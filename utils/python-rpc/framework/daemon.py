@@ -39,15 +39,10 @@ class Daemon(object):
         self.port = port
         self.rpc = JSONRPC('{protocol}://{host}:{port}'.format(protocol=protocol, host=host, port=port if port else base+idx))
 
-    def getblocktemplate(self, address, prev_block = "", client = ""):
+    def getblocktemplate(self):
         getblocktemplate = {
             'method': 'getblocktemplate',
-            'params': {
-                'client': client,
-                'wallet_address': address,
-                'reserve_size' : 8,
-                'prev_block' : prev_block,
-            },
+            'params': {},
             'jsonrpc': '2.0', 
             'id': '0'
         }
@@ -88,10 +83,10 @@ class Daemon(object):
     def submitblock(self, block):
         submitblock = {
             'method': 'submitblock',
-            'params': [ block ],    
-            'jsonrpc': '2.0', 
+            'params': { 'body': block },
+            'jsonrpc': '2.0',
             'id': '0'
-        }    
+        }
         return self.rpc.send_json_rpc_request(submitblock)
     submit_block = submitblock
 
@@ -191,16 +186,13 @@ class Daemon(object):
         return self.rpc.send_json_rpc_request(get_info)
     getinfo = get_info
 
-    def generateblocks(self, address, blocks=1, prev_block = "", starting_nonce = 0):
+    def generateblocks(self, blocks=1):
         generateblocks = {
             'method': 'generateblocks',
             'params': {
-                'amount_of_blocks' : blocks,
-                'wallet_address': address,
-                'prev_block': prev_block,
-                'starting_nonce': starting_nonce,
+                'count': blocks,
             },
-            'jsonrpc': '2.0', 
+            'jsonrpc': '2.0',
             'id': '0'
         }
         return self.rpc.send_json_rpc_request(generateblocks)
@@ -220,10 +212,9 @@ class Daemon(object):
         }
         return self.rpc.send_request("/pop_blocks", pop_blocks)
 
-    def start_mining(self, miner_address, threads_count = 0):
+    def start_mining(self, threads_count = "auto"):
         start_mining = {
-            'miner_address' : miner_address,
-            'threads_count' : threads_count,
+            'threads' : threads_count,
         }
         return self.rpc.send_request('/start_mining', start_mining)
 

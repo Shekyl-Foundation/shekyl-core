@@ -7,9 +7,8 @@
 //! one composition of `σ`, `b`, `C`, `R` and `F`.
 //!
 //! `FEE_LADDER_DERIVATION.md` §11.6 ("economics" item) and PR C §6. The
-//! daemon's estimate and its relay floor used to be composed in C++
-//! (`relay_floor_at` / `fee_correction_from` in `relay_floor_ring.cpp`)
-//! out of four Rust calls, and that composition priced the burn on
+//! daemon's estimate and its relay floor used to be composed beside the
+//! validator, out of four calls, and that composition priced the burn on
 //! **gross** `already_generated_coins` where the validator prices it on
 //! the **net** circulating supply (FL-R16c): the floor's `b`, and so its
 //! `C`, differed from what the miner is paid as soon as anything had

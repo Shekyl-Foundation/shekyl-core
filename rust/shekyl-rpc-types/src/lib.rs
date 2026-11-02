@@ -207,6 +207,12 @@ pub enum SubmitVerdict {
     Rejected {
         /// Why the transaction was refused.
         cause: RejectCause,
+        /// The consensus row that refused, for [`RejectCause::ConsensusRule`]
+        /// (`"CEN-J15"`): the reply's diagnostic parameter, so the wallet can
+        /// say why. Absent for every other cause, and absent on the wire
+        /// then (the frozen corpus of the other causes is unchanged).
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        row: Option<String>,
     },
 }
 
@@ -252,20 +258,22 @@ pub enum RejectCause {
     /// Reference block hash unknown to this daemon (typically: daemon not
     /// yet synced to it). Sync-gated retry (§2.5).
     ReferenceNotFound,
-    /// The transaction is a JoinMarket bond post and this daemon cannot
-    /// admit one. Phases A–C passed. Phase D's mutable re-checks do not
-    /// run, because the C++ commit step decodes no JoinMarket form that
-    /// carries a receipt key and returns before `shekyl_submit_commit_tx`
-    /// (`FN_DSA_HYBRID.md` `FND-20`). The capability refusal is the
-    /// verdict: a key-image or fee race during Phase C is reported as this
-    /// cause, and retrying the same bytes against this daemon fails the
-    /// same way. The wallet releases the post and its funding reservation
-    /// and does not resubmit (§2.5). Deleted with the C++ commit shim at
-    /// `DEL-008`.
-    JoinMarketUnsupported,
+    /// A consensus row refused the transaction against this chain when the
+    /// pool committed it: a chain-bound row the verifier does not judge
+    /// (CEN-J15, a compact join onto a shard that is not closed, final and
+    /// priced, is the first). Terminal: the bytes are sound and the chain
+    /// decides; the wallet releases, holds the record to its end date
+    /// (BD-Q3 Rule 2) and tells its user the row, which rides as
+    /// [`SubmitVerdict::Rejected`]'s `row`. Added at 3.63 (the flip; Rick,
+    /// 2026-10-29): before it the daemon answered an internal fault and the
+    /// wallet resent a post the chain refuses every time.
+    ConsensusRule,
     /// Forward-compat catch-all: a cause this client build does not know.
     /// Deserialize-side only — a daemon never authors it. Disposition per
     /// §2.5: release + one-shot rebuild (the F28 loop-breaker applies).
+    /// A pre-flip daemon's `join_market_unsupported` (its C++ commit step
+    /// could not hold a JoinMarket bond post; the cause left the set at
+    /// 3.63) reads as this.
     #[serde(other)]
     Unrecognized,
 }

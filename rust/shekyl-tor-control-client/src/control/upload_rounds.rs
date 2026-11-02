@@ -47,12 +47,32 @@ const COUNTER_CEILING: u32 = u32::MAX;
 /// fetch's (the self-probe fetches our own descriptor), and closes nothing. An
 /// `UPLOADED` or `FAILED` naming an HSDir with no open upload, as when the subscription
 /// began mid-round, is ignored.
+///
+/// **Where each descriptor went** ([`Self::directories`]): the directories whose
+/// upload succeeded, each with the descriptor id (the blinded key) its `UPLOAD`
+/// named, for the probe's directory check (`TOR_SUPERVISOR.md` §4.5). An
+/// `UPLOADED` names no descriptor, so it is paired with the earliest open upload to
+/// that directory.
 pub struct UploadRounds {
     address: ServiceId,
-    open: Vec<RelayFingerprint>,
+    /// The open round's uploads not yet ended, each with its `UPLOAD`'s id.
+    open: Vec<(RelayFingerprint, Option<String>)>,
     uploaded: u32,
     failed: u32,
     triggered: bool,
+    /// The open round's successful uploads.
+    current: Vec<UploadedTo>,
+    /// The latest ended round's successful uploads, from a round with one.
+    last: Vec<UploadedTo>,
+}
+
+/// A directory a descriptor was uploaded to, and which descriptor.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct UploadedTo {
+    /// The directory.
+    pub hsdir: RelayFingerprint,
+    /// The descriptor id its `UPLOAD` named: the blinded key.
+    pub descriptor_id: String,
 }
 
 /// A boundary in a round of uploads, reported by [`UploadRounds::observe`].
@@ -84,6 +104,20 @@ impl UploadRounds {
             uploaded: 0,
             failed: 0,
             triggered: false,
+            current: Vec::new(),
+            last: Vec::new(),
+        }
+    }
+
+    /// The directories the latest round's uploads reached, each with its
+    /// descriptor: the open round's while it has a success, else the last
+    /// ended round's that had one. Empty before any upload succeeded.
+    #[must_use]
+    pub fn directories(&self) -> &[UploadedTo] {
+        if self.current.is_empty() {
+            &self.last
+        } else {
+            &self.current
         }
     }
 
@@ -114,7 +148,7 @@ impl UploadRounds {
                 if !self.in_round() {
                     marks.push(RoundMark::Started);
                 }
-                self.open.push(hsdir);
+                self.open.push((hsdir, event.descriptor_id.clone()));
                 marks
             }
             HsDescAction::Uploaded => self.close(hsdir, true),
@@ -124,12 +158,20 @@ impl UploadRounds {
     }
 
     fn close(&mut self, hsdir: RelayFingerprint, succeeded: bool) -> Vec<RoundMark> {
-        let Some(at) = self.open.iter().position(|open| *open == hsdir) else {
+        let Some(at) = self.open.iter().position(|(open, _)| *open == hsdir) else {
             return Vec::new();
         };
-        self.open.swap_remove(at);
+        // `remove`, not `swap_remove`: the earliest open upload to a directory
+        // is the one an end pairs with.
+        let (_, descriptor_id) = self.open.remove(at);
         let mut marks = Vec::new();
         if succeeded {
+            if let Some(descriptor_id) = descriptor_id {
+                self.current.push(UploadedTo {
+                    hsdir,
+                    descriptor_id,
+                });
+            }
             self.uploaded += 1;
             if !self.triggered {
                 self.triggered = true;
@@ -164,6 +206,9 @@ impl UploadRounds {
         self.uploaded = 0;
         self.failed = 0;
         self.triggered = false;
+        if !self.current.is_empty() {
+            self.last = std::mem::take(&mut self.current);
+        }
         mark
     }
 }
@@ -174,7 +219,7 @@ mod tests {
     use super::super::framing::ReplyFramer;
     use super::super::onion::ServiceId;
     use super::super::vanguards::RelayFingerprint;
-    use super::{RoundMark, UploadRounds};
+    use super::{RoundMark, UploadRounds, UploadedTo};
 
     /// The throwaway onion of the 2026-10-16 capture (`DiscardPK`; the key is gone).
     const CAPTURED_ONION: &str = "url5xrvawpg5uv275sjyo6w57vvzopdufb7ffykiqnnqxjwecsxm3lid";
@@ -486,5 +531,50 @@ mod tests {
             ServiceId::parse("aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa");
         assert!(rounds.observe(&elsewhere).is_empty());
         assert!(rounds.in_round());
+    }
+
+    fn round_event_for(action: HsDescAction, hsdir: u8, descriptor: Option<&str>) -> HsDescEvent {
+        HsDescEvent {
+            action,
+            address: ServiceId::parse(CAPTURED_ONION),
+            hsdir: Some(RelayFingerprint::from_bytes([hsdir; 20])),
+            descriptor_id: descriptor.map(str::to_owned),
+            reason: None,
+        }
+    }
+
+    fn to(hsdir: u8, descriptor: &str) -> UploadedTo {
+        UploadedTo {
+            hsdir: RelayFingerprint::from_bytes([hsdir; 20]),
+            descriptor_id: descriptor.to_owned(),
+        }
+    }
+
+    /// Each successful upload is kept with the descriptor its `UPLOAD` named;
+    /// a failed one is not. A directory that took both descriptors pairs its
+    /// ends with its uploads in order. The set is the open round's while it
+    /// has a success, and the last such round's after; a later round with no
+    /// success leaves it. Swapping `remove` for `swap_remove` in `close`, or
+    /// keeping failed uploads, fails this.
+    #[test]
+    fn each_successful_upload_is_kept_with_its_descriptor() {
+        use HsDescAction::{Failed, Upload, Uploaded};
+        let mut rounds = UploadRounds::new(ServiceId::parse(CAPTURED_ONION).expect("address"));
+        assert!(rounds.directories().is_empty());
+        rounds.observe(&round_event_for(Upload, 1, Some("cur")));
+        rounds.observe(&round_event_for(Upload, 2, Some("cur")));
+        rounds.observe(&round_event_for(Upload, 3, Some("next")));
+        rounds.observe(&round_event_for(Upload, 2, Some("next")));
+        rounds.observe(&round_event_for(Uploaded, 2, None));
+        assert_eq!(rounds.directories(), [to(2, "cur")], "the open round's");
+        rounds.observe(&round_event_for(Failed, 1, None));
+        rounds.observe(&round_event_for(Uploaded, 3, None));
+        rounds.observe(&round_event_for(Uploaded, 2, None));
+        let ended = [to(2, "cur"), to(3, "next"), to(2, "next")];
+        assert_eq!(rounds.directories(), ended);
+        // A round with no success leaves the last round's set.
+        rounds.observe(&round_event_for(Upload, 4, Some("cur")));
+        rounds.observe(&round_event_for(Failed, 4, None));
+        assert_eq!(rounds.directories(), ended);
     }
 }

@@ -39,8 +39,8 @@
 //!
 //! §1.9 discipline: `C` comes from the owners through
 //! [`fee_ladder::correction_factor_ratio`]. The floor formula's owner is
-//! `shekyl_economics::relay_fee_floor`, and the daemon's
-//! `get_current_fee_per_byte` calls it.
+//! `shekyl_economics::relay_fee_floor`. The daemon's admission calls that
+//! owner.
 //!
 //! [`floor_rate`] is NOT simply replaced by it, and the reason is the
 //! instrument's subject rather than inertia: the owner returns atomic

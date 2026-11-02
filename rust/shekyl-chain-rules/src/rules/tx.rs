@@ -815,8 +815,8 @@ impl TxRule for H21 {
 /// `pseudoOuts == fee-input count`; the FCMP++ proof is present iff fee
 /// inputs are; `CTTypeFcmpPlusPlusPqc`; and the balance with the mint on the
 /// debit slot — `Σ pseudoOuts + total_reward·H = Σ masks + fee·H`. The
-/// checked sum is the one CEN-J24 uses (`shekyl_checked_sum_amounts`'s
-/// body); H9 has already refused an overflowing sum. Applies to the emission
+/// checked sum is the one CEN-J24 uses; H9 has already refused an
+/// overflowing sum. Applies to the emission
 /// class.
 pub(crate) struct H22;
 

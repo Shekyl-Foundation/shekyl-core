@@ -197,7 +197,7 @@ pub fn cmd_mine_start(
     remind_if_remote(dc);
 
     // F6 — already mining: relay the daemon's state, no error tone.
-    match dc.mining_status() {
+    let address = match dc.mining_status() {
         Ok(status) if status.active => {
             return Ok(json!({
                 "started": false,
@@ -205,9 +205,9 @@ pub fn cmd_mine_start(
                 "threads": status.threads_count,
             }));
         }
-        Ok(_) => {}
+        Ok(status) => status.address,
         Err(e) => return failed(e.to_string()),
-    }
+    };
 
     // F7 — not synced: `/start_mining` is CHECK_CORE_READY and will return
     // BUSY. Refuse here with the height copy rather than confirm-and-fail.
@@ -224,10 +224,8 @@ pub fn cmd_mine_start(
         ));
     }
 
-    let address = super::balance::primary_address(rpc, "Failed to get the payout address")?;
-
     let threads = threads.unwrap_or_else(default_threads);
-    match dc.start_mining(&address, threads) {
+    match dc.start_mining(threads) {
         Ok(()) => Ok(json!({
             "started": true,
             "threads": threads,

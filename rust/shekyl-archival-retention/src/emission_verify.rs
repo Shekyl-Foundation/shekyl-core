@@ -3,7 +3,7 @@
 // All rights reserved.
 // BSD-3-Clause
 
-//! `shekyl_emission_vin_verify` — the PR-E3 fail-fast verify body
+//! The PR-E3 fail-fast emission verify body, once behind a coarse FFI crossing (deleted, `DEL-008`)
 //! (`REWARD_EMISSION_VIN_PLAN.md` §7.1 / PR-E3;
 //! `REWARD_EMISSION_E3_GATING_ROUND.md` §3 item 3).
 //!

@@ -10,7 +10,6 @@ use super::{
     human_readable_timestamp, native_json_rpc, require_ok, trimmed, wide_difficulty_decimal,
     wide_difficulty_value, Source,
 };
-use crate::chain_facts::FfiChainFacts;
 use shekyl_units::AtomicUnits;
 
 /// Fetch `get_block_headers_range` — native here, over `/json_rpc` remotely.
@@ -26,8 +25,9 @@ fn fetch_block_headers_range(
     };
     // In-process the console is the operator's own terminal, so the
     // restricted rule does not apply — as `print_block` says.
-    let reply = native_json_rpc(src, "get_block_headers_range", &request, |core| {
-        crate::methods::get_block_headers_range(&FfiChainFacts::new(core.clone()), &request, false)
+    let reply = native_json_rpc(src, "get_block_headers_range", &request, |_core| {
+        let chain = super::open_chain()?;
+        crate::methods::get_block_headers_range(chain.as_chain_facts(), &request, false)
     })?;
     require_ok(&reply.status)?;
     Ok(reply.headers)
@@ -103,8 +103,9 @@ fn render_blockchain_info_entry(h: &shekyl_rpc_types::BlockHeader) -> String {
 /// Fetch `get_fee_estimate` — native here, over `/json_rpc` remotely.
 fn fetch_fee_estimate(src: &Source) -> Result<shekyl_rpc_types::GetFeeEstimateResponse, String> {
     let request = shekyl_rpc_types::GetFeeEstimateRequest::default();
-    let reply = native_json_rpc(src, "get_fee_estimate", &request, |core| {
-        crate::methods::get_fee_estimate(&FfiChainFacts::new(core.clone()), &request)
+    let reply = native_json_rpc(src, "get_fee_estimate", &request, |_core| {
+        let chain = super::open_chain()?;
+        crate::methods::get_fee_estimate(chain.as_chain_facts(), &request)
     })?;
     require_ok(&reply.status)?;
     Ok(reply)

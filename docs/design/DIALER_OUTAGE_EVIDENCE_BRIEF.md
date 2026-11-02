@@ -86,7 +86,7 @@ As data, beside the dial profile:
    - none.
    - Proposed for Tor: a stream opened during the attempt.
    - For clearnet: the wargame in §5 decides it.
-3. **Its clearing rule:** what restores addresses that cooled on uncorroborated failures once the link is shown working. Proposed: the first corroborating event clears them.
+3. **Clearing is the judge's behaviour, not a declaration (Rick, 2026-10-31):** the first corroborating event clears the excused cooldowns of addresses with no counted failure. A per-connector clearing rule is rejected under rule 21 (`DIALER_OUTAGE_EVIDENCE.md` §9, with its reopen criterion).
 4. **Its backoff values:** what the profile already has (retries, waits, ladder steps and cap, window). Each value says what it means for this connector's failures.
 
 ### 4.3 What the judge guarantees, for every connector
@@ -97,13 +97,13 @@ These are invariants. Each is tested against every connector's declarations, not
 3. **Recovery doesn't wait on outage cooldowns.** The first sign of a working link clears cooldowns taken on uncorroborated failures. The target: the blackhole recovery comes down toward the refuse block's 6 s.
 4. **Proven misbehaviour still drops,** on a destination-authenticated connector, as today.
 5. **The probe never counts as link evidence.** The probe of the node's own onion is not a session and not a peer dial (`TOR_SUPERVISOR.md` §4.5). Only the supervisor reads it.
-6. **Nothing is inferred about Tor's network.** The judge reads only the dialer's own observations (`TSR-Q14`), and the supervisor's posture line is unchanged.
+6. **Nothing is inferred about Tor's network.** The judge reads only the dialer's own observations (`TSR-Q14`), and the supervisor's posture line reads only the judge's (`DIALER_OUTAGE_EVIDENCE.md` §6).
 
 ### 4.4 Deletions (rule 15)
 
 - the quiet guard: `owner/quiet.rs`'s ladder choice and its unopened count;
 - the profile's quiet thresholds: `QuietThreshold`, `quiet_attempts` and the derived S;
-- the supervisor's `quiet_after`, which reads Tor's S today. It needs its own source, and the Tor lane rules that;
+- the supervisor's reading of Tor's S: `quiet_after` takes its source from the judge (`DIALER_OUTAGE_EVIDENCE.md` §6);
 - the §97 rows and the brief text that state K and S.
 
 ## 5. Wargame in the Round 0 return
@@ -119,32 +119,38 @@ These are invariants. Each is tested against every connector's declarations, not
 
 ## 6. Tests that can fail (each names the edit that makes it fail)
 
-1. **A Tor silent-drop block,** five dials in flight, no stream opened: every white test that fails stays white and cools at the first step. Today it fails, because K is never reached.
-2. **The same block, but one concurrent dial opens a stream mid-attempt:** the failing white is demoted.
-3. **After the block, the first corroborating event:** addresses cooled during the block are drawable at once.
+1. **A Tor silent-drop block,** five dials in flight, no stream opened and no session receiving: every white test that fails stays white and, having no counted failure, cools for `outage_retry`; a gray address with counted failures cools at its current rung. Today it fails, because K is never reached.
+2. **The same block, with the link shown working on both sides of a failure:** a sign of life within δ before the failure (another attempt's stream opening, or a byte received on a counted session) **and** one within δ after it. The failing white is demoted. With life on one side only, it is excused.
+3. **After the block, the first corroborating event:** addresses with no counted failure that were excused during the block are drawable at once; addresses with counted failures keep their rung.
+
 4. **A Destination failure with no corroboration:** it still counts against the address (a refusal is never excused as an outage).
 5. **A Local failure:** never counts against the address, on either connector.
 6. **Boot with the network down:** no demotion, no climb.
 7. **The probe never corroborates.**
-8. **Every invariant in 4.3, run against each connector's declarations.** Plus a test that a cause with no declared evidence kind fails the build, so a connector cannot leave a failure unmapped.
+8. **Every invariant in 4.3, run against each connector's declarations.** A connector cannot leave a failure unmapped: each observation it can make is a variant its stamping matches totally into a `DialFailure` (the judge's own type, `DIALER_OUTAGE_EVIDENCE.md` §2.2), so an unmapped one does not compile; a test pins every row.
 
 ## 7. Live (Pi; claim it in the ledger after the Tor soak's claim ends, about 2026-11-07 06:17Z)
 
-Repeat the Tor lane's blackhole case (10 minutes of silent drops while running) and the refuse case. Add a clearnet blackhole. Pass criteria:
-- no white demotion in any case;
-- recovery after a blackhole within the refuse case's order of magnitude;
+Repeat the Tor lane's blackhole case (10 minutes of silent drops while running) and the refuse case. Add a clearnet blackhole, and:
+- blackholes of 10, 20 and 30 s;
+- pulsed loss, 25 s down and 15 s up, for ten minutes;
+- both connectors, counting white demotions;
+- on Tor, the time from unblock to the first stream open.
+
+Leave in-flight Tor attempts to run (TSR-Q14: Tor retries inside its own window).
+
+**Pass criteria (the gate):**
+- no white demotion in the 10-minute blackhole, on either connector;
+- recovery after that blackhole within the refuse case's order of magnitude;
 - an unchanged eclipse-share result: the in-flight bound's 90 % gray test, under the new judge.
+
+**Measured, not gated:** the 10, 20 and 30 s blackholes and the pulsed-loss run measure the bracket's residual (`DIALER_OUTAGE_EVIDENCE.md` §3.3): a failure inside an outage shorter than about 2δ (≈ 30 s) is bracketed by signs of life on both sides and counts by design, so these can demote white with a correct judge. Their white demotions and Tor's unblock-to-first-open time are recorded; **their acceptance thresholds are Rick's to set** from the readings.
 
 ## Out of scope
 
-- the Tor supervisor's thresholds and posture line, beyond giving `quiet_after` a source the Tor lane rules;
+- the Tor supervisor's thresholds and posture line, beyond `quiet_after` and its sentence (`DIALER_OUTAGE_EVIDENCE.md` §6);
 - the in-flight bound;
 - the fill rules and the draw;
 - the targets.
 
 No push without Rick's go-ahead.
-
-## Records-was
-
-- **Revision 1 (2026-10-31)** proposed one rule for every connector: a failure counts only if a session was held or a stream opened during the attempt. Rick ruled one judge, with each connector declaring how its failures are judged.
-- **The K/S guard (ruled 2026-10-26 and 2026-10-27)** was one mechanism fed per-connector numbers. The 2026-10-31 blackhole showed it engaging too late on Tor.

@@ -321,7 +321,7 @@ fn noise_cadence(seed: u64, polls: usize, queues: &mut NoiseQueues) -> Vec<(u64,
             match effect {
                 Effect::NoiseSend { channel, .. } => out.push((now, channel, true)),
                 Effect::NoiseUnbind { channel } => out.push((now, channel, false)),
-                Effect::Fluff { .. } => {}
+                Effect::Fluff { .. } | Effect::Stem { .. } | Effect::Published { .. } => {}
             }
         }
     }

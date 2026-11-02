@@ -4,9 +4,8 @@
 // BSD-3-Clause
 
 //! The mining methods (`DRS_X_STORE_FLIP.md` DX-Q3, b3), over the node's
-//! [`MiningFacts`] and [`DoorFacts`]. **Built and not routed:** the server
-//! answers each from the C++ table until the flip, which points dispatch
-//! here. Each failure is an RW-Q3 class with a typed diagnostic
+//! [`MiningFacts`] and [`DoorFacts`]. JSON-RPC and the REST mining routes
+//! dispatch here. Each failure is an RW-Q3 class with a typed diagnostic
 //! ([`codes`]).
 //!
 //! `get_block_template` and `get_miner_data` read the job the node posted;

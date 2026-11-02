@@ -86,6 +86,19 @@ impl EpochMap {
         }
     }
 
+    /// [`StemMap::alternate_for`] on whichever map the epoch holds.
+    #[must_use]
+    pub(super) fn alternate_for(
+        &self,
+        source: SourceId,
+        chosen: ConnectionId,
+    ) -> Option<ConnectionId> {
+        match self {
+            Self::Uniform(map) => map.alternate_for(source, chosen),
+            Self::Reserved(map) => map.alternate_for(source, chosen),
+        }
+    }
+
     /// The stem peer for `source`, assigning one on the first call this epoch.
     pub(super) fn stem_for<R: RelayRng + ?Sized>(
         &mut self,

@@ -384,6 +384,7 @@ fn dispatch(
     effects: Vec<Effect>,
     ctx: *mut c_void,
     fluff: FluffCb,
+    stem: Option<FluffCb>,
     noise: NoiseSendCb,
     resolved: CarrierResolvedCb,
     queues: Option<&mut NoiseQueues>,
@@ -391,6 +392,23 @@ fn dispatch(
     let mut queues = queues;
     for effect in effects {
         match effect {
+            Effect::Stem { peer, blobs } => {
+                // A reshape or a held origin's send. Only `poll` produces it,
+                // and `poll` always passes the callback.
+                let Some(stem) = stem else {
+                    debug_assert!(false, "Stem effect with no stem callback");
+                    continue;
+                };
+                let spans: Vec<ShekylRelayBlob> = blobs
+                    .iter()
+                    .map(|b| ShekylRelayBlob {
+                        ptr: b.as_ptr(),
+                        len: b.len(),
+                    })
+                    .collect();
+                stem(ctx, peer.as_bytes().as_ptr(), spans.as_ptr(), spans.len());
+            }
+            Effect::Published { txs } => mark_shown(&txs),
             Effect::Fluff { peer, blobs } => {
                 // `blobs` outlives the call, so the spans stay valid for it.
                 let spans: Vec<ShekylRelayBlob> = blobs
@@ -764,6 +782,7 @@ pub(crate) fn new_zone_publishing(
         origin,
     };
     handle.publish();
+    LIVE_ZONES.fetch_add(1, Ordering::AcqRel);
     Box::into_raw(Box::new(handle))
 }
 
@@ -872,6 +891,7 @@ pub unsafe extern "C" fn shekyl_relay_zone_noise_enqueue(
 pub unsafe extern "C" fn shekyl_relay_zone_free(handle: *mut RelayZoneHandle) {
     if !handle.is_null() {
         drop(Box::from_raw(handle));
+        LIVE_ZONES.fetch_sub(1, Ordering::AcqRel);
     }
 }
 
@@ -1006,6 +1026,7 @@ pub unsafe extern "C" fn shekyl_relay_zone_noise_enabled(handle: *const RelayZon
 pub unsafe extern "C" fn shekyl_relay_zone_record_stem(
     handle: *mut RelayZoneHandle,
     hashes: *const u8,
+    blobs: *const ShekylRelayBlob,
     n: usize,
     successor: *const u8,
     source: *const u8,
@@ -1018,15 +1039,57 @@ pub unsafe extern "C" fn shekyl_relay_zone_record_stem(
     let Some(succ) = read_id(successor) else {
         return;
     };
-    let ids = read_tx_ids(hashes, n);
-    if ids.is_empty() {
+    let Some(txs) = read_tx_pairs(hashes, blobs, n) else {
         return;
-    }
+    };
     let src = read_id(source);
     h.driver
         .zone_mut()
-        .record_stem(&ids, succ, src, now_ms, &mut h.rng);
+        .record_stem(&txs, succ, src, now_ms, &mut h.rng);
     h.publish();
+}
+
+/// Hold this node's own transactions, which were not sent: the plan was
+/// `AwaitSync` or `NoOwnEdge`, or the own-edge write failed (RX-2, Rick
+/// 2026-10-29). Not shown, not fluffed; the zone plans them again on its
+/// wake (`DAEMON_RELAY_PRIVACY.md` §92.5c, the short grid). Deleter: RD,
+/// with `levin_notify`.
+///
+/// # Safety
+/// `handle` must be null (no-op) or a live zone. `hashes` must point at
+/// `32 * n` readable bytes and `blobs` at `n` readable spans.
+#[no_mangle]
+pub unsafe extern "C" fn shekyl_relay_zone_hold_origin(
+    handle: *mut RelayZoneHandle,
+    hashes: *const u8,
+    blobs: *const ShekylRelayBlob,
+    n: usize,
+    now_ms: u64,
+) {
+    let Some(h) = handle.as_mut() else { return };
+    let Some(txs) = read_tx_pairs(hashes, blobs, n) else {
+        return;
+    };
+    h.driver.zone_mut().hold_origin(&txs, now_ms);
+    h.publish();
+}
+
+/// Read `n` hash/blob pairs. `None` when either side is unreadable or the
+/// batch is empty.
+unsafe fn read_tx_pairs(
+    hashes: *const u8,
+    blobs: *const ShekylRelayBlob,
+    n: usize,
+) -> Option<Vec<(TxId, TxBlob)>> {
+    if n == 0 || blobs.is_null() {
+        return None;
+    }
+    let ids = read_tx_ids(hashes, n);
+    if ids.len() != n {
+        return None;
+    }
+    let blobs = read_blobs(blobs, n)?;
+    Some(ids.into_iter().zip(blobs).collect())
 }
 
 /// Record that `n` transactions arrived `from` a peer — any zone, any path,
@@ -1076,6 +1139,9 @@ pub unsafe extern "C" fn shekyl_relay_zone_record_arrival(
     // it does in one pass.
     let propagated = h.driver.zone_mut().record_arrival(&ids, read_id(from));
     h.publish();
+    // Seen circulating: the pool shows it (Q9). Rust to Rust, the same bit
+    // the relay's fluff sets.
+    mark_shown(&propagated);
 
     // The verdicts leave through a caller-sized buffer rather than a callback
     // or a retained store. Bounded by construction — `propagated` is a subset
@@ -1570,8 +1636,10 @@ unsafe fn read_blobs(blobs: *const ShekylRelayBlob, n: usize) -> Option<Vec<TxBl
 pub unsafe extern "C" fn shekyl_relay_zone_poll(
     handle: *mut RelayZoneHandle,
     now_ms: u64,
+    node_synchronised: bool,
     ctx: *mut c_void,
     on_fluff: FluffCb,
+    on_stem: FluffCb,
     on_noise: NoiseSendCb,
     on_carrier_resolved: CarrierResolvedCb,
 ) {
@@ -1579,16 +1647,67 @@ pub unsafe extern "C" fn shekyl_relay_zone_poll(
         return;
     }
     let h = &mut *handle;
+    let zone = h.driver.zone_mut();
+    for tx in take_departed() {
+        zone.release(&tx);
+    }
+    zone.set_node_sync(node_sync(node_synchronised), now_ms);
     let effects = h.driver.poll(now_ms, &mut h.rng);
     h.publish();
     dispatch(
         effects,
         ctx,
         on_fluff,
+        Some(on_stem),
         on_noise,
         on_carrier_resolved,
         h.noise.as_mut(),
     );
+}
+
+fn node_sync(synchronised: bool) -> NodeSync {
+    if synchronised {
+        NodeSync::Synchronised
+    } else {
+        NodeSync::Unsynchronised
+    }
+}
+
+/// Mark `txs` shown in the pool: the zone fluffed them or saw them
+/// circulate (criterion 2, Q9). An id the pool does not hold is a no-op.
+fn mark_shown(txs: &[TxId]) {
+    for tx in txs {
+        let _ = crate::pool_ffi::note_shown(shekyl_types::TxHash::from_bytes(*tx.as_bytes()));
+    }
+}
+
+/// Live zones in this process. A departure is queued only while one exists,
+/// so an offline node, which builds none, queues nothing.
+static LIVE_ZONES: AtomicUsize = AtomicUsize::new(0);
+
+/// Ids that left the pool, for the zone's next poll to release.
+static DEPARTED: Mutex<Vec<TxId>> = Mutex::new(Vec::new());
+
+/// The pool dropped these transactions: the zone forgets their relay state
+/// at its next poll (`DRS_X_STORE_FLIP.md` §2, the release obligation). The
+/// node's departure hook calls it. Bounded by the pool's departures between
+/// two wakes, and empty when no zone exists.
+pub fn note_departed(ids: &[shekyl_types::TxHash]) {
+    if ids.is_empty() || LIVE_ZONES.load(Ordering::Acquire) == 0 {
+        return;
+    }
+    let mut departed = DEPARTED
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner);
+    departed.extend(ids.iter().map(|id| TxId::from_bytes(id.to_bytes())));
+}
+
+fn take_departed() -> Vec<TxId> {
+    std::mem::take(
+        &mut *DEPARTED
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner),
+    )
 }
 
 /// Release every pending fluff batch — what `notify::run_fluff()` drives.
@@ -1612,6 +1731,7 @@ pub unsafe extern "C" fn shekyl_relay_zone_force_fluff(
         effects,
         ctx,
         on_fluff,
+        None,
         noop_noise,
         noop_carrier_resolved,
         None,

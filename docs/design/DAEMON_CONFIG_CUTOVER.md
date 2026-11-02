@@ -93,7 +93,7 @@ What crosses the FFI after the cutover, and nothing else:
   (§2.7).
 - C++ to Rust: the core handle, once, to the RPC start (§2.3); the core's
   tip, published as it changes (`shekyl_core_publish_tip`, `rust/shekyl-ffi/src/dialer_ffi.rs:398`,
-  called from `src/cryptonote_core/blockchain.cpp:5959`); chain facts for the
+  called from `src/cryptonote_core/blockchain.cpp`); chain facts for the
   notify runner (§2.10).
 
 ### 2.2 The start sequence (DC-Q13)
@@ -368,7 +368,7 @@ a typed code. That closes the pre-created-directory hole of §7 item 7.
   lines 79 to 98 of `src/common/daemon_default_data_dir.cpp` at `d26148535e`
   is deleted with the file.
 - The data-directory port suffix
-  ([`src/p2p/net_node.inl:907-910`](../../src/p2p/net_node.inl)) is
+  (lines 907 to 910 of `src/p2p/net_node.inl` at `ba61b2dcba`) is
   deleted: it was a silent path move standing in for a lock.
 - SOCKS credentials are typed secrets: zeroized, shown in the
   effective-configuration line only as set (IG-6, IG-14), held in Rust,
@@ -516,7 +516,6 @@ cutover replaces their callers.
 | the network | core, the miner, the console client | `network` |
 | offline, derived from both connectors being off | core (line 1559 of `src/cryptonote_core/cryptonote_core.cpp` at `d26148535e`), the protocol handler | `clearnet`, `tor` (IG-Q3) |
 | the fixed difficulty | core | `dev-difficulty` |
-| the pool's weight bound | core | `txpool-weight-max` |
 | sync on or off | the protocol handler | `dev-sync` |
 | the mining address | the miner | `mine-address`, already decoded: the display text, the spend and view keys, and the ML-KEM encapsulation key. The miner assembles the account address from those keys and does not parse the text |
 | the mining threads | the miner | `mine-threads`; 0 is `auto`, and the miner chooses the count |
@@ -524,10 +523,11 @@ cutover replaces their callers.
 | the console's command words | the C++ console client | the positional words; empty for a daemon start |
 | the console's RPC endpoint | the C++ console client | the first `rpc-admin-listen` endpoint when it is IPv4: four octets in network order and a port, present only in client mode. A client whose endpoint is not IPv4 is refused at parse (`config.value.range`). Absence of any admin endpoint is refused at parse (§2.2) |
 
-**Eleven fields.** A gate pins the count and fails when it rises; each later
+**Ten fields.** A gate pins the count and fails when it rises; each later
 slice that moves a reader deletes its field. If the pre-flight finds a C++
-reader of the advertised address on `dev`, it is a twelfth field,
-recorded there.
+reader of the advertised address on `dev`, it is an eleventh field,
+recorded there. The pool's weight bound left when `txpool-weight-max`
+became a rejected option (IG-Q11).
 
 **Where it is defined.** The snapshot's structures, its field count and
 the parse export the C++ test binaries and `shekyl-blockchain-import`
@@ -592,7 +592,6 @@ kinds and defaults are `INPUT_GRAMMAR.md` §5's and are not restated. The
 | Tor connector | `shekyl-tor` and the zone host | the posture: `Off`, `Managed` with the Tor binary's path, or `Operator` with a SOCKS proxy and its RFC 1929 pair (§2.5) and an optional onion with its local listen endpoint | `no-ephemeral-tor`, `tx-proxy`, `anonymous-inbound`, `SHEKYL_TOR_BINARY` (environment) |
 | p2p policy | the dialer and the peer lists | the operator's peers, the closed-network declaration (absent or non-empty, DC-F11), the local-range override, early disclosure, the ban file's entries, the two rate bounds | `add-peer`, `seed-node`, `add-exclusive-node`, `allow-local-ip`, `p2p-disclose-early` (PR-3), `ban-list`, `in-peers`, `limit-rate-up`, `limit-rate-down`, `limit-rate`, `out-peers`, `tos-flag`, `no-igd`, `igd` |
 | rpc | `shekyl-daemon-rpc` | the admin and view listener sets, the origin list, the connection cap | `rpc-bind-ip`, `rpc-bind-ipv6-address`, `rpc-use-ipv6`, `rpc-bind-port`, `rpc-restricted-bind-ip`, `rpc-restricted-bind-ipv6-address`, `rpc-restricted-bind-port`, `restricted-rpc`, `rpc-access-control-origins`, `rpc-max-connections`, `rpc-max-connections-per-public-ip`, `rpc-max-connections-per-private-ip`, `rpc-response-soft-limit`, `disable-rpc-ban` |
-| txpool | core, through the snapshot | the weight bound | `max-txpool-weight` |
 | notify | the Rust runner (DC-Q14) | three commands, each an argument array with its named placeholders | `block-notify`, `reorg-notify`, `block-rate-notify` |
 | mine | the miner, through the snapshot | the address and the thread count | `start-mining`, `mining-threads`, the five `bg-mining-*` |
 | dev | each lever's owner | the levers of `INPUT_GRAMMAR.md` §5, each accepted only on the networks its row names, never on mainnet (IG-8) | `fixed-difficulty`, `no-sync`, `clearnet-transport-encrypt`, `carrier-development`, the four environment levers |
@@ -601,12 +600,16 @@ kinds and defaults are `INPUT_GRAMMAR.md` §5's and are not restated. The
 In no section, because nothing is configured: `keep-fakechain` (no wipe),
 `max-concurrency` (IG-Q7), the three test levers, `show-time-stats`.
 Lane-owned and not ported (IG-Q4): `db-salvage`, `keep-alt-blocks`,
-`pad-transactions`. `db-sync-mode` is decided: no knob, and the constant is
-DRS-D9's `safe`, explicit rather than a default, so no sync turns the fsync off
-(the DRS lane; Rick, 2026-10-26). Chain sync's four (`prep-blocks-threads`,
+`pad-transactions`. `db-sync-mode` is decided: no knob. The Rust store's
+durability is a constant, `shekyl_chain_store::store::DURABILITY`
+(`Immediate`: an fsync per commit, DRS-D9; the DRS lane; Rick, 2026-10-26),
+and the node logs it at open; no sync turns the fsync off. Chain sync's four (`prep-blocks-threads`,
 `block-sync-size`, `span-limit`, `block-download-max-size`) are rejected rows,
 refused with CS-Q12's reason (`P2P_3_CHAIN_SYNC_BRIEF.md` CS-Q12, Rick
-2026-10-18).
+2026-10-18). `txpool-weight-max` is a rejected row, refused because the
+pool's cap derives from the chain (CEN-M10: `REFERENCE_BLOCK_MAX_AGE` blocks
+at the block weight limit; `DRS_E5_POOL_ALT_PRUNE.md`, `INPUT_GRAMMAR.md`
+IG-Q11).
 
 ---
 
@@ -621,11 +624,11 @@ deleted in every case.
 | --- | --- | --- |
 | lines 102 to 120 of `src/daemon/main.cpp` at `d26148535e`, declared in lines 38 to 141 of `src/daemon/command_line_args.h` at `d26148535e` and [`src/common/command_line.cpp:71-72`](../../src/common/command_line.cpp) | 13 | `help`, `version`, `os-version`, `config-file`, `log-file`, `log-level`, `max-log-file-size`, `max-log-files`, `max-concurrency`, `proxy`, `non-interactive`, `daemon_command`, `carrier-development` |
 | lines 237 to 260 of `src/cryptonote_core/cryptonote_core.cpp` at `d26148535e`, declared [`:74-188`](../../src/cryptonote_core/cryptonote_core.cpp) | 20 | `data-dir`, `testnet`, `stagenet`, `regtest`, `keep-fakechain`, `fixed-difficulty`, `prep-blocks-threads`, `show-time-stats`, `block-sync-size`, `test-drop-download`, `test-drop-download-height`, `test-dbg-lock-sleep`, `offline`, `block-download-max-size`, `span-limit`, `max-txpool-weight`, `block-notify`, `reorg-notify`, `block-rate-notify`, `keep-alt-blocks` |
-| [`src/cryptonote_basic/miner.cpp:278-286`](../../src/cryptonote_basic/miner.cpp), declared [`:92-98`](../../src/cryptonote_basic/miner.cpp) | 7 | `start-mining`, `mining-threads`, `bg-mining-enable`, `bg-mining-ignore-battery`, `bg-mining-min-idle-interval`, `bg-mining-idle-threshold`, `bg-mining-miner-target` |
-| [`src/blockchain_db/blockchain_db.cpp:199-203`](../../src/blockchain_db/blockchain_db.cpp) | 2 | `db-sync-mode`, `db-salvage` |
+| `src/cryptonote_basic/miner.cpp`, declared `:92-98` | 7 | `start-mining`, `mining-threads`, `bg-mining-enable`, `bg-mining-ignore-battery`, `bg-mining-min-idle-interval`, `bg-mining-idle-threshold`, `bg-mining-miner-target` |
+| `src/blockchain_db/blockchain_db.cpp` | 2 | `db-sync-mode`, `db-salvage` |
 | [`src/p2p/net_node.inl:105-133`](../../src/p2p/net_node.inl), declared lines 87 to 153 of `src/p2p/net_node.cpp` at `d26148535e` | 26 | `p2p-bind-ip`, `p2p-bind-ipv6-address`, `p2p-bind-port`, `p2p-bind-port-ipv6`, `p2p-use-ipv6`, `p2p-ignore-ipv4`, `p2p-external-port`, `allow-local-ip`, `add-peer`, `add-priority-node` and `seed-node` (both gone on PR-3), `add-exclusive-node`, `tx-proxy`, `anonymous-inbound`, `no-ephemeral-tor`, `ban-list`, `no-sync`, `no-igd`, `igd`, `out-peers`, `in-peers`, `tos-flag`, `limit-rate-up`, `limit-rate-down`, `limit-rate`, `pad-transactions`, `clearnet-transport-encrypt`; and PR-3's `p2p-disclose-early` (`arg_p2p_disclose_early`, `src/p2p/net_node.cpp` line 131 at `d26148535e` at `fce0a2fa`) |
 | lines 116 to 122 of `src/rpc/rpc_args.cpp` at `d26148535e`, declared at 91 to 105 (the file is deleted by commit (c)) | 7 registered of 15 | `rpc-bind-ip`, `rpc-bind-ipv6-address`, `rpc-restricted-bind-ip`, `rpc-restricted-bind-ipv6-address`, `rpc-use-ipv6`, `rpc-access-control-origins`, `disable-rpc-ban`; and the eight TLS and login descriptors registered for nothing (DC-F6) |
-| [`src/rpc/core_rpc_server.cpp:92-103`](../../src/rpc/core_rpc_server.cpp), declared [`:1402-1450`](../../src/rpc/core_rpc_server.cpp) | 7 | `rpc-bind-port`, `rpc-restricted-bind-port`, `restricted-rpc`, `rpc-max-connections-per-public-ip`, `rpc-max-connections-per-private-ip`, `rpc-max-connections`, `rpc-response-soft-limit` |
+| [`src/rpc/core_rpc_server.cpp`](../../src/rpc/core_rpc_server.cpp), declared [`:1402-1450`](../../src/rpc/core_rpc_server.cpp) | 7 | `rpc-bind-port`, `rpc-restricted-bind-port`, `restricted-rpc`, `rpc-max-connections-per-public-ip`, `rpc-max-connections-per-private-ip`, `rpc-max-connections`, `rpc-response-soft-limit` |
 
 ### 4.2 Deletion rows
 
@@ -640,29 +643,29 @@ the base and zero after (rule 47). A literal pipe in a pattern is `\|`.
 | `variables_map` and `program_options` in `shekyld` | `rg -n -e 'variables_map' -e 'program_options' src/daemon src/cryptonote_core src/p2p src/rpc src/cryptonote_basic src/blockchain_db src/cryptonote_protocol` → more than 0; `rg -n -e 'Boost_PROGRAM_OPTIONS_LIBRARY' src/daemon/CMakeLists.txt` → 1 | 0 and 0 |
 | `src/daemon/command_line_args.h`, `src/common/removed_flags.{h,cpp}`, `src/rpc/rpc_args.{h,cpp}`, `src/common/daemon_default_data_dir.{h,cpp}` | files exist; `removed_flags.cpp` still sends Windows operators to Task Scheduler (lines 158 to 162 of `src/common/removed_flags.cpp` at `d26148535e`), which RT-16 rejects; `daemon_default_data_dir.cpp` infers the mode from the account's elevation, which RT-16 forbids | `rg -n -e 'removed_flags' -e 'rpc_args' -e 'daemon_default_data_dir' -e 'command_line_args' src tests` → 0 |
 | the RPC start's configuration and the C++ listener loop (§2.3) | `shekyl_daemon_rpc_start` has nine parameters; `rg -n -e 'rpc_instance' -e 'rust_rpc_handles' src/daemon` → more than 0 | one parameter, the core handle; 0 |
-| the zone host's C++-supplied values (Rick's review, item 3) | `shekyl_zone_listen_clearnet` takes the bind values, the SOCKS host and port, the encrypt flag, the network id and the ceiling (`rust/shekyl-ffi/src/zone_ffi.rs:452-464`); the ceiling is computed in C++ (`transport_ceiling`, `src/p2p/net_node.h` line 456 at `d26148535e`, `src/p2p/net_node.inl:832`, `:968`, `:997`); the spans are already Rust's (the transport layer's `spans.rs` on PR-3) | the zone host reads its sections, the network id comes from the network row, the ceiling from Rust's own resolver; `rg -n -e 'transport_ceiling' -e 'm_network_id' src/p2p` → 0 |
+| the zone host's C++-supplied values (Rick's review, item 3) | `shekyl_zone_listen_clearnet` takes the bind values, the SOCKS host and port, the encrypt flag, the network id and the ceiling (`rust/shekyl-ffi/src/zone_ffi.rs:452-464`); the ceiling is computed in C++ (`transport_ceiling`, `src/p2p/net_node.h` line 456 and `src/p2p/net_node.inl` lines 832, 968 and 997 at `d26148535e`); the spans are already Rust's (the transport layer's `spans.rs` on PR-3) | the zone host reads its sections, the network id comes from the network row, the ceiling from Rust's own resolver; `rg -n -e 'transport_ceiling' -e 'm_network_id' src/p2p` → 0 |
 | every other configuration push | `rg -n -e shekyl_zone_set_connector_cap -e shekyl_zone_clear_connector_cap -e shekyl_link_set_up -e shekyl_link_set_down src rust/shekyl-ffi/src src/shekyl/shekyl_ffi.h` → more than 6; `shekyl_log_init_file`, `shekyl_log_set_level`, `shekyl_log_set_categories` called from [`contrib/epee/src/mlog.cpp:215`](../../contrib/epee/src/mlog.cpp), [`:306`](../../contrib/epee/src/mlog.cpp), [`:338`](../../contrib/epee/src/mlog.cpp); `shekyl_daemon_tor_start`'s data-directory parameter ([`src/p2p/net_node.inl:761-763`](../../src/p2p/net_node.inl)) | the pushes gone; the managed Tor reads the paths section; `mlog_configure` shrinks to installing the tracing forwarder |
 | PR-3's pushes | `rg -n -e shekyl_dialer_set_out_peers -e shekyl_peerlist_allow_local_ip -e shekyl_peerlist_admit_operator -e shekyl_peerlist_disclose_early -e shekyl_dialer_set_exclusive -e shekyl_dialer_open_address_file -e note_own_address -e admit_operator_peer src rust/shekyl-ffi src/shekyl/shekyl_ffi.h` → more than 8 (`rust/shekyl-ffi/src/dialer_ffi.rs:351`, `:464`, `:489`, `:511`, `:538`; `rust/shekyl-ffi/src/peerlist_ffi.rs:68`) | 0; `shekyl_peerlist_set_own_address` survives only as the peer lists' own entry, called by `shekyl-tor` and by the configuration, never by C++ |
 | the reverse pulls | `rg -n -e shekyl_p2p_default_out_peers -e shekyl_relay_zone_min_provisioned_out_peers -e shekyl_dialer_out_target src` → more than 3 | 0 |
 | UPnP | `rg -n -i -e 'upnp' -e 'm_igd' -e 'igd_t' src/p2p` → more than 40 ([`src/p2p/net_node.h:227-231`](../../src/p2p/net_node.h), [`:383-390`](../../src/p2p/net_node.h), [`src/p2p/net_node.inl:66-68`](../../src/p2p/net_node.inl), [`:1013-1019`](../../src/p2p/net_node.inl), [`:1275`](../../src/p2p/net_node.inl), [`:2096-2098`](../../src/p2p/net_node.inl)) | 0 |
 | miniupnpc | `rg -n -i -e 'miniupnp' -e 'UPNP' CMakeLists.txt external/CMakeLists.txt cmake/FindMiniupnpc.cmake .gitmodules contrib/brew/Brewfile .github/workflows src/p2p/CMakeLists.txt` → more than 15 ([`CMakeLists.txt:490`](../../CMakeLists.txt), [`external/CMakeLists.txt:32-51`](../../external/CMakeLists.txt)) | 0; the submodule leaves `.gitmodules` and the tree; the note at [`scripts/ci/check_doc_claims.py:694`](../../scripts/ci/check_doc_claims.py) is updated |
-| `out-peers` and its runtime surface | `rg -n -e 'out_peers' -e 'OUT_PEERS' -e 'change_max_out_public_peers' -e 'get_max_out_public_peers' src rust/shekyl-daemon-rpc/src` → more than 20 ([`src/rpc/core_rpc_server.cpp:1166-1171`](../../src/rpc/core_rpc_server.cpp), [`src/daemon/command_server.cpp:211-213`](../../src/daemon/command_server.cpp), [`rust/shekyl-daemon-rpc/src/server.rs:340`](../../rust/shekyl-daemon-rpc/src/server.rs)) | 0 |
+| `out-peers` and its runtime surface | `rg -n -e 'out_peers' -e 'OUT_PEERS' -e 'change_max_out_public_peers' -e 'get_max_out_public_peers' src rust/shekyl-daemon-rpc/src` → more than 20 ([`src/rpc/core_rpc_server.cpp`](../../src/rpc/core_rpc_server.cpp), [`src/daemon/command_server.cpp:211-213`](../../src/daemon/command_server.cpp), [`rust/shekyl-daemon-rpc/src/server.rs:340`](../../rust/shekyl-daemon-rpc/src/server.rs)) | 0 |
 | the inbound cap and every text that names it (§1.1, the inbound-cap ruling) | `rg -n -e 'in_peers' -e 'in-peers' -e 'change_max_in_public_peers' -e 'get_max_in_public_peers' -e 'm_inbound_cap_explicit' src rust tests` → more than 90 (lines 1700 to 1711 of `src/p2p/net_node.inl` at `d26148535e`, lines 1970 to 1999 at `d26148535e`, the console word at [`src/daemon/command_server.cpp:217`](../../src/daemon/command_server.cpp), and the five unbounded-case warnings at lines 1825 to 1853 of `src/p2p/net_node.inl` at `d26148535e`) | 0; the safety bound stays, and its warnings say that inbound is unbounded and why, naming nothing the operator can set; `InboundCeiling::resolve`'s `reserved` no longer counts explicit inbound caps, since no zone has one; the C++ tests that pin `--in-peers 0` suppressing the address announcement (lines 1768 to 1774 of `tests/unit_tests/node_server.cpp` at `d26148535e`) are replaced by the same assertion under `clearnet-listen none` |
 | the per-knob runtime endpoints, their callers and the console words (§2.7, `RPC_CHANNEL.md` §6.4) | `rg -n -e '"/set_limit"' -e '"/in_peers"' -e '"/set_log_level"' -e '"/set_log_categories"' -e '"/get_limit"' rust/shekyl-daemon-rpc/src/server.rs` → more than 5 ([`rust/shekyl-daemon-rpc/src/server.rs:276`](../../rust/shekyl-daemon-rpc/src/server.rs), [`:318-345`](../../rust/shekyl-daemon-rpc/src/server.rs)); the callers of `/get_limit`: the Rust console's `print_net_stats` ([`rust/shekyl-daemon-rpc/src/console/mod.rs:1121-1166`](../../rust/shekyl-daemon-rpc/src/console/mod.rs)), the Python framework ([`utils/python-rpc/framework/daemon.py:433-436`](../../utils/python-rpc/framework/daemon.py)), the C++ client test ([`tests/unit_tests/daemon_rpc_client.cpp:107-110`](../../tests/unit_tests/daemon_rpc_client.cpp)), and the regtest check of `print_net_stats` | 0; `option_set` and `option_show` in their place, the callers moved to them; `/get_limit` leaves RK-8 (replaced, not ported). `/pop_blocks` stays and moves behind RT-W10's armed switch (RT-O9.2) |
 | the `,N` suffixes | `rg -n -e 'get_max_connections' -e 'max_connections' src/p2p/net_node.cpp src/p2p/net_node.h` → more than 8 | 0 |
-| `disable-rpc-ban` and the RPC server's dead scorer | `rg -n -e 'disable_rpc_ban' -e 'core_rpc_server::add_host_fail' -e 'RPC_IP_FAILS_BEFORE_BLOCK' src` → more than 5 ([`src/rpc/core_rpc_server.cpp:173-190`](../../src/rpc/core_rpc_server.cpp); the shared context is unblockable, [`src/rpc/core_rpc_ffi.cpp:84-89`](../../src/rpc/core_rpc_ffi.cpp)) | 0; `node_server::add_host_fail` ([`src/p2p/net_node.inl:395`](../../src/p2p/net_node.inl)) is the P2P function and stays |
+| `disable-rpc-ban` and the RPC server's dead scorer | `rg -n -e 'disable_rpc_ban' -e 'core_rpc_server::add_host_fail' -e 'RPC_IP_FAILS_BEFORE_BLOCK' src` → more than 5 ([`src/rpc/core_rpc_server.cpp`](../../src/rpc/core_rpc_server.cpp); the shared context is unblockable, [`src/rpc/core_rpc_ffi.cpp`](../../src/rpc/core_rpc_ffi.cpp)) | 0; `node_server::add_host_fail` ([`src/p2p/net_node.inl:395`](../../src/p2p/net_node.inl)) is the P2P function and stays |
 | the test and debug levers | `rg -n -e 'test_drop_download' -e 'g_test_dbg_lock_sleep' -e 'show_time_stats' src contrib/epee/include/syncobj.h` → more than 10 | 0 |
 | background mining's options and runtime arguments | `rg -n -e 'do_background_mining' -e 'ignore_battery' -e 'bg_mining' src` → more than 10 | 0 for the options and the `start_mining` arguments; the miner's background thread deleted in this PR |
 | the network booleans and `keep-fakechain` | `rg -n -e 'arg_testnet_on' -e 'arg_stagenet_on' -e 'arg_regtest_on' -e 'keep_fakechain' src` → more than 20 | 0 in daemon-linked code; the utilities' copies are re-homed (§9) |
 | the three regtest arms | the FAKECHAIN tests at [`src/p2p/net_node.inl:617`](../../src/p2p/net_node.inl), [`:719`](../../src/p2p/net_node.inl), line 523 of `src/cryptonote_core/cryptonote_core.cpp` at `d26148535e`, [`:1628`](../../src/cryptonote_core/cryptonote_core.cpp) | gone; [`:484`](../../src/cryptonote_core/cryptonote_core.cpp) (the `/fake` subdirectory) becomes the params row; [`:631`](../../src/cryptonote_core/cryptonote_core.cpp) (the pool's flag) is the pool lane's and is listed, not deleted |
 | the data-directory port suffix | `rg -n -F -e 'm_config_folder + "/" + public_zone.m_port' src/p2p/net_node.inl` → 1 | 0 |
-| `Blockchain::m_offline` and its parameter | [`src/cryptonote_core/blockchain.cpp:302`](../../src/cryptonote_core/blockchain.cpp), [`src/cryptonote_core/blockchain.h:1145`](../../src/cryptonote_core/blockchain.h) | 0 |
+| `Blockchain::m_offline` and its parameter | `src/cryptonote_core/blockchain.cpp`, `src/cryptonote_core/blockchain.h` | 0 |
 | the undefined `extern nodetool::arg_offline` | line 507 of `src/p2p/net_node.h` at `d26148535e` | 0 |
 | `m_require_ipv4` | `rg -n -e 'm_require_ipv4' src` → 2 | 0 |
 | the environment levers | `rg -n -F -e 'getenv("SHEKYL_' src/cryptonote_core/blockchain.cpp` → 2; `rg -n -F -e 'env::var("SEEDHASH_' rust/shekyl-ffi/src/pow_randomx_ffi.rs` → 4; `rg -n -F -e 'getenv("RPC_LOGIN")' src/rpc` → 1; `rg -n -e 'SHEKYL_TOR_BINARY' rust docs/COMPILING_DEBUGGING_TESTING.md` → 8, read once at [`rust/shekyl-tor-control-client/src/binary.rs:491`](../../rust/shekyl-tor-control-client/src/binary.rs) | 0; the four `dev-` levers replace them, and Rust arms the schedules from its section; `tor-file` replaces the Tor override, and `discover_and_verify` keeps only its two discovered tiers |
 | the carrier global | `rg -n -e 'set_carrier_development' src` → more than 2 | 0; the relay reads `dev-relay-cover` |
 | `tools::set_max_concurrency` from the daemon | the two lines of `main.cpp` at `d26148535e`, recorded in the audit §2 | gone with `main.cpp`'s parse (commit (b)) |
-| the C++ notify path and its process-wide `SIGCHLD` change (DC-F12) | line 52 of `src/common/notify.cpp` at `d26148535e` splits a command string on whitespace; line 124 of `src/common/spawn.cpp` at `d26148535e` sets `SIGCHLD` to ignored for the whole process; the daemon is their only user (`src/cryptonote_core/cryptonote_core.cpp:53`, `src/cryptonote_core/blockchain.cpp:72` include `notify.h`), with `tests/unit_tests/notify.cpp` | `src/common/notify.{h,cpp}`, `src/common/spawn.{h,cpp}` and `tests/unit_tests/notify.cpp` deleted with their CMake entries; `rg -n -e 'tools::Notify' -e 'tools::spawn' -e 'SIGCHLD' src tests` → 0 (the runner is Rust's, DC-Q14, and tests itself) |
+| the C++ notify path and its process-wide `SIGCHLD` change (DC-F12) | line 52 of `src/common/notify.cpp` at `d26148535e` splits a command string on whitespace; line 124 of `src/common/spawn.cpp` at `d26148535e` sets `SIGCHLD` to ignored for the whole process; the daemon is their only user (`src/cryptonote_core/cryptonote_core.cpp:53`, `src/cryptonote_core/blockchain.cpp` include `notify.h`), with `tests/unit_tests/notify.cpp` | `src/common/notify.{h,cpp}`, `src/common/spawn.{h,cpp}` and `tests/unit_tests/notify.cpp` deleted with their CMake entries; `rg -n -e 'tools::Notify' -e 'tools::spawn' -e 'SIGCHLD' src tests` → 0 (the runner is Rust's, DC-Q14, and tests itself) |
 | the C++ signal owner and orchestration (DC-Q13) | [`src/daemon/daemon.cpp:272`](../../src/daemon/daemon.cpp) installs `tools::signal_handler`, whose Windows handler stops only on Ctrl-C and Ctrl-Break ([`src/common/util.h:193-201`](../../src/common/util.h), DC-F13); `Daemon::run`, `t_internals` and `main.cpp`'s body orchestrate the start | `rg -n -e 'signal_handler::install' src/daemon` → 0; the orchestration replaced by the remnant's `run(snapshot)` and `stop()`; `main.cpp` is one call |
 | `utils/conf/shekyld.conf` | the file exists; cited at [`docs/USER_GUIDE.md:131-133`](../USER_GUIDE.md) | gone |
 | `scripts/ci/check_carrier_flag_hidden.sh` | exists | replaced by a table test that `dev-relay-cover` is hidden and refused on mainnet |
@@ -885,8 +888,10 @@ generated documentation. The utilities Part B deletes go in their own PRs (`INPU
 until the redb cutover, and DRS-E2's `shekyl-e2-trace-export`) keep their
 option sets; the descriptors they share with the daemon (`arg_data_dir`,
 `arg_testnet_on`, `arg_stagenet_on`, `arg_db_sync_mode`) move into a header
-they own, and `src/blockchain_utilities/blockchain_import.cpp:662`'s call to
-`core::init_options` becomes a call into it.
+they own, and `src/blockchain_utilities/blockchain_import.cpp`'s call to
+`core::init_options` becomes a call into it. The store flip deleted
+`shekyl-blockchain-import`, `-export`, `-stats`, `shekyl-mdb-copy` and
+`shekyl-e2-trace-export`; the header they were going to own went with them.
 
 Pre-flight (rule 26), recorded in `docs/design/DAEMON_CONFIG_CUTOVER_AUDIT.md`
 before the first production commit:
@@ -920,7 +925,6 @@ chain-sync lanes do not touch the option surface.
 | DC-F1, the genesis-at-open check on a store's contents (no longer a blocker) | [`DAEMON_REDB_STORE.md`](DAEMON_REDB_STORE.md) |
 | DC-N2, the console moves to `shekyl-cli` | RT-15, [`RPC_CHANNEL.md`](RPC_CHANNEL.md) |
 | the blockchain utilities' option sets | IG Part B; this brief §9 |
-| the inherited default of `txpool-weight-max` (IG-Q11) | [`DRS_E5_POOL_ALT_PRUNE.md`](DRS_E5_POOL_ALT_PRUNE.md), the pool's live document |
 | the inherited default of `rpc-connections-max` (IG-Q12) | RT-O9.4, [`RPC_CHANNEL.md`](RPC_CHANNEL.md) |
 | the `removed_flags` shim sunset | this brief §4; the row leaves with the files |
 
@@ -930,7 +934,7 @@ chain-sync lanes do not touch the option surface.
 
 | Id | Finding | Route |
 | --- | --- | --- |
-| DC-F1 | `Blockchain::init` creates genesis only in an empty store and checks nothing in a non-empty one ([`src/cryptonote_core/blockchain.cpp:356-369`](../../src/cryptonote_core/blockchain.cpp)) | carried, §10; not a blocker (DC-Q5) |
+| DC-F1 | `Blockchain::init` creates genesis only in an empty store and checks nothing in a non-empty one (`src/cryptonote_core/blockchain.cpp`) | carried, §10; not a blocker (DC-Q5) |
 | DC-F2 | The documented per-network log file never existed: the default path takes the module name first ([`contrib/epee/src/mlog.cpp:64-82`](../../contrib/epee/src/mlog.cpp)) | absorbed: the network row names the file |
 | DC-F3 | SOCKS credentials are parsed and never reach Rust | absorbed, §2.5 |
 | DC-F4 | The silent auto-load path ignored `--data-dir` and, on Windows, differed from the data directory | absorbed by DC-Q3 |
@@ -941,7 +945,7 @@ chain-sync lanes do not touch the option surface.
 | DC-F9 | A list given on both surfaces kept only the command line's, undocumented | absorbed: IG-6 makes it the rule |
 | DC-F10 | A `*` origin aborts the daemon after its log says RPC started. `shekyl_daemon_rpc_start` returned a handle and spawned the server (lines 208 to 212 of `rust/shekyl-daemon-rpc/src/ffi_exports.rs` at `d26148535e`); the task builds the CORS layer ([`rust/shekyl-daemon-rpc/src/server.rs:87-115`](../../rust/shekyl-daemon-rpc/src/server.rs)); tower-http 0.6.8 panics on a wildcard passed to `AllowOrigin::list` (its `allow_origin.rs`, lines 60 to 64, read at source); the workspace builds with `panic = "abort"` in both profiles (`rust/Cargo.toml`, lines 671 to 676), so the process ends; no panic hook is installed, so the reason reaches standard error only. Entries that are not valid header values are logged and dropped ([`rust/shekyl-daemon-rpc/src/server.rs:100-102`](../../rust/shekyl-daemon-rpc/src/server.rs)) | absorbed: the origin kind refuses both at parse |
 | DC-F11 | A list option with no values was "present" to the C++: the vector semantic installs an empty default ([`src/common/command_line.h:179-183`](../../src/common/command_line.h)) and `has_arg` tests the map entry ([`src/common/command_line.h:256-262`](../../src/common/command_line.h)), so every start declared a closed network with no peers. PR-3 reads an empty declaration as none on the Rust side (`6fc926404`) | absorbed: the closed-network declaration is absent or non-empty |
-| DC-F14 | `/pop_blocks` is not limited to regtest today. Neither its handler ([`src/rpc/core_rpc_server.cpp:1186`](../../src/rpc/core_rpc_server.cpp)) nor the chain code checks the network, and the route is only `AdminOnly` ([`rust/shekyl-daemon-rpc/src/server.rs:349-351`](../../rust/shekyl-daemon-rpc/src/server.rs)), so a caller on the loopback admin listener can rewind a mainnet chain; the harness comment calling it "FAKECHAIN-gated" ([`rust/shekyl-engine-core/src/engine/regtest_e2e.rs:771`](../../rust/shekyl-engine-core/src/engine/regtest_e2e.rs)) is false | closed by RT-W10 step 1 (`RPC_CHANNEL.md` §6.4): the route is an armed test lever, served only with `--dev-rpc`, and the harness comment names it so |
+| DC-F14 | `/pop_blocks` is not limited to regtest today. Neither its handler ([`src/rpc/core_rpc_server.cpp`](../../src/rpc/core_rpc_server.cpp)) nor the chain code checks the network, and the route is only `AdminOnly` ([`rust/shekyl-daemon-rpc/src/server.rs:349-351`](../../rust/shekyl-daemon-rpc/src/server.rs)), so a caller on the loopback admin listener can rewind a mainnet chain; the harness comment calling it "FAKECHAIN-gated" ([`rust/shekyl-engine-core/src/engine/regtest_e2e.rs:771`](../../rust/shekyl-engine-core/src/engine/regtest_e2e.rs)) is false | closed by RT-W10 step 1 (`RPC_CHANNEL.md` §6.4): the route is an armed test lever, served only with `--dev-rpc`, and the harness comment names it so |
 | DC-F13 | On Windows a run-as-user daemon is terminated, not stopped, by every console event but Ctrl-C and Ctrl-Break: the handler logs "Exiting without saving" and returns `FALSE` for window close, logoff and shutdown ([`src/common/util.h:193-201`](../../src/common/util.h)), so RT-16's "stops at logout" does not hold today. Low severity: the stores are transactional and Tor exits through `TAKEOWNERSHIP` | absorbed: one stop path for every signal, console event and SCM control (§2.2 step 9) |
 | DC-F12 | The first notify command switches child reaping off for the whole process. `tools::spawn` sets `signal(SIGCHLD, SIG_IGN)` after a spawn it does not wait for (line 124 of `src/common/spawn.cpp` at `d26148535e`); from then on the kernel reaps every child, the managed Tor included, which the Rust side waits on ([`rust/shekyl-tor-control-client/src/control/actor.rs:616`](../../rust/shekyl-tor-control-client/src/control/actor.rs), [`:1011`](../../rust/shekyl-tor-control-client/src/control/actor.rs)). Under tokio 1.51.0 on Linux the pidfd reaper's wait then fails with `ECHILD` instead of an exit status; on macOS and FreeBSD the `SIGCHLD` handler tokio relies on is overwritten and the wait never completes | absorbed: the Rust runner reaps its own children and never changes a signal disposition (§2.10); pre-flight demonstrates it (§9) |
 

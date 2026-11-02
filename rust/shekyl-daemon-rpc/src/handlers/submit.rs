@@ -56,6 +56,10 @@ pub async fn submit_transaction(
         SubmitCaller::Foreign
     };
 
+    // The request's arrival, before the gate: with the engine's answer
+    // line, the record of a submit the gate or a phase held.
+    tracing::debug!(bytes = request.tx_blob.len() / 2, "submit received");
+
     // F39 verification cap, enforced at the async dispatch layer: acquire a
     // permit from the process-global Phase-C semaphore BEFORE spawning the
     // blocking submit, so a queued submission parks as a cheap async task

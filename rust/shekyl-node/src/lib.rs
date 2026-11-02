@@ -8,10 +8,9 @@
 //! Rust `main` builds it at start, after the network marker and before the
 //! remnant's `run`. It owns the chain store, the ingest service, the pool,
 //! the hasher budget, the cache store, the job board and the socket table.
-//! Nothing is routed into it from C++: the C++ core keeps the live chain
-//! and the live RPC until the flip. An empty store connects the pinned
-//! genesis through the service's door, and that is the only block the
-//! store holds until the flip routes arrivals.
+//! The handler's block arrivals enter the ingest door, and its transactions
+//! enter this pool. An empty store connects the pinned genesis through the
+//! service's door.
 //!
 //! # Stop
 //!
@@ -91,6 +90,7 @@ use shekyl_pow_randomx::CacheStore;
 use shekyl_runtime::{RuntimeBudget, ThreadName};
 use shekyl_transport_layer::Sockets;
 use shekyl_types::{BlockHeight, UnixSeconds};
+use tokio::sync::Notify;
 
 use crate::facts::{
     BansBridge, ChainBridge, DoorBridge, DoorEntry, PoolBridge, StopBridge, Surroundings,
@@ -215,6 +215,7 @@ impl Node {
         let store_path = args.config.data_dir.join("chain.db");
         let pool_path = args.config.data_dir.join("pool.db");
         let store = Arc::new(open_chain(&store_path, horizons, &anchors)?);
+        tracing::info!("{}", store_durability_line());
         let parallelism = std::thread::available_parallelism().unwrap_or(NonZeroUsize::MIN);
         let budget = Budget::new(parallelism);
         let caches = Arc::new(CacheStore::new());
@@ -223,6 +224,23 @@ impl Node {
             Arc::new(Metrics::new()),
         ));
         let pool = open_pool(&store, &pool_path, rules)?;
+        let submit_pool = Arc::clone(&pool);
+        let departed = pool_departed();
+        // Q9: fluff at this tip rebuilds the posted job. Same Notify the
+        // follower waits on for parked bodies.
+        let shown = Arc::new(Notify::new());
+        let shown_hook: shekyl_ffi::pool_ffi::Shown = {
+            let shown = Arc::clone(&shown);
+            Arc::new(move || shown.notify_one())
+        };
+        shekyl_ffi::pool_ffi::install(
+            Arc::clone(&store),
+            Arc::clone(&pool),
+            rules,
+            AdmissionPolicy::GENESIS,
+            Arc::clone(&departed),
+            shown_hook,
+        );
         let pool_slot = Arc::new(Mutex::new(Some(Arc::clone(&pool))));
         let sockets = Sockets::new();
         let board = Arc::new(JobBoard::new());
@@ -263,8 +281,10 @@ impl Node {
                 pool,
                 policy: AdmissionPolicy::GENESIS,
                 wall: Arc::new(wall_now),
+                departed: Some(Arc::clone(&departed)),
             }),
             producer,
+            shown: Some(shown),
         };
         let service_config = ServiceConfig::default();
         let runtime = shekyl_runtime::runtime(
@@ -290,11 +310,15 @@ impl Node {
                 }
                 return Err(error);
             }
+            // The handler's arrivals enter this door (DX-Q2 item 2). The
+            // pump runs on this runtime; unbind must not.
+            shekyl_ffi::ingest_ffi::install(service.door(), tokio::runtime::Handle::current());
             Ok(service)
         });
         let service = match started {
             Ok(service) => service,
             Err(error) => {
+                uninstall_process_doors();
                 runtime.shutdown(RUNTIME_SHUTDOWN);
                 return Err(error);
             }
@@ -307,6 +331,7 @@ impl Node {
         let (tips, latch) = match subscribed {
             Ok(pair) => pair,
             Err(error) => {
+                uninstall_process_doors();
                 if let Err(stop) = runtime.block_on(service.stop()) {
                     tracing::error!(
                         "a connector watch did not open, and the service stopped on {stop}"
@@ -316,7 +341,51 @@ impl Node {
                 return Err(OpenError::Service(error.to_string()));
             }
         };
+        // DX-Q2 item 5: the dialer's outbound handshake is a consumer of the
+        // one tip source. Publish the tip the watch holds now, then every
+        // change; the task ends when the connector drops its sender.
+        let mut handshake_tips = tips.clone();
+        runtime.spawn(async move {
+            loop {
+                if let Some(tip) = handshake_tips.borrow_and_update().tip {
+                    shekyl_ffi::dialer_ffi::publish_chain_tip(&tip);
+                }
+                if handshake_tips.changed().await.is_err() {
+                    break;
+                }
+            }
+        });
         let pool_health = service.pool_health();
+        shekyl_daemon_rpc::submit::install_production(
+            shekyl_daemon_rpc::submit::RustPoolShim::new(
+                shekyl_daemon_rpc::submit::StoreChain::new(
+                    Arc::clone(&store),
+                    Arc::new(RulesOf(rules)),
+                ),
+                submit_pool,
+                AdmissionPolicy::GENESIS,
+                wall_now,
+            )
+            .retiring(Arc::new({
+                let health = pool_health.clone();
+                move |fault| health.retire(fault)
+            }))
+            .nudging(Arc::new({
+                // The shell answers 0 only when no relay exists: an offline
+                // node never constructs one, so there is no network to hide
+                // from and the transaction is shown at once (RX-2, Rick
+                // 2026-10-29). With a relay, the answer is 1 before the zone
+                // plans on its strand, so `NoOwnEdge` and `AwaitSync` never
+                // reach this branch: the zone holds those (`hold_origin`),
+                // neither fluffed nor shown.
+                move |txid, blob| {
+                    if !relay_local(blob) {
+                        shekyl_ffi::pool_ffi::note_shown(*txid);
+                    }
+                }
+            }))
+            .departing(Arc::clone(&departed)),
+        );
         let rewinder = service.rewinder();
         let at_open = sync_at_open(network);
         tracing::info!(
@@ -338,7 +407,10 @@ impl Node {
             budget.clone(),
             found,
             miner_address,
-            posting.clone(),
+            mining::Watched {
+                posting: posting.clone(),
+                tips: tips.clone(),
+            },
             pool_health.clone(),
         ));
         let started_at = facts::unix_now();
@@ -389,7 +461,7 @@ impl Node {
         })
     }
 
-    /// The handles the RPC server carries. Live routes do not read them yet.
+    /// The handles the RPC server carries.
     #[must_use]
     pub fn handles(&self) -> Handles {
         self.handles.clone()
@@ -464,6 +536,9 @@ impl Node {
         // The miner first: its workers hash on the board this stop withdraws,
         // and a handle may keep mining control alive past the node.
         self.mining.close();
+        // The process doors hold the store (`Door::admission`); leave them
+        // up and `chain.db` stays exclusive after this node has stopped.
+        uninstall_process_doors();
         let Some(runtime) = self
             .runtime
             .lock()
@@ -618,6 +693,45 @@ fn wall_now() -> UnixSeconds {
     UnixSeconds::from_raw(facts::unix_now())
 }
 
+/// Every id that leaves the pool releases its relay state in the zone
+/// (`DRS_X_STORE_FLIP.md` §2): the zone's per-transaction state stays
+/// bounded by the pool. The hook does not read the pool: a concurrent flush
+/// can empty it between the release and any later count.
+fn pool_departed() -> shekyl_chain_ingest::service::Departed {
+    Arc::new(shekyl_ffi::relay_zone_ffi::note_departed)
+}
+
+/// The shell's relay entry. RD deletes it with `levin_notify`. `true`
+/// when the relay took the blob; `false` is no route (no notifier bound,
+/// whatever the reason), and the caller applies the fluff at the origin.
+fn relay_local(blob: &[u8]) -> bool {
+    if blob.is_empty() {
+        return false;
+    }
+    relay_local_ffi(blob) != 0
+}
+
+#[cfg(not(test))]
+#[allow(unsafe_code)]
+fn relay_local_ffi(blob: &[u8]) -> i32 {
+    // SAFETY: `blob` is a live slice. The shell answers 0 to a call before
+    // `core::init` returns.
+    unsafe { shekyl_shell_relay_local(blob.as_ptr(), blob.len()) }
+}
+
+#[cfg(test)]
+fn relay_local_ffi(blob: &[u8]) -> i32 {
+    shekyl_shell_relay_local(blob.as_ptr(), blob.len())
+}
+
+// The C++ shell's one relay entry. The node is the caller; the shell is
+// the definition. Unit tests supply the symbol themselves.
+#[cfg(not(test))]
+#[allow(unsafe_code)]
+unsafe extern "C" {
+    fn shekyl_shell_relay_local(blob: *const u8, len: usize) -> i32;
+}
+
 fn rules_of(config: &DaemonConfig) -> Result<ChainRules, OpenError> {
     let chain = match config.network {
         shekyl_daemon_config::Network::Mainnet => Chain::Public(shekyl_address::Network::Mainnet),
@@ -650,6 +764,15 @@ fn schedule_of(dev: &Dev) -> Result<FakechainSchedule, OpenError> {
         .map_err(|error| OpenError::Rules(error.to_string()))
 }
 
+/// Drop the process-wide doors that hold the chain store. `install` pairs
+/// with this; a stop or a failed open that already installed must call it,
+/// or the next open in this process meets `DatabaseAlreadyOpen`.
+fn uninstall_process_doors() {
+    shekyl_ffi::ingest_ffi::uninstall();
+    shekyl_ffi::pool_ffi::uninstall();
+    shekyl_daemon_rpc::submit::clear_production();
+}
+
 fn open_chain(
     path: &std::path::Path,
     horizons: Horizons,
@@ -674,6 +797,18 @@ fn open_chain(
         }
         Err(error) => Err(error.into()),
     }
+}
+
+/// A4: the durability the store opened with, said by the node that opened
+/// it. The DRS bench reads this line back (`scripts/bench/drs_artifact.py`
+/// `STORE_DURABILITY_RE`): the marker is `Store durability: ` and the first
+/// word after it is the policy.
+fn store_durability_line() -> String {
+    let durability = shekyl_chain_store::store::DURABILITY;
+    format!(
+        "Store durability: {} (an fsync per commit, DRS-D9; redb Durability::{durability:?})",
+        format!("{durability:?}").to_lowercase()
+    )
 }
 
 fn anchors_of(rules: ChainRules) -> ReleaseAnchors {
@@ -736,3 +871,12 @@ async fn connect_genesis(
 
 #[cfg(test)]
 mod tests;
+
+/// The daemon binary supplies this from C++. Unit tests link no C++, so
+/// a test node has no route: its own transactions fluff at the origin.
+#[cfg(test)]
+#[allow(unsafe_code)]
+#[no_mangle]
+extern "C" fn shekyl_shell_relay_local(_blob: *const u8, _len: usize) -> i32 {
+    0
+}

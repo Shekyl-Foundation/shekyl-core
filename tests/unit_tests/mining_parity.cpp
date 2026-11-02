@@ -37,31 +37,12 @@
 #include <vector>
 
 #include "cryptonote_basic/cryptonote_basic_impl.h"
-#include "cryptonote_basic/cryptonote_format_utils.h"
-#include "cryptonote_core/cryptonote_tx_utils.h"
-#include "crypto/pow_randomx.h"
 #include "cryptonote_config.h"
 #include "shekyl/economics.h"
 #include "shekyl/shekyl_ffi.h"
 
 namespace
 {
-
-// Lowercase hex of a 32-byte hash (self-contained; avoids an epee string_tools
-// include for one call site).
-std::string hex32(const crypto::hash& h)
-{
-  static const char digits[] = "0123456789abcdef";
-  std::string s;
-  s.reserve(64);
-  for (size_t i = 0; i < 32; ++i)
-  {
-    const unsigned char b = static_cast<unsigned char>(h.data[i]);
-    s.push_back(digits[b >> 4]);
-    s.push_back(digits[b & 0x0f]);
-  }
-  return s;
-}
 
 TEST(mining_parity, release_multiplier_scales_reward)
 {
@@ -173,16 +154,16 @@ TEST(mining_parity, genesis_paid_reward_and_split_are_pinned)
   ASSERT_EQ(genesis.staker_emission, UINT64_C(0));
 }
 
-TEST(mining_parity, randomx_hash_routes_through_v2_ffi)
+TEST(mining_parity, randomx_v2_ffi_reproduces_the_canonical_kat)
 {
-  // Reuse the Phase 3a Hole-1 canonical KAT (tests/randomx_v2_parity/
-  // randomx_v2_full_parity.cpp): seed 0x01..0x20 over a fixed ASCII blob has
-  // this pinned RandomX v2 light-cache hash. The release-gate parity test
-  // anchors the value against the C v2 full dataset; here we assert that
-  // hash_pow_randomx reproduces it, proving the C++ dispatch routes through
-  // the v2 verifier (the same expected value also appears in
-  // randomx_v2_full_parity.cpp's kFrozenKatHashHex — a drift in either
-  // fails both).
+  // The Phase 3a Hole-1 canonical KAT (tests/randomx_v2_parity/
+  // randomx_v2_full_parity.cpp kFrozenKatHashHex, and the miner KAT ctest):
+  // seed 0x01..0x20 over a fixed ASCII blob has this pinned RandomX v2
+  // light-cache hash. The release-gate parity test anchors the value against
+  // the C v2 full dataset; here the verifier this binary links reproduces it
+  // through the export the parity harness calls. The C++ dispatch that used
+  // to sit in front of the export (`hash_pow_randomx`, `get_block_longhash`)
+  // was deleted with the C++ chain: the daemon's PoW is the Rust ingest's.
   static const char* const kCanonicalKatHex =
     "34f8b0179159d837e463c17c8692c106d2d3536f7da325aeefeb3e22a136b651";
 
@@ -199,13 +180,6 @@ TEST(mining_parity, randomx_hash_routes_through_v2_ffi)
     expected[i] = static_cast<uint8_t>(std::stoul(
       std::string(kCanonicalKatHex + 2 * i, 2), nullptr, 16));
 
-  crypto::hash via_dispatch = crypto::null_hash;
-  ASSERT_TRUE(cryptonote::hash_pow_randomx(blob.data(), blob.size(), seed, via_dispatch));
-  ASSERT_EQ(0, std::memcmp(via_dispatch.data, expected.data(), expected.size()));
-
-  // A direct v2 FFI call must produce the same bytes, cross-checking the
-  // verifier is reachable from this binary and the dispatch marshals
-  // its arguments correctly.
   crypto::hash via_ffi = crypto::null_hash;
   ASSERT_EQ(SHEKYL_POW_RANDOMX_V2_OK,
             shekyl_pow_randomx_v2_hash(
@@ -213,62 +187,17 @@ TEST(mining_parity, randomx_hash_routes_through_v2_ffi)
               blob.data(),
               blob.size(),
               reinterpret_cast<uint8_t (*)[32]>(via_ffi.data)));
-  ASSERT_EQ(via_ffi, via_dispatch);
+  ASSERT_EQ(0, std::memcmp(via_ffi.data, expected.data(), expected.size()));
 }
 
-TEST(mining_parity, genesis_identity_is_pow_independent)
-{
-  // RANDOMX_V2_PHASE3_PLAN.md §3.2 / §8.3. The genesis block is mined at
-  // difficulty 1, so find_nonce_for_given_block accepts the very first nonce
-  // tried (GENESIS_NONCE) regardless of which PoW algorithm computes the
-  // longhash, and the block id is Keccak(serialized header) — independent of the
-  // longhash entirely. The RandomX v2 cutover (genesis longhash CryptoNight ->
-  // RandomX, and the calculate_block_hash block-202612 fossil drop in c1611f4be)
-  // therefore cannot move the genesis nonce or id. This also exercises
-  // generate_genesis_block through the v2 verifier — the path Blockchain::init
-  // runs on every daemon boot.
-  //
-  // frozen_id is a regression anchor. If a *legitimate* pre-genesis change to
-  // GENESIS_TX or a header field moves it, set frozen_id to "" to re-capture the
-  // printed value, then re-pin it. Each id is independently anchored by
-  // `geblock block-id --network <net>` (rust/shekyl-genesis-tool), which derives
-  // the same id in pure Rust from config/genesis_recipients.<net>.json; the
-  // mainnet id is also CI-cross-anchored to the height-0 block_hash in
-  // rust/shekyl-wire/tests/vectors/regtest_coinbase_hashes.json (daemon capture
-  // via capture_coinbase.py; see coinbase_hash.rs MAINNET_GENESIS_BLOCK_ID) —
-  // three independent derivations of the same PoW-independent genesis id.
-  struct NetCase
-  {
-    cryptonote::network_type net;
-    const char* name;
-    const char* frozen_id;
-  };
-  const NetCase nets[] = {
-    { cryptonote::MAINNET,  "mainnet",  "d7af382339b2cd0c4ee4b2ea0afe7426f34bc2971495d9873fd4cec2107ad8ed" },
-    { cryptonote::TESTNET,  "testnet",  "e895bf2baa4ea4ccb07620d354e544a4be243bf329925f6a8a51631da18033da" },
-    { cryptonote::STAGENET, "stagenet", "371e8fa310afb0c6089e47398ebe02c4e2aa1820e8ccfd32e328558b99677c60" },
-  };
-
-  for (const NetCase& nc : nets)
-  {
-    const cryptonote::config_t& cfg = cryptonote::get_config(nc.net);
-    cryptonote::block bl{};
-    ASSERT_TRUE(cryptonote::generate_genesis_block(bl, cfg.GENESIS_TX, cfg.GENESIS_NONCE))
-      << nc.name << ": generate_genesis_block failed";
-    EXPECT_EQ(cfg.GENESIS_NONCE, bl.nonce)
-      << nc.name << ": genesis nonce moved (difficulty-1 invariant broken)";
-
-    crypto::hash id{};
-    ASSERT_TRUE(cryptonote::get_block_hash(bl, id)) << nc.name << ": get_block_hash failed";
-    const std::string got = hex32(id);
-    if (std::string(nc.frozen_id).empty())
-      std::printf("[genesis] %-8s nonce=%u id=%s  (CAPTURE: paste into frozen_id)\n",
-                  nc.name, static_cast<unsigned>(bl.nonce), got.c_str());
-    else
-      EXPECT_EQ(std::string(nc.frozen_id), got) << nc.name << ": genesis block id changed";
-  }
-}
-
+// The genesis identity pin (`genesis_identity_is_pow_independent`: the three
+// networks' genesis block ids, derived through the C++ `generate_genesis_block`)
+// is not here. That constructor was deleted with the C++ chain; the ids are
+// derived in pure Rust from the pinned GENESIS_TX and nonce by
+// rust/shekyl-genesis-tool/tests/genesis_block_ids.rs, and the mainnet id is
+// also derived from the captured h0 blob by
+// rust/shekyl-wire/tests/coinbase_hash.rs (MAINNET_GENESIS_BLOCK_ID).
+//
 // The genesis extra's byte-identity proof is not here. It read the fields
 // out of each network's genesis extra and handed them back to
 // shekyl_coinbase_extra, requiring the same bytes out. Since the 0x0C draw

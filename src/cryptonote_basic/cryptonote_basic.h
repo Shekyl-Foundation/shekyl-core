@@ -256,8 +256,8 @@ namespace cryptonote
   // owns the layout, the parse and every structural bound. C++ never reads
   // inside: the three fields consensus indexes by -- (P, shard, E) -- come
   // through `shekyl_archival_serve_credit_extract` (the tagged blob, whole),
-  // and admission verifies through `shekyl_archival_verify_serve_credit_vin`
-  // with this vin's pruned record (CtSig.p.serve_credit_pruned[i]) alongside.
+  // and admission's verify (the C++ one went with `DEL-008`; the Rust rule is CEN-J8–J10) reads
+  // this vin's pruned record (CtSig.p.serve_credit_pruned[i]) alongside it.
   //
   // This used to be a typed struct with nine fields. Two of those were values
   // the verifier derives (RF-D6), one more was the challenged leaf the
@@ -350,7 +350,7 @@ namespace cryptonote
   // consensus and is consumed by three sites that MUST agree on what a given tx
   // is — check_tx_inputs (CT dispatch), check_tx_outputs (the v3
   // zero-plaintext-vout carve-out for emission reward vouts), and
-  // ver_non_input_consensus (RCT semantics) — so the predicate lives here once
+  // the deleted C++ RCT-semantics dispatch — so the predicate lives here once
   // (REWARD_EMISSION_E3_GATING_ROUND.md §2.2 / §9.5). Do not re-open-code it: a
   // second copy that drifts splits validators on whether a tx is an emission tx.
   enum class archival_tx_kind { none, serve_credit_only, bond_post, emission };

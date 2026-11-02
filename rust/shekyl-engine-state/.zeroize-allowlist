@@ -89,6 +89,14 @@ rust/shekyl-engine-state/src/ledger_indexes.rs|pub(crate) pub_keys: HashMap<[u8;
 # `Debug` and the engine-layer AEAD-at-rest seal on the `.wallet.pending`
 # sibling file, not by wipe-on-drop.
 rust/shekyl-engine-state/src/pending_post_block/mod.rs|pub tx_bytes: Vec<u8>
+#
+# `CenRowName::bytes` is the ASCII name of a consensus-census row
+# (`CEN-J15`), the public register identifier the daemon named in a
+# `consensus_rule` rejection (RPC 3.63; `TerminalCause::ConsensusRule`,
+# pending-post v14). It is a fixed 16-byte buffer so the cause stays
+# `Copy`; the name is published in the census and carries nothing of the
+# wallet's.
+rust/shekyl-engine-state/src/pending_post_block/mod.rs|bytes: [u8; CenRowName::CAPACITY]
 
 # ── pscan_cursor.rs ───────────────────────────────────────────────────
 #

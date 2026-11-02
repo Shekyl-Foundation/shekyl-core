@@ -20,15 +20,13 @@
 //! `E5-Q5`), so the switch matches on it rather than re-deriving the
 //! checkpoint test the function was already told.
 //!
-//! Pure over its operands. Two consumers: the Rust switch
-//! (`shekyl-chain-ingest`) and, until `DEL-009`, the C++ alt path, which
-//! marshals the two cumulative difficulties as the FFI's `ShekylU128`
-//! halves.
+//! Pure over its operands. The Rust switch (`shekyl-chain-ingest`) is
+//! the consumer. The C++ alt path and its FFI exports are gone (DEL-009).
 
 /// The verdict of one admission-time fork-choice evaluation.
 ///
-/// Discriminants are the FFI wire codes (`difficulty_ffi.rs` re-exports
-/// them as `SHEKYL_FORK_CHOICE_*`); keep them stable.
+/// Discriminants are the verdict codes the switch matches; keep them
+/// stable.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 #[repr(i32)]
 pub enum ForkChoiceVerdict {

@@ -361,7 +361,7 @@ where
         reference: Option<ReferenceBlock>,
         tree_depth: u8,
     ) -> Result<BuildSelected, SendError> {
-        if let Err(err) = request.check_recipients() {
+        if let Err(err) = request.check_recipients(self.network) {
             emit_pending_tx_diagnostic(
                 self.sink.as_ref(),
                 PendingTxDiagnostic::BuildFailed {

@@ -395,7 +395,7 @@ fn the_bond_post<'tx>(cx: &TxContext<'tx>) -> Option<&'tx shekyl_wire::BondPost>
 /// CEN-J11: the post's `hybrid_public_key` is canonical-length
 /// ([`PQC_HYBRID_SINGLE_KEY_LEN`]) and its `p_canonical_id` **is the
 /// recompute over it** ([`p_canonical_id_from_hybrid_pubkey`], the function
-/// the C++ calls through `shekyl_archival_p_canonical_id_from_pubkey`).
+/// the C++ called through its FFI, deleted by `DEL-008`).
 /// The hint is what every later read keys on — the fold's record write,
 /// J13's record read, G10's block uniqueness — so a post whose hint names
 /// another persona would insert the poster's key under the other's id;

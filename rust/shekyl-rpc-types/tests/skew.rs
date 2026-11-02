@@ -40,7 +40,8 @@ fn skew_a_unknown_cause_degrades_to_unrecognized() {
     assert_eq!(
         parsed,
         SubmitVerdict::Rejected {
-            cause: RejectCause::Unrecognized
+            cause: RejectCause::Unrecognized,
+            row: None,
         },
         "unknown cause must land on Unrecognized, never on a known cause"
     );
@@ -59,7 +60,8 @@ fn skew_a_holds_for_arbitrary_cause_strings() {
         assert_eq!(
             parsed,
             SubmitVerdict::Rejected {
-                cause: RejectCause::Unrecognized
+                cause: RejectCause::Unrecognized,
+                row: None,
             },
             "cause {cause:?} must degrade to Unrecognized"
         );
@@ -101,7 +103,8 @@ fn skew_c_unknown_fields_inside_known_variants_are_tolerated() {
     assert_eq!(
         parsed,
         SubmitVerdict::Rejected {
-            cause: RejectCause::FeeTooLow
+            cause: RejectCause::FeeTooLow,
+            row: None,
         }
     );
 }
@@ -133,7 +136,8 @@ fn skew_a_and_c_compose() {
     assert_eq!(
         parsed,
         SubmitVerdict::Rejected {
-            cause: RejectCause::Unrecognized
+            cause: RejectCause::Unrecognized,
+            row: None,
         }
     );
 }
@@ -152,7 +156,7 @@ fn unrecognized_never_appears_on_the_authoring_side_of_a_known_cause() {
         RejectCause::StaleRoot,
         RejectCause::ReferenceTooRecent,
         RejectCause::ReferenceNotFound,
-        RejectCause::JoinMarketUnsupported,
+        RejectCause::ConsensusRule,
     ];
     for cause in known {
         let json = serde_json::to_string(&cause).expect("serialize cause");

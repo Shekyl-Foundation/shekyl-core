@@ -35,9 +35,11 @@
 #           2026-09-08 local Release; sum ~20 min).
 #   slow  — ARMED_SLOW, the nightly live-daemon workflow (depth-3 spend
 #           780 s measured 2026-09-08 local Release, and the two slice-7
-#           gates — too heavy per-PR, still consensus gates). The emission
-#           claim left this lane: it submits a kind-5 JoinMarket, which
-#           this daemon does not admit (DECIDED_DARK, FND-20).
+#           gates — too heavy per-PR, still consensus gates; four bonded
+#           walks since the DRS-X flip, two of which close and price an
+#           archival shard with real spends before they stake). The
+#           emission-claim walk is DECIDED_DARK: its serve-credit lever
+#           went with the C++ chain.
 # Both lanes name-check ALL lists, so a rename is caught in every run.
 #
 # PR #660 ruled against a cost tier on the grounds that a nightly tier
@@ -124,37 +126,15 @@ regtest_ignored=$(grep -c '^engine::regtest_e2e::.*: test$' "$ignored" || true)
 #     bridged pool routes and not the native one; the native
 #     /get_transactions handler passing `true` for the flag panicked naming
 #     that route alone. ~77 s measured, local Release daemon.
-#   e2e_the_cxx_daemon_answers_join_market_unsupported — the FND-20
-#     tripwire for the five DECIDED_DARK walks below: drives the bond walk
-#     to its submit and asserts the C++ commit shim's typed answer
-#     (Rejected{JoinMarketUnsupported}, which the wallet takes as terminal
-#     and releases the post's funding — not a Rust verdict on the post, not
-#     a commit fault). Goes red the day the daemon under test admits a
-#     kind-5 JoinMarket, naming the five walks that are then due back
-#     (FOLLOWUPS: "The five bonded regtest walks are decided dark").
-#     Sabotage 2026-10-14, local Release daemon built from this branch: the
-#     C++ shim's JoinMarket answer disabled (`if false && …`), daemon
-#     rebuilt; the commit fell through to the C++ reparse and the test
-#     panicked on its other-finding arm naming Submit(Ambiguous {
-#     DaemonUnavailable }) (78 s; the green run before it 89 s).
-#   e2e_fcmp_spend_over_depth3_tree (slow) — historical red: CurveTreeIngest
-#     root mismatch pre-fix, confirmed 2026-06-27 (its doc comment).
-#   e2e_cxx_template_fills_to_its_median (slow) — historical red
-#     2026-09-28: its premise (a C++-built block at the limit) failed its
-#     own assertions on the first run; the C++ producer stops at its
-#     fee/penalty equilibrium past the median (CHAIN_RULES_SLICE_7.md §3.5).
-#     Fifty wallet spends into the pool: ~5 min debug, too heavy per-PR.
-#   e2e_a_rust_block_at_the_consensus_bound_is_judged_by_the_cxx (slow) —
-#     historical red 2026-09-28: the C++ refused the Rust block at the
-#     bound for its coinbase (the regtest F21 epoch, §3.11), the finding
-#     that fixed the daemon's hard-fork table. Same pool cost as above.
-#   the_armed_switch_on_testnet_serves_two_levers_and_the_setter_refuses_inject —
-#     RT-O36, recorded red in 8cd238c (2026-10-26), then restored. The
-#     setter admitting testnet made inject answer OK; the switch off made
-#     generateblocks come back -32002 rpc.unarmed. One testnet daemon,
-#     zero blocks: an admission probe, so it stays on the per-PR lane.
+#   sync::a_dialing_node_hands_its_tip_to_the_peer_it_dials — DX-Q2 item 5 (the
+#     design review's M2): a restarted node's first outbound handshake
+#     carries the tip it read from its store. Two daemons, one restart.
+#     Red check seen 2026-10-29 (the flip's owner, local debug build) with
+#     the tip forwarder disabled in shekyl-node: "the restarted A never
+#     handed B its tip: after 90s: fresh incoming connections on B: []
+#     (wanted one at height Some(21))", 114 s. Green 35 s measured
+#     2026-10-29, local debug build.
 ARMED=(
-  engine::regtest_e2e::e2e_the_cxx_daemon_answers_join_market_unsupported
   engine::regtest_e2e::origin::restricted_listener_is_withheld_status_and_capped_by_native_handlers
   engine::regtest_e2e::ported_console_commands_answer_on_the_in_process_arm
   engine::regtest_e2e::ported_p2p_console_commands_answer_on_the_in_process_arm
@@ -169,18 +149,72 @@ ARMED=(
   engine::regtest_e2e::jsonrpc_we_carries_handler_status_through_the_result_envelope
   engine::regtest_e2e::get_output_histogram_stays_unrouted
   engine::regtest_e2e::origin::restricted_listener_hides_a_transaction_this_node_has_not_broadcast
+  engine::regtest_e2e::origin::restricted_listener_names_a_transaction_this_node_shows
   engine::regtest_e2e::origin::get_info_console_commands_answer_on_the_in_process_arm
-  engine::regtest_e2e::the_armed_switch_on_testnet_serves_two_levers_and_the_setter_refuses_inject
+  engine::regtest_e2e::the_armed_switch_on_testnet_serves_two_levers_and_knows_no_third
+  engine::regtest_e2e::sync::a_dialing_node_hands_its_tip_to_the_peer_it_dials
+  # Observed red 2026-10-30 on the flip at e4280bfbf5 before the sync-head
+  # fix: the joiner stood at height 21 of 101 (one span) until the deadline.
+  engine::regtest_e2e::sync::a_node_syncs_a_chain_longer_than_the_doors_window_from_a_peer
 )
 
 # Consensus gates too heavy for the per-PR lane (depth-3 spend, 13 min
 # measured 2026-09-08; the two slice-7 gates ~5 min each in a debug build,
-# fifty spends apiece). The emission claim (19 min) left with the kind-5
-# walks. The nightly live-daemon workflow runs these with GATE_LANE=slow.
+# fifty spends apiece). The nightly live-daemon workflow runs these with
+# GATE_LANE=slow. The four bonded walks joined on 2026-10-29, when the Rust
+# daemon first admitted a kind-5 JoinMarket (the DRS-X flip), each
+# observed green on that daemon before it moved here:
+#   e2e_staker_bond_post_accepted_and_applied — the production stake entry
+#     (a complete-tree bond: mine + fund + discover + stake + submit +
+#     confirm), 264 s.
+#   e2e_drain_wire_shape_matches_a_real_transfer — the drain wire shape
+#     over a complete-tree bond, 165 s.
+#   The two market-bond walks stake a compact join onto shard 0, which
+#     CEN-J15 admits only once the shard is closed, final and priced by a
+#     slash pass. Each opens with `close_shard_through_the_daemon` from
+#     the staker wallet it then stakes from: 289 real wallet spends
+#     (10 579 B of archival good apiece, sixteen a block) close the shard,
+#     `reorg_cap` blocks make it final, the wallet's P-scan covers the
+#     fill ahead of the retention prune, and the chain is mined through
+#     the pass that prices it — the daemon's `get_archival_shard_coverage`
+#     is the exit, never arithmetic. That fill is most of each walk's
+#     time (the box's block pace, 1–3 s, sets the rest), and why they are
+#     here rather than per-PR. Observed red on the flip binary 2026-10-29
+#     before the fill existed, each at its first stake (the pool door's
+#     J15 refusal), and green with it, local debug build:
+#     e2e_release_accepted_and_connected — 1 385 s (SEB 32, cap 8).
+#     e2e_unstake_collect_retire_composed_arc — 1 348 s (SEB 8, cap 2;
+#       the 248-block claim window included).
+#   The relay embargo's two live walks (RX-1, Rick 2026-10-29), each
+#   waiting out the origin's 1,148 s retry, so slow lane, not PR lane:
+#     origin::embargo::an_origin_with_no_alternate_fluffs_at_its_first_fire_and_is_mined
+#       — origin and sink: the first fire has no alternate and fluffs (W3b);
+#       broadcast at 1 148.6 s, mined, 1 230 s, 2026-10-30. Red before the
+#       embargo landed: the origin held its transaction in stem past 600 s
+#       (2026-10-29).
+#     origin::embargo::an_origin_whose_successor_drops_re_stems_to_its_alternate_and_never_fluffs
+#       — the origin and three simulated Levin peers (regtest_e2e_peer.rs):
+#       two take its stem slots and swallow stems, one dials in and fluffs
+#       the transaction back. Re-stem to the alternate at 1 148.0 s, disarmed
+#       by the return, no fluff through a second interval, mined; 2 497 s,
+#       2026-10-30. No daemon option drops stems (Rick, 2026-10-29: the
+#       adversary belongs in the test). Red seen 2026-10-30 on a daemon
+#       built to fluff on every fire (the C++ behaviour §14 rejected): the
+#       first fire reached the alternate as a fluff, "the re-stem is a stem".
 ARMED_SLOW=(
   engine::regtest_e2e::e2e_fcmp_spend_over_depth3_tree
   engine::regtest_e2e::e2e_cxx_template_fills_to_its_median
   engine::regtest_e2e::e2e_a_rust_block_at_the_consensus_bound_is_judged_by_the_cxx
+  engine::regtest_e2e::e2e_staker_bond_post_accepted_and_applied
+  engine::regtest_e2e::e2e_drain_wire_shape_matches_a_real_transfer
+  engine::regtest_e2e::e2e_release_accepted_and_connected
+  engine::regtest_e2e::e2e_unstake_collect_retire_composed_arc
+  engine::regtest_e2e::origin::embargo::an_origin_with_no_alternate_fluffs_at_its_first_fire_and_is_mined
+  engine::regtest_e2e::origin::embargo::an_origin_whose_successor_drops_re_stems_to_its_alternate_and_never_fluffs
+  # Observed red 2026-10-30 (the handed-over span removed from the queue
+  # before the door connected it): the joiner stood at one height with the
+  # door reporting no room, as the F-B subjects did at 724 of 762.
+  engine::regtest_e2e::sync::a_node_syncs_fifteen_spans_from_a_peer
 )
 
 # Deliberately never run here, with the reason recorded (rule 23: a decided
@@ -194,37 +228,16 @@ ARMED_SLOW=(
 #     pass/fail proposition: each writes its trace under RT_P5_OUT and is
 #     run by hand when the registration says. The parser they rely on is
 #     covered by ordinary unit tests in the same module.
-#   The five walks below each call `stake_persona_to_confirmed_bond`, which
-#     submits a `post_kind` 5 JoinMarket. The C++ daemon cannot parse that
-#     byte, and the frozen verify export refuses every JoinMarket
-#     (`FN_DSA_HYBRID.md` §8, FND-20); its commit shim answers
-#     Rejected{JoinMarketUnsupported} for one. Observed red 2026-10-13 on
-#     `e2e_staker_bond_post_accepted_and_applied`, when that refusal still
-#     surfaced as a commit fault. The lane exits on the first red, so the
-#     other four were not reached; they share the helper and fail the same
-#     way. Teaching the
-#     C++ decoder the receipt key is the departure this increment refuses
-#     (no file under `src/` moved). A Rust reparse inside the submit shim
-#     would not apply the post either: pool, mine, connect and relay all
-#     parse the blob in C++. The walks stay in the tree — the positive
-#     subject returns when the daemon under test admits a kind-5 JoinMarket
-#     (DEL-008) — and move back to ARMED or ARMED_SLOW then. That day is
-#     not left to be noticed: the ARMED tripwire
-#     e2e_the_cxx_daemon_answers_join_market_unsupported drives
-#     the same bonding path to the submit and asserts the refusal, so a
-#     daemon that admits the post turns it red naming these five. The
-#     deferral record is the FOLLOWUPS row "The five bonded regtest walks
-#     are decided dark until the daemon under test admits a kind-5
-#     JoinMarket" (owner DEL-008).
-#     Prior reds, so the original subject is not lost:
-#       e2e_staker_bond_post_accepted_and_applied — PR-4a daemon-gap
-#         tripwire (unimplemented-arm Malformed).
-#       e2e_drain_wire_shape_matches_a_real_transfer — sabotage 2026-09-08.
-#       e2e_release_accepted_and_connected — sabotage 2026-09-08 (as
-#         e2e_unbond_accepted_and_connected, pre Unbond→Release rename).
-#       e2e_unstake_collect_retire_composed_arc — sabotage 2026-09-08.
-#       e2e_emission_claim_accepted_and_applied — sabotage 2026-09-08;
-#         was ARMED_SLOW.
+#   e2e_emission_claim_accepted_and_applied — the third market-bond walk.
+#     Dark because serve credit's production path goes live at SO-D12 4b
+#     (Rick, 2026-10-29: no inject lever; test the production path). Its
+#     CEN-J15 darkness is gone: on the flip binary it fills and prices
+#     shard 0, the market bond is admitted and confirmed, and the join
+#     epoch is read back (SEB 128, cap 16), green; its A2 leg calls the
+#     `inject_archival_serve_credit` lever DX-Q3 deleted with the C++
+#     chain. 4b re-subjects A2 to the bundle path and arms it, in the
+#     live-Tor lane (FOLLOWUPS: the emission regtest walk). Prior reds:
+#     sabotage 2026-09-08 (was ARMED_SLOW).
 #   capture_chain_keeps_its_datadir — the DX-Q8 chain generator. One
 #     regtest daemon, data directory kept on drop, the directory asserted
 #     still present. Run by hand with SHEKYLD_BIN before
@@ -236,10 +249,6 @@ DECIDED_DARK=(
   engine::regtest_e2e::generate_ct2_tier_b_fixture
   engine::regtest_e2e::rt_p5::rt_p5_dry_run
   engine::regtest_e2e::rt_p5::rt_p5_registered_run
-  engine::regtest_e2e::e2e_staker_bond_post_accepted_and_applied
-  engine::regtest_e2e::e2e_drain_wire_shape_matches_a_real_transfer
-  engine::regtest_e2e::e2e_release_accepted_and_connected
-  engine::regtest_e2e::e2e_unstake_collect_retire_composed_arc
   engine::regtest_e2e::e2e_emission_claim_accepted_and_applied
 )
 

@@ -457,8 +457,8 @@ pub fn emission_epoch_facts<'id, V: ChainView<'id>>(
     Ok(out)
 }
 
-/// CEN-J25: the coarse verify — `shekyl_emission_vin_verify`
-/// (`blockchain.cpp:4015`), here the retention crate's three legs and
+/// CEN-J25: the coarse verify — the C++'s one FFI crossing, deleted by
+/// `DEL-008` — here the retention crate's three legs and
 /// their join: [`emission_vin_verify_claims_under`] (`REWARD_EMISSION_LEG.md`
 /// §7.1 claims 1–5: alignment, the claim window against the connecting
 /// height, the claimant's bond posture and holdings, dedup against the

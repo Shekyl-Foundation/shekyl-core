@@ -954,7 +954,7 @@ impl CurveTreeClient {
     ///
     /// Pure forward to [`LeafStore::next_freeze_seg`]; the prefix invariant
     /// and the deliberate non-collision with
-    /// `shekyl_archival_retention::frozen_segment_count` live there.
+    /// the frozen-segment count the archival C++ path read (deleted, `DEL-008`) live there.
     ///
     /// # Errors
     ///

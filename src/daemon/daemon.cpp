@@ -49,7 +49,7 @@
 #include "misc_log_ex.h"
 #include "p2p/net_node.h"
 #include "rpc/core_rpc_ffi.h"
-#include "rpc/core_rpc_server.h"
+#include "rpc/rpc_subject.h"
 #include "shekyl/shekyl_ffi.h"
 #include "version.h"
 
@@ -86,17 +86,19 @@ struct t_internals {
   // P2P server bound to protocol.
   t_node_server p2p;
 
-  // The core the Rust RPC serves; the listeners are Rust's.
-  std::unique_ptr<cryptonote::core_rpc_server> rpc;
+  // The two objects the Rust RPC's sync-half facts read. The listeners
+  // are Rust's.
+  rpc_subject subject;
 
   explicit t_internals(const ShekylDaemonSnapshot& snapshot)
     : core(nullptr)
     , protocol{core, nullptr, snapshot.offline}
     , p2p{protocol}
+    , subject{nullptr, nullptr}
   {
     // === core ===
     MGINFO("Initializing core...");
-    if (!core.init(snapshot, nullptr))
+    if (!core.init(snapshot))
     {
       throw std::runtime_error("Failed to initialize core");
     }
@@ -123,16 +125,16 @@ struct t_internals {
     core.set_cryptonote_protocol(&protocol);
 
     // The one RPC handle. Rust binds and serves the RPC section at the
-    // remnant's one start call in run() (DAEMON_CONFIG_CUTOVER.md §2.3);
-    // this object is the core it serves and reads no option.
-    rpc.reset(new cryptonote::core_rpc_server{core, p2p});
+    // remnant's one start call in run() (DAEMON_CONFIG_CUTOVER.md §2.3).
+    // These two pointers are what the sync-half facts read.
+    subject.core = &core;
+    subject.p2p = &p2p;
   }
 
   ~t_internals()
   {
     // The Rust RPC is already stopped (shekyl_daemon_rpc_stop() in
-    // Daemon::run()); the core_rpc_server is torn down when `rpc` is
-    // destroyed below. No explicit RPC deinit step remains.
+    // Daemon::run()). No explicit RPC deinit step remains.
 
     MGINFO("Deinitializing p2p...");
     try { p2p.deinit(); }
@@ -202,7 +204,7 @@ bool Daemon::run(bool interactive)
     // serves them; the refusal is logged there. Its completion is what the
     // Rust main() waits for before it starts what serves peers (§2.2 step
     // 8), so it is the last act of construction here.
-    if (shekyl_daemon_rpc_start(static_cast<void*>(mp_internals->rpc.get())) != 0)
+    if (shekyl_daemon_rpc_start(static_cast<void*>(&mp_internals->subject)) != 0)
     {
       throw std::runtime_error("Failed to start the RPC; the reason is logged just above");
     }
@@ -220,7 +222,7 @@ bool Daemon::run(bool interactive)
         0, 0,
         mp_internals->core.get_nettype(),
         false,
-        mp_internals->rpc.get()));
+        &mp_internals->subject));
       // The console's `exit` asks the one stop owner (§2.2 step 9); the
       // remnant never stops itself.
       rpc_commands->start_handling([](){ shekyl_daemon_request_stop(); });

@@ -554,16 +554,14 @@ fn classify_probe(outcome: TxSubmitOutcome) -> ProbeVerdict {
         TxSubmitOutcome::AlreadyInChain { .. } => {
             ProbeVerdict::Kernel(ProbeOutcome::ConfirmedInChain)
         }
-        TxSubmitOutcome::Rejected { cause } => match cause {
+        TxSubmitOutcome::Rejected { cause, .. } => match cause {
             // Terminal: under single-egress a definite terminal verdict
             // proves the bytes are in neither pool nor chain (§7.1).
             RejectCause::Malformed
             | RejectCause::FeeTooLow
             | RejectCause::DoubleSpendConflict
-            | RejectCause::Unrecognized
-            | RejectCause::JoinMarketUnsupported => {
-                ProbeVerdict::Kernel(ProbeOutcome::RejectedTerminal)
-            }
+            | RejectCause::ConsensusRule
+            | RejectCause::Unrecognized => ProbeVerdict::Kernel(ProbeOutcome::RejectedTerminal),
             // Retryable: needs a fresh reference — a human-authorized
             // rebuild, not an automatic one.
             RejectCause::StaleRoot
@@ -580,12 +578,12 @@ fn probe_trace(outcome: TxSubmitOutcome) -> WatchdogProbeOutcome {
         TxSubmitOutcome::Submitted { .. } => WatchdogProbeOutcome::ReofferedAfterAbsence,
         TxSubmitOutcome::AlreadyInPool { .. } => WatchdogProbeOutcome::PresentInPool,
         TxSubmitOutcome::AlreadyInChain { .. } => WatchdogProbeOutcome::ConfirmedInChain,
-        TxSubmitOutcome::Rejected { cause } => match cause {
+        TxSubmitOutcome::Rejected { cause, .. } => match cause {
             RejectCause::Malformed
             | RejectCause::FeeTooLow
             | RejectCause::DoubleSpendConflict
-            | RejectCause::Unrecognized
-            | RejectCause::JoinMarketUnsupported => WatchdogProbeOutcome::RejectedTerminal,
+            | RejectCause::ConsensusRule
+            | RejectCause::Unrecognized => WatchdogProbeOutcome::RejectedTerminal,
             RejectCause::StaleRoot
             | RejectCause::ReferenceTooRecent
             | RejectCause::ReferenceNotFound => WatchdogProbeOutcome::RejectedRetryable,

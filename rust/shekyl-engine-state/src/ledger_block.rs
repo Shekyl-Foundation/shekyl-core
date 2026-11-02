@@ -41,7 +41,7 @@
 //!   confidential-staking sweep.)
 
 use serde::{Deserialize, Serialize};
-use shekyl_types::BlockHeight;
+use shekyl_types::{BlockHeight, ChainCount};
 use shekyl_units::AtomicUnits;
 
 use crate::{error::WalletLedgerError, transfer::TransferDetails};
@@ -320,6 +320,21 @@ impl LedgerBlock {
         self.tip.synced_height
     }
 
+    /// The chain count this wallet is synced through: `0` when it has
+    /// never scanned a block, otherwise the newest ingested block's height
+    /// plus one. The same quantity as the daemon's `get_height` count, so
+    /// the two compare directly; [`Self::height`] does not (a synced wallet
+    /// reads one behind, and an unscanned one reads as having scanned
+    /// genesis). `None` only for a tip at `u64::MAX`, which no chain can
+    /// reach and only a corrupt file can hold.
+    pub fn synced_count(&self) -> Option<ChainCount> {
+        if self.tip.is_unscanned() {
+            Some(ChainCount::ZERO)
+        } else {
+            ChainCount::with_tip(self.tip.synced_height)
+        }
+    }
+
     /// All tracked transfers as a slice.
     pub fn transfers(&self) -> &[TransferDetails] {
         &self.transfers
@@ -459,6 +474,24 @@ mod tests {
         assert_eq!(window.len(), 2);
         window.retain_recent(0);
         assert!(window.is_empty());
+    }
+
+    #[test]
+    fn synced_count_is_the_daemon_count_of_the_scanned_chain() {
+        let at = |tip: BlockchainTip| LedgerBlock::new(Vec::new(), tip, ReorgBlocks::default());
+        assert_eq!(LedgerBlock::empty().synced_count(), Some(ChainCount::ZERO));
+        assert_eq!(
+            at(BlockchainTip::new(BlockHeight::from_raw(0), [7; 32])).synced_count(),
+            Some(ChainCount::from_raw(1)),
+        );
+        assert_eq!(
+            at(BlockchainTip::new(BlockHeight::from_raw(1556), [7; 32])).synced_count(),
+            Some(ChainCount::from_raw(1557)),
+        );
+        assert_eq!(
+            at(BlockchainTip::new(BlockHeight::from_raw(u64::MAX), [7; 32])).synced_count(),
+            None,
+        );
     }
 
     fn sample_transfer(seed: u8) -> TransferDetails {

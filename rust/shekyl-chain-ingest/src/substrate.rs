@@ -6,16 +6,17 @@
 //! The production [`Substrate`]: RandomX verification and the system clock
 //! (`DRS_E2_REPLAY_DRIVER.md` RD-Q3).
 //!
-//! Until this type existed only mocks implemented the trait. This is the
-//! one implementation every Shekyl validator runs — the replay driver, the
-//! live daemon, the wallet's own checks — and it is a **thin adapter** over
-//! `shekyl-pow-randomx`'s verifier surface: `CacheStore::lookup_or_derive`
-//! for the seed's [`PreparedCache`] (the daemon's two-epoch cache, so a
-//! replay crossing a seed boundary swaps caches the way the daemon does)
-//! and `compute_hash` for the longhash. Never the mining JIT (§1.3); never
-//! `VmStatePool`, which is bench scaffolding (RD-F14). Parallel formation
-//! is N workers each holding a clone of this substrate — the cache store is
-//! shared behind its own `Arc`s, the scratchpad is per call.
+//! This is the one implementation every Shekyl validator runs — the replay
+//! driver, the live daemon, the wallet's own checks — and it is a thin
+//! adapter over `shekyl-pow-randomx`. [`CacheStore`] holds the two prepared
+//! caches, canonical and transient. [`longhash`](Substrate::longhash) is
+//! [`compute_hash`] on a cache [`CacheStore::lookup`] already holds.
+//! [`pin_seed`](shekyl_chain_rules::Substrate::pin_seed) and
+//! [`prepare_seed`](shekyl_chain_rules::Substrate::prepare_seed) are the
+//! only fills. Never the mining JIT; never `VmStatePool`, which is bench
+//! scaffolding (RD-F14). Parallel formation is N workers each holding a
+//! clone of this substrate — the cache store is shared behind its own
+//! `Arc`s, the scratchpad is per call.
 //!
 //! # Faults
 //!
@@ -28,16 +29,20 @@
 //!
 //! # Pinning the epoch (RD-F20)
 //!
-//! `CacheStore` holds two prepared caches — canonical and transient — and
-//! derives on every miss. A driver that never pins leaves both live seeds
-//! of a lag window fighting over the one transient slot, so each switch
-//! between them is a fresh 256 MiB fill: the first real run re-derived at
-//! window 16 on a 301-block chain with two seeds. [`Substrate::pin_seed`]
-//! is the hook: the pipeline calls it with the claimed seed whenever the
-//! seed changes, before the blocks under it are formed, and this substrate
-//! makes that seed canonical through [`CacheStore::pin_canonical`] — the
-//! same call the daemon's FFI pin makes, so an epoch switch is one
-//! operation whichever door it arrives through.
+//! A hash does not fill a cache. [`longhash`](Substrate::longhash) looks
+//! up; a miss is [`SubstrateFault::CacheAbsent`]. The derive is
+//! [`pin_seed`](shekyl_chain_rules::Substrate::pin_seed), which makes that
+//! seed canonical through [`CacheStore::pin_canonical`], or
+//! [`prepare_seed`](shekyl_chain_rules::Substrate::prepare_seed), which
+//! builds a branch seed into the transient slot and leaves the canonical
+//! slot where it is. The pipeline pins each seed the window names before
+//! the blocks under it are formed, so the first block of an epoch never
+//! waits on a build.
+//!
+//! The store holds two prepared caches. A driver that hashed without
+//! pinning refilled 256 MiB at every seed switch: the first real run
+//! re-derived at window 16 on a 301-block chain with two seeds. Pinning
+//! is what ended that.
 //!
 //! # Measurement
 //!

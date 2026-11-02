@@ -27,12 +27,10 @@
 //! store's size was read for every caller, because a restricted reply
 //! carried it rounded up; that read ended with the stand-ins.
 //!
-//! **This trait is the contract the store cutover inherits.** Today its one
-//! implementation reads the C++ core through the facts shim. When the Rust
-//! store replaces the C++ one, the implementation changes and this does
-//! not — which is why the rules that matter are stated here, on the trait,
-//! and tested against a double, rather than left to the C++ side to get
-//! right. Three in particular:
+//! **This trait is the contract the store cutover inherits.** The live
+//! implementation is [`crate::store_facts::StoreFacts`]. The rules that
+//! matter are stated here, on the trait, and tested against a double.
+//! Three in particular:
 //!
 //! - [`InfoFacts::chain`] describes **one** chain state. Everything it
 //!   returns that comes from the chain store is read under one lock and
@@ -47,14 +45,12 @@
 //!   the same board.
 
 use std::path::Path;
-use std::sync::Arc;
 
 use shekyl_economics::TxVolume;
 use shekyl_types::{BlockHash, ChainCount};
 use shekyl_units::AtomicUnits;
 
-use crate::chain_facts::{decode_target_count, FactsFault};
-use crate::core::CoreRpc;
+use crate::chain_facts::FactsFault;
 
 /// The chain at its tip, with the node's own view of whether it is caught
 /// up. Read for every caller.
@@ -308,101 +304,6 @@ pub fn store_file_size(path: &Path) -> Result<u64, FactsFault> {
             );
             Err(FactsFault::StoreUnreadable)
         }
-    }
-}
-
-/// Production [`InfoFacts`] over the live core handle.
-pub struct FfiInfoFacts {
-    core: Arc<CoreRpc>,
-}
-
-impl FfiInfoFacts {
-    pub fn new(core: Arc<CoreRpc>) -> Self {
-        Self { core }
-    }
-}
-
-impl InfoFacts for FfiInfoFacts {
-    fn chain(&self) -> Result<InfoChainFacts, FactsFault> {
-        let pod = self.core.info_chain().map_err(FactsFault::from_code)?;
-        Ok(InfoChainFacts {
-            chain_height: ChainCount::from_raw(pod.chain_height),
-            top_hash: BlockHash::from_bytes(pod.top_hash),
-            difficulty: u128::from(pod.difficulty_hi) << 64 | u128::from(pod.difficulty_lo),
-            cumulative_difficulty: u128::from(pod.cumulative_difficulty_hi) << 64
-                | u128::from(pod.cumulative_difficulty_lo),
-            difficulty_target: pod.difficulty_target,
-            total_transactions: pod.total_transactions,
-            block_weight_limit: pod.block_weight_limit,
-            block_weight_median: pod.block_weight_median,
-            adjusted_time: pod.adjusted_time,
-            already_generated_coins: AtomicUnits::from_raw(pod.already_generated_coins),
-            total_burned: AtomicUnits::from_raw(pod.total_burned),
-            tx_volume: TxVolume::window(pod.tx_volume_count_sum, pod.tx_volume_blocks),
-            core_target_height: decode_target_count(pod.core_target_height),
-            synchronized: pod.synchronized != 0,
-            busy_syncing: pod.busy_syncing != 0,
-            offline: pod.offline != 0,
-            following_degraded: pod.following_degraded != 0,
-            protocol_version: u64::from(pod.protocol_version),
-        })
-    }
-
-    fn pool_counts(&self, scope: PoolScope) -> Result<PoolState<PoolCounts>, FactsFault> {
-        let (broadcast, unbroadcast) = self
-            .core
-            .info_pool_counts(scope == PoolScope::WithUnbroadcast)
-            .map_err(FactsFault::from_code)?;
-        // The C++ pool is never retired.
-        Ok(PoolState::Live(PoolCounts {
-            broadcast,
-            unbroadcast,
-        }))
-    }
-
-    fn store_size(&self) -> Result<u64, FactsFault> {
-        let path = self.core.info_store_file().map_err(FactsFault::from_code)?;
-        store_file_size(&path)
-    }
-
-    fn status(&self) -> Result<InfoStatusFacts, FactsFault> {
-        let (pod, version) = self.core.info_status().map_err(FactsFault::from_code)?;
-        // The build always has a version. An empty one is a shim that did
-        // not write it, and the reply type refuses it on the reading side;
-        // it is a fault here and not a reply nobody could decode.
-        if version.is_empty() {
-            return Err(FactsFault::Inconsistent);
-        }
-        Ok(InfoStatusFacts {
-            start_time: pod.start_time,
-            free_space: pod.free_space,
-            alt_blocks_count: pod.alt_blocks_count,
-            version,
-        })
-    }
-
-    fn peers(&self) -> Result<PeerFacts, FactsFault> {
-        // The two list sizes come from the Rust peer lists, not the core,
-        // and are read first: a daemon started offline answers that
-        // there, and no count is read for it.
-        let (white_peerlist_size, grey_peerlist_size) =
-            match crate::core::CoreRpc::peerlist_sizes().map_err(FactsFault::from_code)? {
-                crate::core::P2pRead::Offline => return Ok(PeerFacts::Offline),
-                crate::core::P2pRead::Running(sizes) => sizes,
-            };
-        let pod = self.core.info_peers().map_err(FactsFault::from_code)?;
-        Ok(PeerFacts::Running(InfoPeersFacts {
-            public_incoming_sockets: pod.public_incoming_sockets,
-            public_outgoing_sockets: pod.public_outgoing_sockets,
-            tor_incoming_sockets: pod.tor_incoming_sockets,
-            tor_outgoing_sockets: pod.tor_outgoing_sockets,
-            white_peerlist_size,
-            grey_peerlist_size,
-        }))
-    }
-
-    fn sessions(&self) -> Result<SessionCounts, FactsFault> {
-        sessions()
     }
 }
 

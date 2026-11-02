@@ -8,11 +8,9 @@
 //! shape: a trait object, and an absent value that answers
 //! [`FactsFault::NotReady`].
 //!
-//! **Nothing here is routed.** The live handlers still read the C++ core.
-//! The handles are on [`crate::server::AppState`] so the flip's edit is
-//! which source a handler calls, and a Rust test can already call them
-//! over a real node. An absent handle never answers with a zero or an
-//! empty list (RK-D23): those are what a live, empty node reports.
+//! The handlers and the in-process console read these handles. An absent
+//! handle never answers with a zero or an empty list (RK-D23): those are
+//! what a live, empty node reports.
 
 use std::net::{IpAddr, Ipv4Addr};
 use std::num::NonZeroUsize;
@@ -36,15 +34,59 @@ use crate::read_facts::{
     PowSeed, ShardCoverage, SpentAt,
 };
 
-/// The chain reads that replace `FfiChainFacts`, `FfiInfoFacts` and
-/// `ChainReadFacts`' production sources at the flip. One object, the
-/// three traits those handlers already call.
-pub trait ChainRead: ChainFacts + InfoFacts + ChainReadFacts {}
+/// The chain reads. One object, the three traits the handlers call.
+/// The production source is the store.
+pub trait ChainRead: ChainFacts + InfoFacts + ChainReadFacts {
+    /// This object as the chain-facts trait the method functions take.
+    fn as_chain_facts(&self) -> &dyn ChainFacts;
+    /// This object as the info-facts trait `get_info` takes.
+    fn as_info_facts(&self) -> &dyn InfoFacts;
+    /// This object as the read-facts trait the store methods take.
+    fn as_read_facts(&self) -> &dyn ChainReadFacts;
+}
 
-impl<T> ChainRead for T where T: ChainFacts + InfoFacts + ChainReadFacts {}
+impl<T> ChainRead for T
+where
+    T: ChainFacts + InfoFacts + ChainReadFacts,
+{
+    fn as_chain_facts(&self) -> &dyn ChainFacts {
+        self
+    }
+
+    fn as_info_facts(&self) -> &dyn InfoFacts {
+        self
+    }
+
+    fn as_read_facts(&self) -> &dyn ChainReadFacts {
+        self
+    }
+}
 
 /// A chain-read handle.
 pub type ChainReadHandle = Arc<dyn ChainRead>;
+
+static LIVE: std::sync::Mutex<Option<Handles>> = std::sync::Mutex::new(None);
+
+/// The handles the running daemon's console reads. Set when the RPC starts.
+pub fn publish_live(handles: &Handles) {
+    *LIVE
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner) = Some(handles.clone());
+}
+
+/// The published handles, or `None` before the RPC has started.
+#[must_use]
+pub fn live_handles() -> Option<Handles> {
+    LIVE.lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner)
+        .clone()
+}
+
+/// The published chain, or `None` before the RPC has started.
+#[must_use]
+pub fn live_chain() -> Option<ChainReadHandle> {
+    live_handles().map(|handles| handles.chain)
+}
 
 /// One pool entry, as a listing reads it: never when it arrived (S7).
 #[derive(Clone, Debug, PartialEq, Eq)]

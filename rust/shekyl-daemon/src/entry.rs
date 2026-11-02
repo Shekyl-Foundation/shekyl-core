@@ -8,8 +8,8 @@
 //!
 //! Nothing crosses in either direction but what is here. C++ `main()`
 //! hands [`shekyl_daemon_main`] a [`ShekylDaemonEntry`] — its version
-//! strings and two function pointers, `run` and `stop` — and the process
-//! `argc`/`argv`. Rust resolves that vector through
+//! strings, whether this build is a release, and two function pointers,
+//! `run` and `stop` — and the process `argc`/`argv`. Rust resolves that vector through
 //! [`ArgumentVector`](shekyl_ffi::argument_vector::ArgumentVector) and fills
 //! a [`ShekylDaemonSnapshot`], the read-only structure holding exactly the
 //! values whose reader is still C++, and calls `run` with it. The C++
@@ -51,6 +51,9 @@ pub struct ShekylDaemonEntry {
     pub release_name: *const c_char,
     /// `SHEKYL_VERSION_FULL`, NUL-terminated.
     pub version_full: *const c_char,
+    /// `SHEKYL_VERSION_IS_RELEASE`. The same constant the version string
+    /// is built from (`version.cpp.in`), not `debug_assertions` (FLIP-Q3).
+    pub is_release: bool,
     /// `SHEKYL_PROTOCOL_VERSION`.
     pub protocol_version: u32,
     /// The remnant's `run`.
@@ -58,6 +61,21 @@ pub struct ShekylDaemonEntry {
     /// The remnant's `stop`.
     pub stop: Option<StopFn>,
 }
+
+/// The 64-bit layout `main()` fills. `is_release` sits between the version
+/// string and `protocol_version` (FLIP-Q3). The C++ twin is
+/// `tests/unit_tests/daemon_entry_layout.cpp`; the FFI layout gate compares
+/// the two definitions.
+const _: () = {
+    assert!(std::mem::align_of::<ShekylDaemonEntry>() == 8);
+    assert!(std::mem::size_of::<ShekylDaemonEntry>() == 40);
+    assert!(std::mem::offset_of!(ShekylDaemonEntry, release_name) == 0);
+    assert!(std::mem::offset_of!(ShekylDaemonEntry, version_full) == 8);
+    assert!(std::mem::offset_of!(ShekylDaemonEntry, is_release) == 16);
+    assert!(std::mem::offset_of!(ShekylDaemonEntry, protocol_version) == 20);
+    assert!(std::mem::offset_of!(ShekylDaemonEntry, run) == 24);
+    assert!(std::mem::offset_of!(ShekylDaemonEntry, stop) == 32);
+};
 
 /// The daemon's one C entry: C++ `main()` builds an entry and calls this
 /// with its `argc` and `argv`, and Rust owns the process from here.
@@ -111,6 +129,7 @@ mod tests {
         ShekylDaemonEntry {
             release_name: release.as_ptr(),
             version_full: version.as_ptr(),
+            is_release: false,
             protocol_version: 3,
             run: None,
             stop: None,

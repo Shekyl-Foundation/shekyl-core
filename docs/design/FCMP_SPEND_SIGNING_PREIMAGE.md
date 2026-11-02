@@ -48,7 +48,7 @@ shekyl-oxide output. Its full end-to-end proof is the live-oracle spend KAT
 > was read at the pin, not live sites.
 
 ### 1.1 Per-input PQC signing preimage
-`get_transaction_signed_payload(tx, i)` (`src/cryptonote_core/tx_pqc_verify.cpp:58-152`, at the pin; deleted 2026-09-25):
+`get_transaction_signed_payload(tx, i)` (`tx_pqc_verify.cpp:58-152` at the pin; the function was deleted 2026-09-25 and the file deleted with the C++ chain in DRS-X):
 
 ```
 payload(i) = prefix_blob ‖ ct_base_blob ‖ prunable_hash ‖ pqc_header(i) ‖ all_key_hashes

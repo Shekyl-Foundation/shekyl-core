@@ -65,7 +65,7 @@ public:
     , uint16_t port
     , cryptonote::network_type nettype
     , bool is_rpc = true
-    , cryptonote::core_rpc_server* rpc_server = NULL
+    , void* live = NULL
     );
 
   bool process_command_str(const std::string& cmd);

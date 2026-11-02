@@ -39,8 +39,7 @@ set(cryptonote_basic_sources
   connection_context.cpp
   cryptonote_basic_impl.cpp
   cryptonote_format_utils.cpp
-  difficulty.cpp
-  miner.cpp)
+  difficulty.cpp)
 
 set(cryptonote_basic_headers)
 
@@ -56,7 +55,6 @@ target_link_libraries(cryptonote_basic
   PUBLIC
     common
     cncrypto
-    checkpoints
     cryptonote_format_utils_basic
     device
     ${Boost_DATE_TIME_LIBRARY}

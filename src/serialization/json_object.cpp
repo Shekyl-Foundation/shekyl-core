@@ -34,7 +34,6 @@
 #include <type_traits>
 
 #include "cryptonote_basic/cryptonote_basic_impl.h"
-#include "cryptonote_core/cryptonote_tx_utils.h"
 
 // drop macro from windows.h
 #ifdef GetObject
@@ -1450,27 +1449,6 @@ void fromJsonValue(const rapidjson::Value& val, cryptonote::rpc::DaemonInfo& inf
   info.wide_cumulative_difficulty = cumulative_difficulty_top64;
   info.wide_cumulative_difficulty <<= 64;
   info.wide_cumulative_difficulty += info.cumulative_difficulty;
-}
-
-void toJsonValue(rapidjson::Writer<epee::byte_stream>& dest, const cryptonote::tx_block_template_backlog_entry& entry)
-{
-  dest.StartObject();
-  INSERT_INTO_JSON_OBJECT(dest, id, entry.id);
-  INSERT_INTO_JSON_OBJECT(dest, weight, entry.weight);
-  INSERT_INTO_JSON_OBJECT(dest, fee, entry.fee);
-  dest.EndObject();
-}
-
-void fromJsonValue(const rapidjson::Value& val, cryptonote::tx_block_template_backlog_entry& entry)
-{
-  if (!val.IsObject())
-  {
-    throw WRONG_TYPE("json object");
-  }
-
-  GET_FROM_JSON_OBJECT(val, entry.id, id);
-  GET_FROM_JSON_OBJECT(val, entry.weight, weight);
-  GET_FROM_JSON_OBJECT(val, entry.fee, fee);
 }
 
 }  // namespace json

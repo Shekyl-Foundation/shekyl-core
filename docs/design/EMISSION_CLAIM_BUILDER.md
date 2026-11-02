@@ -210,7 +210,7 @@ daemon identity; **mining-era end** — the path must survive as the
 long-term payout rail):
 
 - **(a) New daemon RPC** exposing the as-of-`E` snapshot per `(P, E)`
-  (the same gather `shekyl_archival_emission_epoch_work` marshals for
+  (the same gather `shekyl_archival_emission_epoch_work` (deleted, `DEL-008`) marshals for
   verify). Pro: single source of truth, byte-identical operands. Con: a
   new public RPC surface; persona-side calls must ride the `P`-isolated
   transport (`PTorClient`/`PRpc`) under the 2d-2 posture rules — under
@@ -224,7 +224,7 @@ long-term payout rail):
   per-`P` contribution to `Σwork(E)`, and its doc comment is explicit
   that it is sourced once so the three existing consumers — the persisted
   denominator (`sigma_work_milli`), the emission numerator FFI
-  (`shekyl_archival_emission_epoch_work`), and the verify body
+  (`shekyl_archival_emission_epoch_work` (deleted, `DEL-008`)), and the verify body
   (`emission_verify`) — **cannot drift**: "the M-2 sourcing-divergence the
   WS-1 design makes *unrepresentable rather than tested-against*." A
   wallet-side re-derivation is a fourth evaluator that is *not* sourced
@@ -689,7 +689,7 @@ predicate ever changes independently of the floor.
 | Field | Type | Source of truth (daemon-side) | Consumer (wallet-side) |
 | --- | --- | --- | --- |
 | `chain_height` | u64 | tip at gather time | staleness check against the wallet's own scan tip (§2 step 3 same-tip rule); not an operand |
-| `current_settled_epoch` | u64 | `shekyl_archival_settlement_epoch_at_height` over tip (`archival_ffi.rs:520`) — the same helper consensus uses, never a second derivation | step 1 window bounds: `claim_window_floor(settled)` … `settled − 1` |
+| `current_settled_epoch` | u64 | `shekyl_archival_settlement_epoch_at_height` (deleted, `DEL-008`) over tip (`archival_ffi.rs:520`) — the same helper consensus uses, never a second derivation | step 1 window bounds: `claim_window_floor(settled)` … `settled − 1` |
 | `has_bond_record` | bool | `archival_bond_record` row existence for `p_id` | absent ⇒ `NoClaimableEpochs` refusal (idle, not error) |
 | `join_settlement_epoch` | u64 | bond record | step 1 `E ≥ E_join + 1` filter; vin field |
 | `holdings` | `HoldingsDescriptor` (wire form) | bond record | vin holdings-equality field (§5.3/§6.4.1 — verify step 2 demands record equality; the builder copies the record's descriptor, never recomputes one) |
@@ -702,7 +702,7 @@ field the landed struct lacks and drops none):
 | Field | Mirrors | Note |
 | --- | --- | --- |
 | `settlement_epoch` | `.settlement_epoch` | echo of the row's `E` |
-| `close_block_height` | `.close_block_height` | the close-**processing** height `(E+1)·SEB`. Sourced from `shekyl_archival_epoch_close_processing_height`, one above the epoch's last block `shekyl_archival_epoch_last_block` (= `(E+1)·SEB − 1`; named `*_epoch_close_height` until 2026-09-30, when the shared word was retired — `DRS_E4_ARCHIVAL_WRITER.md` §10). The RPC doc comment repeats this pin |
+| `close_block_height` | `.close_block_height` | the close-**processing** height `(E+1)·SEB`. Sourced from `shekyl_archival_epoch_close_processing_height` (deleted, `DEL-008`), one above the epoch's last block `shekyl_archival_epoch_last_block` (deleted, `DEL-008`) (= `(E+1)·SEB − 1`; named `*_epoch_close_height` until 2026-09-30, when the shared word was retired — `DRS_E4_ARCHIVAL_WRITER.md` §10). The RPC doc comment repeats this pin |
 | `sigma_work_milli` | `.sigma_work_milli` | **persisted** `Σwork(E)` — the stored denominator, never a recompute (M1 gate outcome reaches the wallet only through this value, same as verify) |
 | `budget_atomic` | `.budget_atomic` | frozen close-row `budget(E)` |
 | `has_budget_row` | `.has_budget_row` | absent close row ⇒ wallet treats `E` as unclaimable (mirrors the verify shim's reject); present-and-zero is rejected downstream by wire positivity. This is the C++ daemon's row, where budget and `Σwork` are frozen together at the close (goes with `DEL-008`). In the Rust validator the budget row exists one epoch before the `Σwork` row (`SO-D11`, [`ARCHIVAL_SETTLEMENT_WRITER.md`](ARCHIVAL_SETTLEMENT_WRITER.md) §15), so budget presence alone is not claimability there. `Σwork`'s presence is not on the wire. Gating an epoch on `Σwork`'s row at the claim source is `SO-D11g`, recorded on the `DEL-008` row; the RPC and the wallet are unchanged |

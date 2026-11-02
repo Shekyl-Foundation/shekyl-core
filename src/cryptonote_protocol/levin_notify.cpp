@@ -120,22 +120,65 @@ namespace levin
     //! §46: hand the stemmed txs to the zone's observation watch. The
     //! deadline is drawn Rust-side (zone-cached embargo timer); `source` is
     //! null for locally-originated (nil uuid), matching `in_mapping_[nil]`.
+    //! The canonical hashes of the blobs in `txs` that parse, with spans over
+    //! those same blobs, aligned. The spans borrow `txs`.
+    struct relay_tx_spans
+    {
+      std::vector<crypto::hash> hashes;
+      std::vector<ShekylRelayBlob> spans;
+    };
+
+    relay_tx_spans relay_tx_spans_of(const std::vector<cryptonote::blobdata>& txs)
+    {
+      relay_tx_spans out{};
+      out.hashes.reserve(txs.size());
+      out.spans.reserve(txs.size());
+      for (const auto& blob : txs)
+      {
+        cryptonote::transaction tx{};
+        crypto::hash hash{};
+        if (!cryptonote::parse_and_validate_tx_from_blob(blob, tx, hash))
+          continue;
+        out.hashes.push_back(hash);
+        out.spans.push_back(ShekylRelayBlob{reinterpret_cast<const std::uint8_t*>(blob.data()), blob.size()});
+      }
+      return out;
+    }
+
+    /* The stem watch's observation IS the embargo: the zone keeps the bytes
+       beside it, keyed on the hash and never on the wire, and re-stems them
+       to the alternate or fluffs them when it fires (DAEMON_RELAY_PRIVACY.md
+       §12.2, §14.7). */
     void record_stem_observation(
       RelayZoneHandle* const relay,
       const std::vector<cryptonote::blobdata>& txs,
       const boost::uuids::uuid& destination,
       const boost::uuids::uuid& source)
     {
-      const std::vector<crypto::hash> hashes = stem_watch_tx_hashes(txs);
-      if (hashes.empty())
+      const relay_tx_spans held = relay_tx_spans_of(txs);
+      if (held.hashes.empty())
         return;
       const bool local = source.is_nil();
       shekyl_relay_zone_record_stem(
-        relay, reinterpret_cast<const std::uint8_t*>(hashes.data()), hashes.size(),
+        relay, reinterpret_cast<const std::uint8_t*>(held.hashes.data()),
+        held.spans.data(), held.hashes.size(),
         reinterpret_cast<const std::uint8_t*>(std::addressof(destination)),
         local ? nullptr : reinterpret_cast<const std::uint8_t*>(std::addressof(source)),
         now_ms()
       );
+    }
+
+    /* This node's own transactions that were not sent stay with the zone:
+       not shown, not fluffed (RX-2, Rick 2026-10-29). The zone plans them
+       again on its wake. */
+    void hold_origin(RelayZoneHandle* const relay, const std::vector<cryptonote::blobdata>& txs)
+    {
+      const relay_tx_spans held = relay_tx_spans_of(txs);
+      if (held.hashes.empty())
+        return;
+      shekyl_relay_zone_hold_origin(
+        relay, reinterpret_cast<const std::uint8_t*>(held.hashes.data()),
+        held.spans.data(), held.hashes.size(), now_ms());
     }
 
     //! \return `id` as the 16 raw bytes the relay FFI reads.
@@ -670,6 +713,45 @@ namespace levin
         }
       }
 
+      /*! An embargo's reshape to the alternate, or a held origin's send: a
+          stem on the ordinary wire to the peer the zone named
+          (DAEMON_RELAY_PRIVACY.md §12.2; RX-1, RX-2). The zone already armed
+          the next embargo against this peer, so nothing is recorded here, and
+          the bytes are the transaction's own: no relay or retry state rides
+          them (§12.2 item 5). Sent without the fluff flag, as every stem is.
+
+          On a zone running the development carrier this goes out unpadded
+          where a planned stem would ride the carrier; the carrier is off in
+          every shipped build (`make_relay_zone`), and RD owns the residual. */
+      static void on_stem(void* ctx, const std::uint8_t* peer, const ShekylRelayBlob* blobs, std::size_t n) noexcept
+      {
+        assert(ctx != nullptr);
+        try
+        {
+          detail::zone& z = *static_cast<relay_effects*>(ctx)->zone;
+          boost::uuids::uuid destination{};
+          std::memcpy(std::addressof(destination), peer, sizeof(destination));
+          connections* registry = z.registry_holding(destination);
+          if (!registry)
+            return;
+
+          std::vector<blobdata> txs;
+          txs.reserve(n);
+          for (std::size_t i = 0; i < n; ++i)
+            txs.emplace_back(reinterpret_cast<const char*>(blobs[i].ptr), blobs[i].len);
+          if (!make_payload_send_txs(*registry, std::move(txs), destination, z.pad_txs, false))
+            MDEBUG("reshape stem to " << destination << " was not written; the next fire fluffs");
+        }
+        catch (const std::exception& e)
+        {
+          MERROR("relay stem callback threw, dropping send: " << e.what());
+        }
+        catch (...)
+        {
+          MERROR("relay stem callback threw a non-standard exception, dropping send");
+        }
+      }
+
       /* The noise send below is REACHABLE now, and it transports rather than
          logging. That is the carrier caller landing: `NoiseQueues` in
          `shekyl-relay` holds the buffers, the join in `relay_zone_ffi`
@@ -822,10 +904,13 @@ namespace levin
           const std::uint64_t at = now_ms();
           relay_effects sink{zone_};
           sink.reserve_verdicts(*zone_);
+          /* The handler's sync state until CS-5: a turn to synchronised
+             plans every origin the zone holds (RX-2). */
+          const bool node_synchronised = core_ != nullptr && core_->is_synchronized();
           shekyl_relay_zone_poll(
-            zone_->relay.get(), at,
+            zone_->relay.get(), at, node_synchronised,
             std::addressof(sink),
-            relay_effects::on_fluff, relay_effects::on_noise,
+            relay_effects::on_fluff, relay_effects::on_stem, relay_effects::on_noise,
             relay_effects::on_carrier_resolved
           );
           /* AFTER the call returns: `apply_carrier_verdicts` re-enters the zone,
@@ -983,8 +1068,13 @@ namespace levin
             const bool originated_here = (pending.requested == relay_method::local);
             if (originated_here)
             {
-              MDEBUG("carrier discarded an originated transaction; leaving it "
-                     "unrelayed so the origin retries on the short grid");
+              /* Never sent in full, so the zone holds it on the short grid
+                 (§92.5c), neither shown nor fluffed (RX-2). */
+              MDEBUG("carrier discarded an originated transaction; the zone holds it");
+              const ShekylRelayBlob span{reinterpret_cast<const std::uint8_t*>(pending.blob.data()), pending.blob.size()};
+              shekyl_relay_zone_hold_origin(
+                z.relay.get(), reinterpret_cast<const std::uint8_t*>(std::addressof(pending.txid)),
+                std::addressof(span), 1, at_ms);
               return;
             }
             /* RECORDED EVEN IF NO PEER TAKES IT, and that is a deliberate
@@ -1073,9 +1163,11 @@ namespace levin
              locally originated and collapse every forwarded stem into the
              local bucket of the watch's source mapping. */
           const bool local = pending.source.is_nil();
+          const ShekylRelayBlob span{reinterpret_cast<const std::uint8_t*>(pending.blob.data()), pending.blob.size()};
           shekyl_relay_zone_record_stem(
             z.relay.get(),
-            reinterpret_cast<const std::uint8_t*>(std::addressof(pending.txid)), 1,
+            reinterpret_cast<const std::uint8_t*>(std::addressof(pending.txid)),
+            std::addressof(span), 1,
             reinterpret_cast<const std::uint8_t*>(std::addressof(v.peer)),
             local ? nullptr : reinterpret_cast<const std::uint8_t*>(std::addressof(pending.source)),
             /* The POLL's clock, not the wall clock. `run_next_wake` drives
@@ -1203,18 +1295,23 @@ namespace levin
         );
         if (plan == SHEKYL_RELAY_PLAN_AWAIT_SYNC)
         {
-          // The zone withheld a local origin. Nothing was sent and nothing is
-          // recorded, so the pool retries after this node synchronises.
-          MDEBUG("unsynchronised node originates no stem");
+          // The zone withheld a local origin. Nothing was sent; the zone holds
+          // it and plans it again when this node turns synchronised.
+          MDEBUG("unsynchronised node originates no stem; the zone holds it");
+          hold_origin(zone_->relay.get(), txs_);
+          relay_wake::arm(zone_, core_);
           return;
         }
         if (plan == SHEKYL_RELAY_PLAN_NO_OWN_EDGE)
         {
           // No outbound edge hides this node's address. Nothing is sent and
-          // nothing is recorded, so the pool retries on the short grid.
-          // Refreshing the stem map cannot manufacture that edge, and a fluff
-          // would publish the origin on a clear link.
-          MDEBUG("no outbound edge hides this node's address; originating nothing");
+          // nothing is shown: the zone holds it and plans it again on its
+          // short grid or when a session is established (RX-2). Refreshing
+          // the stem map cannot manufacture that edge, and a fluff would
+          // publish the origin on a clear link.
+          MDEBUG("no outbound edge hides this node's address; the zone holds the origin");
+          hold_origin(zone_->relay.get(), txs_);
+          relay_wake::arm(zone_, core_);
           return;
         }
         if (plan == SHEKYL_RELAY_PLAN_OWN_EDGE)
@@ -1231,7 +1328,10 @@ namespace levin
             MDEBUG("Sent " << txs_.size() << " transaction(s) to " << destination << " on the own-edge");
             return;
           }
-          MDEBUG("own-edge write failed; originating nothing");
+          // The write failed: nothing was sent. The zone holds it (RX-2).
+          MDEBUG("own-edge write failed; the zone holds the origin");
+          hold_origin(zone_->relay.get(), txs_);
+          relay_wake::arm(zone_, core_);
           return;
         }
 
@@ -1641,10 +1741,11 @@ namespace levin
       const std::uint64_t at = shekyl_relay_zone_next_wake(z->relay.get());
       relay_effects sink{z};
       sink.reserve_verdicts(*z);
+      const bool node_synchronised = core != nullptr && core->is_synchronized();
       shekyl_relay_zone_poll(
-        z->relay.get(), at,
+        z->relay.get(), at, node_synchronised,
         std::addressof(sink),
-        relay_effects::on_fluff, relay_effects::on_noise,
+        relay_effects::on_fluff, relay_effects::on_stem, relay_effects::on_noise,
         relay_effects::on_carrier_resolved
       );
       // AFTER the call returns; see the sibling site.
@@ -1676,30 +1777,18 @@ namespace levin
        read-modify of the zone's stem watch, so it takes the same path as
        every other handle call rather than racing them. Hashes are the join
        key — the caller already parsed once for the whole fan-out. */
-    boost::asio::dispatch(zone_->strand, [zone = zone_, hashes = std::move(hashes), from, core = core_] ()
+    boost::asio::dispatch(zone_->strand, [zone = zone_, hashes = std::move(hashes), from] ()
     {
       /* `from` identifies the arriving peer so the watch can refuse to
          resolve an observation charged to that same peer (F-10). A nil uuid
          means "no peer", which never matches a successor. */
-      std::vector<crypto::hash> propagated(hashes->size());
-      const std::size_t n = shekyl_relay_zone_record_arrival(
+      /* The zone resolves the verdicts, disarms the embargoes they end and
+         marks those transactions shown in the pool itself (Q9). Nothing
+         crosses back: the count is all this side could use, and it does not. */
+      shekyl_relay_zone_record_arrival(
         zone->relay.get(), reinterpret_cast<const std::uint8_t*>(hashes->data()), hashes->size(),
         from.is_nil() ? nullptr : reinterpret_cast<const std::uint8_t*>(std::addressof(from)),
-        reinterpret_cast<std::uint8_t*>(propagated.data()));
-
-      /* The verdicts that fired on THIS arrival, forwarded once. Sized at the
-         arrival count because the propagated set is a subset of it, so the
-         buffer is exact without a probe call.
-
-         Same seam `on_transactions_relayed` uses, for the same reason: the
-         relay strand owns the handle and holds no pool reference, and core is
-         the only thing that reaches both. Nothing is decided here — the pool
-         scopes the fact to the entry class that asked the question. */
-      if (n != 0 && core != nullptr)
-      {
-        propagated.resize(n);
-        core->on_stem_propagated(epee::to_span(propagated));
-      }
+        nullptr);
     });
   }
 

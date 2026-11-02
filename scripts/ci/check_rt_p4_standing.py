@@ -82,6 +82,10 @@ KNOWN_BUILD_ENV = frozenset({
     # Where cargo writes, pinned to the path the link reads (#1228); it
     # selects a directory, never a codegen setting.
     "CARGO_TARGET_DIR",
+    # The release version string, set only on the wallet binaries' build
+    # and read only by `shekyl-wallet-rpc`'s `option_env!` as a `&str`
+    # constant; no decapsulation crate reads it.
+    "SHEKYL_VERSION_FULL",
     "CARGO_TARGET_<T>_RUSTFLAGS", "MACOSX_DEPLOYMENT_TARGET", "SDKROOT",
 })
 KNOWN_BUILD_FLAGS = frozenset({

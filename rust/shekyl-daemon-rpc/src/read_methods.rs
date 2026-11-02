@@ -4,9 +4,9 @@
 // BSD-3-Clause
 
 //! The store flip's native read handlers (`DRS_X_STORE_FLIP.md` DX-Q3,
-//! PR 3), over [`ChainReadFacts`]. **Built and not routed:** no handler
-//! here is in [`native_method_for`](crate::handlers) or a REST route, and
-//! the server answers each method from the C++ table until the flip. Each
+//! PR 3), over [`ChainReadFacts`]. The JSON-RPC rows are dispatched from
+//! `handlers::json_rpc`, and the REST and `.bin` rows dispatch here too.
+//! Each
 //! answers on the C++ wire (`shekyl_rpc_types::chain_reads`, `archival`);
 //! where it answers differently, the difference is a row in
 //! `DRS_X_STORE_FLIP.md`'s divergence register, and the flip's

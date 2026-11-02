@@ -104,8 +104,8 @@ fn test_release_multiplier_ffi() {
 }
 
 // ---- PR-E1: reward-emission membership-only primitives ----
-// (The per-auth hybrid gate FFI was retired: C-1 verifies auth via the coarse
-// shekyl_emission_vin_verify, whose Rust body emission_vin_verify_auth pins the
+// (The per-auth hybrid gate FFI was retired, and the coarse C-1 verify FFI went
+// with `DEL-008`; the Rust body emission_vin_verify_auth pins the
 // leaf-gate-first order and per-role domains — see emission_verify_kat.rs.)
 
 /// The census `d-12` split crosses the FFI: a PQC key-scalar count that

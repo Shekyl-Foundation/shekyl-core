@@ -117,7 +117,7 @@ this lane.
    by the pool. `relay_method` on the pool entry
    (`tx_pool.cpp`, `blockchain_db.h`) is the relay state machine stored
    beside the coins. **UPDATE 2026-10-02:** the two `origin_zone` bits
-   are unused (`src/blockchain_db/blockchain_db.h:271`). They stay so
+   are unused (`src/blockchain_db/blockchain_db.h`). They stay so
    the record stays 192 bytes, and they are not a connector id.
    `NetZone` stays the zone-parameterized embargo class, not a pool
    field; discriminant 2 is unused so `tor` stays 3. `address_type`
@@ -309,7 +309,7 @@ resolve against git history, `git log --follow -- src/net/dandelionpp.cpp`),
 the epoch/stem/fluff orchestration in
 [`src/cryptonote_protocol/levin_notify.cpp`](../../src/cryptonote_protocol/levin_notify.cpp),
 and the stem embargo in
-[`src/cryptonote_core/tx_pool.cpp`](../../src/cryptonote_core/tx_pool.cpp).
+`src/cryptonote_core/tx_pool.cpp`.
 The routing is sound. The *timing* — which is the entire privacy mechanism —
 is not, and was never tested.
 
@@ -324,9 +324,9 @@ Four defects, each verified against source and measured:
 
 | # | Defect | Site | Severity |
 | --- | --- | --- | --- |
-| **F-1** | The embargo constant does not follow from its own stated derivation | [`tx_pool.cpp:66-87`](../../src/cryptonote_core/tx_pool.cpp#L66-L87) | Medium — wrong value |
-| **F-2** | The embargo is drawn from a Poisson; its derivation assumes an exponential. At these means the timer is near-deterministic and effectively never fires | [`tx_pool.cpp:1031`](../../src/cryptonote_core/tx_pool.cpp#L1031), `duration.h` *(header deleted whole by the memoryless rewrite, PR #431, commit [`071a7cc5e`](https://github.com/Shekyl-Foundation/shekyl-core/commit/071a7cc5e))* | **High — mechanism absent** |
-| **F-3** | The closed form substitutes `E[K]` into an expression in `K(K-1)`; stem length is geometric, so it under-provisions at every fluff probability | [`tx_pool.cpp:66-87`](../../src/cryptonote_core/tx_pool.cpp#L66-L87) | Medium — no constant correction fixes it |
+| **F-1** | The embargo constant does not follow from its own stated derivation | `tx_pool.cpp:66-87` | Medium — wrong value |
+| **F-2** | The embargo is drawn from a Poisson; its derivation assumes an exponential. At these means the timer is near-deterministic and effectively never fires | `tx_pool.cpp:1031`, `duration.h` *(header deleted whole by the memoryless rewrite, PR #431, commit [`071a7cc5e`](https://github.com/Shekyl-Foundation/shekyl-core/commit/071a7cc5e))* | **High — mechanism absent** |
+| **F-3** | The closed form substitutes `E[K]` into an expression in `K(K-1)`; stem length is geometric, so it under-provisions at every fluff probability | `tx_pool.cpp:66-87` | Medium — no constant correction fixes it |
 | **F-4** | The **fluff delay** has the same distribution defect as F-2, on the timer every node applies to every transaction | [`levin_notify.cpp:75-90`](../../src/cryptonote_protocol/levin_notify.cpp#L75-L90), [`:439-440`](../../src/cryptonote_protocol/levin_notify.cpp#L439-L440) | **High — mechanism degraded** |
 | **F-5** | Because of F-4, the fluff flood itself is ~7× slower than it needs to be — first passage to an arbitrary node takes ~13.75 s (p90) instead of ~2.25 s. A throughput consequence of the same defect, and it feeds back into the embargo derivation | same as F-4 | **High — network-wide latency** |
 
@@ -1023,7 +1023,7 @@ leak = P(preempt)  ×  neighbour(supernode reach)  ×  origin-attribution
 
 - **Embargo mean** sets `P(preempt)` — mean-dependent, the lever moved by RD-1/RD-4.
 - **Fluff-return `F`** sets the disarm window `h·hop + F`
-  ([`tx_pool.cpp` `now + embargo_duration()`](../../src/cryptonote_core/tx_pool.cpp#L1053)):
+  (`tx_pool.cpp` `now + embargo_duration()`):
   a larger `F` gives every prefix embargo longer to fire, so it pushes the leak
   **opposite** to the embargo mean. And `F` is downstream of F-4 — the memoryless
   fix made the return flood ~7× faster (F-5) — so **F-4 was a second, independent
@@ -3238,13 +3238,13 @@ reshape stops being a lever we weigh and becomes the mechanism.
 
 On embargo expiry the stem transaction is **promoted to fluff**.
 `get_relayable_transactions` returns the expired tx tagged with its own relay
-method — `stem` ([tx_pool.cpp:998](../../src/cryptonote_core/tx_pool.cpp#L998)) —
+method — `stem` (tx_pool.cpp:998) —
 and `cryptonote_core` then buckets `stem` into `public_req`
 ([:1075-1076](../../src/cryptonote_core/cryptonote_core.cpp#L1075)) and relays
 `public_req` with **`relay_method::fluff`**
 ([:1087](../../src/cryptonote_core/cryptonote_core.cpp#L1087)). The loop-detection
 twin does the same on receiving a stemmed tx back
-([tx_pool.cpp:296](../../src/cryptonote_core/tx_pool.cpp#L296)). So the mechanism's
+(tx_pool.cpp:296). So the mechanism's
 answer to "I didn't see my tx return" is **fluff it** — and that fluff *is* C3.
 (This also confirms the crate's instruments modelled the right event: preemption
 = a fluff, not a silent re-stem.)
@@ -3383,7 +3383,7 @@ timescales are stacked in a narrow band.
 ### 15.2 The block-inclusion path is clean (verified)
 
 A mined tx is dropped from the pool via `remove_txpool_tx`
-([blockchain.cpp:7053](../../src/cryptonote_core/blockchain.cpp#L7053), the
+(blockchain.cpp:7053, the
 block-connect path), and the embargo lives in that pool entry's
 `meta.last_relayed_time`, which `get_relayable_transactions` only reads for
 pool-resident txes — so a mined tx **cannot** fire a stale embargo. And the margin
@@ -3734,14 +3734,14 @@ mirror image — and sets the precedent this round follows (below). The rest hol
 | Anchor | At source |
 | --- | --- |
 | The 39 s constant | `CRYPTONOTE_DANDELIONPP_EMBARGO_AVERAGE` (`cryptonote_config.h`) |
-| The F-1 ghost, in prose | the derivation comment, [tx_pool.cpp:66–86](../../src/cryptonote_core/tx_pool.cpp#L66) — its own formula over `k=5, ep=0.10, hop=175 ms` gives **16.61 s**; 39 s reproduces only under `log10` for `ln` |
-| The F-2 draw | `crypto::random_poisson_seconds embargo_duration{…}` ([tx_pool.cpp:1031](../../src/cryptonote_core/tx_pool.cpp#L1031)), applied at [:1053](../../src/cryptonote_core/tx_pool.cpp#L1053) |
+| The F-1 ghost, in prose | the derivation comment, tx_pool.cpp:66–86 — its own formula over `k=5, ep=0.10, hop=175 ms` gives **16.61 s**; 39 s reproduces only under `log10` for `ln` |
+| The F-2 draw | `crypto::random_poisson_seconds embargo_duration{…}` (tx_pool.cpp:1031), applied at :1053 |
 | The wallet consumer | `tx_propagation_timeout = EMBARGO_AVERAGE * 3/2` (the deleted `wallet2.cpp`) — second consumer of the constant; on expiry marks the transfer failed and un-spends key images |
-| The other timer | `MIN_RELAY_TIME = 300` ([tx_pool.cpp:94](../../src/cryptonote_core/tx_pool.cpp#L94)) |
+| The other timer | `MIN_RELAY_TIME = 300` (tx_pool.cpp:94) |
 | The Rust primitive | `EmbargoTimer::{adopted, inherited, geometric_with_tick, …}` (`schedule.rs`) — already landed, unmoved |
 
 `crypto::random_poisson_seconds` has exactly **two** users, both in `tx_pool.cpp`:
-the embargo (removed here) and the `forward` delay ([:307](../../src/cryptonote_core/tx_pool.cpp#L307)).
+the embargo (removed here) and the `forward` delay (:307).
 The forward delay is out of RP-4's scope; it is the last consumer of that header
 and a candidate for a later round, named here so it is not forgotten.
 
@@ -3754,7 +3754,7 @@ answers them — which is the point of re-censusing before building.
   drops a duplicate stem receipt silently, a loop is a self-inflicted black hole
   recovered only at embargo latency… needs a `tx_pool.cpp` duplicate-stem-receipt
   check **before RP-4**." It does not drop it:
-  [tx_pool.cpp:295–296](../../src/cryptonote_core/tx_pool.cpp#L295) converts a
+  tx_pool.cpp:295–296 converts a
   stem receipt for a tx already in `dandelionpp_stem` state to **fluff** — the
   Dandelion++ prototype behaviour the item asks for. The loop-black-hole failure
   mode does not exist, and RP-4 is therefore unblocked. (This mattered more after
@@ -3765,7 +3765,7 @@ answers them — which is the point of re-censusing before building.
   (300 s), where at 39 s it did not, so "a black-holed origin's first
   `MIN_RELAY_TIME` re-relay and its embargo recovery can now cross." At the seam
   they cannot: the relay loop dispatches on relay *method*
-  ([tx_pool.cpp:969–987](../../src/cryptonote_core/tx_pool.cpp#L969)) —
+  (tx_pool.cpp:969–987) —
   `stem`/`forward` are gated **solely** by `last_relayed_time > now` (which for an
   embargoed tx *is* the embargo deadline, a future timestamp), while
   `get_relay_delay`/`MIN_RELAY_TIME` gates only `local`/`fluff`/`block`. The two
@@ -3804,7 +3804,7 @@ process-wide `OnceLock` (the tables are immutable once built) and the same
 
 | C++ call site | FFI |
 | --- | --- |
-| `embargo_duration()` per stem tx ([tx_pool.cpp](../../src/cryptonote_core/tx_pool.cpp)) | `shekyl_dandelionpp_embargo_draw_seconds_for_connector(connector: u8) -> u64` |
+| `embargo_duration()` per stem tx (tx_pool.cpp) | `shekyl_dandelionpp_embargo_draw_seconds_for_connector(connector: u8) -> u64` |
 | `tx_propagation_timeout` in `wallet2` (the deleted `wallet2.cpp`) | `shekyl_dandelionpp_propagation_timeout_seconds() -> u64` |
 
 `crypto::random_poisson_seconds embargo_duration{…}` and the
@@ -5947,7 +5947,7 @@ capability, per §20.9) starts from the literature, untouched by any of this.
 
 ### 22.2 Q-12 — the forward-delay draw: registered, and live by its own criterion (a)
 
-[`tx_pool.cpp:311`](../../src/cryptonote_core/tx_pool.cpp#L311) draws the
+`tx_pool.cpp:311` draws the
 i2p/tor→clearnet forwarding delay as
 `crypto::random_poisson_seconds{22 s}` — Poisson, σ ≈ 4.7 s, **not
 memoryless**: the F-2/F-4 family signature, under a mean whose stated design
@@ -6181,10 +6181,10 @@ Traced by call graph, and the trace is decisive rather than suggestive:
    — on a noise zone, `relay_method::stem` is demoted to `relay_method::local`
    *before* `on_transactions_relayed`, under the comment *"do not put into
    stempool embargo"*.
-2. [`blockchain_db.cpp`](../../src/blockchain_db/blockchain_db.cpp) — `local`
+2. `blockchain_db.cpp` — `local`
    sets `is_local = 1`; `dandelionpp_stem` is a **different case arm** and
    stays `0`.
-3. [`tx_pool.cpp:1054`](../../src/cryptonote_core/tx_pool.cpp#L1054) — the
+3. `tx_pool.cpp:1054` — the
    derived embargo arms **only** under `if (meta.dandelionpp_stem)`.
 
 **So a transaction sent over the covert channel never arms the backstop this
@@ -6482,7 +6482,7 @@ as an open question for the §6 round, not decided here.
 The inherited claim ([`levin_notify.cpp:1060-1062`](../../src/cryptonote_protocol/levin_notify.cpp#L1060-L1062))
 is that Dandelion++ over I2P/Tor needs *"the mempool/stempool to know the zone
 a tx originated from."* Checked: `txpool_tx_meta_t`
-([`blockchain_db.h:177-206`](../../src/blockchain_db/blockchain_db.h#L177-L206))
+(`blockchain_db.h:177-206`)
 has **no zone field**, so the claim is accurate *as a description*. It is
 **false as a statement of feasibility**: the struct carried `bf_padding : 2`
 at the time —
@@ -9627,9 +9627,9 @@ first successful probe fluffs it and closes the window for everyone.
 
 **The discriminator's fix cost went up, and a cheaper fix appeared.** Both
 structural facts — `relay_category::broadcasted` excluding stem
-([`blockchain_db.h:116`](../../src/blockchain_db/blockchain_db.h#L116)) and
+(`blockchain_db.h:116`) and
 `add_tx` taking no peer
-([`tx_pool.cpp:376`](../../src/cryptonote_core/tx_pool.cpp#L376)) — say the
+(`tx_pool.cpp:376`) — say the
 **incoming path drops identity, exactly as it dropped the hash (§48)**. Third
 instance of one shape. So the peer discriminator needs a signature change
 *through the incoming path*, not a comparison at the decision site.
@@ -13199,7 +13199,7 @@ permissive one.
 all:**
 
 > *"A mined tx is dropped from the pool via `remove_txpool_tx`
-> ([blockchain.cpp:7053](../../src/cryptonote_core/blockchain.cpp#L7053), the
+> (blockchain.cpp:7053, the
 > block-connect path), and the embargo lives in that pool entry's
 > `meta.last_relayed_time`, which `get_relayable_transactions` only reads for
 > pool-resident txes — so a mined tx **cannot** fire a stale embargo."*
@@ -15685,7 +15685,10 @@ adopted anonymity timer is **1148 s**
 (`shekyl_dandelionpp_origin_retry_interval_seconds`).
 
 That is a constant with a live provenance rather than a point inside a bracket:
-if `alpha` moves the interval follows, instead of decoupling silently. Same
+if `alpha` moves the interval follows, instead of decoupling silently. It stays
+fixed at 1148 s through the DRS-X flip and the rebuild, and is revisited after
+the rebuild against the Rust relay as built (Rick, 2026-10-30; owner RD, the
+FOLLOWUPS row *Revisit the origin's first retry*). Same
 shape as §94.8's argument for deriving rather than choosing, and it removes the
 self-invented bar this arc has been bitten by twice.
 
@@ -17205,6 +17208,8 @@ row. Pins below were read at `98fbd20acb`.
 | --- | --- | --- | --- | --- |
 | Tor dial retry waits: 5 s + U(0, 5 s) before attempt 2, 20 s + U(0, 10 s) before attempt 3; clearnet makes one attempt for gray and two for white (one redial before a white address demotes, Rick 2026-10-26) | Each connector's dial profile, `shekyl-transport-layer` `dial_profile(connector)`: `.retry_waits` and `.attempts` (the dial profile, Rick 2026-10-27); the retry ladder, `shekyl-dialer/src/pace.rs` (the gray-lifecycle PR, Rick 2026-10-24) | **Assumption.** Starting values, written down; re-derived from testnet runs on the Rust path | The dialer's retry scheduler: when a retry-worthy failure is dialed again within one test | After the gray-lifecycle PR, on testnet: the distribution of attempt-2 and attempt-3 successes against the waits |
 | Gray cooldown: 2 min after the first failed test, doubling per consecutive failed test, capped at 1 h, each with U(0, 50%) jitter; the first step only, without a climb, while the connector holds no session, its last K attempts all ended without opening a stream, and S has passed since one opened (the quiet threshold: clearnet K 11, S 32.065 s; Tor K 13, S 364.5 s) | Each connector's dial profile, `shekyl-transport-layer` `dial_profile(connector).cooldown` (the dial profile, Rick 2026-10-27); the ladder, `shekyl-peerlist` `cooldown_nanos` (the gray-lifecycle PR, Rick 2026-10-24); the quiet stretch, `shekyl-dialer/src/owner/quiet.rs` and `pace.rs` (Rick, 2026-10-26) | **Assumption.** Starting values, written down. What the cap means: a dead address costs each node at most about 24 failed tests a day once it reaches the cap (a Tor test is up to three attempts); in a quiet stretch it is retested every first step instead, about every 4 to 5 min on Tor. **The quiet threshold, Derived** (the dial profile, Rick 2026-10-27), on the floor device, at ε = 10⁻³: K is the smallest k with `p_fail^k < ε` at the half-dead fraction, and S is at least one window and the time K attempts take at the connector's bound and pace, computed in the profile (`QuietThreshold::derive`): `ceil(K / bound)` rounds, each up to the connector's dial deadline and its longest wake gap (1.5 s), so S follows if any of them moves. Clearnet (shekyl-dev data `dial-profile/2026-10-27-clearnet-pfail`): 0 of 283 attempts to live peers failed. With no failure observed the estimate is read at its bound: the 95 % upper bound of `q_live` is about 1.1 % (the rule of three), so `p_fail` = 0.505 and K = 11 (the point estimate, 0.5, gives 10); S: eleven rounds at bound 1, each up to the 1.415 s deadline and a 1.5 s wake, 32.065 s. **What the series can and cannot show:** the rig dialed the testnet fleet, our own hosts, from the floor device across internet paths (connects took 18 to 247 ms, none local), on a quiet network. The internet's live-failure rate is higher, with NAT, firewalls and churn, so `q_live` here is a floor for the open network's. **Re-derived from** the testnet fleet's clearnet live-dial outcomes after alpha.11. Tor (`inflight-bound/2026-10-26-final-head`): 189 of 336 attempts failed at half dead, `p_fail` 0.5625, so K = 13; S: thirteen attempts at bound 5 are three rounds, each up to the 120 s dial deadline and a 1.5 s wake, 364.5 s; every full-window reply seen (104 to 113 s) is inside the deadline. A false quiet needs the node to hold nothing, which is the isolated node the wargame accepts. Tor's S is also the managed-Tor posture line's `quiet_after` (the daemon builds the supervisor's `Policy` from the profile) | The lists: a failed test that proves no misbehaviour cools the address instead of dropping it; the dialer cannot draw a cooling address | After the gray-lifecycle PR, on testnet: how often a cooled address succeeds at its first retest, by rung of the ladder. Clearnet's K: the testnet fleet's clearnet live-dial outcomes after alpha.11 |
+| Failure-judging bracket δ, 15 s on Tor and 15 s on clearnet, each its own (`OE-D5`, `OE-D7` ruled 2026-10-31; built by #1235) | Each connector's `DialProfile.judging.bracket_nanos` in `shekyl-transport-layer/src/profile.rs` (`TOR_BRACKET_NANOS`, `CLEARNET_BRACKET_NANOS`); read by the dialer's judge | **Assumption**, per connector (Rick, 2026-10-31). Basis on both: the 60 s timed sync (`P2P_DEFAULT_HANDSHAKE_INTERVAL`, `src/cryptonote_config.h:193`) gives each session about two received messages a minute. **Tor** counts any session and every stream opening (the one guard link); **clearnet** counts outbound sessions only. Prediction under an assumed independent Poisson arrival on each counted session (`DIALER_OUTAGE_EVIDENCE.md` §3.5): one δ-interval is empty with `p = exp(−n · δ / 30 s)`, and the two-sided bracket excuses a healthy link's Uncertain failure with `1 − (1 − p)²`, about 0.50 % at 12 sessions, 9.7 % at 6, 60 % at 2. Re-derived if the timed-sync interval moves. *Records-was: labelled Derived, with the one-sided 0.25 %* | The judge's bracketed corroboration: an Uncertain failure counts only with a sign of life within δ before and within δ after it | The floor-device live runs (`DIALER_OUTAGE_EVIDENCE_BRIEF.md` §7): the fraction of Uncertain failures excused on a healthy link at target, per connector |
+| Excusal retry `outage_retry`, 10 s + U(0, 5 s) on Tor and 10 s + U(0, 5 s) on clearnet, each its own (`OE-D6`, `OE-D7` ruled 2026-10-31; built by #1235) | Each connector's `DialProfile.judging.outage_retry` (`TOR_OUTAGE_RETRY`, `CLEARNET_OUTAGE_RETRY`) | **Assumption**, per connector (Rick, 2026-10-31). An address cooldown, not a recovery bound: how long an excused address with no counted failure waits before it is eligible again; an address with counted failures keeps its rung (hold the rung, `DIALER_OUTAGE_EVIDENCE.md` §3.4). Eligible means drawable when a slot is free. **Tor** basis: under the slot turnover, `window / bound` (21 s at today's 105 s window; the build checks only the deadline's 24 s, necessary not sufficient). **Clearnet** basis: caps redials of an unproven address at one per 10–15 s; the build checks that the shortest retry outlasts one fill round. Recovery after an unblock is a measurement: on clearnet the design bounds the first redial of an excused address at about δ + 15 s plus one dial; on Tor the first redial waits for a slot, and the unblock-to-first-open time is a Pi measurement (brief §7). *Records-was: "recovery after an unblock is at most 15 s plus one dial" on both* | The peer list's excusal of an address with no counted failure; the first sign of life clears it | The floor-device live runs: blackhole recovery time, per connector |
 | Clearnet transit, 50 ms | `verify_cost.rs` `ADOPTED_TRANSIT_ASSUMPTION_MS` and its typed twin `ADOPTED_TRANSIT`; the D7 clearnet column's `transit_ms` (`declaration.rs`) | **Assumption.** §21's "at least 50 ms if crossing an ocean", carried forward labelled at §86.2. Never measured on either path | `adopted_hop_ms` (the clearnet `hop`, 175 ms), the clearnet embargo table (`EmbargoTimer::adopted`, mean 190 s), the flood instrument's clearnet row (`conformance::flood::transit_for`) | After RD, on the Rust path: a quantile, not a mean (§86.2), clearnet to clearnet on an established connection, from a floor-representative connection (§94.6) |
 | Tor transit, 1625 ms | `verify_cost.rs` `ANON_ZONE_TRANSIT_ASSUMPTION_MS` and `ANON_ZONE_TRANSIT`; the D7 Tor column's `transit_ms` | **Assumption.** §63.2's "ten times clearnet" upper bound, taken on faith (§89.5). §94's 2026-08 readings (per-session pooled p90 403.8 to 710.9 ms across the day, 590.6 ms interpolated at the modal shape, §94.10 and §94.5) are **RustPath** readings of the network term, taken by `shekyl-tor-transit-spike` over public Tor with no relay in the path; they are recorded, not adopted, because the tail above the measured 8.4 to 16.6 KB span is unmeasured (§94.5) and the re-derivation is §94.10's two-commit procedure | The Tor `hop` (1750 ms) and embargo table; `longest_transit` and through it `shekyl_dandelionpp_origin_retry_interval_seconds` and `shekyl_dandelionpp_propagation_timeout_seconds`; the flood instrument's Tor row | After RD, on the Rust path, under §94's pre-registration: onion-to-onion rendezvous on an established connection, the floor-representative host, at least 8 h of spread for the diurnal swing, the tail shape included |
 | `hop` scheduling term, 0 | `verify_cost.rs` `adopted_hop_ms` doc; §71.3's composition `hop = transit + verification + scheduling`; §94.7 and §94.9 | **CppPath.** The 0 says a stem forward is dispatched at once on the C++ zone strand (`dandelionpp_notify`). That is a claim about `levin_notify.cpp`, not about the Rust `Driver`. The type cannot refuse an omitted term, so it is carried here as a stated omission | `time_between_hop_ms`, through the omission | After RD, on the Rust path: the `Driver`'s decision-to-write span under load. D5's leg 4 (timer lateness, `P2P_TRANSPORT_LAYER.md`) is that instrument once the Rust `Driver` runs; its interim asio run is itself `CppPath` |

@@ -6,7 +6,7 @@
 //! **The weight gate** (`FEE_LADDER_DERIVATION.md` §11.6 PR B item 3).
 //!
 //! `predict_weight` prices a transaction the wallet has not built yet. Until
-//! FL-R20 that prediction had a 2% cushion under it: `check_fee` admitted at
+//! FL-R20 that prediction had a 2% cushion: admission allowed
 //! `needed - needed/50`, so a one-byte prediction error cost nothing. FL-R23
 //! pins `RELAY_ADMISSION_SLACK_BP = 0`, and at zero slack a one-byte error on
 //! any shape is a hard bounce — one the lookback-min admission cannot absorb,

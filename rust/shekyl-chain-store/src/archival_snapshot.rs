@@ -242,8 +242,6 @@ pub const fn disposition(family: ArchivalFamily) -> Disposition {
         }
         ArchivalFamily::ShardSegment
         | ArchivalFamily::EmissionClaimLog
-        | ArchivalFamily::BondUnbondLog
-        | ArchivalFamily::BondHoldingsUpdateLog
         | ArchivalFamily::BondReinstateLog
         | ArchivalFamily::EpochCloseLog => {
             Disposition::Excluded("NOT_PORTED journal: a revert pre-image, no state to compare")

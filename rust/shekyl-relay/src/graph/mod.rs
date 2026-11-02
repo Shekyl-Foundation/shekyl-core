@@ -36,10 +36,12 @@ use shekyl_types::relay::RelayMethod;
 use crate::stem_watch::{StemTally, StemTallySnapshot, StemWatch, TxId};
 
 mod cover;
+mod embargo;
 mod epoch_map;
 mod hidden_slot;
 mod origin;
 
+pub use embargo::{origin_retry_ms, origin_retry_secs, EmbargoWork, NEVER_SENT_RETRY_MS};
 pub use origin::OriginVerdict;
 
 use epoch_map::EpochMap;
@@ -474,6 +476,11 @@ pub struct Relay {
     /// The address-hiding class's report (`hidden_slot`). Unarmed until the
     /// first epoch rebuild. Only a reserved map arms one.
     hidden_class_watch: hidden_slot::HiddenClassWatch,
+    /// Every stem's embargo state and every held origin (`embargo`).
+    embargoes: embargo::Embargoes,
+    /// The node's sync state, as last reported. Unsynchronised until the
+    /// first report, so an origin held before it waits.
+    node_sync: NodeSync,
 }
 
 impl Relay {
@@ -574,6 +581,8 @@ impl Relay {
             stems,
             noise,
             hidden_class_watch: hidden_slot::HiddenClassWatch::BeforeRebuild,
+            embargoes: embargo::Embargoes::default(),
+            node_sync: NodeSync::Unsynchronised,
         })
     }
 
@@ -657,41 +666,14 @@ impl Relay {
             .or_insert_with(|| PeerFluff::new(direction, connector));
         if direction == PeerDirection::Outbound {
             self.update_stems(rng);
+            // A new outbound session may be the own edge a held origin waits
+            // for (RX-2): plan it on the next poll rather than the grid.
+            self.unsent_due_now(0);
         }
         // The class is the registry, not the stem merge. An inbound session
         // is not a stem candidate; noting it changes nothing once the count
         // is taken.
         self.note_hidden_class();
-    }
-
-    /// Record that `txs` were stemmed to `successor`, keyed under `source`
-    /// (`None` = locally originated, matching `in_mapping_[nil]`).
-    ///
-    /// The observation window is drawn from the successor's connector at
-    /// `now`. A connector with no assessed transit records nothing. The
-    /// question is the one the pool's embargo asks of the same peer (*did
-    /// you propagate this?*). Domain ownership stays in this crate (rule 20):
-    /// the FFI only marshals bytes and a clock.
-    pub fn record_stem<R: RelayRng + ?Sized>(
-        &mut self,
-        txs: &[TxId],
-        successor: ConnectionId,
-        source: Option<ConnectionId>,
-        now: Millis,
-        rng: &mut R,
-    ) {
-        let Some(peer) = self.contexts.get(&successor) else {
-            return;
-        };
-        let connector = peer.connector;
-        let Some(timer) = embargo_timer(&peer.declaration) else {
-            return;
-        };
-        let deadline = timer.deadline(now, rng);
-        for tx in txs {
-            self.stem_watch
-                .stemmed(*tx, successor, source, connector, deadline);
-        }
     }
 
     /// Mean of the embargo drawn for `connector`, when that connector has an
@@ -731,18 +713,6 @@ impl Relay {
         }
     }
 
-    /// Resolve every stem observation whose deadline has passed as *silent*.
-    ///
-    /// Driven from [`crate::Driver::poll`]'s `now`, so the outcome is a
-    /// function of the same clock every other relay decision uses — no second
-    /// reactor. The earliest pending deadline is also folded into
-    /// [`crate::Driver::next_wake`], so the asio timer wakes for silences on
-    /// time rather than only when fluff/epoch/noise happen to fire. Returns
-    /// how many resolved, so a witness can assert the drive ran.
-    pub fn expire_stem_observations(&mut self, now: Millis) -> usize {
-        self.stem_watch.expire(now)
-    }
-
     /// Earliest in-flight stem-observation deadline, if any.
     #[must_use]
     pub fn stem_observation_deadline(&self) -> Option<Millis> {
@@ -758,7 +728,9 @@ impl Relay {
     /// **data, not a decision** (§38.1).
     /// Returns the subset of `txs` whose observation this arrival RESOLVED as
     /// propagated — the transactions for which *"it came back from somewhere
-    /// other than where I sent it"* just became true.
+    /// other than where I sent it"* just became true — and, from a peer, any
+    /// of `txs` this node held unsent: each now circulates, its embargo is
+    /// disarmed, and the FFI marks it shown.
     ///
     /// **A decision leaving, not an input crossing.** The caller does not get
     /// the watch, the pending map, or a query surface over them; it gets the
@@ -778,7 +750,9 @@ impl Relay {
                 propagated.push(*tx);
             }
         }
-        propagated
+        // The verdict disarms the embargo the stem armed (§92.5c item 1): no
+        // fire follows, and the state goes.
+        self.disarm(propagated, txs, from)
     }
 
     /// Every successor with resolved observations — the §55 telemetry
@@ -1308,6 +1282,8 @@ impl Relay {
 
 #[cfg(test)]
 mod edge;
+#[cfg(test)]
+mod embargo_tests;
 #[cfg(test)]
 mod hidden_class_tests;
 #[cfg(test)]

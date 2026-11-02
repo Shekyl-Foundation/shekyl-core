@@ -620,13 +620,13 @@ pub const fn layer_is_selene(layer: u8) -> bool {
 // The archival segment is a level-`j` subtree of this tree. Which leaves make
 // up segment `k` is read by two independently built stores — the wallet-side
 // shard store (`shekyl-curve-tree`) that serves segment bytes, and the
-// consensus reader in `shekyl-archival-retention` (`frozen_segment_count`:
-// the C++ validator's D2 operand, the coverage RPC and pop revert — **not**
-// bond admission, which reads it nowhere; its shard predicate was ruled
-// 2026-09-19 and is unbuilt, `docs/design/ARCHIVAL_BOND_ADD_ADMISSION.md`
-// §3; and not the Rust validator's CEN-F17 operand since DRS-E4 commit 4,
-// which counts the archival shards the recorded fold has closed,
-// `shekyl_chain_rules::closed_shards_before`) — and by
+// consensus side in `shekyl-archival-retention`, whose config-generated
+// `SEGMENT_LEAF_COUNT` is pinned to this derivation (the C++ validator's
+// frozen-segment count that read it is deleted with the archival C++ path,
+// `DEL-008`; the Rust validator's CEN-F17 operand counts the archival shards
+// the recorded fold has closed, `shekyl_chain_rules::closed_shards_before`;
+// bond admission reads it nowhere, its shard predicate ruled 2026-09-19 and
+// unbuilt, `docs/design/ARCHIVAL_BOND_ADD_ADMISSION.md` §3) — and by
 // every challenge, whose leaf index
 // is taken against the segment's recorded leaf count. A divergent partition
 // forks revert away from the store. The derivation therefore
@@ -638,9 +638,9 @@ pub const fn layer_is_selene(layer: u8) -> bool {
 
 /// Sub-root layer index `j` for archival segment boundaries.
 ///
-/// **Consensus-frozen, not a tunable.** `frozen_segment_count` partitions
-/// admissible `shard_id`s and pop revert by `SEGMENT_LEAF_COUNT`, which
-/// `shekyl-archival-retention` const-asserts equal to [`leaves_per_segment`].
+/// **Consensus-frozen, not a tunable.** Admissible `shard_id`s are partitioned
+/// by `SEGMENT_LEAF_COUNT`, which `shekyl-archival-retention` const-asserts
+/// equal to [`leaves_per_segment`].
 /// Moving `j` is a consensus change — a constants bump plus fixture
 /// regeneration under `ARCHIVAL_SEGMENT_FREEZE_PIPELINE.md` §5.2's reversion
 /// criteria — and the build fails at that assert until both sides move

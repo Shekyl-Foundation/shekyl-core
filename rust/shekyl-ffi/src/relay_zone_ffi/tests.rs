@@ -121,6 +121,17 @@ fn reset() {
     GATHER.with(|g| *g.borrow_mut() = GatherState::default());
 }
 
+/// `n` one-byte blobs, for a stem record whose bytes the test does not read.
+fn test_blobs(n: usize) -> Vec<ShekylRelayBlob> {
+    static BYTE: [u8; 1] = [0x5a];
+    (0..n)
+        .map(|_| ShekylRelayBlob {
+            ptr: BYTE.as_ptr(),
+            len: 1,
+        })
+        .collect()
+}
+
 fn id(byte: u8) -> [u8; 16] {
     let mut b = [0u8; 16];
     b[0] = byte;
@@ -261,7 +272,9 @@ fn an_unbound_slots_due_ticks_cross_as_noise_unbind_at_its_index() {
             shekyl_relay_zone_poll(
                 h,
                 due,
+                true,
                 std::ptr::null_mut(),
+                rec_fluff,
                 rec_fluff,
                 rec_noise,
                 rec_resolved,
@@ -545,7 +558,9 @@ fn polling_at_the_reported_wake_time_releases_the_batch() {
             shekyl_relay_zone_poll(
                 h,
                 due - 1,
+                true,
                 std::ptr::null_mut(),
+                rec_fluff,
                 rec_fluff,
                 rec_noise,
                 rec_resolved,
@@ -556,7 +571,9 @@ fn polling_at_the_reported_wake_time_releases_the_batch() {
         shekyl_relay_zone_poll(
             h,
             due,
+            true,
             std::ptr::null_mut(),
+            rec_fluff,
             rec_fluff,
             rec_noise,
             rec_resolved,
@@ -605,7 +622,9 @@ fn polling_across_the_epoch_boundary_gathers_and_rebuilds() {
         shekyl_relay_zone_poll(
             h,
             due,
+            true,
             std::ptr::null_mut(),
+            rec_fluff,
             rec_fluff,
             rec_noise,
             rec_resolved,
@@ -683,7 +702,9 @@ fn a_null_handle_is_a_safe_no_op_on_every_export() {
         shekyl_relay_zone_poll(
             null,
             0,
+            true,
             std::ptr::null_mut(),
+            rec_fluff,
             rec_fluff,
             rec_noise,
             rec_resolved,
@@ -969,7 +990,15 @@ fn record_stem_and_arrival_cross_the_boundary_into_the_watch() {
         let mut hashes = [0u8; 64]; // two packed 32-byte canonical tx hashes
         hashes[0] = 0xA1;
         hashes[32] = 0xB2;
-        shekyl_relay_zone_record_stem(h, hashes.as_ptr(), 2, id(9).as_ptr(), std::ptr::null(), 0);
+        shekyl_relay_zone_record_stem(
+            h,
+            hashes.as_ptr(),
+            test_blobs(2).as_ptr(),
+            2,
+            id(9).as_ptr(),
+            std::ptr::null(),
+            0,
+        );
         assert_eq!(
             h.as_ref()
                 .expect("live zone")
@@ -1028,7 +1057,9 @@ fn record_stem_and_arrival_cross_the_boundary_into_the_watch() {
         shekyl_relay_zone_poll(
             h,
             3_600_000,
+            true,
             std::ptr::null_mut(),
+            rec_fluff,
             rec_fluff,
             rec_noise,
             rec_resolved,
@@ -1050,6 +1081,7 @@ fn record_stem_and_arrival_cross_the_boundary_into_the_watch() {
         shekyl_relay_zone_record_stem(
             std::ptr::null_mut(),
             hashes.as_ptr(),
+            test_blobs(1).as_ptr(),
             1,
             id(9).as_ptr(),
             std::ptr::null(),
@@ -1114,8 +1146,10 @@ fn a_nil_successor_arms_no_observation_but_a_real_one_does() {
         shekyl_relay_zone_record_stem(
             h,
             hashes.as_ptr(),
+            test_blobs(1).as_ptr(),
             1,
-            id(0).as_ptr(), // all-zero uuid == nil
+            id(0).as_ptr(),
+            // all-zero uuid == nil
             std::ptr::null(),
             0,
         );
@@ -1127,7 +1161,15 @@ fn a_nil_successor_arms_no_observation_but_a_real_one_does() {
         );
 
         shekyl_relay_zone_on_session_established(h, id(9).as_ptr(), false, 0);
-        shekyl_relay_zone_record_stem(h, hashes.as_ptr(), 1, id(9).as_ptr(), std::ptr::null(), 0);
+        shekyl_relay_zone_record_stem(
+            h,
+            hashes.as_ptr(),
+            test_blobs(1).as_ptr(),
+            1,
+            id(9).as_ptr(),
+            std::ptr::null(),
+            0,
+        );
         assert_eq!(
             shekyl_relay_zone_stem_in_flight(h),
             1,
@@ -1163,12 +1205,16 @@ fn the_forwarded_connector_selects_the_observation_window() {
                 shekyl_relay_zone_on_session_established(h, id(9).as_ptr(), false, connector);
                 let mut hashes = [0u8; 32];
                 hashes[0] = 0xA1;
+                // A forwarded stem, from peer 8: its window is the successor
+                // connector's draw. This node's own stem would wait the
+                // origin's fixed retry interval instead (RX-1).
                 shekyl_relay_zone_record_stem(
                     h,
                     hashes.as_ptr(),
+                    test_blobs(1).as_ptr(),
                     1,
                     id(9).as_ptr(),
-                    std::ptr::null(),
+                    id(8).as_ptr(),
                     0,
                 );
                 // Lossless rather than an `as` cast with a precision allow:
@@ -1215,7 +1261,15 @@ fn stem_snapshot_reports_row_count_and_writes_only_when_it_fits() {
 
         let mut hashes = [0u8; 32];
         hashes[0] = 0xA1;
-        shekyl_relay_zone_record_stem(h, hashes.as_ptr(), 1, id(9).as_ptr(), std::ptr::null(), 0);
+        shekyl_relay_zone_record_stem(
+            h,
+            hashes.as_ptr(),
+            test_blobs(1).as_ptr(),
+            1,
+            id(9).as_ptr(),
+            std::ptr::null(),
+            0,
+        );
         shekyl_relay_zone_record_arrival(
             h,
             hashes.as_ptr(),
@@ -1319,7 +1373,9 @@ unsafe fn drive_one_noise_send(h: *mut RelayZoneHandle) {
         shekyl_relay_zone_poll(
             h,
             due,
+            true,
             std::ptr::null_mut(),
+            rec_fluff,
             rec_fluff,
             rec_noise,
             rec_resolved,
@@ -1582,7 +1638,9 @@ fn a_discarded_carrier_message_resolves_not_sent_across_the_boundary() {
             shekyl_relay_zone_poll(
                 h,
                 tick * 1_000,
+                true,
                 std::ptr::null_mut(),
+                rec_fluff,
                 rec_fluff,
                 rec_noise,
                 rec_resolved,
@@ -1619,7 +1677,9 @@ unsafe fn drive_one_wake(h: *mut RelayZoneHandle) {
     shekyl_relay_zone_poll(
         h,
         due,
+        true,
         std::ptr::null_mut(),
+        rec_fluff,
         rec_fluff,
         rec_noise,
         rec_resolved,

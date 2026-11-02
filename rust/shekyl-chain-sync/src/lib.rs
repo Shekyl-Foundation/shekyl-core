@@ -52,6 +52,7 @@ mod state;
 mod tree;
 
 pub use claim::{PayloadRefused, PeerClaim};
+pub use locator::locator;
 pub use model::{
     BoundArrival, CachePlan, ClaimError, CloseCause, Command, Event, HashClass, Job, OfferedBody,
     Outcome, ProveItem, Proved, Sync, BODY_REQUESTS_IN_FLIGHT, SYNC_RATE_FLOOR,

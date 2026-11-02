@@ -31,7 +31,7 @@
 #include "string_tools.h"
 #include "common/scoped_message_writer.h"
 #include "daemon/rpc_command_executor.h"
-#include "rpc/core_rpc_server_commands_defs.h"
+#include "shekyl/shekyl_ffi.h"
 #include "cryptonote_core/cryptonote_core.h"
 #include "cryptonote_basic/difficulty.h"
 #include <boost/format.hpp>
@@ -42,46 +42,6 @@
 #define SHEKYL_DEFAULT_LOG_CATEGORY "daemon"
 
 namespace daemonize {
-
-namespace {
-
-  std::string get_human_time_ago(time_t t, time_t now)
-  {
-    if (t == now)
-      return "now";
-    time_t dt = t > now ? t - now : now - t;
-    std::string s;
-    if (dt < 90)
-      s = boost::lexical_cast<std::string>(dt) + " seconds";
-    else if (dt < 90 * 60)
-      s = boost::lexical_cast<std::string>(dt/60) + " minutes";
-    else if (dt < 36 * 3600)
-      s = boost::lexical_cast<std::string>(dt/3600) + " hours";
-    else
-      s = boost::lexical_cast<std::string>(dt/(3600*24)) + " days";
-    return s + " " + (t > now ? "in the future" : "ago");
-  }
-
-  std::string get_time_hms(time_t t)
-  {
-    unsigned int hours, minutes, seconds;
-    char buffer[24];
-    hours = t / 3600;
-    t %= 3600;
-    minutes = t / 60;
-    t %= 60;
-    seconds = t;
-    snprintf(buffer, sizeof(buffer), "%02u:%02u:%02u", hours, minutes, seconds);
-    return std::string(buffer);
-  }
-
-  std::string make_error(const std::string &base, const std::string &status)
-  {
-    if (status == CORE_RPC_STATUS_OK)
-      return base;
-    return base + " -- " + status;
-  }
-}
 
 // Commands whose method has moved to Rust render there, on both arms
 // (DAEMON_RPC_KV_CUTOVER.md §3.4): live core in-process, the RPC address
@@ -97,7 +57,7 @@ bool t_rpc_command_executor::run_rust_console(const std::vector<std::string>& ar
   size_t out_len = 0;
   const int32_t rc = shekyl_daemon_console_run(
     ptrs.data(), ptrs.size(),
-    m_is_rpc ? nullptr : static_cast<void*>(m_rpc_server),
+    m_is_rpc ? nullptr : m_live,
     m_is_rpc ? m_rpc_client->address().c_str() : nullptr,
     tools::t_rpc_client::timeout_secs(),
     // This process's network, for the identity handshake on the remote arm
@@ -125,9 +85,9 @@ t_rpc_command_executor::t_rpc_command_executor(
   , uint16_t port
   , cryptonote::network_type nettype
   , bool is_rpc
-  , cryptonote::core_rpc_server* rpc_server
+  , void* live
   )
-  : m_rpc_client(NULL), m_rpc_server(rpc_server)
+  : m_rpc_client(NULL), m_live(live)
 {
   if (is_rpc)
   {
@@ -135,9 +95,9 @@ t_rpc_command_executor::t_rpc_command_executor(
   }
   else
   {
-    if (rpc_server == NULL)
+    if (live == NULL)
     {
-      throw std::runtime_error("If not calling commands via RPC, rpc_server pointer must be non-null");
+      throw std::runtime_error("If not calling commands via RPC, live pointer must be non-null");
     }
   }
 
@@ -164,121 +124,9 @@ bool t_rpc_command_executor::print_peer_list_stats() {
   return run_rust_console({"print_peer_list_stats"});
 }
 
-bool t_rpc_command_executor::save_blockchain() {
-  cryptonote::COMMAND_RPC_SAVE_BC::request req;
-  cryptonote::COMMAND_RPC_SAVE_BC::response res;
-
-  std::string fail_message = "Couldn't save blockchain";
-
-  if (m_is_rpc)
-  {
-    if (!m_rpc_client->rpc_request(req, res, "/save_bc", fail_message.c_str()))
-    {
-      return true;
-    }
-  }
-  else
-  {
-    if (!m_rpc_server->on_save_bc(req, res) || res.status != CORE_RPC_STATUS_OK)
-    {
-      tools::fail_msg_writer() << make_error(fail_message, res.status);
-      return true;
-    }
-  }
-
-  tools::success_msg_writer() << "Blockchain saved";
-
-  return true;
-}
-
-bool t_rpc_command_executor::show_hash_rate() {
-  cryptonote::COMMAND_RPC_SET_LOG_HASH_RATE::request req;
-  cryptonote::COMMAND_RPC_SET_LOG_HASH_RATE::response res;
-  req.visible = true;
-
-  std::string fail_message = "Unsuccessful";
-
-  if (m_is_rpc)
-  {
-    if (!m_rpc_client->rpc_request(req, res, "/set_log_hash_rate", fail_message.c_str()))
-    {
-      return true;
-    }
-  }
-  else
-  {
-    if (!m_rpc_server->on_set_log_hash_rate(req, res) || res.status != CORE_RPC_STATUS_OK)
-    {
-      tools::fail_msg_writer() << make_error(fail_message, res.status);
-    }
-  }
-
-  tools::success_msg_writer() << "Hash rate logging is on";
-
-  return true;
-}
-
-bool t_rpc_command_executor::hide_hash_rate() {
-  cryptonote::COMMAND_RPC_SET_LOG_HASH_RATE::request req;
-  cryptonote::COMMAND_RPC_SET_LOG_HASH_RATE::response res;
-  req.visible = false;
-
-  std::string fail_message = "Unsuccessful";
-
-  if (m_is_rpc)
-  {
-    if (!m_rpc_client->rpc_request(req, res, "/set_log_hash_rate", fail_message.c_str()))
-    {
-      return true;
-    }
-  }
-  else
-  {
-    if (!m_rpc_server->on_set_log_hash_rate(req, res) || res.status != CORE_RPC_STATUS_OK)
-    {
-      tools::fail_msg_writer() << make_error(fail_message, res.status);
-      return true;
-    }
-  }
-
-  tools::success_msg_writer() << "Hash rate logging is off";
-
-  return true;
-}
-
 bool t_rpc_command_executor::show_difficulty() {
   // Rendered in Rust since `get_info` moved there (RK-5c).
   return run_rust_console({"diff"});
-}
-
-static void get_metric_prefix(cryptonote::difficulty_type hr, double& hr_d, char& prefix)
-{
-  if (hr < 1000)
-  {
-    prefix = 0;
-    return;
-  }
-  static const char metric_prefixes[] = { 'k', 'M', 'G', 'T', 'P', 'E', 'Z', 'Y' };
-  for (size_t i = 0; i < sizeof(metric_prefixes); ++i)
-  {
-    if (hr < 1000000)
-    {
-      hr_d = hr.convert_to<double>() / 1000;
-      prefix = metric_prefixes[i];
-      return;
-    }
-    hr /= 1000;
-  }
-  prefix = 0;
-}
-
-static std::string get_mining_speed(cryptonote::difficulty_type hr)
-{
-  double hr_d;
-  char prefix;
-  get_metric_prefix(hr, hr_d, prefix);
-  if (prefix == 0) return (boost::format("%.0f H/s") % hr).str();
-  return (boost::format("%.2f %cH/s") % hr_d % prefix).str();
 }
 
 
@@ -289,73 +137,6 @@ bool t_rpc_command_executor::show_status() {
   // only — in-process a `/mining_status` that will not answer is this
   // daemon's own fault.
   return run_rust_console({"status"});
-}
-
-bool t_rpc_command_executor::mining_status() {
-  cryptonote::COMMAND_RPC_MINING_STATUS::request mreq;
-  cryptonote::COMMAND_RPC_MINING_STATUS::response mres;
-  epee::json_rpc::error error_resp;
-  bool has_mining_info = true;
-
-  std::string fail_message = "Problem fetching info";
-
-  bool mining_busy = false;
-  if (m_is_rpc)
-  {
-    // mining info is only available non unrestricted RPC mode
-    has_mining_info = m_rpc_client->rpc_request(mreq, mres, "/mining_status", fail_message.c_str());
-  }
-  else
-  {
-    if (!m_rpc_server->on_mining_status(mreq, mres))
-    {
-      tools::fail_msg_writer() << fail_message.c_str();
-      return true;
-    }
-
-    if (mres.status == CORE_RPC_STATUS_BUSY)
-    {
-      mining_busy = true;
-    }
-    else if (mres.status != CORE_RPC_STATUS_OK)
-    {
-      tools::fail_msg_writer() << make_error(fail_message, mres.status);
-      return true;
-    }
-  }
-
-  if (!has_mining_info)
-  {
-    tools::fail_msg_writer() << "Mining info unavailable";
-    return true;
-  }
-
-  if (mining_busy || !mres.active)
-  {
-    tools::msg_writer() << "Not currently mining";
-  }
-  else
-  {
-    tools::msg_writer() << "Mining at " << get_mining_speed(mres.speed) << " with " << mres.threads_count << " threads";
-  }
-
-  tools::msg_writer() << "PoW algorithm: " << mres.pow_algorithm;
-  if (mres.active)
-  {
-    tools::msg_writer() << "Mining address: " << mres.address;
-  }
-
-  if (!mining_busy && mres.active && mres.speed > 0 && mres.block_target > 0 && mres.difficulty > 0)
-  {
-    double ratio = mres.speed * mres.block_target / (double)mres.difficulty;
-    uint64_t daily = 86400ull / mres.block_target * mres.block_reward * ratio;
-    uint64_t monthly = 86400ull / mres.block_target * 30.5 * mres.block_reward * ratio;
-    uint64_t yearly = 86400ull / mres.block_target * 356 * mres.block_reward * ratio;
-    tools::msg_writer() << "Expected: " << cryptonote::print_money(daily) << " shekyl daily, "
-        << cryptonote::print_money(monthly) << " shekyl monthly, " << cryptonote::print_money(yearly) << " yearly";
-  }
-
-  return true;
 }
 
 bool t_rpc_command_executor::print_connections() {
@@ -414,242 +195,29 @@ bool t_rpc_command_executor::is_key_image_spent(const crypto::key_image &ki) {
   return run_rust_console({"is_key_image_spent", epee::string_tools::pod_to_hex(ki)});
 }
 
-bool t_rpc_command_executor::print_transaction_pool_long() {
-  cryptonote::COMMAND_RPC_GET_TRANSACTION_POOL::request req;
-  cryptonote::COMMAND_RPC_GET_TRANSACTION_POOL::response res;
-
-  std::string fail_message = "Problem fetching transaction pool";
-
-  if (m_is_rpc)
-  {
-    if (!m_rpc_client->rpc_request(req, res, "/get_transaction_pool", fail_message.c_str()))
-    {
-      return true;
-    }
-  }
-  else
-  {
-    if (!m_rpc_server->on_get_transaction_pool(req, res) || res.status != CORE_RPC_STATUS_OK)
-    {
-      tools::fail_msg_writer() << make_error(fail_message, res.status);
-      return true;
-    }
-  }
-
-  if (res.transactions.empty() && res.spent_key_images.empty())
-  {
-    tools::msg_writer() << "Pool is empty" << std::endl;
-  }
-  if (! res.transactions.empty())
-  {
-    const time_t now = time(NULL);
-    tools::msg_writer() << "Transactions: ";
-    for (auto & tx_info : res.transactions)
-    {
-      tools::msg_writer() << "id: " << tx_info.id_hash << std::endl
-                          << tx_info.tx_json << std::endl
-                          << "blob_size: " << tx_info.blob_size << std::endl
-                          << "weight: " << tx_info.weight << std::endl
-                          << "fee: " << cryptonote::print_money(tx_info.fee) << std::endl
-                          << "fee/byte: " << cryptonote::print_money(tx_info.fee / (double)tx_info.weight) << std::endl
-                          << "receive_time: " << tx_info.receive_time << " (" << get_human_time_ago(tx_info.receive_time, now) << ")" << std::endl
-                          << "relayed: " << [&](const cryptonote::tx_info &tx_info)->std::string { if (!tx_info.relayed) return "no"; return boost::lexical_cast<std::string>(tx_info.last_relayed_time) + " (" + get_human_time_ago(tx_info.last_relayed_time, now) + ")"; } (tx_info) << std::endl
-                          << "do_not_relay: " << (tx_info.do_not_relay ? 'T' : 'F')  << std::endl
-                          << "kept_by_block: " << (tx_info.kept_by_block ? 'T' : 'F') << std::endl
-                          << "double_spend_seen: " << (tx_info.double_spend_seen ? 'T' : 'F')  << std::endl
-                          << "max_used_block_height: " << tx_info.max_used_block_height << std::endl
-                          << "max_used_block_id: " << tx_info.max_used_block_id_hash << std::endl
-                          << "last_failed_height: " << tx_info.last_failed_height << std::endl
-                          << "last_failed_id: " << tx_info.last_failed_id_hash << std::endl;
-    }
-    if (res.spent_key_images.empty())
-    {
-      tools::msg_writer() << "WARNING: Inconsistent pool state - no spent key images";
-    }
-  }
-  if (! res.spent_key_images.empty())
-  {
-    tools::msg_writer() << ""; // one newline
-    tools::msg_writer() << "Spent key images: ";
-    for (const cryptonote::spent_key_image_info& kinfo : res.spent_key_images)
-    {
-      tools::msg_writer() << "key image: " << kinfo.id_hash;
-      if (kinfo.txs_hashes.size() == 1)
-      {
-        tools::msg_writer() << "  tx: " << kinfo.txs_hashes[0];
-      }
-      else if (kinfo.txs_hashes.size() == 0)
-      {
-        tools::msg_writer() << "  WARNING: spent key image has no txs associated";
-      }
-      else
-      {
-        tools::msg_writer() << "  NOTE: key image for multiple txs: " << kinfo.txs_hashes.size();
-        for (const std::string& tx_id : kinfo.txs_hashes)
-        {
-          tools::msg_writer() << "  tx: " << tx_id;
-        }
-      }
-    }
-    if (res.transactions.empty())
-    {
-      tools::msg_writer() << "WARNING: Inconsistent pool state - no transactions";
-    }
-  }
-
-  return true;
-}
-
-bool t_rpc_command_executor::print_transaction_pool_short() {
-  cryptonote::COMMAND_RPC_GET_TRANSACTION_POOL::request req;
-  cryptonote::COMMAND_RPC_GET_TRANSACTION_POOL::response res;
-
-  std::string fail_message = "Problem fetching transaction pool";
-
-  if (m_is_rpc)
-  {
-    if (!m_rpc_client->rpc_request(req, res, "/get_transaction_pool", fail_message.c_str()))
-    {
-      return true;
-    }
-  }
-  else
-  {
-    if (!m_rpc_server->on_get_transaction_pool(req, res) || res.status != CORE_RPC_STATUS_OK)
-    {
-      tools::fail_msg_writer() << make_error(fail_message, res.status);
-      return true;
-    }
-  }
-
-  if (res.transactions.empty())
-  {
-    tools::msg_writer() << "Pool is empty" << std::endl;
-  }
-  else
-  {
-    const time_t now = time(NULL);
-    for (auto & tx_info : res.transactions)
-    {
-      tools::msg_writer() << "id: " << tx_info.id_hash << std::endl
-                          << "blob_size: " << tx_info.blob_size << std::endl
-                          << "weight: " << tx_info.weight << std::endl
-                          << "fee: " << cryptonote::print_money(tx_info.fee) << std::endl
-                          << "fee/byte: " << cryptonote::print_money(tx_info.fee / (double)tx_info.weight) << std::endl
-                          << "receive_time: " << tx_info.receive_time << " (" << get_human_time_ago(tx_info.receive_time, now) << ")" << std::endl
-                          << "relayed: " << [&](const cryptonote::tx_info &tx_info)->std::string { if (!tx_info.relayed) return "no"; return boost::lexical_cast<std::string>(tx_info.last_relayed_time) + " (" + get_human_time_ago(tx_info.last_relayed_time, now) + ")"; } (tx_info) << std::endl
-                          << "do_not_relay: " << (tx_info.do_not_relay ? 'T' : 'F')  << std::endl
-                          << "kept_by_block: " << (tx_info.kept_by_block ? 'T' : 'F') << std::endl
-                          << "double_spend_seen: " << (tx_info.double_spend_seen ? 'T' : 'F') << std::endl
-                          << "max_used_block_height: " << tx_info.max_used_block_height << std::endl
-                          << "max_used_block_id: " << tx_info.max_used_block_id_hash << std::endl
-                          << "last_failed_height: " << tx_info.last_failed_height << std::endl
-                          << "last_failed_id: " << tx_info.last_failed_id_hash << std::endl;
-    }
-  }
-
-  return true;
-}
-
 bool t_rpc_command_executor::print_transaction_pool_stats() {
-  // Rendered in Rust since `get_info` moved there (RK-5c). It still reads
-  // `/get_transaction_pool_stats` through the bridge; that leg moves with
-  // the pool routes (RK-6).
   return run_rust_console({"print_pool_stats"});
-}
-
-bool t_rpc_command_executor::start_mining(const std::string& address, uint64_t num_threads, cryptonote::network_type nettype) {
-  cryptonote::COMMAND_RPC_START_MINING::request req;
-  cryptonote::COMMAND_RPC_START_MINING::response res;
-  req.miner_address = address;
-  req.threads_count = num_threads;
-  
-  std::string fail_message = "Mining did not start";
-
-  if (m_is_rpc)
-  {
-    if (m_rpc_client->rpc_request(req, res, "/start_mining", fail_message.c_str()))
-    {
-      tools::success_msg_writer() << "Mining started";
-    }
-  }
-  else
-  {
-    if (!m_rpc_server->on_start_mining(req, res) || res.status != CORE_RPC_STATUS_OK)
-    {
-      tools::fail_msg_writer() << make_error(fail_message, res.status);
-      return true;
-    }
-  }
-
-  return true;
-}
-
-bool t_rpc_command_executor::stop_mining() {
-  cryptonote::COMMAND_RPC_STOP_MINING::request req;
-  cryptonote::COMMAND_RPC_STOP_MINING::response res;
-
-  std::string fail_message = "Mining did not stop";
-
-  if (m_is_rpc)
-  {
-    if (!m_rpc_client->rpc_request(req, res, "/stop_mining", fail_message.c_str()))
-    {
-      return true;
-    }
-  }
-  else
-  {
-    if (!m_rpc_server->on_stop_mining(req, res) || res.status != CORE_RPC_STATUS_OK)
-    {
-      tools::fail_msg_writer() << make_error(fail_message, res.status);
-      return true;
-    }
-  }
-
-  tools::success_msg_writer() << "Mining stopped";
-  return true;
 }
 
 bool t_rpc_command_executor::stop_daemon()
 {
-  cryptonote::COMMAND_RPC_STOP_DAEMON::request req;
-  cryptonote::COMMAND_RPC_STOP_DAEMON::response res;
-
-//# ifdef WIN32
-//    // Stop via service API
-//    // TODO - this is only temporary!  Get rid of hard-coded constants!
-//    bool ok = windows::stop_service("Shekyl Daemon");
-//    ok = windows::uninstall_service("Shekyl Daemon");
-//    //bool ok = windows::stop_service(SERVICE_NAME);
-//    //ok = windows::uninstall_service(SERVICE_NAME);
-//    if (ok)
-//    {
-//      return true;
-//    }
-//# endif
-
-  // Stop via RPC
-  std::string fail_message = "Daemon did not stop";
-
+  // One stop path. The console word asks; it does not stop the process
+  // itself (DAEMON_CONFIG_CUTOVER.md §2.2). The remote arm posts the
+  // Rust route. Neither arm builds a request struct.
   if (m_is_rpc)
   {
-    if(!m_rpc_client->rpc_request(req, res, "/stop_daemon", fail_message.c_str()))
+    std::string reason;
+    if (!m_rpc_client->post_route("/stop_daemon", "{}", reason))
     {
+      tools::fail_msg_writer() << "Daemon did not stop -- " << reason;
       return true;
     }
   }
   else
   {
-    if (!m_rpc_server->on_stop_daemon(req, res) || res.status != CORE_RPC_STATUS_OK)
-    {
-      tools::fail_msg_writer() << make_error(fail_message, res.status);
-      return true;
-    }
+    shekyl_daemon_request_stop();
   }
-
   tools::success_msg_writer() << "Stop signal sent";
-
   return true;
 }
 
@@ -673,211 +241,6 @@ bool t_rpc_command_executor::print_status()
   return true;
 }
 
-bool t_rpc_command_executor::print_bans()
-{
-    cryptonote::COMMAND_RPC_GETBANS::request req;
-    cryptonote::COMMAND_RPC_GETBANS::response res;
-    std::string fail_message = "Unsuccessful";
-    epee::json_rpc::error error_resp;
-
-    if (m_is_rpc)
-    {
-        if (!m_rpc_client->json_rpc_request(req, res, "get_bans", fail_message.c_str()))
-        {
-            return true;
-        }
-    }
-    else
-    {
-        if (!m_rpc_server->on_get_bans(req, res, error_resp) || res.status != CORE_RPC_STATUS_OK)
-        {
-            tools::fail_msg_writer() << make_error(fail_message, res.status);
-            return true;
-        }
-    }
-
-    if (!res.bans.empty())
-    {
-        for (auto i = res.bans.begin(); i != res.bans.end(); ++i)
-        {
-            if (i->permanent)
-              tools::msg_writer() << i->host << " banned permanently";
-            else
-              tools::msg_writer() << i->host << " banned for " << i->seconds << " seconds";
-        }
-    }
-    else 
-        tools::msg_writer() << "No IPs are banned";
-
-    return true;
-}
-
-bool t_rpc_command_executor::ban(const std::string &address, time_t seconds)
-{
-    cryptonote::COMMAND_RPC_SETBANS::request req;
-    cryptonote::COMMAND_RPC_SETBANS::response res;
-    std::string fail_message = "Unsuccessful";
-    epee::json_rpc::error error_resp;
-
-    cryptonote::COMMAND_RPC_SETBANS::ban ban;
-    ban.host = address;
-    ban.ip = 0;
-    ban.ban = true;
-    ban.seconds = seconds;
-    req.bans.push_back(ban);
-
-    if (m_is_rpc)
-    {
-        if (!m_rpc_client->json_rpc_request(req, res, "set_bans", fail_message.c_str()))
-        {
-            return true;
-        }
-    }
-    else
-    {
-        if (!m_rpc_server->on_set_bans(req, res, error_resp) || res.status != CORE_RPC_STATUS_OK)
-        {
-            tools::fail_msg_writer() << make_error(fail_message, res.status);
-            return true;
-        }
-    }
-
-    return true;
-}
-
-bool t_rpc_command_executor::unban(const std::string &address)
-{
-    cryptonote::COMMAND_RPC_SETBANS::request req;
-    cryptonote::COMMAND_RPC_SETBANS::response res;
-    std::string fail_message = "Unsuccessful";
-    epee::json_rpc::error error_resp;
-
-    cryptonote::COMMAND_RPC_SETBANS::ban ban;
-    ban.host = address;
-    ban.ip = 0;
-    ban.ban = false;
-    ban.seconds = 0;
-    req.bans.push_back(ban);
-
-    if (m_is_rpc)
-    {
-        if (!m_rpc_client->json_rpc_request(req, res, "set_bans", fail_message.c_str()))
-        {
-            return true;
-        }
-    }
-    else
-    {
-        if (!m_rpc_server->on_set_bans(req, res, error_resp) || res.status != CORE_RPC_STATUS_OK)
-        {
-            tools::fail_msg_writer() << make_error(fail_message, res.status);
-            return true;
-        }
-    }
-
-    return true;
-}
-
-bool t_rpc_command_executor::banned(const std::string &address)
-{
-    cryptonote::COMMAND_RPC_BANNED::request req;
-    cryptonote::COMMAND_RPC_BANNED::response res;
-    std::string fail_message = "Unsuccessful";
-    epee::json_rpc::error error_resp;
-
-    req.address = address;
-
-    if (m_is_rpc)
-    {
-        if (!m_rpc_client->json_rpc_request(req, res, "banned", fail_message.c_str()))
-        {
-            return true;
-        }
-    }
-    else
-    {
-        if (!m_rpc_server->on_banned(req, res, error_resp) || res.status != CORE_RPC_STATUS_OK)
-        {
-            tools::fail_msg_writer() << make_error(fail_message, res.status);
-            return true;
-        }
-    }
-
-    if (res.banned && res.permanent)
-      tools::msg_writer() << address << " is banned permanently";
-    else if (res.banned)
-      tools::msg_writer() << address << " is banned for " << res.seconds << " seconds";
-    else
-      tools::msg_writer() << address << " is not banned";
-
-    return true;
-}
-
-bool t_rpc_command_executor::flush_txpool(const std::string &txid)
-{
-    cryptonote::COMMAND_RPC_FLUSH_TRANSACTION_POOL::request req;
-    cryptonote::COMMAND_RPC_FLUSH_TRANSACTION_POOL::response res;
-    std::string fail_message = "Unsuccessful";
-    epee::json_rpc::error error_resp;
-
-    if (!txid.empty())
-      req.txids.push_back(txid);
-
-    if (m_is_rpc)
-    {
-        if (!m_rpc_client->json_rpc_request(req, res, "flush_txpool", fail_message.c_str()))
-        {
-            return true;
-        }
-    }
-    else
-    {
-        if (!m_rpc_server->on_flush_txpool(req, res, error_resp) || res.status != CORE_RPC_STATUS_OK)
-        {
-            tools::fail_msg_writer() << make_error(fail_message, res.status);
-            return true;
-        }
-    }
-
-    tools::success_msg_writer() << "Pool successfully flushed";
-    return true;
-}
-
-bool t_rpc_command_executor::print_coinbase_tx_sum(uint64_t height, uint64_t count)
-{
-  cryptonote::COMMAND_RPC_GET_COINBASE_TX_SUM::request req;
-  cryptonote::COMMAND_RPC_GET_COINBASE_TX_SUM::response res;
-  epee::json_rpc::error error_resp;
-
-  req.height = height;
-  req.count = count;
-
-  std::string fail_message = "Unsuccessful";
-
-  if (m_is_rpc)
-  {
-    if (!m_rpc_client->json_rpc_request(req, res, "get_coinbase_tx_sum", fail_message.c_str()))
-    {
-      return true;
-    }
-  }
-  else
-  {
-    if (!m_rpc_server->on_get_coinbase_tx_sum(req, res, error_resp) || res.status != CORE_RPC_STATUS_OK)
-    {
-      tools::fail_msg_writer() << make_error(fail_message, res.status);
-      return true;
-    }
-  }
-
-  tools::msg_writer() << "Sum of coinbase transactions between block heights ["
-    << height << ", " << (height + count) << ") is "
-    << cryptonote::print_money(boost::multiprecision::uint128_t(res.wide_emission_amount) + boost::multiprecision::uint128_t(res.wide_fee_amount)) << " "
-    << "consisting of " << cryptonote::print_money(boost::multiprecision::uint128_t(res.wide_emission_amount))
-    << " in emissions, and " << cryptonote::print_money(boost::multiprecision::uint128_t(res.wide_fee_amount)) << " in fees";
-  return true;
-}
-
 bool t_rpc_command_executor::alt_chain_info(const std::string &tip, size_t above, uint64_t last_blocks)
 {
   // RK-5b: `get_block_header_by_hash` is served from Rust and the whole
@@ -896,35 +259,6 @@ bool t_rpc_command_executor::print_blockchain_dynamic_stats(uint64_t nblocks)
   return run_rust_console({"print_blockchain_dynamic_stats", std::to_string(nblocks)});
 }
 
-bool t_rpc_command_executor::relay_tx(const std::string &txid)
-{
-    cryptonote::COMMAND_RPC_RELAY_TX::request req;
-    cryptonote::COMMAND_RPC_RELAY_TX::response res;
-    std::string fail_message = "Unsuccessful";
-    epee::json_rpc::error error_resp;
-
-    req.txids.push_back(txid);
-
-    if (m_is_rpc)
-    {
-        if (!m_rpc_client->json_rpc_request(req, res, "relay_tx", fail_message.c_str()))
-        {
-            return true;
-        }
-    }
-    else
-    {
-        if (!m_rpc_server->on_relay_tx(req, res, error_resp) || res.status != CORE_RPC_STATUS_OK)
-        {
-            tools::fail_msg_writer() << make_error(fail_message, res.status);
-            return true;
-        }
-    }
-
-    tools::success_msg_writer() << "Transaction successfully relayed";
-    return true;
-}
-
 bool t_rpc_command_executor::sync_info()
 {
   return run_rust_console({"sync_info"});
@@ -936,34 +270,6 @@ bool t_rpc_command_executor::pop_blocks(uint64_t num_blocks)
   // daemon's switch before the C++ handler runs; the remote arm posts and
   // that daemon's stamp admits. This stays a shim (rule 20).
   return run_rust_console({"pop_blocks", std::to_string(num_blocks)});
-}
-
-bool t_rpc_command_executor::flush_cache(bool bad_blocks)
-{
-    cryptonote::COMMAND_RPC_FLUSH_CACHE::request req;
-    cryptonote::COMMAND_RPC_FLUSH_CACHE::response res;
-    std::string fail_message = "Unsuccessful";
-    epee::json_rpc::error error_resp;
-
-    req.bad_blocks = bad_blocks;
-
-    if (m_is_rpc)
-    {
-        if (!m_rpc_client->json_rpc_request(req, res, "flush_cache", fail_message.c_str()))
-        {
-            return true;
-        }
-    }
-    else
-    {
-        if (!m_rpc_server->on_flush_cache(req, res, error_resp) || res.status != CORE_RPC_STATUS_OK)
-        {
-            tools::fail_msg_writer() << make_error(fail_message, res.status);
-            return true;
-        }
-    }
-
-    return true;
 }
 
 bool t_rpc_command_executor::version()

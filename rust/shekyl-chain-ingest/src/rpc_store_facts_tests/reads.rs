@@ -208,6 +208,7 @@ async fn a_spend_connected_between_the_reads_is_spent_in_the_chain() {
                     origin: Origin::Local,
                     block,
                     bodies,
+                    attestation_witness: Vec::new(),
                 })
                 .expect("room")
                 .reply()

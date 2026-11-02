@@ -88,6 +88,15 @@ namespace cryptonote
     void reset_next_span_time(boost::posix_time::ptime t = boost::posix_time::microsec_clock::universal_time());
     void set_span_hashes(uint64_t start_height, const boost::uuids::uuid &connection_id, std::vector<crypto::hash> hashes);
     bool get_next_span(uint64_t &height, std::vector<cryptonote::block_complete_entry> &bcel, boost::uuids::uuid &connection_id, epee::net_utils::network_address &addr, bool filled = true) const;
+    /// The first filled span starting at or past `min_start`: the next span
+    /// the ingest door has not been handed. A span handed to the door stays
+    /// queued until the door connects it (`remove_spans_ending_before`), so
+    /// its hashes read as held and are not requested again meanwhile.
+    bool get_next_span_from(uint64_t min_start, uint64_t &height, std::vector<cryptonote::block_complete_entry> &bcel, boost::uuids::uuid &connection_id, epee::net_utils::network_address &addr) const;
+    bool has_filled_span_from(uint64_t min_start) const;
+    /// Erase every span whose last block is below `height`: what the door
+    /// has connected.
+    void remove_spans_ending_before(uint64_t height);
     bool has_next_span(const boost::uuids::uuid &connection_id, bool &filled, boost::posix_time::ptime &time) const;
     bool has_next_span(uint64_t height, bool &filled, boost::posix_time::ptime &time, boost::uuids::uuid &connection_id) const;
     size_t get_data_size() const;

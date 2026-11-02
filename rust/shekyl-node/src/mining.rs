@@ -16,6 +16,7 @@ use std::num::NonZeroUsize;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex, PoisonError};
 
+use shekyl_chain_ingest::connector::TipChanged;
 use shekyl_chain_ingest::follower::{NoJob, Posting, Unbuilt};
 use shekyl_chain_ingest::service::PoolHealth;
 use shekyl_daemon_rpc::chain_facts::FactsFault;
@@ -95,6 +96,13 @@ pub struct MiningStatus {
     pub no_job: Option<NoJob>,
 }
 
+/// What the follower publishes that the miner's reads follow: the board's
+/// posting state and the chain's tip.
+pub(crate) struct Watched {
+    pub(crate) posting: watch::Receiver<Posting>,
+    pub(crate) tips: watch::Receiver<TipChanged>,
+}
+
 /// The node's miner (module docs).
 pub struct MiningControl {
     /// The node's one job board; the crate's tests read it here.
@@ -104,6 +112,12 @@ pub struct MiningControl {
     found: FoundBlocks,
     address: Option<MiningAddress>,
     posting: watch::Receiver<Posting>,
+    /// The chain's tip, as the connector publishes it: a posted job is
+    /// served only while it is the next block of this tip (N2, one
+    /// template per tip). Between a block connecting and the follower's
+    /// next post the board still holds the previous tip's job; the miner
+    /// keeps hashing it, harmlessly, and the RPC answers not ready.
+    tips: watch::Receiver<TipChanged>,
     pool: PoolHealth,
     miner: Mutex<Option<Miner>>,
     /// Set by [`Node::stop`](crate::Node::stop): no miner starts after it.
@@ -117,7 +131,7 @@ impl MiningControl {
         budget: Budget,
         found: FoundBlocks,
         address: Option<MiningAddress>,
-        posting: watch::Receiver<Posting>,
+        watches: Watched,
         pool: PoolHealth,
     ) -> Self {
         Self {
@@ -126,7 +140,8 @@ impl MiningControl {
             budget,
             found,
             address,
-            posting,
+            posting: watches.posting,
+            tips: watches.tips,
             pool,
             miner: Mutex::new(None),
             closed: AtomicBool::new(false),
@@ -234,6 +249,13 @@ fn no_job_diagnostic(why: &NoJob) -> Diagnostic {
 }
 
 /// The job, as the RPC reads it.
+/// Whether a job at `job_height` is the next block of a chain of
+/// `tip_count` blocks: the one template per tip the RPC serves (N2). An
+/// empty chain (`None`) has no job to serve.
+pub(crate) fn job_is_for_tip(job_height: u64, tip_count: Option<u64>) -> bool {
+    tip_count == Some(job_height)
+}
+
 fn posted_template(job: &Job) -> PostedTemplate {
     PostedTemplate {
         block: job.block.serialize(),
@@ -269,7 +291,12 @@ impl MiningFacts for MiningControl {
 
     fn template(&self) -> Result<Result<PostedTemplate, Diagnostic>, FactsFault> {
         if let Some((_, job)) = self.board.posted() {
-            return Ok(Ok(posted_template(&job)));
+            let tip_count = self.tips.borrow().tip.map(|tip| tip.count.to_raw());
+            if job_is_for_tip(job.height.to_raw(), tip_count) {
+                return Ok(Ok(posted_template(&job)));
+            }
+            // The tip moved under the job; the follower's next pass replaces it.
+            return Ok(Err(no_job_diagnostic(&NoJob::Starting)));
         }
         let why = match &*self.posting.borrow() {
             Posting::Withdrawn(why) => why.clone(),
@@ -356,6 +383,26 @@ mod diagnostic_tests {
     /// caller refused by `generateblocks` can tell a body lost twice from a
     /// pool judged at another tip twice. The stuck posting is a refusal;
     /// the same reason still on its one rebuild is a wait.
+    #[test]
+    fn a_job_is_served_only_as_the_next_block_of_the_tip() {
+        // One template per tip (N2). Seen on the quiet box: after a block
+        // connected the previous tip's job was still served, listing bodies
+        // that block had mined (`e2e_cxx_template_fills_to_its_median`).
+        assert!(super::job_is_for_tip(5, Some(5)));
+        assert!(
+            !super::job_is_for_tip(5, Some(6)),
+            "the tip moved under the job"
+        );
+        assert!(
+            !super::job_is_for_tip(5, Some(4)),
+            "a job ahead of the tip is not its next block"
+        );
+        assert!(
+            !super::job_is_for_tip(0, None),
+            "an empty chain serves no job"
+        );
+    }
+
     #[test]
     fn a_stuck_build_names_the_reason_that_did_not_clear() {
         let why = NoJob::Unbuilt(Unbuilt::Stuck {

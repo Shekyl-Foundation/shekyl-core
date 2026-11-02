@@ -187,9 +187,9 @@ pub fn main(entry: &ShekylDaemonEntry, args: &[OsString], host: &Host) -> i32 {
         config: &config,
         version: version_full.clone(),
         protocol_version: u64::from(entry.protocol_version),
-        // Not the C++ `release_build` flag. This feeds only the staged
-        // identity the handles carry. The flip decides the one definition.
-        release_build: !cfg!(debug_assertions),
+        // `SHEKYL_VERSION_IS_RELEASE`, the constant the version string is
+        // built from. `debug_assertions` is not that flag (FLIP-Q3).
+        release_build: entry.is_release,
         request_stop: Arc::new(signals::request_stop),
     }) {
         Ok(node) => node,
@@ -627,6 +627,7 @@ mod tests {
         ShekylDaemonEntry {
             release_name: RELEASE.as_ptr(),
             version_full: VERSION.as_ptr(),
+            is_release: false,
             protocol_version: 3,
             run: Some(fake_run),
             stop: Some(fake_stop),

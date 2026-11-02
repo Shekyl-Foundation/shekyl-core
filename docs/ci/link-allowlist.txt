@@ -27,3 +27,6 @@ docs/completed/STAGE_1_PR_5_PENDING_TX_ENGINE.md:../../rust/shekyl-engine-core/s
 docs/FOLLOWUPS.md:rust/... # the followup entry describing this rot class quotes the broken pattern
 docs/FOLLOWUPS.md:docs/... # the followup entry describing this rot class quotes the broken pattern
 docs/FOLLOWUPS.md:../` # prose example of the fix idiom in the same followup entry
+docs/design/DAEMON_CONFIG_CUTOVER.md:../../src/rpc/core_rpc_server.cpp # deleted with the store flip; the rows record the pre-flip RPC server
+docs/design/DAEMON_RELAY_PRIVACY.md:../../src/rpc/daemon_submit_ffi.cpp # deleted with the store flip; §6 anchors the pre-flip submit path
+docs/design/RPC_CHANNEL.md:../../src/rpc/core_rpc_server.cpp # deleted with the store flip; the drift note cites the pre-flip listener

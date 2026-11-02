@@ -34,9 +34,9 @@ pub enum SendError {
         available: u64,
     },
 
-    /// The `TxRequest` named a destination that does not parse as a
-    /// Shekyl address for the wallet's network, or that is on a
-    /// different network than the wallet itself.
+    /// The `TxRequest` named a destination this wallet will not pay:
+    /// not a Shekyl address, one for another network, the display-only
+    /// form, a damaged address, or a version this wallet does not pay.
     #[error("invalid recipient: {reason}")]
     InvalidRecipient {
         /// Human-readable reason. (Intentionally a `&'static str` so

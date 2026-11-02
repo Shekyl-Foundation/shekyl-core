@@ -72,12 +72,10 @@ namespace cryptonote
     // call `shekyl_difficulty_lwma1_next` via two pieces that live
     // together but distinctly:
     //
-    //   * The `lwma1_next_difficulty` helper defined in the anonymous
-    //     namespace of `src/cryptonote_core/blockchain.cpp` builds the
-    //     FFI argument arrays and dispatches the call.
-    //   * Non-zero FFI return codes are translated into the
-    //     `cryptonote::difficulty_computation_error` exception declared
-    //     in `src/cryptonote_core/difficulty_engine_error.h`.
+    //   * The daemon's next-difficulty call is the Rust store's
+    //     (`shekyl-chain-rules`); the C++ `blockchain.cpp` bridge and its
+    //     `difficulty_computation_error` exception were deleted with it
+    //     (DRS-X).
     //
     // No DAA helper lives in this header any more. The remaining
     // inhabitants are the `check_hash` PoW predicate (now a thin wrapper

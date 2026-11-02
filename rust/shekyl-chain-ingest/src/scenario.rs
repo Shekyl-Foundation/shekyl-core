@@ -438,6 +438,17 @@ where
         self.substrate.tick();
     }
 
+    /// The `following_degraded` latch, `None` while it is clear.
+    pub async fn following_degraded(&self) -> Option<shekyl_chain_store::codec::FollowingDegraded> {
+        let watch = self
+            .connector
+            .ask(crate::connector::WatchLatch)
+            .await
+            .expect("the latch watch");
+        let held = *watch.borrow();
+        held
+    }
+
     /// How many alternative blocks the store holds (`AltBlocksHeld`, AL6).
     pub async fn alt_blocks_held(&self) -> Result<u64, RunFault> {
         self.connector

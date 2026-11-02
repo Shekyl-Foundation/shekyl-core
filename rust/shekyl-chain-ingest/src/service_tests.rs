@@ -187,6 +187,7 @@ pub(crate) fn arrival(tag: u64, session: u64, mined: &Mined) -> Arrival {
             .iter()
             .map(shekyl_wire::Transaction::serialize)
             .collect(),
+        attestation_witness: Vec::new(),
     }
 }
 
@@ -298,6 +299,298 @@ async fn a_span_from_the_tip_connects_in_order() {
             }
         );
     }
+    service.stop().await.expect("stops");
+    y.close().await;
+    cleanup(&path);
+}
+
+/// A span the door accepts lands in one write: one commit and one
+/// `TipChanged` for the run, at the run's last block, not one per block
+/// (DRS-D6's mitigation, 2026-10-30: the door committed once per block,
+/// two fsyncs each, where the C++ batched a whole span). Every block is
+/// still answered `Connected` at its height, in order.
+#[tokio::test(flavor = "multi_thread")]
+async fn a_span_lands_in_one_commit() {
+    use crate::connector::TipChanged;
+    let mut y = Scenario::open("service-one-commit-y");
+    let blocks = y.mine(6).await;
+    let gate = Arc::new(Gated::new());
+    let (service, path) = service(
+        "service-one-commit",
+        Arc::clone(&gate),
+        ServiceConfig::default(),
+    );
+    let door = service.door();
+    assert!(
+        door.room() >= blocks.len(),
+        "the span fits the door's window"
+    );
+    let mut tips = service.watch_tip().await.expect("watch");
+    assert_eq!(*tips.borrow_and_update(), TipChanged { seq: 0, tip: None });
+    let replies = offer_all(&door, 1, &blocks).await;
+    for (mined, reply) in blocks.iter().zip(&replies) {
+        assert_eq!(
+            *reply,
+            Reply::Connected {
+                height: mined.height,
+                hash: mined.hash
+            }
+        );
+    }
+    assert!(
+        tips.has_changed().expect("open"),
+        "the run published its tip"
+    );
+    let published = *tips.borrow_and_update();
+    assert_eq!(
+        published.seq, 1,
+        "one commit for the span, not {}",
+        published.seq
+    );
+    assert_eq!(
+        published.tip.map(|t| t.top_id),
+        Some(blocks[blocks.len() - 1].hash),
+        "the one publication is the run's last block"
+    );
+    service.stop().await.expect("stops");
+    y.close().await;
+    cleanup(&path);
+}
+
+/// A substrate whose longhash faults on one block, and is the gated one
+/// for every other: what a run meets when its cache cannot be read.
+struct Faulting {
+    gate: Gated,
+    faulting: BlockHash,
+}
+
+/// The fault [`Faulting`] raises: not a cache miss, so the run does not
+/// place its arrivals again.
+#[derive(Debug)]
+struct FormFault;
+
+impl Substrate for Faulting {
+    type Fault = FormFault;
+    type Held = ();
+
+    fn local_clock(&self) -> Result<Timestamp, Self::Fault> {
+        Ok(self.gate.local_clock().expect("the gate's clock"))
+    }
+
+    fn longhash(&self, pow_blob: &[u8], seed: &BlockHash) -> Result<PowHash, Self::Fault> {
+        if shekyl_wire::identity_of_pow_blob(pow_blob) == self.faulting {
+            return Err(FormFault);
+        }
+        Ok(self.gate.longhash(pow_blob, seed).expect("the gate hashes"))
+    }
+
+    fn pin_seed(&self, seed: &BlockHash) {
+        self.gate.pin_seed(seed);
+    }
+
+    fn prepare_seed(&self, seed: &BlockHash) -> Self::Held {
+        self.gate.prepare_seed(seed);
+    }
+
+    fn longhash_held(
+        &self,
+        pow_blob: &[u8],
+        seed: &BlockHash,
+        _held: &Self::Held,
+    ) -> Result<PowHash, Self::Fault> {
+        self.longhash(pow_blob, seed)
+    }
+}
+
+/// A form that faults fails the service before the run's write: nothing
+/// of the run lands, the arrivals are answered `Stopped`, and the stop
+/// reports the fault. A door that landed the formed prefix first and only
+/// then looked at the fault had a path on which the write's own outcome
+/// (a refusal, a stale view) returned before the fault was ever reported,
+/// and the service ran on as if its substrate were sound; failing before
+/// the write leaves that path no entry.
+#[tokio::test(flavor = "multi_thread")]
+async fn a_form_that_faults_fails_the_service_before_the_run_lands() {
+    let mut y = Scenario::open("service-form-fault-y");
+    let blocks = y.mine(3).await;
+    let path = tmp("service-form-fault");
+    let store: ChainStore = open_store(&path);
+    let service = Service::start(
+        Arc::new(store),
+        RULES,
+        Arc::new(Faulting {
+            gate: Gated::new(),
+            faulting: blocks[1].hash,
+        }),
+        ServiceConfig::default(),
+        Budget::of_host(),
+        super::Follow::default(),
+    );
+    let door = service.door();
+    let span = blocks
+        .iter()
+        .enumerate()
+        .map(|(i, m)| arrival(u64::try_from(i).expect("fits"), 1, m))
+        .collect();
+    let tickets = door.offer_span(span).expect("room");
+    let replies = tokio::time::timeout(std::time::Duration::from_secs(30), async {
+        let mut replies = Vec::new();
+        for ticket in tickets {
+            replies.push(ticket.reply().await.reply);
+        }
+        replies
+    })
+    .await
+    .expect("every arrival is answered");
+    assert!(
+        replies.iter().all(|r| matches!(r, Reply::Stopped)),
+        "nothing landed and every arrival was answered Stopped: {replies:?}"
+    );
+    assert!(
+        service.stop().await.is_err(),
+        "the service reports the form's fault"
+    );
+    y.close().await;
+    cleanup(&path);
+}
+
+/// A run whose last block lists a spend anchored on a root the run itself
+/// writes: the spend connecting at `AT` references block `AT − 5` (CEN-I11's
+/// newest admissible reference), whose root is the tree's state after
+/// block `AT − 6`, and the span handed over is `AT − 6 ..= AT`, so that
+/// root exists only in the run's open transaction when block `AT` is
+/// judged. The whole run lands, in one commit, each block answered at its
+/// height. The run also crosses the first seed boundary of a fresh store
+/// in the sibling test above (genesis under the null seed, block 1 under
+/// genesis's): one run, two seeds pinned, one commit.
+#[tokio::test(flavor = "multi_thread")]
+async fn a_spend_anchored_on_a_root_its_own_run_writes_lands_with_it() {
+    use crate::test_support::{h, Family, FIRST_SPEND_HEIGHT};
+    use shekyl_harness_spender::Spender;
+    let at = FIRST_SPEND_HEIGHT + 1;
+    let mut y = Scenario::open("service-run-anchor-y");
+    let mut blocks = y.mine(at).await;
+    let spend = {
+        let spender = Spender::over(&blocks);
+        spender.spend_coinbase(y.wallet(), h(0), h(at), Family::Main.fee())
+    };
+    let spending = y
+        .mine_listing(vec![spend])
+        .await
+        .unwrap_or_else(|outcome| panic!("the spend's block connects on the scenario: {outcome}"));
+    assert_eq!(spending.height, h(at));
+    let spending_hash = spending.hash;
+    blocks.push(spending);
+    let gate = Arc::new(Gated::new());
+    let (service, path) = service(
+        "service-run-anchor",
+        Arc::clone(&gate),
+        ServiceConfig::default(),
+    );
+    let door = service.door();
+    let mut tips = service.watch_tip().await.expect("watch");
+    // Everything below the reference root's block, in spans as the door
+    // has room; then the dependent run as one span.
+    let split = usize::try_from(at - 6).expect("fits");
+    let before = offer_all(&door, 1, &blocks[..split]).await;
+    assert!(
+        before.iter().all(|r| matches!(r, Reply::Connected { .. })),
+        "{before:?}"
+    );
+    let seq_before = tips.borrow_and_update().seq;
+    let run = &blocks[split..];
+    assert_eq!(run.len(), 7);
+    assert!(door.room() >= run.len(), "the run fits the door's window");
+    let replies = offer_all(&door, 1, run).await;
+    for (mined, reply) in run.iter().zip(&replies) {
+        assert_eq!(
+            *reply,
+            Reply::Connected {
+                height: mined.height,
+                hash: mined.hash
+            },
+            "block {} of the run",
+            mined.height
+        );
+    }
+    let published = *tips.borrow_and_update();
+    assert_eq!(
+        published.seq,
+        seq_before + 1,
+        "the run landed in one commit"
+    );
+    assert_eq!(
+        published.tip.map(|t| t.top_id),
+        Some(spending_hash),
+        "the one publication is the spending block"
+    );
+    // The spend is on the chain the service holds: its key image is spent.
+    let (on_chain, as_alt) = homes(&service, spending_hash);
+    assert!(on_chain && !as_alt);
+    service.stop().await.expect("stops");
+    y.close().await;
+    cleanup(&path);
+}
+
+/// A run across a seed boundary lands in one commit: the span
+/// `2107 ..= 2113` straddles height 2112, the first block hashed under
+/// the seed at height 2048 (`SEEDHASH_EPOCH_BLOCKS + SEEDHASH_EPOCH_LAG`),
+/// so the run's forms hash under two seeds, both pinned for the one run,
+/// and the run's one write records both halves. Ignored: it mines 2,114
+/// blocks, and the nightly ignored lane runs it.
+#[tokio::test(flavor = "multi_thread")]
+#[ignore = "mines past the first seed epoch; the chain-ingest ignored lane runs it"]
+async fn a_run_across_a_seed_boundary_lands_in_one_commit() {
+    use shekyl_difficulty::{SEEDHASH_EPOCH_BLOCKS, SEEDHASH_EPOCH_LAG};
+    let boundary = SEEDHASH_EPOCH_BLOCKS + SEEDHASH_EPOCH_LAG; // 2112
+    let mut y = Scenario::open("service-seed-run-y");
+    let blocks = y.mine(boundary + 2).await;
+    let gate = Arc::new(Gated::new());
+    let (service, path) = service(
+        "service-seed-run",
+        Arc::clone(&gate),
+        ServiceConfig::default(),
+    );
+    let door = service.door();
+    let mut tips = service.watch_tip().await.expect("watch");
+    let split = usize::try_from(boundary - 5).expect("fits");
+    let before = offer_all(&door, 1, &blocks[..split]).await;
+    assert!(
+        before.iter().all(|r| matches!(r, Reply::Connected { .. })),
+        "{before:?}"
+    );
+    let seq_before = tips.borrow_and_update().seq;
+    let pins_before = gate.pins();
+    let run = &blocks[split..];
+    assert_eq!(run.len(), 7);
+    let replies = offer_all(&door, 1, run).await;
+    for (mined, reply) in run.iter().zip(&replies) {
+        assert_eq!(
+            *reply,
+            Reply::Connected {
+                height: mined.height,
+                hash: mined.hash
+            },
+            "block {} of the run",
+            mined.height
+        );
+    }
+    let published = *tips.borrow_and_update();
+    assert_eq!(
+        published.seq,
+        seq_before + 1,
+        "the run landed in one commit"
+    );
+    assert!(
+        gate.pins() - pins_before >= 2,
+        "the one run pinned a seed on each side of the boundary ({} pins)",
+        gate.pins() - pins_before
+    );
+    assert_eq!(
+        gate.canonical(),
+        Some(blocks[usize::try_from(SEEDHASH_EPOCH_BLOCKS).expect("fits")].hash),
+        "the canonical slot holds the new epoch's seed, block 2048's"
+    );
     service.stop().await.expect("stops");
     y.close().await;
     cleanup(&path);
@@ -636,6 +929,7 @@ fn junk(tag: u64, session: u64, solicited: bool, len: usize) -> Arrival {
         },
         block: vec![0xA5; len],
         bodies: Vec::new(),
+        attestation_witness: Vec::new(),
     }
 }
 
@@ -1358,6 +1652,7 @@ impl SeatedPool {
                     pool: Arc::clone(&pool),
                     policy: AdmissionPolicy::GENESIS,
                     wall: Arc::new(|| UnixSeconds::from_raw(10)),
+                    departed: None,
                 }),
                 ..Default::default()
             },
@@ -1375,7 +1670,9 @@ impl SeatedPool {
     }
 
     /// Admit `tx` and mark it shown. The follower is not woken: the test
-    /// wakes it once the hook it wants is in place.
+    /// wakes it once the hook it wants is in place. Production wakes on
+    /// `shekyl_pool_fluffed` (Q9); tests that admit through this lock
+    /// still call [`Self::wake`].
     fn show(&self, tx: &shekyl_wire::Transaction) {
         use shekyl_chain_rules::AdmissionPolicy;
         use shekyl_chain_store::store::{ChainStore, SnapshotView};
@@ -1528,6 +1825,72 @@ async fn a_body_flushed_between_the_locks_is_left_out_of_the_rebuilt_job() {
     assert_eq!(builds, 2, "the withdrawal was built again");
 }
 
+/// Q9: a body a pop returns to the pool is a shown-set change the relay's
+/// hook never sees, and its admission judges at the tip the pop left, which
+/// the pool's work order keeps behind the heavier tip it last judged at. The
+/// return wakes the attendant: its reconcile re-judges at this tip and the
+/// rebuilt job lists the body. The red is the regtest walk
+/// `e2e_fcmp_spend_reorg_restores_pool_and_fee` on a daemon whose
+/// `offer_carried` admitted without waking: the job posted on the pop's tip
+/// change, before the return, stayed and listed nothing (2026-10-29). In
+/// this harness the attendant may reach the pop's tip after the return and
+/// list the body on that build alone, so this test pins the property, not
+/// the wake.
+#[tokio::test(flavor = "multi_thread")]
+async fn a_body_a_pop_returns_is_listed_by_the_rebuilt_job() {
+    use crate::pool_door_tests::{matured, paying_the_floor};
+
+    let (mut scenario, prefix) = matured("service-pop-returns").await;
+    let tx = paying_the_floor(&mut scenario, &prefix, 0).await;
+    let txid = tx.txid_parts().hash;
+    let next = prefix.last().expect("the chain").height.to_raw() + 1;
+    let mut seated = SeatedPool::start("service-pop-returns");
+    offer_all(&seated.service.door(), 1, &prefix).await;
+    posted_job(
+        &mut seated.posting,
+        &seated.board,
+        CHAIN_POSTED,
+        |_at, job| job.height.to_raw() == next && !lists(job, txid),
+    )
+    .await;
+    seated.show(&tx);
+    seated.wake();
+    posted_job(
+        &mut seated.posting,
+        &seated.board,
+        WAKE_POSTED,
+        |_at, job| lists(job, txid),
+    )
+    .await;
+    let carrying = scenario
+        .mine_listing(vec![tx.clone()])
+        .await
+        .unwrap_or_else(|outcome| panic!("the spend's block lands: {outcome}"));
+    offer_all(&seated.service.door(), 1, std::slice::from_ref(&carrying)).await;
+    posted_job(
+        &mut seated.posting,
+        &seated.board,
+        CHAIN_POSTED,
+        |_at, job| job.height.to_raw() == next + 1 && !lists(job, txid),
+    )
+    .await;
+    seated
+        .service
+        .rewinder()
+        .pop_blocks(1)
+        .await
+        .expect("the pop");
+    posted_job(
+        &mut seated.posting,
+        &seated.board,
+        WAKE_POSTED,
+        |_at, job| job.height.to_raw() == next && lists(job, txid),
+    )
+    .await;
+    seated.stop().await;
+    scenario.close().await;
+}
+
 /// Two builds in a row lose a listed body at one tip: the one rebuild
 /// withdraws for the same reason, and the board rests on `Stuck`, which
 /// `generateblocks` refuses. The next wake, whose first build loses a
@@ -1625,9 +1988,13 @@ async fn a_closed_sync_channel_withdraws_the_job_and_following_goes_on() {
     let mut followed = service.followed();
     drop(sync_tx);
     offer_all(&service.door(), 1, &blocks).await;
+    // The span lands in one commit, so the follower has one publication to
+    // reach, not one per block: the tip watch's sequence after the offers.
+    let published = service.watch_tip().await.expect("watch").borrow().seq;
+    assert!(published >= 1, "the span published its tip");
     tokio::time::timeout(
         std::time::Duration::from_secs(20),
-        followed.wait_for(|at| *at >= 2),
+        followed.wait_for(|at| *at >= published),
     )
     .await
     .expect("the follower still follows")
@@ -1991,8 +2358,8 @@ async fn a_bound_arrival_connects_through_form_judged_without_a_hash() {
             .collect(),
         attestation_witness: Vec::new(),
     };
-    // The door bounds the block and its bodies; the witness is not
-    // counted, and the caller's measure is the door's own.
+    // The door bounds the block and its bodies; the witness is a sidecar
+    // with its own cap, and the caller's measure is the door's own.
     let measured = bound.bytes();
     let with_witness = super::BoundArrival {
         attestation_witness: vec![0; 64],
@@ -2003,6 +2370,12 @@ async fn a_bound_arrival_connects_through_form_judged_without_a_hash() {
         measured,
         bound.block.len() + bound.bodies.iter().map(Vec::len).sum::<usize>()
     );
+    let over = super::BoundArrival {
+        attestation_witness: vec![0; shekyl_types::MAX_ATTESTATION_WITNESS_BYTES + 1],
+        ..bound.clone()
+    };
+    assert_eq!(over.bytes(), measured);
+    assert_eq!(door.offer_bound(vec![over]).err(), Some(Refusal::Oversize));
     let tickets = door.offer_bound(vec![bound]).expect("room");
     let reply = tickets
         .into_iter()

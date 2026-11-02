@@ -34,9 +34,8 @@ namespace shekyl {
 // to correct. All of it is shekyl-economics::compute_fee_burn now. What
 // crosses here is FACTS: the fee sum, the exact volume window, the two store
 // facts the supply derives from, and the escalation operand — each read at
-// PARENT-block state (Blockchain::parent_frozen_segment_count is the
-// asserting read-point for n; coins_generated and total_burned come from
-// the same pre-add_block state).
+// parent-block state. The C++ reader of n was deleted with the chain;
+// coins_generated and total_burned come from the same pre-add state.
 
 struct BurnResult {
     uint64_t miner_fee_income;

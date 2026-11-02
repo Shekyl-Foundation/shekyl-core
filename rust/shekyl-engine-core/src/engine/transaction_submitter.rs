@@ -13,7 +13,7 @@ use shekyl_types::PCanonicalId;
 use shekyl_wire::Transaction;
 
 use super::bond_assembly::PBoundBytes;
-use super::error::{AmbiguousErrorKind, RetryableRejectCause, TerminalErrorKind};
+use super::error::{AmbiguousErrorKind, CenRowName, RetryableRejectCause, TerminalErrorKind};
 use super::pending::TxHash;
 use super::posture::BroadcastPosture;
 use super::prpc::PRpc;
@@ -210,7 +210,10 @@ pub(crate) fn submit_outcome_from_verdict(
             hash,
             height: *height,
         },
-        SubmitVerdict::Rejected { cause } => TxSubmitOutcome::Rejected { cause: *cause },
+        SubmitVerdict::Rejected { cause, row } => TxSubmitOutcome::Rejected {
+            cause: *cause,
+            row: row.as_deref().and_then(CenRowName::parse),
+        },
     }
 }
 
@@ -251,22 +254,27 @@ pub(crate) fn outcome_to_result(outcome: TxSubmitOutcome) -> Result<SubmitSucces
         TxSubmitOutcome::AlreadyInChain { hash, height } => {
             Ok(SubmitSuccess::AlreadyInChain { hash, height })
         }
-        TxSubmitOutcome::Rejected { cause } => Err(submitter_error_from_cause(cause)),
+        TxSubmitOutcome::Rejected { cause, row } => Err(submitter_error_from_cause(cause, row)),
     }
 }
 
 /// Split a [`RejectCause`] into the terminal / retryable error classes
 /// per the §2.5 disposition table. Factored out of [`outcome_to_result`]
 /// so the cause→class mapping is a single, testable site.
-fn submitter_error_from_cause(cause: RejectCause) -> SubmitterError {
+fn submitter_error_from_cause(cause: RejectCause, row: Option<CenRowName>) -> SubmitterError {
     let terminal = |kind| SubmitterError::RejectedTerminal { kind };
     let retryable = |cause| SubmitterError::RejectedRetryable { cause };
     match cause {
         RejectCause::Malformed => terminal(TerminalErrorKind::Malformed),
+        // Terminal with its row. A reply that names no row, or one this
+        // wallet cannot carry whole, takes the fail-safe disposition.
+        RejectCause::ConsensusRule => match row {
+            Some(row) => terminal(TerminalErrorKind::ConsensusRule { row }),
+            None => terminal(TerminalErrorKind::Unrecognized),
+        },
         RejectCause::FeeTooLow => terminal(TerminalErrorKind::FeeTooLow),
         RejectCause::DoubleSpendConflict => terminal(TerminalErrorKind::DoubleSpend),
         RejectCause::Unrecognized => terminal(TerminalErrorKind::Unrecognized),
-        RejectCause::JoinMarketUnsupported => terminal(TerminalErrorKind::JoinMarketUnsupported),
         RejectCause::StaleRoot => retryable(RetryableRejectCause::StaleRoot),
         RejectCause::ReferenceTooRecent => retryable(RetryableRejectCause::ReferenceTooRecent),
         RejectCause::ReferenceNotFound => retryable(RetryableRejectCause::ReferenceNotFound),
@@ -307,8 +315,17 @@ where
             .daemon
             .submit_transaction(tx_bytes)
             .await
-            .map_err(|_| SubmitterError::Ambiguous {
-                kind: AmbiguousErrorKind::DaemonUnavailable,
+            .map_err(|error| {
+                // The verdict's absence is ambiguous to the caller (Two
+                // Generals), but what the transport saw is not a secret:
+                // the log says it, so an operator reading "unavailable"
+                // can tell a refused connection from a reply that was not
+                // a verdict.
+                let error: crate::engine::error::IoError = error.into();
+                tracing::warn!(%error, "submit: the daemon gave no verdict");
+                SubmitterError::Ambiguous {
+                    kind: AmbiguousErrorKind::DaemonUnavailable,
+                }
             })?;
         // The typed verdict carries NO txid field — neither path reads an id back from
         // the daemon (identity is always locally computed, anti-untrusted-daemon).
@@ -625,12 +642,14 @@ mod tests {
         assert_eq!(
             submit_outcome_from_verdict(
                 &SubmitVerdict::Rejected {
-                    cause: RejectCause::Malformed
+                    cause: RejectCause::Malformed,
+                    row: None,
                 },
                 hash
             ),
             TxSubmitOutcome::Rejected {
-                cause: RejectCause::Malformed
+                cause: RejectCause::Malformed,
+                row: None,
             }
         );
     }
@@ -680,13 +699,9 @@ mod tests {
                 TerminalErrorKind::DoubleSpend,
             ),
             (RejectCause::Unrecognized, TerminalErrorKind::Unrecognized),
-            (
-                RejectCause::JoinMarketUnsupported,
-                TerminalErrorKind::JoinMarketUnsupported,
-            ),
         ] {
-            let err =
-                outcome_to_result(TxSubmitOutcome::Rejected { cause }).expect_err("terminal cause");
+            let err = outcome_to_result(TxSubmitOutcome::Rejected { cause, row: None })
+                .expect_err("terminal cause");
             assert!(
                 matches!(err, SubmitterError::RejectedTerminal { kind } if kind == expected),
                 "cause {cause:?} must map to terminal kind {expected:?}, got {err:?}"
@@ -709,7 +724,7 @@ mod tests {
                 RetryableRejectCause::ReferenceNotFound,
             ),
         ] {
-            let err = outcome_to_result(TxSubmitOutcome::Rejected { cause })
+            let err = outcome_to_result(TxSubmitOutcome::Rejected { cause, row: None })
                 .expect_err("retryable cause");
             assert!(
                 matches!(

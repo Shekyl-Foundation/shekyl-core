@@ -5,10 +5,9 @@
 
 //! Tests for the archival codecs (`codec::archival`): the bond record's round
 //! trip at every genesis-frozen cap, each decode refusal on its own axis,
-//! and the **v7 cross-check** — the C++ `ArchivalBondValue` corpus
-//! (`docs/test_vectors/ARCHIVAL_BOND_RECORD_V7.json`, written and asserted
-//! by `tests/unit_tests/archival_bond_record_v7_corpus.cpp`) rebuilt as
-//! [`BondRecord`]s field by field, so the re-specified codec is shown to
+//! and the **v7 cross-check** — the frozen `ArchivalBondValue` corpus
+//! (`docs/test_vectors/ARCHIVAL_BOND_RECORD_V7.json`; frozen, no regenerator)
+//! rebuilt as [`BondRecord`]s field by field, so the re-specified codec is shown to
 //! carry the *same record*, not merely to round-trip itself
 //! (`DRS_E1_SARCH.md` §7, ruled on PR #840).
 
@@ -471,8 +470,8 @@ fn record_from_v7_fields(f: &serde_json::Value) -> BondRecord {
 fn the_v7_corpus_maps_onto_the_record_without_loss() {
     let text = fs::read_to_string(corpus_path()).unwrap_or_else(|e| {
         panic!(
-            "the v7 corpus is missing ({e}); it is written by \
-             tests/unit_tests/archival_bond_record_v7_corpus.cpp with SHEKYL_WRITE_V7_CORPUS=1"
+            "the v7 corpus is missing ({e}); it is frozen and has no regenerator \
+             (docs/test_vectors/ARCHIVAL_BOND_RECORD_V7.json)"
         )
     });
     let doc: serde_json::Value = serde_json::from_str(&text).expect("corpus is JSON");

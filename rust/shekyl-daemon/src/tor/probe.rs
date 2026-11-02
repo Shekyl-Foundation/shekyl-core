@@ -17,8 +17,10 @@
 
 use shekyl_ffi::dialer_ffi::ProbeHandshake;
 use shekyl_timing_engine::Tick;
-use shekyl_tor_control_client::control::{Command, TorEvent, UploadRounds};
-use shekyl_tor_control_client::supervisor::{round_inputs, Inbound, InboundCause, Input};
+use shekyl_tor_control_client::control::{Command, RelayFingerprint, TorEvent, UploadRounds};
+use shekyl_tor_control_client::supervisor::{
+    round_inputs, DirectoryAnswer, DirectoryFetch, Inbound, InboundCause, Input,
+};
 use shekyl_tor_control_daemon::{probe_own_onion, ProbeDial};
 use tokio::task::JoinHandle;
 
@@ -191,6 +193,78 @@ impl Drive {
     }
 }
 
+/// A probe's check: the directories the latest upload round reached, each
+/// with the descriptor it was sent and its own CSPRNG draw (§4.5). An
+/// empty set is a check that counts nothing, and the probe alone decides.
+impl Drive {
+    pub(super) fn directories_drawn(&self) -> Input {
+        let fetches = self
+            .rounds
+            .as_ref()
+            .map(|rounds| {
+                rounds
+                    .directories()
+                    .iter()
+                    .map(|to| DirectoryFetch {
+                        hsdir: to.hsdir,
+                        descriptor_id: to.descriptor_id.clone(),
+                        draw: shekyl_ffi::tor_link::probe_delay_draw(),
+                    })
+                    .collect()
+            })
+            .unwrap_or_default();
+        Input::DirectoriesDrawn { fetches }
+    }
+
+    /// `HSFETCH` this node's onion from one directory. Tor accepting the
+    /// command (`250`) starts that fetch's answer window
+    /// ([`Input::DirectoryFetchAccepted`]). The `HS_DESC` lines that follow
+    /// are events, folded by the event loop. A command Tor refuses (the
+    /// directory left its consensus, 552) or that cannot be asked is
+    /// unusable here, so the check does not wait on it.
+    pub(super) async fn fetch_from(&self, hsdir: RelayFingerprint) -> Option<Input> {
+        let unusable = Some(Input::DirectoryAnswered {
+            hsdir,
+            descriptor_id: None,
+            answer: DirectoryAnswer::Unusable,
+        });
+        let (Some(control), Some(service)) = (self.control.as_ref(), self.service.clone()) else {
+            return unusable;
+        };
+        match control
+            .ask(Command::HsFetchFrom {
+                service,
+                server: hsdir,
+            })
+            .await
+        {
+            Ok(reply) if reply.status() == 250 => Some(Input::DirectoryFetchAccepted { hsdir }),
+            Ok(reply) => {
+                tracing::debug!(
+                    target: "tor",
+                    status = reply.status(),
+                    ?hsdir,
+                    "Tor did not take the directory fetch"
+                );
+                unusable
+            }
+            Err(error) => {
+                tracing::debug!(target: "tor", ?hsdir, "the directory fetch was not asked ({error})");
+                unusable
+            }
+        }
+    }
+}
+
+/// Tor reported a clock jump while Running (§4.5, "Overdue"): say so, and
+/// draw the probe's delay from the CSPRNG, as a round's probe does.
+pub(super) fn jump_probe() -> Input {
+    tracing::info!(target: "tor", "Tor reported a clock jump; probing this node's onion");
+    Input::JumpProbeDrawn {
+        draw: shekyl_ffi::tor_link::probe_delay_draw(),
+    }
+}
+
 /// A descriptor round's mark, said as it arrives. The probe's delay draw is
 /// not said: its point is that no directory can predict the probe, and a
 /// log line is one more copy of it.
@@ -214,6 +288,7 @@ fn link_inbound(inbound: Inbound) -> shekyl_ffi::zone_ffi::InboundFacet {
             cause: match cause {
                 InboundCause::ProbeTimedOut => LinkCause::ProbeTimedOut,
                 InboundCause::DescriptorRejected => LinkCause::DescriptorRejected,
+                InboundCause::DescriptorNotFound => LinkCause::DescriptorNotFound,
             },
             since: Tick::new(since),
         },

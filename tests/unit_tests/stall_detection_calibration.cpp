@@ -28,9 +28,10 @@
 
 // Stall-detection calibration regression test.
 //
-// The daemon's `cryptonote::core::check_block_rate()` runs a Poisson
-// tail test against the last 150 block timestamps. Its calibration
-// depends on two T-derived constants:
+// The daemon's stall detector (the C++ `core::check_block_rate()`, deleted
+// with the C++ chain in DRS-X; no Rust owner yet) ran a Poisson tail test
+// against the last 150 block timestamps. Its calibration depends on two
+// T-derived constants:
 //
 //   threshold       = 1 / (864000 / SHEKYL_DAA_TARGET_SECONDS)
 //                   = 1 / 7200   (one false positive per 10 days)
@@ -131,8 +132,8 @@ TEST(stall_detection_calibration, threshold_value_pinned)
 
 TEST(stall_detection_calibration, expected_block_counts_pinned)
 {
-  // The windowed loop in `cryptonote::core::check_block_rate()` checks
-  // five time windows; the expected block count for each is window / T.
+  // The detector's windowed loop checked five time windows; the expected
+  // block count for each is window / T.
   // These are the Poisson means of the underlying tail tests.
   constexpr std::array<unsigned int, 5> windows = { 5400, 3600, 1800, 1200, 600 };
   constexpr std::array<unsigned int, 5> expected = { 45, 30, 15, 10, 5 };

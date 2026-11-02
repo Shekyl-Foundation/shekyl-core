@@ -4145,7 +4145,7 @@ is not a table of constants.**
 > **The block-carrying commands cannot take a static cap, and this is the
 > finding, not a gap in the round.** A block's maximum weight is
 > `m_current_block_cumul_weight_limit` — **dynamic, consensus-derived, and a
-> function of chain state** (`src/cryptonote_core/blockchain.cpp:1846`, `median_weight = m_current_block_cumul_weight_limit / 2` — cited with its symbol so a line drift is detectable by grep). A static number is
+> function of chain state** (`src/cryptonote_core/blockchain.cpp`, `median_weight = m_current_block_cumul_weight_limit / 2` — cited with its symbol so a line drift is detectable by grep). A static number is
 > therefore either **too small**, rejecting a legitimate block during a growth
 > phase and partitioning the node, or **too large**, in which case it is not a
 > bound. The inherited 128 MB is the second.
@@ -4273,7 +4273,7 @@ own value is owed to sync measurements instead (FOLLOWUPS).*
 > **(b) The cardinality-derived batch bound exceeds the session packet limit,
 > which contradicts PWD-T6.** The consensus weight limit **floors** at
 > `2 × get_min_block_weight` = **600,000 bytes**
-> (`src/cryptonote_core/blockchain.cpp:6150-6153` at `dev` `059aca264`; the
+> (`src/cryptonote_core/blockchain.cpp` at `dev` `059aca264`; the
 > median is clamped up to `full_reward_zone` at `:6150-6151` before the
 > doubling at `:6153`. *Re-pinned 2026-09-21: the earlier `:6564-6567` /
 > `:6543` anchors were written against a superseded tree and now land on a
@@ -4810,7 +4810,7 @@ mempool acceptance.
 > rules the **p2p consequence** only. It does **not** re-rule the acceptance
 > rules, and it does **not** touch `kept_by_block`'s input-check tolerance —
 > `add_tx` inserts transactions whose input check failed with
-> `fcmp_verified = 0` (`src/cryptonote_core/blockchain.cpp:6068`), contained by
+> `fcmp_verified = 0` (`src/cryptonote_core/blockchain.cpp`), contained by
 > **CEN-M8's hash-gated skip**, which is cited here as already-decided and
 > reasoned about nowhere.
 
@@ -4833,8 +4833,8 @@ decoration:
 
 | Site | What the rejection describes | Universal? | Verdict |
 | --- | --- | --- | --- |
-| **`:257` fee too low** | **Our own state.** The floor is computed by **`get_current_fee_per_byte`** (`src/cryptonote_core/blockchain.cpp:4372-4385`) from `m_current_block_cumul_weight_limit`, `m_db->height()`, `get_block_already_generated_coins(height-1)` and `m_long_term_effective_median_block_weight` — **our chain, at our height** — and `check_fee` (`:4388`) only compares against it | No — **CEN-M3 records there is no consensus fee floor**; it is relay-tier | **No drop.** A peer relaying below *our* floor may be entirely honest on a different valid policy |
-| **`:291` double-spend** | **Our own state.** `have_tx_keyimges_as_spent` takes `m_transactions_lock` **and** `m_blockchain` and tests against our pool and chain (`src/cryptonote_core/tx_pool.cpp:1688-1701`) | No — node-local and **reorg-dependent**; our own view changes underneath us | **No drop.** A tx conflicting in our view can be fine in theirs |
+| **`:257` fee too low** | **Our own state.** The floor is computed by **`get_current_fee_per_byte`** (`src/cryptonote_core/blockchain.cpp`) from `m_current_block_cumul_weight_limit`, `m_db->height()`, `get_block_already_generated_coins(height-1)` and `m_long_term_effective_median_block_weight` — **our chain, at our height** — and `check_fee` (`:4388`) only compares against it | No — **CEN-M3 records there is no consensus fee floor**; it is relay-tier | **No drop.** A peer relaying below *our* floor may be entirely honest on a different valid policy |
+| **`:291` double-spend** | **Our own state.** `have_tx_keyimges_as_spent` takes `m_transactions_lock` **and** `m_blockchain` and tests against our pool and chain (`src/cryptonote_core/tx_pool.cpp`) | No — node-local and **reorg-dependent**; our own view changes underneath us | **No drop.** A tx conflicting in our view can be fine in theirs |
 | **`:267` oversized `tx_extra`** | **The input** — `tx.extra.size()` against a compile-time constant | **No.** The `!kept_by_block` gate says so outright: the same transaction is acceptable inside a block, so this is relay policy | **No drop.** Dropping here punishes configuration divergence |
 | **`:276` non-zero `unlock_time`** | **The input** — `tx.unlock_time` | **No**, for the same reason and by the same gate | **No drop** |
 
@@ -4859,7 +4859,7 @@ rather than inheriting whatever the default happens to be.
 > carve-outs, and that set includes our own failures.** Two paths return false
 > with the flag unset while the failure describes **our own state**, not the
 > input: `insert_key_images`' pool-bookkeeping invariant
-> (`src/cryptonote_core/tx_pool.cpp:785-787` — a `CHECK_AND_ASSERT_MES` whose
+> (`src/cryptonote_core/tx_pool.cpp` — a `CHECK_AND_ASSERT_MES` whose
 > message begins "internal error"; reached from `add_tx` at `:337`/`:496`) and
 > `add_tx`'s catch-alls (`:344`, `:506-509` — "internal error: error adding
 > transaction to txpool"). Both fall through the same
@@ -4918,7 +4918,7 @@ rather than inheriting whatever the default happens to be.
 > input-describing, universal — and its drop stands. The size arm
 > (`check_incoming_block_size`, `:542-546`) is **state-describing**: it
 > compares the blob against **our** current weight limit + 100
-> (`src/cryptonote_core/cryptonote_core.cpp:1408-1420`), and the limit a few
+> (`src/cryptonote_core/cryptonote_core.cpp`), and the limit a few
 > heights ahead can legally exceed ours (how fast is the consensus lane's
 > derivation — the same `margin` question, owed above). The false-drop window
 > is narrow in practice — the announce blob is header + tx hashes, far
@@ -4992,7 +4992,7 @@ would mean attributability is the wrong axis rather than a mis-scored site.
 
 #### The inherited `TODO` is answered, not inherited
 
-`// TODO: Investigate why not?` (`src/cryptonote_core/tx_pool.cpp:282`) asks why
+`// TODO: Investigate why not?` (`src/cryptonote_core/tx_pool.cpp`) asks why
 block-borne transactions skip the key-image-spent check. **It is the same
 question for all four conditions**, because all four are `kept_by_block`-gated
 — `:267` and `:276` inline, `:291` by its enclosing `if`, and `:257` by
@@ -5005,12 +5005,12 @@ removed, verified at `dev` `736fd998d0`.
 > verified at every call site rather than inferred from one.**
 >
 > `kept_by_block` **is** `(tx_relay == relay_method::block)`
-> (`src/cryptonote_core/tx_pool.cpp:227`). **No block-owned caller passes a
+> (`src/cryptonote_core/tx_pool.cpp`). **No block-owned caller passes a
 > peer-origin parameter.** The pop path
-> (`src/cryptonote_core/blockchain.cpp:741`), the alt-block pool supplement
-> (`src/cryptonote_core/blockchain.cpp:2292`), the return-taken-transaction
-> path (`src/cryptonote_core/blockchain.cpp:5487`), and the block importer
-> (`src/blockchain_utilities/blockchain_import.cpp:157`) each pass
+> (`src/cryptonote_core/blockchain.cpp`), the alt-block pool supplement
+> (`src/cryptonote_core/blockchain.cpp`), the return-taken-transaction
+> path (`src/cryptonote_core/blockchain.cpp`), and the block importer
+> (`src/blockchain_utilities/blockchain_import.cpp`) each pass
 > `relay_method::block` and nothing about a network. **No connection exists
 > to attribute an offense to, so an offense classification has nothing to
 > classify.**

@@ -13,9 +13,12 @@
 //! installs and dials. Questions to Tor stay on the owning control
 //! connection (`TSR-Q9`).
 //!
-//! A sleep is a timer this driver was waiting on, found more than
-//! `control::RESUMED_AFTER` late: the select wake, or a control ask. The
-//! core does not infer one from a deadline that merely looks late.
+//! A sleep is a wait this driver was in that returned more than
+//! `control::RESUMED_AFTER` past the deadline it was armed with: the loop's
+//! wait, whatever woke it, or a control ask. The core does not infer one
+//! from a deadline that merely looks late. The wait itself lives in
+//! [`wake`]: the timer stands ahead of control events, and events already
+//! queued when it wins are folded before that deadline.
 
 use std::collections::VecDeque;
 use std::net::SocketAddr;
@@ -33,13 +36,13 @@ use shekyl_tor_control_client::binary::{
 };
 use shekyl_tor_control_client::control::{
     parse_bootstrap_progress, parse_event, parse_network_view, parse_socks_listeners,
-    parse_traffic_read, resume_lateness, BootstrapState, Command, ControlError, EventReceiver,
-    EventSink, Resume, ServiceId, SocksTimeout, UploadRounds,
+    parse_traffic_read, BootstrapState, Command, ControlError, ControlReply, EventReceiver,
+    EventSink, Resume, ServiceId, SocksTimeout, TorEvent, UploadRounds,
 };
 use shekyl_tor_control_client::supervisor::{
-    clock_evidence_of, held_sentence, input_of, install_sentence, render, Action, Cause,
-    Connectors, Core, DialTally, Input, ManagedRunning, NetworkView, OriginVerdict as FoldedOrigin,
-    Policy, Space, Step, Syncing, TorSetting,
+    clock_evidence_of, directory_input_of, held_sentence, input_of, install_sentence, render,
+    Action, Cause, Connectors, Core, DialTally, Input, ManagedRunning, NetworkView,
+    OriginVerdict as FoldedOrigin, Policy, Space, Step, Syncing, TorSetting,
 };
 use shekyl_tor_control_daemon::{
     space_needed, sweep_stale_data_dirs, CacheSave, DaemonTorConfig, DaemonTorControl,
@@ -49,6 +52,9 @@ use tokio::sync::{mpsc, watch};
 use tokio::task::JoinHandle;
 
 mod probe;
+mod wake;
+
+use self::wake::{led, plain_inputs, take_queued, wait, Sources, Wake, Woken};
 
 /// A control reply this far past due is a process fault. Not a bootstrap limit.
 const REPLY_BOUND: Duration = Duration::from_secs(30);
@@ -403,100 +409,19 @@ impl Drive {
             let armed = self.step.deadline;
             let entered = self.now();
             arm(&self.owner, armed);
-            tokio::select! {
-                biased;
-                changed = self.stop.changed() => {
-                    if changed.is_err() || *self.stop.borrow() {
-                        self.fold(Input::Shutdown).await;
-                    }
-                }
-                changed = self.forward.changed() => {
-                    // The first wait also sees a forward bound before the loop:
-                    // the receiver has not marked the current value seen.
-                    if changed.is_ok() && self.forward.borrow().is_some() {
-                        self.fold(Input::EndpointReady).await;
-                    }
-                }
-                changed = self.origin.changed() => {
-                    // The sender is process-static, so `Err` does not happen;
-                    // it is not folded so a closed channel cannot spin here.
-                    if changed.is_ok() {
-                        let verdict = *self.origin.borrow_and_update();
-                        self.fold(verdict_input(verdict)).await;
-                    }
-                }
-                changed = self.tor_link.changed() => {
-                    // Process-static like the verdict's: `Err` does not happen.
-                    if changed.is_ok() {
-                        let tally = *self.tor_link.borrow_and_update();
-                        self.fold(tally_input(tally)).await;
-                    }
-                }
-                changed = self.probe_arrivals.changed() => {
-                    // Process-static: `Err` does not happen. Biased ahead of
-                    // the deadline, so a take already in the cell is folded
-                    // before a bound that has also elapsed. The core still
-                    // compares the take's own time with the bound.
-                    if changed.is_ok() {
-                        let arrived = *self.probe_arrivals.borrow_and_update();
-                        if let Some(arrival) = arrived {
-                            tracing::info!(target: "tor", "this node's onion probe arrived");
-                            self.fold(Input::ProbeArrived {
-                                minted_at: arrival.minted_at.get(),
-                                arrived_at: arrival.arrived_at.get(),
-                            })
-                            .await;
-                        }
-                    }
-                }
-                wake = self.owner.wait_wake_async() => {
-                    if wake.is_err() {
-                        break;
-                    }
-                    self.step = self.step_after_wake(armed, entered, self.now());
-                }
-                event = self.incoming.recv() => {
-                    if let Some(reply) = event {
-                        // One fold for the batch. Folding each input on its
-                        // own replaces the step, and the earlier actions,
-                        // a recovery among them, would never be performed.
-                        let mut inputs = self.round_resync();
-                        if let Some(parsed) = parse_event(&reply) {
-                            // Evidence first: a problem that is also the
-                            // blocked link is judged against the clock it
-                            // may already name.
-                            if let Some(input) = clock_evidence_of(&parsed) {
-                                tracing::debug!(target: "tor", "Tor's clock evidence {input:?}");
-                                inputs.push(input);
-                            }
-                            if let Some(input) = input_of(&parsed) {
-                                // A Tor statement the supervisor acts on, said
-                                // as it arrives: what a run records.
-                                tracing::info!(target: "tor", "Tor says {input:?}");
-                                inputs.push(input);
-                            }
-                            for input in self.round_marks(&parsed) {
-                                probe::say_round(&input);
-                                inputs.push(input);
-                            }
-                        }
-                        self.fold_many(inputs).await;
-                    }
-                }
-                death = self.death_rx.recv() => {
-                    if let Some((gen, how)) = death {
-                        if gen == self.generation {
-                            if let Some(input) = observed_death(how) {
-                                self.fold(input).await;
-                            }
-                        }
-                    }
-                }
-                () = wait_bootstrap(&mut self.bootstrap) => {
-                    if let Some(input) = self.bootstrap_input() {
-                        self.fold(input).await;
-                    }
-                }
+            let sources = Sources {
+                stop: &mut self.stop,
+                forward: &mut self.forward,
+                origin: &mut self.origin,
+                tor_link: &mut self.tor_link,
+                probe_arrivals: &mut self.probe_arrivals,
+                incoming: &mut self.incoming,
+                death: &mut self.death_rx,
+                bootstrap: &mut self.bootstrap,
+            };
+            let wake = wait(sources, &self.owner, armed, entered).await;
+            if !self.handle(wake).await {
+                break;
             }
         }
         self.cancel_probe();
@@ -539,8 +464,13 @@ impl Drive {
         self.fold_many(vec![input]).await;
     }
 
-    /// Fold `inputs` as one step. Each transition's actions are kept, in
-    /// order, and the deadline is the last transition's. An empty list
+    /// Fold `inputs` at the driver's clock. See [`Self::fold_at`].
+    async fn fold_many(&mut self, inputs: Vec<Input>) {
+        self.fold_at(inputs, self.now()).await;
+    }
+
+    /// Fold `inputs` as one step at `at`. Each transition's actions are kept,
+    /// in order, and the deadline is the last transition's. An empty list
     /// leaves the step alone, so a batch that carried nothing does not
     /// disarm a wait that is already armed.
     ///
@@ -549,7 +479,7 @@ impl Drive {
     /// is still kept. A [`Action::TakeDown`] reaps after it withdraws, so
     /// the route is gone before the child is. A [`Action::StopRoute`] only
     /// withdraws: the shutdown wipe still owns the child.
-    async fn fold_many(&mut self, inputs: Vec<Input>) {
+    async fn fold_at(&mut self, inputs: Vec<Input>, at: u64) {
         if inputs.is_empty() {
             return;
         }
@@ -557,7 +487,7 @@ impl Drive {
         let mut deadline = None;
         for input in inputs {
             let ended = ends_incarnation(&input);
-            let step = self.core.on(input, self.now());
+            let step = self.core.on(input, at);
             let take_down = step
                 .actions
                 .iter()
@@ -646,6 +576,29 @@ impl Drive {
                     Err(shutdown) => vec![shutdown],
                 }
             }
+            Action::ProbeAfterJump => vec![probe::jump_probe()],
+            Action::CheckDirectories => vec![self.directories_drawn()],
+            Action::FetchFromDirectory { hsdir } => {
+                let mut stop = self.stop.clone();
+                match race_stop(&mut stop, self.fetch_from(hsdir)).await {
+                    Ok(input) => self.resume_before(input.into_iter().collect()),
+                    Err(shutdown) => vec![shutdown],
+                }
+            }
+            Action::DirectoriesUnmatched => {
+                tracing::info!(
+                    target: "tor",
+                    "no directory the last upload round reached holds the descriptor Tor's client asks for; the probe alone decided"
+                );
+                Vec::new()
+            }
+            Action::DescriptorOverdue => {
+                tracing::info!(
+                    target: "tor",
+                    "no descriptor upload began within the descriptor's lifetime; publishing this node's onion again"
+                );
+                Vec::new()
+            }
             Action::PublishInbound(inbound) => {
                 self.publish_inbound(inbound);
                 Vec::new()
@@ -673,26 +626,90 @@ impl Drive {
         }
     }
 
-    /// The select wait returned at `woke`. `armed` is the deadline it was
-    /// waiting on, and `entered` is when that wait began. A timer found more
-    /// than `control::RESUMED_AFTER` late resets the windows first; the work
-    /// still due then runs on the new ones. A tick already past when the
-    /// wait began is overdue work.
-    fn step_after_wake(&mut self, armed: Option<u64>, entered: u64, woke: u64) -> Step {
-        let mut actions = Vec::new();
-        if let Some(due) = armed {
-            let until_due = Duration::from_nanos(due.saturating_sub(entered));
-            let waited = Duration::from_nanos(woke.saturating_sub(entered));
-            if let Resume::Slept { late_by } = resume_lateness(until_due, waited) {
-                actions.extend(self.core.on(Input::Resumed { late_by }, woke).actions);
+    /// Fold what ended a wait (see [`wait`]). A sleep the wait observed is
+    /// folded first, whichever branch returned, so what woke the loop is
+    /// judged on windows that start at the wake. `false` means the timer
+    /// closed and the loop ends.
+    async fn handle(&mut self, wake: Wake) -> bool {
+        let lead = wake.lead();
+        let inputs = match wake.what {
+            Woken::Timer { closed: true } => return false,
+            Woken::Timer { closed: false } => {
+                self.after_timer(lead, wake.woke).await;
+                return true;
+            }
+            Woken::Event(reply) => reply
+                .map(|reply| self.event_inputs(&reply))
+                .unwrap_or_default(),
+            Woken::Death(death) => death
+                .filter(|(generation, _)| *generation == self.generation)
+                .and_then(|(_, how)| observed_death(how))
+                .into_iter()
+                .collect(),
+            Woken::Bootstrap => self.bootstrap_input().into_iter().collect(),
+            plain => plain_inputs(&plain),
+        };
+        self.fold_many(led(lead, inputs)).await;
+        true
+    }
+
+    /// The timer ended the wait at `woke`. Events already queued are folded
+    /// first, at the wake, and then the deadline. The timer won this wait,
+    /// so an event that arrives later cannot hold the deadline off.
+    async fn after_timer(&mut self, lead: Option<Input>, woke: u64) {
+        let queued = take_queued(&mut self.incoming);
+        let mut inputs = lead.into_iter().collect::<Vec<_>>();
+        for reply in &queued {
+            inputs.extend(self.event_inputs(reply));
+        }
+        self.fold_at(inputs, woke).await;
+        let due = self.core.on_deadline(woke);
+        self.step.actions.extend(due.actions);
+        self.step.deadline = due.deadline;
+    }
+
+    /// One event batch from Tor: the round resync, the clock evidence, the
+    /// statement, and the round marks, in that order, folded as one step.
+    /// Folding each input on its own replaces the step, and the earlier
+    /// actions, a recovery among them, would never be performed.
+    fn event_inputs(&mut self, reply: &ControlReply) -> Vec<Input> {
+        let mut inputs = self.round_resync();
+        if let Some(parsed) = parse_event(reply) {
+            // This onion's descriptor events, as Tor states them: which
+            // directory, which descriptor (its blinded key), and how it
+            // ended. A run reads them to see where a descriptor went.
+            if let TorEvent::HsDesc(desc) = &parsed {
+                if desc.address.is_some() && desc.address == self.service {
+                    tracing::debug!(
+                        target: "tor",
+                        action = ?desc.action,
+                        hsdir = ?desc.hsdir,
+                        descriptor_id = ?desc.descriptor_id,
+                        reason = ?desc.reason,
+                        "Tor's descriptor event"
+                    );
+                    // A fetch of this onion: the directory check's evidence.
+                    inputs.extend(directory_input_of(desc));
+                }
+            }
+            // Evidence first: a problem that is also the blocked link is
+            // judged against the clock it may already name.
+            if let Some(input) = clock_evidence_of(&parsed) {
+                tracing::debug!(target: "tor", "Tor's clock evidence {input:?}");
+                inputs.push(input);
+            }
+            if let Some(input) = input_of(&parsed) {
+                // A Tor statement the supervisor acts on, said as it
+                // arrives: what a run records.
+                tracing::info!(target: "tor", "Tor says {input:?}");
+                inputs.push(input);
+            }
+            for input in self.round_marks(&parsed) {
+                probe::say_round(&input);
+                inputs.push(input);
             }
         }
-        let step = self.core.on_deadline(woke);
-        actions.extend(step.actions);
-        Step {
-            actions,
-            deadline: step.deadline,
-        }
+        inputs
     }
 
     /// A control ask returned. A sleep it observed is the first input, so
@@ -980,22 +997,14 @@ impl Drive {
     }
 }
 
-fn now(owner: &OwnerHandle<MonotonicClock>) -> u64 {
+fn now<C: Clock>(owner: &OwnerHandle<C>) -> u64 {
     owner.clock().now().get()
 }
 
-fn arm(owner: &OwnerHandle<MonotonicClock>, deadline: Option<u64>) {
+fn arm<C: Clock>(owner: &OwnerHandle<C>, deadline: Option<u64>) {
     let _cleared = owner.clear();
     if let Some(deadline) = deadline {
         let _armed = owner.arm(Tick::new(deadline));
-    }
-}
-
-async fn wait_bootstrap(bootstrap: &mut Option<watch::Receiver<BootstrapState>>) {
-    if let Some(bootstrap) = bootstrap {
-        let _changed = bootstrap.changed().await;
-    } else {
-        std::future::pending::<()>().await;
     }
 }
 
@@ -1053,7 +1062,6 @@ fn input_of_ask(error: &DaemonTorStartError) -> Input {
 #[cfg(test)]
 mod tests {
     use super::*;
-
     /// A bootstrap sample does not ask Tor about its network. A Running
     /// sample does (§4.2): "no circuit" during bootstrap is not a statement.
     #[test]

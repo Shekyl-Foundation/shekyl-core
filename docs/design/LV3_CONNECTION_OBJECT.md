@@ -880,7 +880,7 @@ closed — `prune_blockchain` is the only method that surfaces the getter, and t
 fleet runs `restricted-rpc=1`, which refuses it (`-32601 Method not allowed in
 restricted mode`, verified on `skl-seedeu`). So the seed was read where it is
 stored: the LMDB `properties` table, whose key is written **only** by
-`prune_worker` ([`db_lmdb.cpp:2363-2375`](../../src/blockchain_db/lmdb/db_lmdb.cpp#L2363)).
+`prune_worker` (`db_lmdb.cpp:2363-2375`).
 
 | | Result |
 | --- | --- |
@@ -890,7 +890,7 @@ stored: the LMDB `properties` table, whose key is written **only** by
 
 The control is the point: the instrument can find keys in these files, and finds
 no `pruning_seed`. **The random-stripe path at
-[`db_lmdb.cpp:2370`](../../src/blockchain_db/lmdb/db_lmdb.cpp#L2370) is not live
+`db_lmdb.cpp:2370` is not live
 in production.** It is reachable only through `prune_blockchain()` /
 `update_blockchain_pruning()`, both gated on `--prune-blockchain`
 ([`cryptonote_core.cpp:668`](../../src/cryptonote_core/cryptonote_core.cpp#L668);

@@ -490,7 +490,7 @@ impl ReadSnapshot<'_> {
 
     /// The long-term weight median **in force for** the block at `height`
     /// — the value it was validated and fee-floored against (SCR-19), the
-    /// O(1) read that retires `rebuild_relay_floor_ring`'s stepped median
+    /// O(1) read that replaces the stepped median the old relay floor kept
     /// (FL-R3-STORE). A projection of R3.
     ///
     /// # Errors

@@ -420,9 +420,16 @@ async fn a_switch_popping_exactly_the_cap_lands_and_one_more_is_refused_locally(
         ));
     }
     match x2.offer(last).await.expect("offer") {
-        Offered::BeyondCap(beyond) => {
+        Offered::BeyondCap { beyond, evidence } => {
             assert_eq!(beyond.depth.to_raw(), LEVERED_CAP + 1);
             assert_eq!(beyond.cap.to_raw(), LEVERED_CAP);
+            let latch = x2.following_degraded().await;
+            assert_eq!(
+                latch.map(|held| held.tip),
+                Some(evidence.tip),
+                "a stored fork past the cap sets following_degraded; \
+                 skipping note_degraded on BeyondCap leaves it clear"
+            );
         }
         other => panic!("one past the cap was not refused locally: {other:?}"),
     }
@@ -458,11 +465,22 @@ async fn a_pop_below_the_undo_floor_is_a_local_fail_stop_not_a_verdict() {
     assert_eq!(plan.demoted.len(), 7, "inside the cap");
     let held_before = x.alt_blocks_held().await.expect("alt held before");
     match x.reorganize(&plan).await.expect("switch") {
-        Switched::BelowFloor { tip, floor } => {
+        Switched::BelowFloor {
+            tip,
+            floor,
+            evidence,
+        } => {
             assert!(tip < floor, "the pop that met the floor");
             assert!(
                 floor > plan.root.height.to_raw(),
                 "the floor is above the fork point"
+            );
+            let latch = x.following_degraded().await;
+            assert_eq!(
+                latch.map(|held| (held.fork_at, held.tip)),
+                Some((evidence.fork_at, evidence.tip)),
+                "a BelowFloor switch sets following_degraded; \
+                 skipping note_degraded on BelowFloor leaves the cell clear"
             );
         }
         other => panic!("the floor did not refuse locally: {other:?}"),

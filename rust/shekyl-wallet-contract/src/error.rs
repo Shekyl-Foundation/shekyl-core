@@ -1326,8 +1326,8 @@ impl WalletRpcError {
         }
     }
 
-    fn submit_rejected(cause: RejectCause) -> Self {
-        let verdict = SubmitVerdict::Rejected { cause };
+    fn submit_rejected(cause: RejectCause, row: Option<String>) -> Self {
+        let verdict = SubmitVerdict::Rejected { cause, row };
         let data = serde_json::to_value(verdict)
             .unwrap_or_else(|_| json!({ "verdict": "rejected", "cause": "unrecognized" }));
         Self::SubmitRejected { data }
@@ -2172,11 +2172,15 @@ impl From<SubmitError> for WalletRpcError {
             SubmitError::ContentChanged { content_gen, .. } => {
                 Self::ContentGenMismatch { content_gen }
             }
-            SubmitError::DaemonRejectedTerminal { kind } => {
-                Self::submit_rejected(terminal_to_reject_cause(kind))
-            }
+            SubmitError::DaemonRejectedTerminal { kind } => Self::submit_rejected(
+                terminal_to_reject_cause(kind),
+                match kind {
+                    TerminalErrorKind::ConsensusRule { row } => Some(row.as_str().to_owned()),
+                    _ => None,
+                },
+            ),
             SubmitError::DaemonRejectedRetryable { cause, .. } => {
-                Self::submit_rejected(retryable_to_reject_cause(cause))
+                Self::submit_rejected(retryable_to_reject_cause(cause), None)
             }
             SubmitError::DaemonAmbiguous { .. } => Self::SubmitAmbiguous,
             SubmitError::SubmitAlreadyPending { .. } => Self::SubmitAlreadyPending,
@@ -2195,7 +2199,7 @@ fn terminal_to_reject_cause(kind: TerminalErrorKind) -> RejectCause {
         TerminalErrorKind::DoubleSpend => RejectCause::DoubleSpendConflict,
         TerminalErrorKind::FeeTooLow => RejectCause::FeeTooLow,
         TerminalErrorKind::Malformed => RejectCause::Malformed,
-        TerminalErrorKind::JoinMarketUnsupported => RejectCause::JoinMarketUnsupported,
+        TerminalErrorKind::ConsensusRule { .. } => RejectCause::ConsensusRule,
         // `TerminalErrorKind` is `#[non_exhaustive]`; `Unrecognized` and any
         // unknown future kinds take the fail-safe Unrecognized disposition
         // (DAEMON_SUBMIT_VERDICT §2.5).
@@ -2737,6 +2741,22 @@ mod tests {
         let data = err.data().expect("data");
         assert_eq!(data["verdict"], "rejected");
         assert_eq!(data["cause"], "fee_too_low");
+        assert!(
+            data.get("row").is_none(),
+            "no row for a cause that has none"
+        );
+
+        let row = shekyl_engine_core::engine::error::CenRowName::parse("CEN-J15").expect("fits");
+        let err: WalletRpcError = SubmitError::DaemonRejectedTerminal {
+            kind: TerminalErrorKind::ConsensusRule { row },
+        }
+        .into();
+        let data = err.data().expect("data");
+        assert_eq!(data["cause"], "consensus_rule");
+        assert_eq!(
+            data["row"], "CEN-J15",
+            "the row rides to the wallet's caller"
+        );
     }
 
     /// The WI-RPC-5 F-2 pin, mechanically: the five drain refusals carry

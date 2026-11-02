@@ -153,7 +153,8 @@ async fn the_engine_submits_through_the_rust_pool_and_its_door() {
     assert_eq!(
         below.expect("no engine fault"),
         SubmitVerdict::Rejected {
-            cause: RejectCause::FeeTooLow
+            cause: RejectCause::FeeTooLow,
+            row: None,
         }
     );
     let held = held.expect("the pool holds the accepted spend");
@@ -218,7 +219,8 @@ async fn a_twin_of_an_accepted_spend_is_a_double_spend_conflict() {
     assert_eq!(
         second.expect("no engine fault"),
         SubmitVerdict::Rejected {
-            cause: RejectCause::DoubleSpendConflict
+            cause: RejectCause::DoubleSpendConflict,
+            row: None,
         }
     );
     drop(std::fs::remove_file(&path));
@@ -548,7 +550,8 @@ async fn a_foreign_caller_is_told_nothing_the_stem_phase_holds() {
     assert_eq!(
         below,
         SubmitVerdict::Rejected {
-            cause: RejectCause::FeeTooLow
+            cause: RejectCause::FeeTooLow,
+            row: None,
         }
     );
     assert!(!twin_held, "the concealed twin is not admitted");
@@ -566,7 +569,8 @@ async fn a_foreign_caller_is_told_nothing_the_stem_phase_holds() {
     assert_eq!(
         after.1,
         SubmitVerdict::Rejected {
-            cause: RejectCause::DoubleSpendConflict
+            cause: RejectCause::DoubleSpendConflict,
+            row: None,
         },
         "fluffed: the conflict is disclosed"
     );
@@ -642,7 +646,8 @@ async fn a_full_pool_answers_a_stem_duplicate_as_a_fresh_spend_at_its_rate() {
     assert_eq!(
         fresh,
         SubmitVerdict::Rejected {
-            cause: RejectCause::FeeTooLow
+            cause: RejectCause::FeeTooLow,
+            row: None,
         },
         "a fresh spend at its rate finds no room"
     );
@@ -731,6 +736,7 @@ async fn a_lone_nodes_own_transaction_is_listed_once_the_relay_shows_it() {
                 pool: Arc::clone(&pool),
                 policy: AdmissionPolicy::GENESIS,
                 wall: Arc::new(|| UnixSeconds::from_raw(1)),
+                departed: None,
             }),
             ..Default::default()
         },
@@ -756,6 +762,7 @@ async fn a_lone_nodes_own_transaction_is_listed_once_the_relay_shows_it() {
             origin: Origin::Local,
             block: next[0].template.block.serialize(),
             bodies: Vec::new(),
+            attestation_witness: Vec::new(),
         })
         .expect("room")
         .reply()

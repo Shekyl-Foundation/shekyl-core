@@ -123,7 +123,14 @@ pub enum Offered {
     },
     /// Stored, and the fork choice switches — but the fork is deeper than
     /// the cap (`E5-Q6`): a local outcome, the block stays stored.
-    BeyondCap(PopBeyondReorgCap),
+    /// `evidence` is what the connector writes on the `following_degraded`
+    /// latch (DX-Q2 item 8).
+    BeyondCap {
+        /// The cap the fork exceeded.
+        beyond: PopBeyondReorgCap,
+        /// The fork point, the heavier tip and its work.
+        evidence: shekyl_chain_store::codec::FollowingDegraded,
+    },
     /// Stored, and the fork choice switches: form what the plan names and
     /// send [`Reorganize`].
     SwitchDue(SwitchPlan),
@@ -251,7 +258,12 @@ enum Planned {
     /// The switch to carry out.
     Due(SwitchPlan),
     /// Deeper than the cap (`E5-Q6`): local, the block stays stored.
-    BeyondCap(PopBeyondReorgCap),
+    BeyondCap {
+        /// The cap the fork exceeded.
+        beyond: PopBeyondReorgCap,
+        /// The fork point, the heavier tip and its work.
+        evidence: shekyl_chain_store::codec::FollowingDegraded,
+    },
     /// CEN-D6 refused an alt entry's target on its own headers: that
     /// block's verdict (`target` module docs), so there is no claim to
     /// make and nothing is formed. The refused entry and every entry
@@ -338,7 +350,12 @@ pub enum Switched {
         removed: Vec<BlockHash>,
     },
     /// The fork is deeper than the cap (`E5-Q6`): local, nothing popped.
-    BeyondCap(PopBeyondReorgCap),
+    BeyondCap {
+        /// The cap the fork exceeded.
+        beyond: PopBeyondReorgCap,
+        /// The fork point, the heavier tip and its work.
+        evidence: shekyl_chain_store::codec::FollowingDegraded,
+    },
     /// A pop met the undo floor (`StoreCannot::PopBelowFloor`): this node
     /// cannot follow the heavier chain. F-1 fail-stop, local — never a
     /// verdict, never peer-punishable; nothing moved.
@@ -347,6 +364,8 @@ pub enum Switched {
         tip: u64,
         /// The persisted undo floor.
         floor: u64,
+        /// The fork point, the heavier tip and its work.
+        evidence: shekyl_chain_store::codec::FollowingDegraded,
     },
 }
 
@@ -411,8 +430,13 @@ impl Message<OfferAlt> for Connector {
         _ctx: &mut Context<Self, Self::Reply>,
     ) -> Self::Reply {
         let (rules, trust) = (self.rules, self.trust);
-        self.writer
-            .with_store(|store| offer(store, rules, trust, msg.0))
+        let offered = self
+            .writer
+            .with_store(|store| offer(store, rules, trust, msg.0))?;
+        if let Offered::BeyondCap { evidence, .. } = &offered {
+            self.note_degraded(*evidence)?;
+        }
+        Ok(offered)
     }
 }
 
@@ -431,6 +455,15 @@ impl Message<Reorganize> for Connector {
             .with_store(|store| switch(store, rules, trust, memo, msg))?;
         if matches!(switched, Switched::Done(_)) {
             self.tip_moved();
+        }
+        let evidence = match &switched {
+            Switched::BeyondCap { evidence, .. } | Switched::BelowFloor { evidence, .. } => {
+                Some(*evidence)
+            }
+            _ => None,
+        };
+        if let Some(evidence) = evidence {
+            self.note_degraded(evidence)?;
         }
         Ok(switched)
     }
@@ -508,7 +541,7 @@ fn offer(
     let snap = store.begin_read()?;
     match plan(store, &snap, rules, tip, hash, verdict)? {
         Planned::Due(plan) => Ok(Offered::SwitchDue(plan)),
-        Planned::BeyondCap(beyond) => Ok(Offered::BeyondCap(beyond)),
+        Planned::BeyondCap { beyond, evidence } => Ok(Offered::BeyondCap { beyond, evidence }),
         Planned::Refused { refused, remove } => {
             remove_alt_suffix(store, &remove)?;
             Ok(Offered::Refused(refused))
@@ -536,7 +569,10 @@ fn plan(
     let chain = AltChain::build(snap, &alt_tip)?;
     let root = chain.root();
     if let Err(beyond) = within_cap(rules, &chain, tip) {
-        return Ok(Planned::BeyondCap(beyond));
+        return Ok(Planned::BeyondCap {
+            beyond,
+            evidence: heavier(&chain),
+        });
     }
     let stitched = AltView::new(snap, chain.clone());
     let entries = chain.entries();
@@ -644,6 +680,21 @@ fn plan(
     }))
 }
 
+/// The latch's evidence: the fork point, this alternative's tip, and that
+/// tip's work. The chain's last entry is the heavier tip; a chain with no
+/// entry has no tip to refuse.
+fn heavier(chain: &AltChain) -> shekyl_chain_store::codec::FollowingDegraded {
+    let tip = chain
+        .entries()
+        .last()
+        .expect("a heavier alternative names its tip");
+    shekyl_chain_store::codec::FollowingDegraded {
+        fork_at: chain.root().height,
+        tip: tip.id,
+        work: tip.block.cumulative_difficulty(),
+    }
+}
+
 /// `E5-Q6`: the depth `chain` would pop from `tip`, against the cap in
 /// force at the alternative tip's height.
 fn within_cap(rules: ChainRules, chain: &AltChain, tip: Tip) -> Result<(), PopBeyondReorgCap> {
@@ -721,7 +772,10 @@ fn switch(
     let chain = alternative_chain(&snap, msg.tip, &msg.alt_tip)?;
     let tip = msg.tip;
     if let Err(beyond) = within_cap(rules, &chain, tip) {
-        return Ok(Switched::BeyondCap(beyond));
+        return Ok(Switched::BeyondCap {
+            beyond,
+            evidence: heavier(&chain),
+        });
     }
     let root = chain.root();
     let entries = chain.entries().to_vec();
@@ -866,7 +920,11 @@ fn switch(
     match outcome {
         Ok(done) => Ok(Switched::Done(done)),
         Err(Stop::Fault(fault)) => Err(fault),
-        Err(Stop::BelowFloor { tip, floor }) => Ok(Switched::BelowFloor { tip, floor }),
+        Err(Stop::BelowFloor { tip, floor }) => Ok(Switched::BelowFloor {
+            tip,
+            floor,
+            evidence: heavier(&chain),
+        }),
         Err(Stop::Refused {
             index,
             at,

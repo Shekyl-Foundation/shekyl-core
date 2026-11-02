@@ -15,7 +15,7 @@ use shekyl_chain_rules::{CenRow, FakechainSchedule, Substrate};
 use shekyl_chain_store::codec::SettlementEpochBlocks;
 use shekyl_chain_store::store::ChainStore;
 use shekyl_hash_budget::Budget;
-use shekyl_types::{BlockHash, PowHash, Timestamp};
+use shekyl_types::{BlockHash, PowHash, Timestamp, MAX_ATTESTATION_WITNESS_BYTES};
 
 use super::*;
 
@@ -113,6 +113,7 @@ fn a_span_is_answered_per_arrival_through_the_bound_post() {
             block: blob(bytes),
             bodies: std::ptr::null(),
             bodies_len: 0,
+            witness: blob(&[]),
         })
         .collect();
 
@@ -198,6 +199,17 @@ fn a_span_is_answered_per_arrival_through_the_bound_post() {
         "carried bytes past the bound are refused before they are copied"
     );
     assert_eq!(shekyl_ingest_room(), 2, "the heavy span took no seat");
+    let mut fat = arrivals[0];
+    fat.witness = ShekylIngestBlob {
+        ptr: stub.as_ptr(),
+        len: MAX_ATTESTATION_WITNESS_BYTES + 1,
+    };
+    assert_eq!(
+        unsafe { shekyl_ingest_offer_span(7, 1, std::ptr::from_ref(&fat), 1) },
+        SHEKYL_INGEST_OVERSIZE,
+        "a witness past its own cap is refused before a seat is taken"
+    );
+    assert_eq!(shekyl_ingest_room(), 2, "the fat-witness span took no seat");
     assert_eq!(
         unsafe { shekyl_ingest_offer_span(7, 1, arrivals.as_ptr(), arrivals.len()) },
         SHEKYL_INGEST_ACCEPTED
@@ -367,7 +379,10 @@ fn one_of_each() -> Vec<Reply> {
             tip: height,
             floor: BlockHeight::from_raw(2),
         }),
-        Reply::MissingBodies { indices: vec![0] },
+        Reply::MissingBodies {
+            hash: BlockHash::from_bytes([10; 32]),
+            indices: vec![0],
+        },
         Reply::Cancelled { by: ArrivalTag(4) },
         Reply::Stopped,
     ]
@@ -463,6 +478,7 @@ fn an_accepted_arrival_is_answered_stopped_through_the_post_at_a_stop() {
         block: blob(&junk),
         bodies: std::ptr::null(),
         bodies_len: 0,
+        witness: blob(&[]),
     }];
     // Accepted while the runtime is not driven: the span waits in the
     // service's queue.

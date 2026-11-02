@@ -61,18 +61,10 @@ use std::path::Path;
 /// precondition, and the pins exist so their number can only shrink.
 const BASELINE: &[(&str, usize, usize)] = &[
     ("account_ffi.rs", 7, 0),
-    ("archival_admission_ffi.rs", 3, 0),
     // with_capacity 2 -> 1 (2026-10-06): the admission body moved to
     // shekyl-archival-retention::attestation_admission (E6 slice 8 row 10
     // c1); the header-parse buffer went with it. The file is the shim.
-    ("archival_ffi/attestation.rs", 6, 1),
-    ("archival_ffi/bond.rs", 2, 0),
     ("archival_ffi/ct_balance.rs", 1, 0),
-    ("archival_ffi/emission.rs", 9, 3),
-    ("archival_ffi/epoch_close.rs", 6, 3),
-    ("archival_ffi/schedule.rs", 4, 0),
-    ("archival_ffi/serve_credit.rs", 3, 1),
-    ("archival_ffi/tests.rs", 0, 3),
     ("ct_balance_ffi.rs", 5, 0),
     // 2 -> 3 (2026-09-01): shekyl_difficulty_check_timestamp_rule reads the
     // <= 11-element u64 MTP window — the C2-R3 rule crossing (consensus rule

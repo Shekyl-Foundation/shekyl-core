@@ -1248,7 +1248,7 @@ sealed and **what** is not.
 **The exploit, on the live path.** The vin carries only the 128-byte challenged
 leaf (`path.rs:85`), consensus checks index-match at
 `shekyl-ffi/src/archival_ffi.rs:612` (reached from `blockchain.cpp:5209` via
-`shekyl_archival_verify_serve_credit_vin`). So `P` precomputes `ℓ(E)` across its
+`shekyl_archival_verify_serve_credit_vin` (deleted, `DEL-008`)). So `P` precomputes `ℓ(E)` across its
 claim horizon, retains those leaves plus openings, **discards the shard**, and
 passes every baseline: at `RESPONSE_BYTES = 3136` over a 26-epoch horizon,
 **~82 KB stands in for 3.33 MB.**

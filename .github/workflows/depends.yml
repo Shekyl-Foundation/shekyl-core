@@ -169,7 +169,6 @@ jobs:
         path: |
           build/${{ matrix.toolchain.host }}/release/bin/shekyl-cli*
           build/${{ matrix.toolchain.host }}/release/bin/shekyld*
-          build/${{ matrix.toolchain.host }}/release/bin/shekyl-mdb-copy*
     - name: notify on a nightly red
       # A nightly leg that fails is pushed at a human, not left to be
       # noticed (Rick, 2026-10-19): it opens a tracking issue, or comments on

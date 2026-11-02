@@ -27,7 +27,8 @@ use zeroize::Zeroizing;
 #[derive(Parser)]
 #[command(
     name = "shekyl-wallet-rpc",
-    about = "Shekyl-native wallet JSON-RPC server (Phase 4)"
+    version = shekyl_wallet_rpc::VERSION,
+    about = "Shekyl wallet JSON-RPC server"
 )]
 struct Cli {
     /// Directory for wallet files.

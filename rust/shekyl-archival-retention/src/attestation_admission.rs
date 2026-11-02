@@ -5,8 +5,8 @@
 
 //! Block-level attestation admission (`ARCHIVAL_CREDIT_WIRE.md` §3–§4): the
 //! body both verifiers run over a block's kept headers and its sidecar
-//! witness — the daemon's FFI (`shekyl_archival_verify_attestation`, which
-//! marshals raw pointers into these calls and maps the refusals onto its
+//! witness — the daemon's FFI (deleted by `DEL-008`; it
+//! marshalled raw pointers into these calls and mapped the refusals onto its
 //! verdict codes) and the Rust validator (CEN-B4 in `shekyl-chain-rules`,
 //! which reads the operands off its view). One body, two callers: a second
 //! orchestration of these steps would be the drift the FFI's verdict codes

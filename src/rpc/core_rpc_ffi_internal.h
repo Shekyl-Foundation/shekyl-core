@@ -26,14 +26,15 @@
 // STRICT LIABILITY, OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF
 // THE USE OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 
-// Shared definition of the opaque handle behind core_rpc_ffi.h /
-// daemon_submit_ffi.h. Internal to the rpc library's FFI translation units;
+// Shared definition of the opaque handle behind core_rpc_ffi.h.
+// Internal to the rpc library's FFI translation units;
 // Rust and other C consumers see only the forward declaration.
 
 #pragma once
 
-namespace cryptonote { class core_rpc_server; }
+#include "rpc_subject.h"
 
 struct core_rpc_handle {
-    cryptonote::core_rpc_server* rpc;
+    cryptonote::core* core;
+    nodetool::node_server<cryptonote::t_cryptonote_protocol_handler<cryptonote::core>>* p2p;
 };

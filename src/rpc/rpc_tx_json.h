@@ -31,7 +31,7 @@
 // a transaction's base, which is what `get_transactions` answers with when the
 // caller asked for the pruned form (RK-D11 keeps that rendering in C++).
 //
-// It lived as a file-local class in core_rpc_server.cpp with exactly one user,
+// It lived as a file-local class beside the old JSON handlers with exactly one user,
 // `on_get_transactions`. RK-4c needs it from the facts shim as well, and a
 // second copy of a serialization wrapper is the kind of duplicate that drifts
 // silently — the two would render differently and only the cross-language

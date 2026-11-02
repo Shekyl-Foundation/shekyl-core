@@ -739,7 +739,8 @@ async fn a_claim_verifies_after_the_epochs_complete_trees_are_released_and_slash
         assert_eq!(
             verdicts.next(),
             Some(SubmitVerdict::Rejected {
-                cause: RejectCause::Malformed
+                cause: RejectCause::Malformed,
+                row: None,
             })
         );
     }

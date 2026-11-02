@@ -1599,7 +1599,7 @@ name, now quantified.
   ([`42-serialization-policy`](../../.cursor/rules/42-serialization-policy.mdc)).
 - **FFI:** `archival_ffi.rs` constructs `BandedCurveParams` **internally** from the
   generated constants — the plateau **does not cross the FFI signature**
-  (`shekyl_archival_epoch_close_compute` takes bonds/shards/credit-pairs only).
+  (`shekyl_archival_epoch_close_compute` (deleted, `DEL-008`) takes bonds/shards/credit-pairs only).
 - **C++: source-unchanged but behaviourally live.** `db_lmdb.cpp` and
   `blockchain_db.h` call the curve-bearing FFI entry points, so C++ needs **no
   edit** while its results change. *State this explicitly in the implementing PR* —
@@ -1937,9 +1937,11 @@ Proofs anchor to the whole accumulated tree at a reference height
 (`CURVE_TREE_CLIENT.md` §5.1 `select_reference_height`: `tip − REF_ANCHOR_AGE`;
 `MIN`/`MAX_AGE` is reorg/staleness control, **not** an anonymity-set bound), and
 `CTTypeFcmpPlusPlusPqc` is the only admissible output type — enforced at
-consensus in
-[`tx_verification_utils.cpp:124`](../../src/cryptonote_core/tx_verification_utils.cpp#L124)
-(and `:141`), not merely described in an RPC schema. So there is no narrow window
+consensus by the Rust validator: CEN-I2 holds by construction of the wire type
+(`shekyl_wire::Ct` admits two CT types) and CEN-H15 refuses `Null` off the
+coinbase ([`census.rs`](../../rust/shekyl-chain-rules/src/census.rs); the C++
+`tx_verification_utils.cpp:124` and `:141` that enforced it were deleted with
+the C++ chain, DRS-X #1212), not merely described in an RPC schema. So there is no narrow window
 a burst can dominate, and uniform outputs cannot be re-partitioned into
 flood/not-flood by a third party.
 
@@ -2058,7 +2060,7 @@ of harm.
 (`ARCHIVAL_SEGMENT_FREEZE_PIPELINE.md` **O-2**: "connects only append; pops are
 branch switches"), and the **single** decrease path is **O-3 pop-symmetry** —
 verified at source: `BlockchainLMDB::revert_archival_segment_freezes`
-([`db_lmdb.cpp:7525`](../../src/blockchain_db/lmdb/db_lmdb.cpp#L7525)) is the only
+(`db_lmdb.cpp:7525`) is the only
 writer that deletes segment rows, is explicitly the pop hook, derives its bound
 from the same Rust entry point as the connect hook, and requires an active write
 txn (`throw` otherwise), so it fires only on block pop. **No path exists to

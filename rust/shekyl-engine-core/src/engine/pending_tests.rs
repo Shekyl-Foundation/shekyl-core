@@ -77,10 +77,24 @@ fn populate(
     }
 }
 
+/// A mainnet address the build helpers accept: it decodes, and no test
+/// here reads its keys.
+fn test_address() -> String {
+    shekyl_address::ShekylAddress::new(
+        Network::Mainnet,
+        [0xAA; 32],
+        [0xBB; 32],
+        [0xEE; 48],
+        vec![0xCC; 1184],
+    )
+    .encode()
+    .expect("encode the test address")
+}
+
 fn standard_request(amount: u64) -> TxRequest {
     TxRequest {
         recipients: vec![TxRecipient {
-            destination: TxDestination::Address("test_address".to_string()),
+            destination: TxDestination::Address(test_address()),
             amount_atomic_units: AtomicUnits::from_raw(amount),
             rid: None,
         }],
@@ -186,30 +200,6 @@ fn build_filters_outputs_already_reserved_by_another_build() {
         matches!(err, SendError::InsufficientFunds { available: 0, .. }),
         "got {err:?}"
     );
-}
-
-#[test]
-fn build_rejects_empty_recipients() {
-    let mut ledger = LedgerBlock::empty();
-    let mut indexes = LedgerIndexes::empty();
-    populate(
-        &mut ledger,
-        &mut indexes,
-        1,
-        vec![make_recovered_output(1, 100, 10_000)],
-        20,
-    );
-    let mut reservations = std::collections::BTreeMap::new();
-    let mut next_id = 0u64;
-    let req = TxRequest {
-        recipients: Vec::new(),
-        priority: FeePriority::Economy,
-    };
-    let err =
-        build_pending_tx_in_state(&ledger, &mut reservations, &mut next_id, &req).unwrap_err();
-    assert!(matches!(err, SendError::InvalidRecipient { .. }));
-    assert!(reservations.is_empty());
-    assert_eq!(next_id, 0);
 }
 
 #[test]
@@ -487,7 +477,7 @@ fn priority_custom_is_accepted_and_preserved() {
     let mut next_id = 0u64;
     let req = TxRequest {
         recipients: vec![TxRecipient {
-            destination: TxDestination::Address("addr".into()),
+            destination: TxDestination::Address(test_address()),
             amount_atomic_units: AtomicUnits::from_raw(1_000),
             rid: None,
         }],
@@ -499,23 +489,26 @@ fn priority_custom_is_accepted_and_preserved() {
     assert!(matches!(r.priority, FeePriority::Custom(_)));
 }
 
-/// The request's own refusals hold on every build path: the production
-/// `LocalPendingTx::build` and `build_select_sync` call
-/// `TxRequest::check_recipients` before any selection or proving, as the
-/// free helper does.
+/// An empty list and a rid the label cannot echo are refused on the
+/// request itself. Production `LocalPendingTx::build` calls
+/// `check_recipients` before selection; that call is pinned in the
+/// transfer suite, not by the selection helper.
 #[test]
 fn a_rid_the_label_cannot_echo_is_refused_at_the_request() {
     use shekyl_engine_state::payment_request::PAYMENT_REQUEST_RID_U48_MAX;
     use shekyl_engine_state::PaymentRequestId;
     let mut req = standard_request(1_000);
-    assert!(req.check_recipients().is_ok());
+    assert!(req.check_recipients(Network::Mainnet).is_ok());
     req.recipients[0].rid = Some(PaymentRequestId(PAYMENT_REQUEST_RID_U48_MAX));
-    assert!(req.check_recipients().is_ok(), "the largest echoable rid");
+    assert!(
+        req.check_recipients(Network::Mainnet).is_ok(),
+        "the largest echoable rid"
+    );
     for raw in [0, PAYMENT_REQUEST_RID_U48_MAX + 1, u64::MAX] {
         req.recipients[0].rid = Some(PaymentRequestId(raw));
         assert!(
             matches!(
-                req.check_recipients(),
+                req.check_recipients(Network::Mainnet),
                 Err(SendError::InvalidRecipient { .. })
             ),
             "rid {raw} must be refused"
@@ -523,7 +516,69 @@ fn a_rid_the_label_cannot_echo_is_refused_at_the_request() {
     }
     req.recipients.clear();
     assert!(matches!(
-        req.check_recipients(),
+        req.check_recipients(Network::Mainnet),
         Err(SendError::InvalidRecipient { .. })
     ));
+}
+
+/// `check_recipients` names why an address cannot be paid. The sentences
+/// for a version this wallet does not pay and for a damaged address are
+/// pinned on `recipient_reason`: public `encode` cannot emit the first,
+/// and collapsing the match would hide both behind "not a Shekyl address".
+/// Ordering against the balance is `build_refuses_a_bad_recipient_before_the_balance`.
+#[test]
+fn check_recipients_names_why_an_address_cannot_be_paid() {
+    use shekyl_address::{AddressError, ShekylAddress, PQC_PAYLOAD_LEN};
+
+    let mut garbage = standard_request(1_000);
+    garbage.recipients[0].destination = TxDestination::Address("notanaddress".into());
+    assert!(matches!(
+        garbage.check_recipients(Network::Mainnet),
+        Err(SendError::InvalidRecipient {
+            reason: "recipient is not a Shekyl address"
+        })
+    ));
+
+    let mainnet = standard_request(1_000);
+    assert!(mainnet.check_recipients(Network::Mainnet).is_ok());
+    assert!(matches!(
+        mainnet.check_recipients(Network::Testnet),
+        Err(SendError::InvalidRecipient {
+            reason: "recipient address is for another network"
+        })
+    ));
+
+    let full = ShekylAddress::decode(&test_address()).expect("the test address decodes");
+    let display = full
+        .encode_classical_display()
+        .expect("the display form encodes");
+    let mut display_req = standard_request(1_000);
+    display_req.recipients[0].destination = TxDestination::Address(display);
+    assert!(matches!(
+        display_req.check_recipients(Network::Mainnet),
+        Err(SendError::InvalidRecipient {
+            reason: "recipient address cannot receive a payment"
+        })
+    ));
+
+    let mut bob = full.clone();
+    bob.ml_kem_encap_key = vec![0x11; PQC_PAYLOAD_LEN];
+    let alice = test_address();
+    let bob_enc = bob.encode().expect("bob encodes");
+    let a: Vec<&str> = alice.split('/').collect();
+    let b: Vec<&str> = bob_enc.split('/').collect();
+    let mut spliced = standard_request(1_000);
+    spliced.recipients[0].destination =
+        TxDestination::Address(format!("{}/{}/{}", a[0], b[1], b[2]));
+    assert!(matches!(
+        spliced.check_recipients(Network::Mainnet),
+        Err(SendError::InvalidRecipient {
+            reason: "recipient address is damaged"
+        })
+    ));
+
+    assert_eq!(
+        super::recipient_reason(&AddressError::UnsupportedVersion { version: 0x02 }),
+        "recipient address uses a version this wallet does not pay"
+    );
 }

@@ -93,7 +93,7 @@ The countersign pre-sign gate is
 
 | Side | Quantity today | Evidence |
 | --- | --- | --- |
-| Daemon admission | **ORDINAL** predecessor | `get_tail_id` returns the tip's index; `++blockchain_height` converts to count; `predecessor_height = blockchain_height - 1` is the tip ordinal (`src/cryptonote_core/blockchain.cpp:5419-5464`). Window hashes are looked up with `height >= m_db->height()` as the exclusive **count** bound and `get_block_hash_from_height(height)` as the **ordinal** index (`src/cryptonote_core/blockchain.cpp:5276-5280`). Fixtures: `shape_for_predecessor(H)` last = `H − 720` (`rust/shekyl-archival-retention/src/pass_anchor.rs:378-381`); `SIG_ANCHOR_HEIGHT = SIG_PREDECESSOR_HEIGHT - PASS_ANCHOR_DEPTH_BLOCKS.to_raw()` (`rust/shekyl-archival-retention/tests/attestation_wire_kat.rs:533-538`). |
+| Daemon admission | **ORDINAL** predecessor | `get_tail_id` returns the tip's index; `++blockchain_height` converts to count; `predecessor_height = blockchain_height - 1` is the tip ordinal (`src/cryptonote_core/blockchain.cpp`). Window hashes are looked up with `height >= m_db->height()` as the exclusive **count** bound and `get_block_hash_from_height(height)` as the **ordinal** index (`src/cryptonote_core/blockchain.cpp`). Fixtures: `shape_for_predecessor(H)` last = `H − 720` (`rust/shekyl-archival-retention/src/pass_anchor.rs:378-381`); `SIG_ANCHOR_HEIGHT = SIG_PREDECESSOR_HEIGHT - PASS_ANCHOR_DEPTH_BLOCKS.to_raw()` (`rust/shekyl-archival-retention/tests/attestation_wire_kat.rs:533-538`). |
 | Witness (`P`) `own_height` | **ORDINAL** | `HostSigner::own_height` is the daemon tip (`DaemonTipCache`, WSS-24 / PR #791, `rust/shekyl-p-host/src/signer.rs:122-124`), typed `Option<BlockHeight>` (height-semantics Phase 2d). Unstamped / not-following / aged-out cache reports `None` (`rust/shekyl-p-host/src/signer.rs:152-158`). Ingest is consecutive from genesis `0, 1, 2, …` (`rust/shekyl-curve-tree/src/client.rs:752-756`). Gate algebra is Instant±span (`checked_sub_count` of `PASS_ANCHOR_DEPTH_BLOCKS` / `PASS_ANCHOR_LAG_BLOCKS`). |
 | Requester mint | protocol **ORDINAL**; production mint **unwired** | Header contract: "hash of its block at `tip − 720`" (`rust/shekyl-p-fetch/src/header.rs:34`). `RequestHeader::fresh` is not on the daemon production fetch path. Inland type is `BlockHeight` (height-semantics Phase 2d). |
 
@@ -195,7 +195,7 @@ The choice the Phase 1 stub left open ("newtype everywhere" vs
   Inland code does not encode `0` as `ChainCount`.
 - **C6 Template height is `ChainCount::next_height()`.**
   `create_block_template` sets `height = m_db->height()`
-  (`src/cryptonote_core/blockchain.cpp:1718`). Numerically the count;
+  (`src/cryptonote_core/blockchain.cpp`). Numerically the count;
   semantically the ordinal the next block will carry
   (`rust/shekyl-types/src/block_axis.rs:168-170`). The inverse — an
   exclusive-end ordinal back to count — is `ChainCount::from_next_height`
@@ -241,7 +241,7 @@ producers cited at source.
 | --- | --- | --- | --- |
 | `GET /get_height` | `GetHeightResponse.height` (`rust/shekyl-rpc-types/src/chain.rs:179`) | COUNT | Facts POD already `+1` (`src/rpc/rpc_facts_ffi.cpp:73-75`); handler copies (`rust/shekyl-daemon-rpc/src/methods.rs:102-108`). Wallet client documents "amount of blocks", genesis-only = 1 (`rust/shekyl-rpc-client/src/lib.rs:380-384`). |
 | `get_block_count` | `GetBlockCountResponse.count` (`rust/shekyl-rpc-types/src/chain.rs:197`) | COUNT | Same chain-height as `/get_height`, honest field name. |
-| `GET /get_info` | `height` | COUNT | Served from Rust since RK-5c. The facts POD carries the chain's count, `get_current_blockchain_height()` (`src/rpc/rpc_facts_ffi.cpp:1101`), decoded as `ChainCount`; the handler writes its raw value (`rust/shekyl-daemon-rpc/src/info.rs:227`, `:227`). |
+| `GET /get_info` | `height` | COUNT | Served from Rust since RK-5c. The facts POD carries the chain's count, `get_current_blockchain_height()` (`src/rpc/rpc_facts_ffi.cpp`), decoded as `ChainCount`; the handler writes its raw value (`rust/shekyl-daemon-rpc/src/info.rs:227`, `:227`). |
 | `GET /get_info` | `target_height` | COUNT or `null` | The core count, forwarded, synchronized or not; `null` when the core reports none (`rust/shekyl-daemon-rpc/src/info.rs:254-257`). The `0`-when-synchronized sentinel was retired at `CORE_RPC_VERSION` 3.46 (RK-D15). The core stores the peer-advertised count (`core::set_target_blockchain_height`, `src/cryptonote_core/cryptonote_core.cpp`), so it is information and no reader decides on it. |
 | `get_version`, `sync_info` | `target_height` | COUNT or `null` | The core count, forwarded; `null` when the core reported none (`rust/shekyl-daemon-rpc/src/methods.rs:115-116`, `rust/shekyl-daemon-rpc/src/methods.rs:132`, `rust/shekyl-daemon-rpc/src/methods.rs:1346-1348`). Inland: `Option<ChainCount>` (C5). The synchronized `0` was retired at `CORE_RPC_VERSION` 3.40, and the `0` (or omitted member) for "no target" at 3.46. |
 | `get_version` | `current_height` (`rust/shekyl-rpc-types/src/chain.rs:400`) | COUNT | `tip.chain_height.to_raw()` (`rust/shekyl-daemon-rpc/src/methods.rs:139`). |
@@ -252,17 +252,17 @@ producers cited at source.
 | `ConnectionInfo.height` (`rust/shekyl-rpc-types/src/p2p.rs:240`) | `height` | COUNT | Peer's claimed blockchain height. |
 | `SyncInfoResponse.height` (`rust/shekyl-rpc-types/src/p2p.rs:289`) | `height` | COUNT | Local chain height. |
 | `SyncSpan.start_block_height` (`rust/shekyl-rpc-types/src/p2p.rs:270`) | `start_block_height` | ORDINAL | Span origin. |
-| `getblocktemplate.height` (`src/rpc/core_rpc_server_commands_defs.h:437`) | `height` | next-block ordinal (= COUNT numeric) | `height = m_db->height()` (`src/cryptonote_core/blockchain.cpp:1718`); RPC writes `res.height` (`src/rpc/core_rpc_server.cpp:501`). Inland: `ChainCount::next_height()` (C6). |
+| `getblocktemplate.height` (`src/rpc/core_rpc_server_commands_defs.h`) | `height` | next-block ordinal (= COUNT numeric) | `height = m_db->height()` (`src/cryptonote_core/blockchain.cpp`); RPC writes `res.height` (`src/rpc/core_rpc_server.cpp`). Inland: `ChainCount::next_height()` (C6). |
 | `getblocktemplate.seed_height` | `seed_height` | ORDINAL | Seed block index. |
-| `get_curve_tree_info.height` | `height` | ORDINAL | `get_current_blockchain_height() - 1` (`src/rpc/core_rpc_server.cpp:1147`) — already converted to the tip ordinal. |
-| `pop_blocks.height` | `height` | COUNT | `res.height = get_current_blockchain_height()` after the pop (`src/rpc/core_rpc_server.cpp:1032`). |
+| `get_curve_tree_info.height` | `height` | ORDINAL | `get_current_blockchain_height() - 1` (`src/rpc/core_rpc_server.cpp`) — already converted to the tip ordinal. |
+| `pop_blocks.height` | `height` | COUNT | `res.height = get_current_blockchain_height()` after the pop (`src/rpc/core_rpc_server.cpp`). |
 
 **FFI PODs (stay `uint64_t` / `u64`; named decode on the Rust side):**
 
 | POD | Field | Quantity |
 | --- | --- | --- |
 | `shekyl_rpc_chain_tip_facts` (`src/rpc/rpc_facts_ffi.h:35-37`) | `chain_height` | COUNT (`top_height + 1`, `src/rpc/rpc_facts_ffi.cpp:73-75`) |
-| same | `target_height` | raw core target (`src/rpc/rpc_facts_ffi.cpp:1293`); `0` is the core reporting none (C5), at this FFI boundary only: no wire method writes it since 3.46 |
+| same | `target_height` | raw core target (`src/rpc/rpc_facts_ffi.cpp`); `0` is the core reporting none (C5), at this FFI boundary only: no wire method writes it since 3.46 |
 | `shekyl_rpc_block_hash_facts` (`src/rpc/rpc_facts_ffi.h:81`) | `chain_height` | COUNT |
 | `shekyl_rpc_block_header_facts` (`src/rpc/rpc_facts_ffi.h:104-106`) | `height` ORDINAL; `depth` DIFFERENCE; `chain_height` COUNT | as named in the header |
 | `ChainTipFactsFfi` (`rust/shekyl-daemon-rpc/src/ffi.rs:337-342`) | twins of the C POD | stay raw |
@@ -276,8 +276,8 @@ copy `get_info.height`, which is COUNT.
 
 | Call | Quantity |
 | --- | --- |
-| `BlockchainLMDB::height()` / `Blockchain::get_current_blockchain_height()` (`src/cryptonote_core/blockchain.cpp:256-263`) | COUNT |
-| `BlockchainLMDB::top_block_hash` out-param (`src/blockchain_db/lmdb/db_lmdb.cpp:3179-3185`) / `Blockchain::get_tail_id(height)` (`src/cryptonote_core/blockchain.cpp:813-817`) | ORDINAL (`m_height - 1`) |
+| `BlockchainLMDB::height()` / `Blockchain::get_current_blockchain_height()` (`src/cryptonote_core/blockchain.cpp`) | COUNT |
+| `BlockchainLMDB::top_block_hash` out-param (`src/blockchain_db/lmdb/db_lmdb.cpp`) / `Blockchain::get_tail_id(height)` (`src/cryptonote_core/blockchain.cpp`) | ORDINAL (`m_height - 1`) |
 
 ### 3.4 Inland family census
 

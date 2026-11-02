@@ -4,7 +4,7 @@
 // BSD-3-Clause
 
 //! `/stop_daemon` over the node's [`StopFacts`] (`DRS_X_STORE_FLIP.md`
-//! DX-Q3, Q11). **Built and not routed**, like [`crate::mining_methods`].
+//! DX-Q3, Q11). `/stop_daemon` dispatches here.
 
 use shekyl_rpc_types::errors::RpcError;
 use shekyl_rpc_types::mining::StatusOnlyResponse;

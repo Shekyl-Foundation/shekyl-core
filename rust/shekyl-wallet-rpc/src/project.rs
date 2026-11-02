@@ -10,7 +10,8 @@ use shekyl_engine_core::PendingTx;
 use shekyl_engine_core::RefreshSummary;
 use shekyl_engine_core::SubmitOutcome;
 use shekyl_engine_state::{
-    DisputeReason, ReceiveAttribution, SendRecord, SendState, TransferDetails, UnspendableReason,
+    DisputeReason, LedgerBlock, ReceiveAttribution, SendRecord, SendState, TransferDetails,
+    UnspendableReason,
 };
 use shekyl_types::TxHash;
 use shekyl_units::AtomicUnits;
@@ -245,12 +246,25 @@ pub fn outgoing_transfer_view(
     })
 }
 
-/// Project [`RefreshSummary`] + post-refresh ledger tip to OpenAPI.
-pub fn refresh_result(summary: &RefreshSummary, synced_height: u64) -> RefreshResult {
+/// The wallet's height on the wire: `wallet_height` (`get_height`,
+/// `get_wallet_info`) and `synced_height` (`refresh`,
+/// `rescan_blockchain`). It is [`LedgerBlock::synced_count`], a chain count
+/// like `daemon_height`, so a synced wallet reports its daemon's number.
+pub fn wallet_height(ledger: &LedgerBlock) -> Result<i64, WalletRpcError> {
+    ledger
+        .synced_count()
+        .and_then(|count| i64::try_from(count.to_raw()).ok())
+        .ok_or_else(|| {
+            WalletRpcError::InternalError("the wallet's synced tip names no chain count".into())
+        })
+}
+
+/// Project [`RefreshSummary`] + post-refresh [`wallet_height`] to OpenAPI.
+pub fn refresh_result(summary: &RefreshSummary, synced_height: i64) -> RefreshResult {
     RefreshResult {
         blocks_processed: i64::try_from(summary.blocks_processed).unwrap_or(i64::MAX),
         transfers_detected: i64::try_from(summary.transfers_detected).unwrap_or(i64::MAX),
-        synced_height: i64::try_from(synced_height).unwrap_or(i64::MAX),
+        synced_height,
         reorg_fork_height: summary
             .reorg
             .as_ref()
@@ -259,11 +273,11 @@ pub fn refresh_result(summary: &RefreshSummary, synced_height: u64) -> RefreshRe
 }
 
 /// Project a rescan summary — OpenAPI omits `reorg_fork_height`.
-pub fn rescan_result(summary: &RefreshSummary, synced_height: u64) -> RescanBlockchainResult {
+pub fn rescan_result(summary: &RefreshSummary, synced_height: i64) -> RescanBlockchainResult {
     RescanBlockchainResult {
         blocks_processed: i64::try_from(summary.blocks_processed).unwrap_or(i64::MAX),
         transfers_detected: i64::try_from(summary.transfers_detected).unwrap_or(i64::MAX),
-        synced_height: i64::try_from(synced_height).unwrap_or(i64::MAX),
+        synced_height,
     }
 }
 

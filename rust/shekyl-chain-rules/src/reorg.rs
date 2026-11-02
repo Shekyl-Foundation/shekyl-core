@@ -90,7 +90,7 @@ const _: () = assert!(
 /// a [`SlashLogFloor`] under the rule set in hand: the slash pass's read
 /// (`SLK-Q1`, SI-26) and the boundary batch's retirement. This production
 /// form is the expression on the genesis pair for documentation and tests;
-/// `shekyl_archival_failure_window_params` is *not* this — it returns the
+/// the retention crate's failure-window params accessor is *not* this — it returns the
 /// m-of-n `(m, n, serve_budget)`.
 #[must_use]
 pub fn journal_horizon(tip: BlockHeight) -> Option<BlockHeight> {

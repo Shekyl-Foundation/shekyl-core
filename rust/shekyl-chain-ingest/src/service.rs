@@ -54,9 +54,9 @@ use shekyl_chain_rules::{AdmissionPolicy, InvalidBlock, Substrate};
 use shekyl_chain_store::store::{ChainStore, StoreError};
 use shekyl_hash_budget::{Budget, Class};
 use shekyl_mempool::{Pool, PoolFault};
-use shekyl_types::{BlockHash, BlockHeight, UnixSeconds};
+use shekyl_types::{BlockHash, BlockHeight, TxHash, UnixSeconds};
 use shekyl_wire::Transaction;
-use tokio::sync::{mpsc, oneshot};
+use tokio::sync::{mpsc, oneshot, Notify};
 use tokio::task::JoinSet;
 
 use crate::admission::{ArrivalBound, Buckets};
@@ -102,6 +102,8 @@ pub struct Arrival {
     pub block: Vec<u8>,
     /// The listed bodies it carried, as blobs, in any order.
     pub bodies: Vec<Vec<u8>>,
+    /// The attestation witness carried beside the block; empty when none.
+    pub attestation_witness: Vec<u8>,
 }
 
 /// One block chain sync has already proven: its header passed
@@ -146,6 +148,7 @@ impl BoundArrival {
             },
             block_len: self.block.len(),
             body_lens: self.bodies.iter().map(Vec::len).collect(),
+            witness_len: self.attestation_witness.len(),
         }
     }
 }
@@ -162,11 +165,18 @@ pub struct ArrivalLengths {
     pub block_len: usize,
     /// Each carried body's length, in the order the caller listed them.
     pub body_lens: Vec<usize>,
+    /// The attestation witness's length; zero when none was carried.
+    /// Bounded by [`shekyl_types::MAX_ATTESTATION_WITNESS_BYTES`], not by
+    /// [`crate::admission::ArrivalBound`].
+    pub witness_len: usize,
 }
 
 impl ArrivalLengths {
-    /// The bytes the door bounds ([`Door::max_arrival_bytes`]): the block
-    /// and the bodies it carried.
+    /// The bytes the door bounds against [`Door::max_arrival_bytes`]: the
+    /// block and the bodies it carried. The attestation witness is a
+    /// sidecar with its own cap
+    /// ([`shekyl_types::MAX_ATTESTATION_WITNESS_BYTES`]); it is not these
+    /// bytes.
     #[must_use]
     pub fn bytes(&self) -> usize {
         self.body_lens
@@ -180,6 +190,7 @@ impl ArrivalLengths {
             origin: arrival.origin,
             block_len: arrival.block.len(),
             body_lens: arrival.bodies.iter().map(Vec::len).collect(),
+            witness_len: arrival.attestation_witness.len(),
         }
     }
 }
@@ -274,6 +285,8 @@ pub enum Reply {
     /// Listed bodies neither the arrival carried nor the pool shows, by
     /// their index in the block's list: ask for them and offer it again.
     MissingBodies {
+        /// The block whose list they are: what the re-request names.
+        hash: BlockHash,
         /// The indices, ascending.
         indices: Vec<usize>,
     },
@@ -411,7 +424,7 @@ impl Staged {
             proof: Proof::Hash {
                 class: class_of(arrival.origin),
             },
-            witness: Vec::new(),
+            witness: arrival.attestation_witness,
         }
     }
 
@@ -550,8 +563,10 @@ pub(crate) struct Shared<S: Substrate> {
     pool_live: Arc<AtomicBool>,
     /// Bodies a span parked because the tip moved under the pool door.
     pending: Mutex<Vec<Transaction>>,
-    /// Wakes the attendant to judge [`pending`](Self::pending).
-    pending_ready: Arc<tokio::sync::Notify>,
+    /// Wakes the attendant: parked bodies, and a shown-set change at this
+    /// tip (Q9: once the relay marks an entry shown, the next template
+    /// lists it — N2 rebuilds the posted job, not only on a tip move).
+    pending_ready: Arc<Notify>,
     /// What a test does to the pool between the producer's two locks.
     /// The build clones it, so a test can replace it between wakes.
     #[cfg(test)]
@@ -677,6 +692,20 @@ where
         self.pool.is_some() && self.pool_live.load(Ordering::Acquire)
     }
 
+    /// The relay's hook for ids this reconcile took out of the pool.
+    pub(crate) fn note_departed(&self, ids: &[TxHash]) {
+        if ids.is_empty() {
+            return;
+        }
+        if let Some(hook) = self
+            .pool
+            .as_ref()
+            .and_then(|wiring| wiring.departed.as_ref())
+        {
+            hook(ids);
+        }
+    }
+
     /// The pool, when it is wired and live. A caller that also reads the
     /// chain begins its snapshot before it locks this, as [`with_pool`]
     /// does.
@@ -712,6 +741,15 @@ where
         self.pending_ready.notify_one();
     }
 
+    /// A shown-set change at this tip that did not come through the relay's
+    /// hook: a body a pop or a switch returned to the pool, admitted public.
+    /// Q9: the posted job is rebuilt on a shown-set change, not only on a
+    /// tip move; the wake is the attendant's one pending `Notify`, so a
+    /// batch of returns costs at most one rebuild in flight.
+    pub(crate) fn shown_changed(&self) {
+        self.pending_ready.notify_one();
+    }
+
     /// Park `bodies` without waking. The next tip, or the next handed
     /// batch, judges them. A tip that moved under this attempt must not
     /// notify itself.
@@ -735,8 +773,9 @@ where
         )
     }
 
-    /// The attendant waits on this beside the tip.
-    pub(crate) fn pending_ready(&self) -> &tokio::sync::Notify {
+    /// The attendant waits on this beside the tip: parked bodies, and a
+    /// shown-set change at this tip (Q9).
+    pub(crate) fn pending_ready(&self) -> &Notify {
         &self.pending_ready
     }
 
@@ -874,6 +913,7 @@ impl Door {
             origin: Origin::Local,
             block,
             bodies,
+            attestation_witness: Vec::new(),
         };
         loop {
             match self.offer(arrival.clone()) {
@@ -995,7 +1035,15 @@ pub struct Follow {
     /// (`SO-D12` increment 4c). It files from the job seat's ring.
     #[cfg(feature = "producer")]
     pub producer: Option<crate::bundle_producer::ProducerSeat>,
+    /// Wakes the tip follower when the pool's shown set changes at this
+    /// tip (`DRS_X_STORE_FLIP.md` Q9). The composition root hands the same
+    /// [`Notify`] the pool door's fluff hook fires. `None` is a private
+    /// notify: tests that admit through the pool lock wake it themselves.
+    pub shown: Option<Arc<Notify>>,
 }
+
+/// Told the ids that left the pool on a reconcile.
+pub type Departed = Arc<dyn Fn(&[TxHash]) + Send + Sync>;
 
 /// The pool, as a consumer of the connector (`DRS_X_STORE_FLIP.md` DX-Q5;
 /// the brief's c6): reconciled by the tip follower after every committed
@@ -1011,6 +1059,11 @@ pub struct PoolWiring {
     pub policy: AdmissionPolicy,
     /// The wall clock its door stamps arrivals with.
     pub wall: Arc<dyn Fn() -> UnixSeconds + Send + Sync>,
+    /// Told the ids that left on this reconcile: evicted to make room, and
+    /// removed because the chain took them or the door now refuses them.
+    /// The relay releases its responsibility for each (`DRS_X_STORE_FLIP.md`
+    /// §2). Absent in a test that does not track responsibilities.
+    pub departed: Option<Departed>,
 }
 
 /// Pops blocks for `pop_blocks` (`DRS_X_STORE_FLIP.md` DX-Q3, Q7), held
@@ -1192,7 +1245,7 @@ where
             pool: follow.pool,
             pool_live: Arc::new(AtomicBool::new(true)),
             pending: Mutex::new(Vec::new()),
-            pending_ready: Arc::new(tokio::sync::Notify::new()),
+            pending_ready: follow.shown.unwrap_or_else(|| Arc::new(Notify::new())),
             #[cfg(test)]
             between_locks: Mutex::new(None),
         });

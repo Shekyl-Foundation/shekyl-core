@@ -204,6 +204,7 @@ mod tests {
         ShekylDaemonEntry {
             release_name: RELEASE.as_ptr(),
             version_full: VERSION.as_ptr(),
+            is_release: false,
             protocol_version: 3,
             run: Some(forbidden_run),
             stop: None,

@@ -18,7 +18,7 @@
 //!
 //! # The trait is shared; the obligation is not
 //!
-//! [`Canonical`], [`CodecError`], [`exact`] and the four value shapes live
+//! [`Canonical`], [`CodecError`], [`exact`] and the three value shapes live
 //! in `shekyl-store-codec`, which both stores reach, together with the
 //! codecs for types neither store owns — the scalars and the
 //! `shekyl-types` / `shekyl-units` vocabulary. The orphan rule decides
@@ -118,8 +118,7 @@ pub use undo::{post_image, UndoEntry, UndoLog, POST_IMAGE_DST};
 // The shared contract, re-exported at its existing path: `crate::codec::X`
 // resolves for every caller it did before the move.
 pub use shekyl_store_codec::{
-    exact, Blob, BlobKind, Canonical, CodecError, Coded, Encoded, EncodedBuf, NoRow, Present, Raw,
-    Unshaped,
+    exact, Blob, BlobKind, Canonical, CodecError, Coded, Encoded, EncodedBuf, Present, Raw,
 };
 
 /// Name arbitrary bytes as a row of a `Coded<V>` table **without** going

@@ -168,13 +168,13 @@ pub enum RejectCause {
     /// Reference block hash unknown to this daemon (typically: daemon not
     /// yet synced to it). Sync-gated retry (§2.5).
     ReferenceNotFound,
-    /// A JoinMarket bond post this daemon cannot admit: its C++ commit
-    /// step has no decoder for the receipt-key form (FND-20). Phases A–C
-    /// passed; Phase D's mutable re-checks do not run, because the shim
-    /// returns before `shekyl_submit_commit_tx`. Deleted with the C++
-    /// commit shim (DEL-008).
-    JoinMarketUnsupported,
+    /// A consensus row refused the transaction against this chain when the
+    /// pool committed it (3.63; the flip). Terminal: the bytes are sound and
+    /// the chain decides. The row rides as `Rejected`'s `row` ("CEN-J15").
+    ConsensusRule,
     /// Forward-compat catch-all: a cause this client build does not know.
+    /// A pre-flip daemon's `join_market_unsupported` (left the set at
+    /// 3.63) reads as this.
     #[serde(other)]
     Unrecognized,
 }
@@ -344,8 +344,8 @@ Request-surface trims relative to `COMMAND_RPC_SEND_RAW_TX`:
 | `Rejected{StaleRoot}` | Rebuild the **proof** over the same input selection against a fresh root. This constructs the wallet's deferred `ProofStale` path and closes the `fcmp_root_stale` FOLLOWUPS criterion (its named reopen was exactly "a daemon-side stale-root signal"). |
 | `Rejected{ReferenceTooRecent}` | Timed backoff (min-age is 5 blocks; the wallet built too close to the tip), then resubmit-same-bytes. |
 | `Rejected{ReferenceNotFound}` | Sync-gated: consult daemon health context (§5.2). If the daemon is behind, wait for sync and resubmit-same-bytes; if the daemon is synced and still does not know the reference, treat as `StaleRoot`. Own-daemon-gated branching per §7.2. |
+| `Rejected{ConsensusRule, row}` | Terminal release; no rebuild (the bytes are sound; the chain's state refused them under the named row, and a rebuild meets the same state). BD-Q3 Rule 2 holds the record and its funding to the end date; the wallet records the row (`TerminalCause::ConsensusRule { row }`, pending-post v14) and tells its user "the chain refused it under consensus rule CEN-J15". A premise that moved under the refusal (a competing spend, a duplicate, a stale root) is classified first, in the race order of §3.1 and with its concealment, so a double spend the door refuses as CEN-I7 is still `DoubleSpendConflict`; the row is the verdict only when nothing else moved. Added at 3.63 (the flip; Rick, 2026-10-29): before it, a chain-bound refusal at the pool's commit reached the wallet as an internal fault, a retryable class, and the wallet resent a post the chain refuses every time. |
 | `Rejected{Unrecognized}` | Release + one-shot rebuild (the F28 loop-breaker applies). |
-| `Rejected{JoinMarketUnsupported}` | Terminal release, no rebuild. Phases A–C passed. Phase D's mutable re-checks do not run: the C++ commit shim cannot reparse these bytes and returns before `shekyl_submit_commit_tx` (`ffi_shim.rs`, FND-20). The capability refusal is the verdict, including when a key-image or fee race would also have refused — retrying the same bytes against this daemon fails the same way. Identity short-circuits (`AlreadyInChain`, the owner's `AlreadyInPool`) return before commit and are not this cause. The pending stake is withdrawn and its funding is spendable again; staking resumes against a daemon that admits a JoinMarket. Deleted with the C++ commit shim (`DEL-008`). |
 | `Err(RpcError)` | The ambiguous case. Hold locks, TTL, resubmit-same-bytes; the next definite verdict resolves. |
 
 **Idempotent resubmission is the status query.** Under identity-first
@@ -1364,7 +1364,7 @@ called at `:3614`; funding spend inputs run the regular K battery over
 | # | Check | Site | Disposition |
 | --- | --- | --- | --- |
 | BP1 | Hybrid pubkey length == `PQC_HYBRID_SINGLE_KEY_LEN` | `:4187-4191` | **A** — ⚠ resolved (PR-4b): `shekyl-wire` `BondPost::read`/`validate` pin the exact canonical length, so a `ParsedSubmission` cannot carry a violation; `Malformed` at Phase A |
-| BP2 | `p_canonical_id` recomputation from pubkey | `:4193-4205` | **C** — already Rust behind `shekyl_archival_p_canonical_id_from_pubkey`; engine calls natively (`p_canonical_id_from_hybrid_pubkey`); `Malformed` |
+| BP2 | `p_canonical_id` recomputation from pubkey | `:4193-4205` | **C** — already Rust behind `shekyl_archival_p_canonical_id_from_pubkey` (deleted, `DEL-008`); engine calls natively (`p_canonical_id_from_hybrid_pubkey`); `Malformed` |
 | BP3 | Bond record does not already exist (DB) | `:4207-4208`, consumed at `bond_post.rs:73-75` | **B fact + D re-check** — a bond-post block landing during C flips it; conflict → `DoubleSpendConflict` (claim-slot leg) |
 | BP4 | Economic battery: post-kind, holdings-shape consistency, credit/debit exclusivity, debit == 0, **bond-floor equality** | `:4212-4226` → `verify_join_market_bond_post`, `bond_post.rs:40-78`; floor per `bond_floor.rs:19-30` | **C** — already Rust (`shekyl-archival-retention`), native call; violations → `Malformed` |
 | BP5 | `pqc_auths[i].hybrid_public_key == bond.hybrid_public_key` | `:3620-3626` | **A** — structural cross-field check; `Malformed` |
@@ -1451,12 +1451,12 @@ needs a discriminating argument, not a line number.
 | UB1 | Vin carries **no** `bond_spend_pk` (§9.11 coupling belt — only JoinMarket carries the debit authorizer; a vin-borne key would be a forgeable self-assertion) | `"vin carries a bond_spend_pk"` belt | **A** — `shekyl-wire` refuses the field on `BondPostKind::Other` at parse, so a `ParsedSubmission` cannot carry a violation; the belt is retained for non-parse callers; `Malformed` |
 | UB2 | Bond record **exists** for `p_canonical_id` (the inverse of BP3) **and its `bonded_total_atomic`** — the balance, not just the row | `get_archival_bond_value` (Release arm) | **B facts; the D re-check is on the BALANCE.** Phase B/C requires presence (absent → `Malformed`). Phase D compares the fresh total against the vin's `bond_debit` — gone, zeroed by a competing exit, or raised by a credit → `DoubleSpendConflict`. Presence is *not* the D predicate: the row survives an exit, so a presence-keyed check is inert (see the exit-shape note below) |
 | UB3 | Cold authority: the record commits a canonical-length `bond_spend_pk`, **and** the bond slot's `pqc_auths` pubkey equals it | `archival_cold_authority_pin(record, post_kind, bond_debit, auth_pubkey, "Release")` (2026-09-11; was `archival_debit_auth_pin(record, auth_pubkey, "Release")` — same pin, the selector moved into Rust) | **C over a B fact** — native `cold_authority_pin` (`shekyl-archival-retention`), the same composed gate the block path calls over FFI: `requires_cold_authority` (Release is **unconditional** there, which is why this row sits ahead of UB9's debit-term guards) then the pin; both pin arms `Malformed`. A record committing **no** key authorizes nothing — fail closed, never an identity-key fallback |
-| UB4 | Per-shard last-served epochs, gathered by the scan `HoldingsKind::last_served_scan()` selects (`HeldShards` / `AllShards`) | `shekyl_archival_last_served_scan` → `archival_bond_{all_,}last_served_epochs` | **B fact, no D re-check** (see the Phase-D scope note) — the shim echoes the scan discriminant it ran and the engine pins the echo against the record's `holdings_kind`; a mismatch is `ShimContract`, never a fold (see the permissive-direction note) |
+| UB4 | Per-shard last-served epochs, gathered by the scan `HoldingsKind::last_served_scan()` selects (`HeldShards` / `AllShards`) | `shekyl_archival_last_served_scan` (deleted, `DEL-008`) → `archival_bond_{all_,}last_served_epochs` | **B fact, no D re-check** (see the Phase-D scope note) — the shim echoes the scan discriminant it ran and the engine pins the echo against the record's `holdings_kind`; a mismatch is `ShimContract`, never a fold (see the permissive-direction note) |
 | UB5 | Whole-record cooldown anchor = the fold of UB4's slice; release cooldown elapsed vs the current settlement epoch | `whole_record_last_served` → `release_cooldown_elapsed` | **C**, no D re-check — native fold; `Malformed`. **Contingent** in both directions: a serve landing during C re-closes the window (see the Phase-D scope note), and a later resubmission of the same bytes can pass once the window reopens |
 | UB6 | Slash-settlement watermark (`get_archival_last_slash_epoch`), `u64::MAX` = nothing settled | `get_archival_last_slash_epoch` | **B fact, no D re-check** — the watermark only advances, so a Phase-B read can only be *behind* the truth, which fails **closed**; `Malformed`, contingent |
 | UB7 | Interval log not full (`record_bad_interval_count < MAX_BOND_BAD_INTERVALS`) — a full log makes the tx unconnectable, so it is unverifiable | `record.bad_intervals.size()` → `bond_post.rs` | **B fact** — no D re-check: the count only grows, and growth can only keep it full; `Malformed` |
-| UB8 | Current settlement epoch = `settlement_epoch_at_height(chain_height)` | `shekyl_archival_settlement_epoch_at_height` | **C over the existing `chain_height` fact** — no new fact. **The raw `m_db->height()` count is fed to an "at height" helper deliberately**: that is the consensus shape (the same count-into-height posture the ref-age window documents), and the engine mirrors it rather than correcting it |
-| UB9 | Economic battery: post-kind, `bond_credit == 0`, floor equality on the post-connect state, full-exit (`bonded_total_atomic == 0`), `bond_debit ==` the record's whole balance, UB5/UB6/UB7 | `shekyl_archival_verify_release_bond_post` → `verify_release_bond_post` | **C** — already Rust, native call; the identical function the C++ oracle dispatches to, so the two paths cannot diverge semantically |
+| UB8 | Current settlement epoch = `settlement_epoch_at_height(chain_height)` | `shekyl_archival_settlement_epoch_at_height` (deleted, `DEL-008`) | **C over the existing `chain_height` fact** — no new fact. **The raw `m_db->height()` count is fed to an "at height" helper deliberately**: that is the consensus shape (the same count-into-height posture the ref-age window documents), and the engine mirrors it rather than correcting it |
+| UB9 | Economic battery: post-kind, `bond_credit == 0`, floor equality on the post-connect state, full-exit (`bonded_total_atomic == 0`), `bond_debit ==` the record's whole balance, UB5/UB6/UB7 | `shekyl_archival_verify_release_bond_post` (deleted, `DEL-008`) → `verify_release_bond_post` | **C** — already Rust, native call; the identical function the C++ oracle dispatches to, so the two paths cannot diverge semantically |
 
 **Why UB0 exists, and why it is not redundant with UB3.** The gather that
 produces UB2/UB4's facts runs a per-shard last-served scan — two LMDB seeks
@@ -1678,7 +1678,7 @@ Serve-credit rows (`check_archival_serve_credit_input`,
 | SC5 | `good_through(P, E)` interval semantics (DB) | `:4281-4286` | **B fact + D re-check** — debits during C can flip it |
 | SC6 | Credit deadline `current_height ≤ H_close` | `:4288-4295` | **C** over snapshot height + **D re-check** (height moves during C); past-deadline → `Malformed` (permanent for these bytes) |
 | SC7 | Seal hash at H_seal; H_fire derivation; shard-in-holdings at H_fire; registry segment; leaf-layer scalars | `:4297-4341` | **B facts** (historical state; deep-reorg drift is block-validation-backstopped) → **C** decision |
-| SC8 | Serve-credit vin verification over wire bytes + ctx (incl. vin wire-tag pin) | `:4343-4376` → `shekyl_archival_verify_serve_credit_vin` | **C** — already Rust, native call; the wire-tag check folds into Phase A's parse (`shekyl-wire` owns the dense tag); `Malformed` |
+| SC8 | Serve-credit vin verification over wire bytes + ctx (incl. vin wire-tag pin) | `:4343-4376` → `shekyl_archival_verify_serve_credit_vin` (deleted, `DEL-008`) | **C** — already Rust, native call; the wire-tag check folds into Phase A's parse (`shekyl-wire` owns the dense tag); `Malformed` |
 
 Classification rule for archival premise failures: **state conflicts**
 (BP3, SC2 — someone else consumed the claim slot) → `DoubleSpendConflict`;
@@ -1713,7 +1713,7 @@ branch (`blockchain.cpp:3801-4110`). The semantic battery is already Rust
 | EV2 | Loud vout amount sum does not overflow | same branch → `shekyl_checked_sum_amounts` | **A** — wire `check_money_overflow` parity sum |
 | EV3 | `total_reward > 0` (Σ loud vouts non-zero) | same branch | **A** — engine static (Phase A, emission kind) |
 | EV4 | CT semantics: canonical Bp+ layout; balance `Σ pseudoOuts + total_reward = Σ out_masks + fee` (mint rides the debit slot); Bp+ verify | `verCtSemanticsEmission` → `verArchivalCtBalanceAndRange` | **C** — native `verify_bond_post_ct_balance` with `BondTerm::Debit(total_reward)` + the shared Bp+ leg |
-| E1 | Vin `canonical_bytes` parse → (`P_canonical_id`, claimed epochs, `1..=MAX`) | `blockchain.cpp:3812` → `shekyl_archival_emission_vin_extract` | **C** — native `emission_wire` decode; Phase A pre-parses for the probe key (parse failure → `Malformed`) |
+| E1 | Vin `canonical_bytes` parse → (`P_canonical_id`, claimed epochs, `1..=MAX`) | `blockchain.cpp:3812` → `shekyl_archival_emission_vin_extract` (deleted, `DEL-008`) | **C** — native `emission_wire` decode; Phase A pre-parses for the probe key (parse failure → `Malformed`) |
 | E2 | Emission slot's `pqc_auths` pubkey derives the vin's `P_canonical_id` | `:3830-3845` | **A** — structural cross-field (BP2/BP5 analogue, same canonical-id function); `Malformed` |
 | E3 | Reference block exists + age window — **required even with zero fee inputs** (the backing proof verifies against this root) | `:3865-3886` | engine Phase C — Emission joins the spending-shape reference arm (`ReferenceNotFound` / `ReferenceTooRecent` / `StaleRoot`) |
 | E4 | `curve_trees_tree_depth ∈ [1, current]` | `:3890` | engine Phase C (row-K10 shape) → `StaleRoot` |
@@ -1767,9 +1767,9 @@ completeness check.
 
 | Site | What |
 | --- | --- |
-| `src/cryptonote_core/tx_pool.h:677` | member declaration |
-| `src/cryptonote_core/tx_pool.cpp:161-167` | resubmit gate (defect 0.2) |
-| `src/cryptonote_core/tx_pool.cpp:764` | insert on stuck-sweep |
+| `src/cryptonote_core/tx_pool.h` | member declaration |
+| `src/cryptonote_core/tx_pool.cpp` | resubmit gate (defect 0.2) |
+| `src/cryptonote_core/tx_pool.cpp` | insert on stuck-sweep |
 
 Re-verified at round 6 (minor c): the grep returns **exactly these three
 sites** — no stats getters, serialization, or RPC readers exist. The member
@@ -1781,17 +1781,17 @@ deletes clean. PR-5's re-grep remains the backstop.
 | --- | --- |
 | `src/cryptonote_core/tx_sanity_check.{h,cpp}` | both overloads |
 | `src/cryptonote_core/CMakeLists.txt:34` | build entry |
-| `src/rpc/core_rpc_server.cpp:53`, `:1153` | include + only production call |
+| `src/rpc/core_rpc_server.cpp`, `:1153` | include + only production call |
 | `src/wallet/wallet2.cpp:55` | **dead include** (no call site) — drops with the include sweep |
 
 ### 9.3 Legacy submit endpoint
 
 | Site | What | Disposition |
 | --- | --- | --- |
-| `src/rpc/core_rpc_server.cpp:1044-1143` | `on_send_raw_tx` | delete (PR-5) |
-| `src/rpc/core_rpc_server.h:113-114`, `:199` | route maps + declaration | delete |
-| `src/rpc/core_rpc_server_commands_defs.h:557` | `COMMAND_RPC_SEND_RAW_TX` epee defs | delete |
-| `src/rpc/core_rpc_ffi.cpp:198-199` | `DJSON` legacy-route dispatch entries | delete |
+| `src/rpc/core_rpc_server.cpp` | `on_send_raw_tx` | delete (PR-5) |
+| `src/rpc/core_rpc_server.h`, `:199` | route maps + declaration | delete |
+| `src/rpc/core_rpc_server_commands_defs.h` | `COMMAND_RPC_SEND_RAW_TX` epee defs | delete |
+| `src/rpc/core_rpc_ffi.cpp` | `DJSON` legacy-route dispatch entries | delete |
 | `rust/shekyl-daemon-rpc/src/server.rs:98-103`, `handlers/json.rs:70` | axum proxy routes for the legacy endpoint | replaced by the native typed route (PR-3); deleted PR-5 |
 | `rust/shekyl-rpc-client/src/lib.rs:191-`, `:488-522` | `TxRelayResponse` + string-keyed `publish_transaction` | replaced by typed verdict (PR-4) |
 | `src/wallet/wallet2.cpp:196`, `:7681-7690` | legacy C++ wallet caller (`get_text_reason`, `commit_tx`) | ports to the new endpoint as a minimal epee marshaling shim (transport-only per rule 20); its richer error text comes from the verdict cause |

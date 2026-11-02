@@ -197,6 +197,10 @@ pub(crate) enum TxSubmitOutcome {
         /// Why the daemon refused the transaction. Dispositions per
         /// §2.5 are applied by the orchestrator.
         cause: shekyl_rpc_client::RejectCause,
+        /// The consensus row that refused, for `ConsensusRule`: the reply's
+        /// diagnostic parameter, carried to the user's sentence. `None` for
+        /// every other cause, and for a row this wallet cannot carry whole.
+        row: Option<crate::engine::error::CenRowName>,
     },
 }
 

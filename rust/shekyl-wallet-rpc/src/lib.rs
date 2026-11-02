@@ -59,5 +59,13 @@ pub use shekyl_engine_core::archival_params;
 pub use tenant::{DaemonEndpoint, SharedEngine, Tenant, TenantState};
 pub use types::{GetVersionResult, JsonRpcRequest, JsonRpcResponse, WalletHandle, API_VERSION};
 
-/// Crate / binary semver (`CARGO_PKG_VERSION`).
-pub const VERSION: &str = env!("CARGO_PKG_VERSION");
+/// The release version `shekyl-wallet-rpc` and `shekyl-cli` print, the
+/// daemon's string (`3.1.0-alpha.11-release`). The CMake build passes it as
+/// `SHEKYL_VERSION_FULL` from `cmake/Version.cmake`; a build that does not
+/// (a bare `cargo build`) cannot name its release and says so with
+/// `-unknown`, as the daemon does without git, rather than passing the
+/// crate's `3.1.0` off as one.
+pub const VERSION: &str = match option_env!("SHEKYL_VERSION_FULL") {
+    Some(version) => version,
+    None => concat!(env!("CARGO_PKG_VERSION"), "-unknown"),
+};

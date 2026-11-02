@@ -93,4 +93,4 @@ not to re-enable 32-bit builds.
 
 ### Compilation
 
-LMDB is compiled via `external/db_drivers/liblmdb/CMakeLists.txt`. It is statically linked into all Shekyl executables that use `BlockchainLMDB`. No external LMDB shared library is used.
+The daemon build does not compile this tree (DEL-004, 2026-10-28). `external/CMakeLists.txt` does not add `db_drivers`, and no target links `lmdb`. The sources stay here as the vendored copy.

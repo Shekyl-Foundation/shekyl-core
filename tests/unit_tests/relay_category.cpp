@@ -48,7 +48,6 @@
 #include <array>
 #include <cstddef>
 
-#include "blockchain_db/blockchain_db.h"
 #include "cryptonote_protocol/enums.h"
 
 namespace

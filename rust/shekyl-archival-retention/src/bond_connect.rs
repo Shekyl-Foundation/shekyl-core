@@ -209,70 +209,6 @@ pub fn release_connect(
 }
 
 #[derive(Debug, Error, PartialEq, Eq, Clone, Copy)]
-pub enum ReleasePopError {
-    /// The record is not in the `Release` post-connect state (`bonded_total`
-    /// nonzero or holdings non-empty) — the journal row does not describe the
-    /// tip's record; the pop would revert something else's write.
-    #[error("record is not in the Release post-connect (Exited) state")]
-    RecordNotExited,
-    /// The record's trailing interval-log entry is not this connect's clean
-    /// interval-close — journal/log desync.
-    #[error("trailing interval-log entry is not the expected clean interval-close")]
-    MissingCleanClose,
-    /// The journaled pre-image has `bonded_total == 0` — connect can never
-    /// journal that (a zero-balance record fails verify and connect alike).
-    #[error("journaled pre-image bonded_total is zero")]
-    PreImageEmpty,
-    /// Re-crediting `total_bonded_atomic` would overflow.
-    #[error("total_bonded_atomic overflow on Release pop re-credit")]
-    TotalBondedOverflow,
-}
-
-/// Fold the `Release` pop twin (gate-4 §5): validate the tip record is the
-/// connect's product, then re-credit `total_bonded_atomic` with the journaled
-/// pre-image balance. Returns the restored `total_bonded_atomic`.
-///
-/// The record fields themselves are restored by the C++ pop arm as a byte-copy
-/// of the pre-image journal row (the emission-claim WS-2 §6.3 shape) — that
-/// restore carries the holdings and the interval log (the clean close vanishes
-/// with it), so this fold's job is the counter movement plus the consistency
-/// checks that make a desynced journal loud instead of silently corrupting.
-///
-/// **Trailing-entry invariant (ratified 2026-07-12, maintainer):** slashability
-/// ends at the `Release` connect — the slash scheduler only examines currently
-/// held shards and an `Exited` record holds none, so nothing ever appends after
-/// the clean close and the refund is never clawed back. (The release verify
-/// guarantees every epoch through the last-served anchor settled *before* the
-/// connect: `release_cooldown` module docs.) The trailing entry at pop is
-/// therefore always this connect's clean close. `pop_block` still reverts
-/// slashes before the bond journal — a defensive ordering belt, since a
-/// same-block slash on a *different* record is routine — and any future change
-/// that let an interval land after a clean close would surface here as
-/// `MissingCleanClose`: loud, not silent.
-pub fn release_pop(
-    current_record_bonded_total: u64,
-    current_record_held_shard_count: usize,
-    trailing_interval: Option<BadInterval>,
-    release_settlement_epoch: u64,
-    journal_pre_bonded_total: u64,
-    total_bonded_atomic: u64,
-) -> Result<u64, ReleasePopError> {
-    if current_record_bonded_total != 0 || current_record_held_shard_count != 0 {
-        return Err(ReleasePopError::RecordNotExited);
-    }
-    match trailing_interval {
-        Some(iv) if is_clean_interval_close(&iv, release_settlement_epoch) => {}
-        _ => return Err(ReleasePopError::MissingCleanClose),
-    }
-    if journal_pre_bonded_total == 0 {
-        return Err(ReleasePopError::PreImageEmpty);
-    }
-    total_bonded_atomic
-        .checked_add(journal_pre_bonded_total)
-        .ok_or(ReleasePopError::TotalBondedOverflow)
-}
-
-#[derive(Debug, Error, PartialEq, Eq, Clone, Copy)]
 pub enum ReinstateConnectError {
     /// The post set is not the record's current holdings —
     /// verify's `ReinstateHoldingsChanged`.
@@ -379,28 +315,6 @@ pub fn reinstate_connect(
         closed_interval_index,
         interval_end_exclusive,
     })
-}
-
-#[derive(Debug, Error, PartialEq, Eq, Clone, Copy)]
-pub enum ReinstatePopError {
-    /// The per-`P` balance moved between the journaled pre-image and the tip
-    /// record — a `Reinstate` is zero-money, so that is not this journal's row.
-    #[error("Reinstate pop: record bonded_total moved (must be unchanged)")]
-    NotReinstateDelta,
-}
-
-/// Fold the `Reinstate` pop twin (gate-4 §5): the C++ arm re-opens the journaled
-/// interval to `end_exclusive = MAX`. Holdings and counters did not move at
-/// connect, so this fold only belts that the tip bonded_total still equals the
-/// journaled pre-image.
-pub fn reinstate_pop(
-    current_record_bonded_total: u64,
-    journal_pre_bonded_total: u64,
-) -> Result<(), ReinstatePopError> {
-    if current_record_bonded_total != journal_pre_bonded_total {
-        return Err(ReinstatePopError::NotReinstateDelta);
-    }
-    Ok(())
 }
 
 #[cfg(test)]

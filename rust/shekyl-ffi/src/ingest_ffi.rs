@@ -43,6 +43,8 @@ use shekyl_chain_ingest::service::{
     Tagged, Ticket,
 };
 
+use shekyl_types::MAX_ATTESTATION_WITNESS_BYTES;
+
 use crate::legacy_util::{bounded_capacity, slice_from_ptr, slice_from_typed_ptr};
 
 /// A borrowed byte buffer.
@@ -53,8 +55,8 @@ pub struct ShekylIngestBlob {
     pub len: usize,
 }
 
-/// One arriving block: the caller's tag, the block blob and the listed
-/// bodies it carried.
+/// One arriving block: the caller's tag, the block blob, the listed
+/// bodies it carried, and the attestation witness beside the block.
 #[repr(C)]
 #[derive(Clone, Copy)]
 pub struct ShekylIngestArrival {
@@ -62,6 +64,7 @@ pub struct ShekylIngestArrival {
     pub block: ShekylIngestBlob,
     pub bodies: *const ShekylIngestBlob,
     pub bodies_len: usize,
+    pub witness: ShekylIngestBlob,
 }
 
 /// One reply, as posted. Which fields carry meaning is the `kind`'s:
@@ -512,11 +515,18 @@ impl Ceilings {
             carried = next;
             body_lens.push(blob.len);
         }
+        if !readable(entry.witness.ptr, entry.witness.len) {
+            return Err(CeilingFault::Invalid);
+        }
+        if entry.witness.len > MAX_ATTESTATION_WITNESS_BYTES {
+            return Err(CeilingFault::Oversize);
+        }
         Ok(ArrivalLengths {
             tag: ArrivalTag(entry.tag),
             origin,
             block_len: entry.block.len,
             body_lens,
+            witness_len: entry.witness.len,
         })
     }
 
@@ -543,11 +553,14 @@ impl Ceilings {
             for blob in blobs {
                 bodies.push(unsafe { slice_from_ptr(blob.ptr, blob.len) }?.to_vec());
             }
+            let attestation_witness =
+                unsafe { slice_from_ptr(entry.witness.ptr, entry.witness.len) }?.to_vec();
             span.push(Arrival {
                 tag: ArrivalTag(entry.tag),
                 origin,
                 block,
                 bodies,
+                attestation_witness,
             });
         }
         Some(span)
@@ -674,8 +687,12 @@ fn encode(connection: u64, tagged: Tagged) -> (ShekylIngestReply, Vec<u64>) {
             out.height = tip.to_raw();
             out.by = floor.to_raw();
         }
-        Reply::MissingBodies { indices: missing } => {
+        Reply::MissingBodies {
+            hash,
+            indices: missing,
+        } => {
             out.kind = SHEKYL_INGEST_MISSING_BODIES;
+            out.hash = hash.to_bytes();
             indices = missing
                 .into_iter()
                 .map(|i| u64::try_from(i).unwrap_or(u64::MAX))

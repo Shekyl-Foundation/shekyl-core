@@ -397,6 +397,7 @@ impl DaemonEngine for DaemonClient {
                     );
                     return Ok(TxSubmitOutcome::Rejected {
                         cause: RejectCause::Malformed,
+                        row: None,
                     });
                 }
             };

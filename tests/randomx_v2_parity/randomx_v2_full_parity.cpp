@@ -124,11 +124,35 @@
 #include "cryptonote_basic/cryptonote_basic.h"
 #include "cryptonote_basic/cryptonote_format_utils.h"
 #include "cryptonote_config.h"
-#include "cryptonote_core/cryptonote_tx_utils.h"
 
 namespace
 {
   using Hash32 = std::array<uint8_t, 32>;
+
+  int hex_nibble(char c)
+  {
+    if (c >= '0' && c <= '9') return c - '0';
+    if (c >= 'a' && c <= 'f') return c - 'a' + 10;
+    if (c >= 'A' && c <= 'F') return c - 'A' + 10;
+    return -1;
+  }
+
+  bool from_hex(const std::string &hex, std::string &out)
+  {
+    if (hex.size() % 2 != 0)
+      return false;
+    out.clear();
+    out.reserve(hex.size() / 2);
+    for (size_t i = 0; i < hex.size(); i += 2)
+    {
+      const int hi = hex_nibble(hex[i]);
+      const int lo = hex_nibble(hex[i + 1]);
+      if (hi < 0 || lo < 0)
+        return false;
+      out.push_back(static_cast<char>((hi << 4) | lo));
+    }
+    return true;
+  }
 
   std::string to_hex(const uint8_t *p, size_t n)
   {
@@ -280,15 +304,43 @@ namespace
     return v;
   }
 
+  // The mainnet genesis header around the pinned GENESIS_TX: what the
+  // deleted C++ `generate_genesis_block` assembled (the Rust owner is
+  // `shekyl-genesis-tool`'s `genesis_block`). Genesis is mined at difficulty
+  // 1, so the pinned nonce stands as written and no PoW search runs here.
+  bool generate_genesis_block(cryptonote::block &bl, const std::string &genesis_tx, uint32_t nonce, std::string &err)
+  {
+    bl = {};
+    cryptonote::blobdata tx_bl;
+    if (!from_hex(genesis_tx, tx_bl))
+    {
+      err = "GENESIS_TX is not hex";
+      return false;
+    }
+    if (!cryptonote::parse_and_validate_tx_from_blob(tx_bl, bl.miner_tx))
+    {
+      err = "GENESIS_TX does not parse as a transaction";
+      return false;
+    }
+    bl.major_version = CURRENT_BLOCK_MAJOR_VERSION;
+    bl.minor_version = CURRENT_BLOCK_MINOR_VERSION;
+    bl.timestamp = 0;
+    bl.nonce = nonce;
+    shekyl_curve_tree_selene_hash_init(reinterpret_cast<uint8_t*>(&bl.curve_tree_root));
+    // attestation_root: block_header() defaults to empty_attestation_root().
+    bl.invalidate_hashes();
+    return true;
+  }
+
   bool genesis_case(Case &out, std::string &err)
   {
     cryptonote::block bl{};
-    if (!cryptonote::generate_genesis_block(
+    if (!generate_genesis_block(
           bl,
           cryptonote::get_config(cryptonote::MAINNET).GENESIS_TX,
-          cryptonote::get_config(cryptonote::MAINNET).GENESIS_NONCE))
+          cryptonote::get_config(cryptonote::MAINNET).GENESIS_NONCE,
+          err))
     {
-      err = "generate_genesis_block failed";
       return false;
     }
     crypto::hash genesis_id{};

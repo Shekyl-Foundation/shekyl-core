@@ -38,7 +38,7 @@ commits of it name them.
 ## 0. Why this slice is not a plain port — RECORD (pre-flight reasoning, 2026-10-08)
 
 RK-1…RK-5b each moved a method whose C++ handler was a thin reader. `get_info`
-is not. Its handler (`src/rpc/core_rpc_server.cpp:189-295`) holds policy:
+is not. Its handler (`src/rpc/core_rpc_server.cpp`) holds policy:
 
 - **A sentinel that reads as data.** `target_height = 0` when synchronized
   (`:208`), for every caller. `0` is also what the core reports when it has
@@ -109,7 +109,7 @@ is left off the reply.
 The reply is assembled from typed parts (RK-D18). Each field has exactly one
 source; where today it has more, the column says which survives. The table
 accounts for all 47 fields `COMMAND_RPC_GET_INFO::response` serializes beside
-its response base (`src/rpc/core_rpc_server_commands_defs.h:270-316`).
+its response base (`src/rpc/core_rpc_server_commands_defs.h`).
 
 | Part → grant | Field(s) | Source after RK-5c | Today |
 | --- | --- | --- | --- |
@@ -443,7 +443,7 @@ every caller.) Health's
 `height` / `top_block_hash` come from **this** snapshot, never from a second
 `shekyl_rpc_chain_tip` call, so a reply cannot pair one tip's hash with
 another tip's difficulty. `synchronized` and the target come from the same
-adapter call (`src/rpc/rpc_facts_ffi.cpp:1179-1186` is the pattern).
+adapter call (`src/rpc/rpc_facts_ffi.cpp` is the pattern).
 
 **Commit 4 built five reads** on one trait, `InfoFacts`
 (`rust/shekyl-daemon-rpc/src/info_facts.rs`): `chain`, `pool_count`,
@@ -513,7 +513,7 @@ refusal. Gathering by part (RK-D24) has no exception.
 
 *The size read must be able to fail, and say so (ruled 2026-10-10,
 RK-D23).* `BlockchainLMDB::get_database_size`
-(`src/blockchain_db/lmdb/db_lmdb.cpp:4253-4260`) swallows the `file_size`
+(`src/blockchain_db/lmdb/db_lmdb.cpp`) swallows the `file_size`
 error and returns `0` — a zero that means "could not read". Read through
 it, the "size read failing" case below would test a path production cannot
 reach. So the size is its own facts export and its own trait method, apart

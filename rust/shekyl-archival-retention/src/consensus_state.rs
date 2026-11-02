@@ -196,7 +196,7 @@ pub fn sigma_work_milli(per_p_work_milli: &[u64], market_mask: &[bool]) -> u64 {
 /// A zero-work member contributes nothing by arithmetic.
 ///
 /// Sourced here so the persisted denominator ([`sigma_work_milli`]), the
-/// emission numerator FFI (`shekyl_archival_emission_epoch_work`), and the
+/// emission numerator (once an FFI, deleted by `DEL-008`), and the
 /// verify body (`emission_verify`) cannot drift on the membership gate — the
 /// M-2 sourcing-divergence the WS-1 design makes unrepresentable rather than
 /// tested-against.

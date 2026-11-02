@@ -123,8 +123,7 @@ fn admitting_facts(fx: &SpendFixture) -> SubmitFacts {
             root: fx.tree_root,
             tree_depth: fx.lmdb_depth,
         }),
-        fee_per_byte: 1,
-        fee_floor_window: None,
+        fee_floor_window: Some(vec![1]),
         pool_refuses_for_room: None,
         weight_limit: u64::try_from(shekyl_wire::transaction::TX_WEIGHT_LIMIT).unwrap(),
         // Reference age 6: ≥ FCMP_REFERENCE_BLOCK_MIN_AGE (5), well under
@@ -1062,8 +1061,7 @@ fn non_spend_kinds_refuse_loudly() {
         in_chain: None,
         key_image_conflicts: Vec::new(),
         reference: None,
-        fee_per_byte: 1,
-        fee_floor_window: None,
+        fee_floor_window: Some(vec![1]),
         pool_refuses_for_room: None,
         weight_limit: u64::try_from(shekyl_wire::transaction::TX_WEIGHT_LIMIT).unwrap(),
         chain_height: ChainCount::from_raw(200),
@@ -1127,47 +1125,6 @@ fn engine_accepts_the_bond_post_end_to_end_with_the_production_verifier() {
 }
 
 #[test]
-fn a_backend_that_cannot_hold_a_join_market_answers_a_definite_rejection() {
-    // The engine classifies an injected `CommitOutcome::JoinMarketUnsupported`
-    // as a definite rejection, relays nothing, and names the JoinMarket to
-    // the backend on `TxMeta::carries_join_market`. The production shim's
-    // return, ahead of `shekyl_submit_commit_tx`, is the live tripwire's
-    // subject (`e2e_the_cxx_daemon_answers_join_market_unsupported`).
-    let fx = bond_fixture();
-    let shim = MockShim::new(bond_admitting_facts(), CommitOutcome::JoinMarketUnsupported);
-    let engine = SubmitEngine::new(Arc::clone(&shim), DaemonTxVerifier);
-    assert_eq!(
-        engine
-            .submit(&fx.hex, SubmitCaller::Owner)
-            .expect("a definite answer, not an engine fault"),
-        SubmitVerdict::Rejected {
-            cause: shekyl_rpc_types::RejectCause::JoinMarketUnsupported
-        },
-    );
-    assert_eq!(
-        shim.relay_count(),
-        0,
-        "nothing was admitted, so nothing relays"
-    );
-    assert!(
-        shim.commits.lock().unwrap()[0].meta.carries_join_market,
-        "the engine names a JoinMarket to the backend"
-    );
-
-    // And names nothing else one: a plain spend commits with the flag down.
-    let spend = fixture();
-    let shim = MockShim::new(admitting_facts(spend), CommitOutcome::Committed);
-    let engine = SubmitEngine::new(Arc::clone(&shim), DaemonTxVerifier);
-    engine
-        .submit(&spend.hex, SubmitCaller::Owner)
-        .expect("no engine fault");
-    assert!(
-        !shim.commits.lock().unwrap()[0].meta.carries_join_market,
-        "a spend is not a JoinMarket"
-    );
-}
-
-#[test]
 fn bond_record_already_exists_is_a_claim_slot_conflict() {
     // §8.7.1 BP3 at Phase C: the record probe came back present — someone
     // else consumed the claim slot → DoubleSpendConflict, never Malformed
@@ -1199,7 +1156,8 @@ fn bond_race_at_commit_classifies_double_spend_conflict() {
             .submit(&fx.hex, SubmitCaller::Owner)
             .expect("no engine fault"),
         SubmitVerdict::Rejected {
-            cause: shekyl_rpc_types::RejectCause::DoubleSpendConflict
+            cause: shekyl_rpc_types::RejectCause::DoubleSpendConflict,
+            row: None,
         },
         "a bond-post block landing during Phase C must classify DoubleSpendConflict"
     );
@@ -2131,7 +2089,8 @@ fn a_forged_debit_signature_never_reaches_the_fact_gather() {
     assert_eq!(
         verdict,
         SubmitVerdict::Rejected {
-            cause: RejectCause::Malformed
+            cause: RejectCause::Malformed,
+            row: None,
         },
         "a bond slot whose signature does not verify is malformed"
     );
@@ -2282,7 +2241,8 @@ fn a_malleated_funding_signature_never_reaches_the_fact_gather() {
     assert_eq!(
         verdict,
         SubmitVerdict::Rejected {
-            cause: RejectCause::Malformed
+            cause: RejectCause::Malformed,
+            row: None,
         },
         "a slot whose signature does not verify is malformed"
     );
@@ -2318,7 +2278,8 @@ fn a_vin_the_static_guards_doom_never_reaches_the_fact_gather() {
     assert_eq!(
         verdict,
         SubmitVerdict::Rejected {
-            cause: RejectCause::Malformed
+            cause: RejectCause::Malformed,
+            row: None,
         },
         "UB9's static guards refuse a nonzero bond_credit on a Release"
     );
@@ -2355,7 +2316,8 @@ fn a_valid_signature_by_the_wrong_key_still_reaches_the_gather() {
     assert_eq!(
         verdict,
         SubmitVerdict::Rejected {
-            cause: RejectCause::Malformed
+            cause: RejectCause::Malformed,
+            row: None,
         },
         "UB3 refuses an identity-key debit"
     );
@@ -2412,7 +2374,8 @@ fn a_competing_release_that_exits_the_record_is_a_terminal_conflict() {
     assert_eq!(
         verdict,
         SubmitVerdict::Rejected {
-            cause: RejectCause::DoubleSpendConflict
+            cause: RejectCause::DoubleSpendConflict,
+            row: None,
         },
         "an exit that consumed the balance is terminal for these bytes"
     );
@@ -2438,7 +2401,8 @@ fn a_balance_that_moved_under_the_debit_is_also_terminal() {
             .submit(&fx.hex, SubmitCaller::Owner)
             .expect("no engine fault"),
         SubmitVerdict::Rejected {
-            cause: RejectCause::DoubleSpendConflict
+            cause: RejectCause::DoubleSpendConflict,
+            row: None,
         },
         "a debit that no longer matches the record's total is unconnectable"
     );
@@ -2465,7 +2429,8 @@ fn an_release_against_a_vanished_record_is_terminal_not_a_fault() {
             .submit(&fx.hex, SubmitCaller::Owner)
             .expect("absence must classify, not fault"),
         SubmitVerdict::Rejected {
-            cause: RejectCause::DoubleSpendConflict
+            cause: RejectCause::DoubleSpendConflict,
+            row: None,
         },
         "a vanished record is a moved slot"
     );

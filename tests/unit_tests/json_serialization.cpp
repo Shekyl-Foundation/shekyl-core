@@ -13,7 +13,7 @@
 #include "cryptonote_basic/account.h"
 #include "cryptonote_basic/cryptonote_basic.h"
 #include "cryptonote_basic/cryptonote_format_utils.h"
-#include "cryptonote_core/cryptonote_tx_utils.h"
+#include "cryptonote_config.h"
 #include "serialization/json_object.h"
 #include "string_tools.h"
 #include "memwipe.h"
@@ -235,12 +235,19 @@ namespace
 
 namespace test
 {
+    // The pinned mainnet GENESIS_TX: a production coinbase written by the
+    // Rust writer. The C++ `construct_miner_tx` that built this fixture was
+    // deleted with the C++ chain.
     cryptonote::transaction
-    make_miner_transaction(cryptonote::account_public_address const& to)
+    make_miner_transaction()
     {
+        cryptonote::blobdata blob;
+        if (!epee::string_tools::parse_hexstr_to_binbuff(
+                cryptonote::get_config(cryptonote::MAINNET).GENESIS_TX, blob))
+            throw std::runtime_error{"GENESIS_TX is not hex"};
         cryptonote::transaction tx{};
-        if (!cryptonote::construct_miner_tx(0, 0, 5000, 500, 500, /*frozen_segment_count=*/0, to, tx))
-            throw std::runtime_error{"transaction construction error"};
+        if (!cryptonote::parse_and_validate_tx_from_blob(blob, tx))
+            throw std::runtime_error{"GENESIS_TX does not parse"};
 
         crypto::hash id{0};
         if (!cryptonote::get_transaction_hash(tx, id))
@@ -629,9 +636,7 @@ TEST(JsonSerialization, InvalidVectorBytes)
 
 TEST(JsonSerialization, MinerTransaction)
 {
-    cryptonote::account_base acct;
-    acct.generate(crypto::secret_key{}, false, false, cryptonote::FAKECHAIN);
-    const auto miner_tx = test::make_miner_transaction(acct.get_keys().m_account_address);
+    const auto miner_tx = test::make_miner_transaction();
 
     crypto::hash tx_hash{};
     ASSERT_TRUE(cryptonote::get_transaction_hash(miner_tx, tx_hash));

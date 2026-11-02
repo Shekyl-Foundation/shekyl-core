@@ -258,7 +258,7 @@ pub fn block_request(params: &serde_json::Value) -> Result<GetBlockRequest, RpcF
 ///
 /// [`RpcFault::Refused`] with [`CORE_RPC_ERROR_CODE_WRONG_PARAM`] for absent
 /// params, a non-object, or an object this method cannot read.
-fn required_object_params<T: serde::de::DeserializeOwned>(
+pub(crate) fn required_object_params<T: serde::de::DeserializeOwned>(
     params: &serde_json::Value,
     expected: &str,
 ) -> Result<T, RpcFault> {
@@ -287,7 +287,7 @@ fn required_object_params<T: serde::de::DeserializeOwned>(
 ///
 /// [`RpcFault::Refused`] with [`CORE_RPC_ERROR_CODE_WRONG_PARAM`] when
 /// `params` is present but is not an object this method accepts.
-fn object_params<T: serde::de::DeserializeOwned + Default>(
+pub(crate) fn object_params<T: serde::de::DeserializeOwned + Default>(
     params: &serde_json::Value,
     expected: &str,
 ) -> Result<T, RpcFault> {
@@ -2091,10 +2091,10 @@ pub(crate) mod tests {
         );
 
         let mut ours: serde_json::Value = serde_json::to_value(&out).unwrap();
-        // Head of the `get_version` chain (`_v39` = 3.62). A bump that
+        // Head of the `get_version` chain (`_v40` = 3.63). A bump that
         // forgets this include fails on `version` below.
         let mut oracle: serde_json::Value = serde_json::from_str(include_str!(
-            "../../shekyl-rpc-types/tests/vectors/rpc/get_version_synced_v39.json"
+            "../../shekyl-rpc-types/tests/vectors/rpc/get_version_synced_v40.json"
         ))
         .unwrap();
         for moving in ["consensus_constants_digest", "genesis_hash"] {

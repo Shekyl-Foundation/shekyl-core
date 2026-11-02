@@ -4,7 +4,7 @@
 // BSD-3-Clause
 
 //! The ban methods (`DRS_X_STORE_FLIP.md` DX-Q3, Q11), host only, over the
-//! node's [`BansFacts`]. **Built and not routed**, like
+//! node's [`BansFacts`]. JSON-RPC dispatches here, like
 //! [`crate::mining_methods`].
 
 use std::net::{IpAddr, Ipv4Addr};

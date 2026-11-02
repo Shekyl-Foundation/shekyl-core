@@ -23,7 +23,6 @@ use std::time::Duration;
 use shekyl_rpc_types::{GetHeightResponse, RestErrorEnvelope};
 use shekyl_units::AtomicUnits;
 
-use crate::chain_facts::FfiChainFacts;
 use crate::core::CoreRpc;
 use crate::ctl_client;
 
@@ -206,8 +205,9 @@ fn print_block(
     // In-process the console is the operator's own terminal, so the
     // restricted-listener rule does not apply: the C++ passed
     // `fill_pow_hash` straight through here too.
-    let reply = native_json_rpc(src, "get_block", &request, |core| {
-        crate::methods::get_block(&FfiChainFacts::new(core.clone()), &request, true)
+    let reply = native_json_rpc(src, "get_block", &request, |_core| {
+        let chain = open_chain()?;
+        crate::methods::get_block(chain.as_chain_facts(), &request, true)
     })?;
     require_ok(&reply.status)?;
 
@@ -285,37 +285,18 @@ where
     }
 }
 
+fn open_chain() -> Result<crate::handles::ChainReadHandle, crate::methods::RpcFault> {
+    crate::handles::live_chain().ok_or(crate::methods::RpcFault::Facts(
+        crate::chain_facts::FactsFault::NotReady,
+    ))
+}
+
 fn require_ok(status: &shekyl_rpc_types::RpcStatus) -> Result<(), String> {
     if status.is_ok() {
         Ok(())
     } else {
         Err(status.0.clone())
     }
-}
-
-/// Unwrap the in-process bridge's own envelope.
-///
-/// `dispatch_jsonrpc_we` answers `{"ok":true,"result":…}` or
-/// `{"ok":false,"error_code":…,"error_message":…}` — **not** a JSON-RPC 2.0
-/// envelope, which is what the remote arm gets from the HTTP listener. Two
-/// shapes for one method because the bridge is not the transport; keeping the
-/// unwrapping in two named functions is what stops the difference being
-/// rediscovered at each new bridged leg.
-fn ffi_json_rpc_result<T: serde::de::DeserializeOwned>(
-    raw: &str,
-    method: &str,
-) -> Result<T, String> {
-    let envelope: crate::types::FfiJsonRpcResult =
-        serde_json::from_str(raw).map_err(|e| format!("malformed {method} reply: {e}"))?;
-    if !envelope.ok {
-        return Err(envelope
-            .error_message
-            .unwrap_or_else(|| format!("{method} failed")));
-    }
-    let result = envelope
-        .result
-        .ok_or_else(|| format!("malformed {method} reply: ok with no result"))?;
-    serde_json::from_value(result).map_err(|e| format!("malformed {method} reply: {e}"))
 }
 
 /// The wide difficulty as a number, or `None` if the daemon sent something
@@ -330,9 +311,9 @@ fn wide_difficulty_value(wide: &str) -> Option<u128> {
 
 fn print_height(src: &Source) -> Result<String, String> {
     let reply = match src {
-        Source::Live(core) => {
-            let facts = FfiChainFacts::new(core.clone());
-            crate::methods::get_height(&facts).map_err(|e| format!("{e:?}"))?
+        Source::Live(_) => {
+            let chain = open_chain().map_err(|e| format!("{e:?}"))?;
+            crate::methods::get_height(chain.as_chain_facts()).map_err(|e| format!("{e:?}"))?
         }
         Source::Remote { .. } => {
             let body = src.post_remote("/get_height", b"{}".to_vec())?;
@@ -536,26 +517,11 @@ fn is_key_image_spent(src: &Source, args: &[String]) -> Result<String, String> {
         key_images: vec![ki.clone()],
     };
     let reply = match src {
-        // Direct, for `fetch_transactions`'s reason: the C++ route is gone.
-        Source::Live(core) => {
-            let ids = crate::methods::parse_request_hashes(
-                &request.key_images,
-                crate::methods::KI_PARSE_FAILED,
-            )?;
-            let raw = core
-                .key_images_spent(&ids)
-                .map_err(|rc| format!("is_key_image_spent: facts unavailable ({rc})"))?;
-            let mut spent_status = Vec::with_capacity(raw.len());
-            for s in raw {
-                spent_status.push(
-                    shekyl_rpc_types::KeyImageStatus::try_from(s)
-                        .map_err(|e| format!("is_key_image_spent: {e}"))?,
-                );
-            }
-            shekyl_rpc_types::IsKeyImageSpentResponse {
-                status: shekyl_rpc_types::RpcStatus::ok(),
-                spent_status,
-            }
+        // The operator's own node, over the store and the pool.
+        Source::Live(_) => {
+            let chain = open_chain().map_err(|fault| format!("{fault:?}"))?;
+            crate::read_methods::is_key_image_spent(chain.as_read_facts(), &request, true)
+                .map_err(|fault| format!("{fault:?}"))?
         }
         Source::Remote { .. } => {
             let body = serde_json::to_vec(&request).map_err(|e| e.to_string())?;
@@ -606,29 +572,10 @@ fn fetch_transactions(
     request: &shekyl_rpc_types::GetTransactionsRequest,
 ) -> Result<shekyl_rpc_types::GetTransactionsResponse, String> {
     match src {
-        Source::Live(core) => {
-            let ids = crate::methods::parse_request_hashes(
-                &request.txs_hashes,
-                crate::methods::TX_PARSE_FAILED,
-            )?;
-            let (slots, chain_height) = core
-                .transactions(&ids, true)
-                .map_err(|rc| format!("get_transactions: facts unavailable ({rc})"))?;
-            crate::methods::project_transactions(
-                request,
-                &ids,
-                &slots,
-                chain_height,
-                |blob, pruned| core.tx_to_json(blob, pruned),
-            )
-            .map_err(|f| match f {
-                crate::methods::ProjectionFailed::Render(f) => {
-                    format!("could not decode {} to json ({})", f.txid, f.code)
-                }
-                crate::methods::ProjectionFailed::Length(f) => {
-                    format!("could not measure the archival length of {}", f.txid)
-                }
-            })
+        Source::Live(_) => {
+            let chain = open_chain().map_err(|fault| format!("{fault:?}"))?;
+            crate::read_methods::get_transactions(chain.as_read_facts(), request, true)
+                .map_err(|fault| format!("{fault:?}"))
         }
         Source::Remote { .. } => {
             let body = serde_json::to_vec(request).map_err(|e| e.to_string())?;
@@ -774,7 +721,7 @@ pub unsafe extern "C" fn shekyl_daemon_console_run(
         // `get_info`.
         "diff" => node::show_difficulty(&source),
         "version" => node::version(&source),
-        "print_pool_stats" => node::print_transaction_pool_stats(&source, unix_now()),
+        "print_pool_stats" => node::print_transaction_pool_stats(&source),
         "pop_blocks" => pop_blocks::pop_blocks(&source, args.get(1)),
         _ => return SHEKYL_DAEMON_CONSOLE_ERR_UNKNOWN,
     };
@@ -1232,9 +1179,9 @@ fn print_net_stats(src: &Source, now: u64) -> Result<String, String> {
 #[deny(clippy::arithmetic_side_effects)]
 fn sync_info(src: &Source) -> Result<String, String> {
     let reply = native_json_rpc(src, "sync_info", &serde_json::json!({}), |core| {
-        let chain = FfiChainFacts::new(core.clone());
+        let chain = open_chain()?;
         let p2p = crate::chain_facts::FfiP2pFacts::new(core.clone());
-        crate::methods::sync_info(&chain, &p2p)
+        crate::methods::sync_info(chain.as_chain_facts(), &p2p)
     })?;
     let shekyl_rpc_types::P2pReply::Running(reply) = reply else {
         return Ok(OFFLINE_LINE.to_owned());

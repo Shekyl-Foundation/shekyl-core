@@ -44,11 +44,11 @@ pub enum MarkerOutcome {
     Matched,
 }
 
-/// Whether the directory holds a daemon store: the closed set the pre-flight
-/// read at the implementation pin (`DAEMON_CONFIG_CUTOVER_AUDIT.md` §3).
+/// Whether the directory holds a daemon store: the chain file the node
+/// writes, or the inherited p2p state file.
 #[must_use]
 pub fn holds_store(data_dir: &Path) -> bool {
-    data_dir.join("lmdb").join("data.mdb").is_file() || data_dir.join("p2pstate.bin").is_file()
+    data_dir.join("chain.db").is_file() || data_dir.join("p2pstate.bin").is_file()
 }
 
 /// Reads the marker and writes nothing: the configuration check's half,
@@ -238,8 +238,8 @@ mod tests {
         let before = std::fs::read(data.join(MARKER_FILE)).unwrap();
         // A store with no marker, read without a lock: the same refusal.
         let bare = d.path().join("bare");
-        std::fs::create_dir_all(bare.join("lmdb")).unwrap();
-        std::fs::write(bare.join("lmdb").join("data.mdb"), "").unwrap();
+        std::fs::create_dir_all(&bare).unwrap();
+        std::fs::write(bare.join("chain.db"), "").unwrap();
         assert_eq!(
             read(&bare, Network::Testnet, ID_A).unwrap_err().code,
             Code::MarkerMissing
@@ -291,8 +291,7 @@ mod tests {
     #[test]
     fn a_store_with_no_marker_is_never_marked_after_the_fact() {
         let (_d, lock) = locked();
-        std::fs::create_dir_all(lock.data_dir().join("lmdb")).unwrap();
-        std::fs::write(lock.data_dir().join("lmdb").join("data.mdb"), "").unwrap();
+        std::fs::write(lock.data_dir().join("chain.db"), "").unwrap();
         let e = check_or_write(&lock, Network::Mainnet, ID_A).unwrap_err();
         assert_eq!(e.code, Code::MarkerMissing);
         assert!(!lock.data_dir().join(MARKER_FILE).exists());

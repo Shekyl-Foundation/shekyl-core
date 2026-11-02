@@ -89,4 +89,36 @@ namespace cryptonote
     }
   }
 
+  //! Which pool entries a read is allowed to see. Not a wire value.
+  enum class relay_category : std::uint8_t
+  {
+    broadcasted = 0, //!< block or fluff: the network already has it
+    relayable,       //!< every method except `none`
+    all              //!< every method
+  };
+
+  inline bool matches_category(relay_method method, relay_category category) noexcept
+  {
+    switch (category)
+    {
+      case relay_category::all:
+        return true;
+      case relay_category::relayable:
+        return method != relay_method::none;
+      case relay_category::broadcasted:
+        switch (method)
+        {
+          case relay_method::none:
+          case relay_method::local:
+          case relay_method::stem:
+            return false;
+          case relay_method::block:
+          case relay_method::fluff:
+            return true;
+        }
+        break;
+    }
+    return false;
+  }
+
 }

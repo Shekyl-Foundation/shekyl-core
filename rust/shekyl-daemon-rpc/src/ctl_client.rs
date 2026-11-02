@@ -40,6 +40,9 @@ pub const SHEKYL_DAEMON_CTL_ERR_ENDPOINT: i32 = -2;
 pub const SHEKYL_DAEMON_CTL_ERR_TRANSPORT: i32 = -3;
 /// The runtime could not be started, or the caller is already inside one.
 pub const SHEKYL_DAEMON_CTL_ERR_RUNTIME: i32 = -4;
+/// The transport completed; the body is a grant refusal, a method error,
+/// a non-OK `status`, or not JSON. HTTP 200 is not success (RW-Q3).
+pub const SHEKYL_DAEMON_CTL_ERR_REPLY: i32 = -5;
 
 /// Hand `bytes` to C++ as a `(ptr, len)` pair the caller releases with
 /// [`shekyl_daemon_ctl_free`]. `len == capacity` by construction
@@ -134,8 +137,10 @@ pub(crate) fn post_blocking(
 ///
 /// Returns one of the `SHEKYL_DAEMON_CTL_*` codes. The HTTP status is not
 /// surfaced separately: the daemon's routes answer every request with a JSON
-/// body that carries its own `status` / `error`, and the C++ caller decodes
-/// that — the transport's job ends at "a response arrived".
+/// body that carries its own `status` / `error`. [`shekyl_daemon_ctl_post`]
+/// stops at "a response arrived"; [`shekyl_daemon_ctl_rest_outcome`] is
+/// the decode a raw POST (the remote `stop_daemon` arm) needs, because a
+/// grant refusal and a method error both arrive as HTTP 200 (RW-Q3).
 ///
 /// # Safety
 ///
@@ -197,13 +202,80 @@ pub unsafe extern "C" fn shekyl_daemon_ctl_post(
 /// # Safety
 ///
 /// `(ptr, len)` must be exactly a pair produced by `shekyl_daemon_ctl_post`
-/// and not yet freed.
+/// (or [`shekyl_daemon_ctl_rest_outcome`]) and not yet freed.
 #[no_mangle]
 pub unsafe extern "C" fn shekyl_daemon_ctl_free(ptr: *mut u8, len: usize) {
     if ptr.is_null() || len == 0 {
         return;
     }
     drop(Box::from_raw(std::ptr::slice_from_raw_parts_mut(ptr, len)));
+}
+
+/// Classify a REST or JSON-RPC reply body. `Ok(())` is a success body;
+/// `Err(reason)` is a grant refusal, a method error, a non-OK `status`,
+/// or a body that is not JSON. HTTP 200 is not success (RW-Q3).
+fn rest_outcome(body: &[u8]) -> Result<(), String> {
+    let value: serde_json::Value =
+        serde_json::from_slice(body).map_err(|e| format!("malformed response body: {e}"))?;
+    if let Some(error) = value.get("error") {
+        if let Some(obj) = error.as_object() {
+            let message = obj
+                .get("message")
+                .and_then(|m| m.as_str())
+                .unwrap_or("request refused");
+            return Err(message.to_owned());
+        }
+        if let Some(message) = error.as_str() {
+            if !message.is_empty() {
+                return Err(message.to_owned());
+            }
+        }
+    }
+    match value.get("status").and_then(|s| s.as_str()) {
+        Some("OK") | None => Ok(()),
+        Some(other) => Err(other.to_owned()),
+    }
+}
+
+/// Decode a REST/JSON-RPC reply the transport already delivered.
+///
+/// * `body` / `body_len` — the response body; `body` may be null iff
+///   `body_len == 0`.
+/// * `out_ptr` / `out_len` — on `SHEKYL_DAEMON_CTL_ERR_REPLY` the UTF-8
+///   diagnostic; on `SHEKYL_DAEMON_CTL_OK` a null/zero pair. Release with
+///   [`shekyl_daemon_ctl_free`].
+///
+/// # Safety
+///
+/// `body` must be valid for `body_len` reads (or null with `body_len == 0`);
+/// `out_ptr` and `out_len` must be valid for writes.
+#[no_mangle]
+pub unsafe extern "C" fn shekyl_daemon_ctl_rest_outcome(
+    body: *const u8,
+    body_len: usize,
+    out_ptr: *mut *mut u8,
+    out_len: *mut usize,
+) -> i32 {
+    if out_ptr.is_null() || out_len.is_null() {
+        return SHEKYL_DAEMON_CTL_ERR_NULL_PTR;
+    }
+    out_ptr.write(std::ptr::null_mut());
+    out_len.write(0);
+    let Some(body) = body_from_ptr(body, body_len) else {
+        emit(
+            b"body was null with a non-zero length, or longer than isize::MAX".to_vec(),
+            out_ptr,
+            out_len,
+        );
+        return SHEKYL_DAEMON_CTL_ERR_NULL_PTR;
+    };
+    match rest_outcome(&body) {
+        Ok(()) => SHEKYL_DAEMON_CTL_OK,
+        Err(reason) => {
+            emit(reason.into_bytes(), out_ptr, out_len);
+            SHEKYL_DAEMON_CTL_ERR_REPLY
+        }
+    }
 }
 
 /// Copy a C string into an owned `String`; `None` for null or non-UTF-8.
@@ -226,6 +298,28 @@ mod tests {
     use std::ffi::CString;
     use std::io::{Read, Write};
     use std::net::TcpListener;
+
+    #[test]
+    fn rest_outcome_accepts_ok_and_refuses_the_rw_q3_envelope() {
+        assert!(rest_outcome(br#"{"status":"OK"}"#).is_ok());
+        assert!(rest_outcome(br#"{"jsonrpc":"2.0","id":null,"result":{}}"#).is_ok());
+        let grant = rest_outcome(
+            br#"{"jsonrpc":"2.0","id":null,"error":{"code":-32601,"message":"this connection's grant does not include node"}}"#,
+        );
+        match grant {
+            Err(message) => assert!(message.contains("grant")),
+            other => panic!("expected grant refusal, got {other:?}"),
+        }
+        match rest_outcome(br#"{"status":"ERROR","error":"FFI dispatch failed"}"#) {
+            Err(message) => assert!(message.contains("FFI dispatch")),
+            other => panic!("expected RestErrorEnvelope, got {other:?}"),
+        }
+        match rest_outcome(br#"{"status":"BUSY"}"#) {
+            Err(message) => assert_eq!(message, "BUSY"),
+            other => panic!("expected BUSY, got {other:?}"),
+        }
+        assert!(rest_outcome(b"not json").is_err());
+    }
 
     /// Call the export the way C++ does and hand back `(code, out bytes)`,
     /// releasing the buffer through the export's own free.

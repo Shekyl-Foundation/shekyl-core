@@ -48,7 +48,6 @@ shekyl_add_executable(daemon
 target_link_libraries(daemon
   PRIVATE
     rpc
-    blockchain_db
     cryptonote_core
     cncrypto
     common

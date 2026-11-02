@@ -118,7 +118,7 @@ impl<'id, V: ChainView<'id>> ChainValid<'id, V> {
     }
 
     /// The id of the set the block was judged under. What the store
-    /// persists as `hf_versions`; not a proxy for set equality.
+    /// persists as `rule_set_in_force`; not a proxy for set equality.
     #[must_use]
     pub const fn rule_set_id(&self) -> RuleSetId {
         self.rule_set.id()

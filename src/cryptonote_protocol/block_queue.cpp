@@ -325,7 +325,13 @@ void block_queue::reset_next_span_time(boost::posix_time::ptime t)
   CHECK_AND_ASSERT_THROW_MES(!blocks.empty(), "No next span to reset time");
   block_map::iterator i = blocks.begin();
   CHECK_AND_ASSERT_THROW_MES(i != blocks.end(), "No next span to reset time");
-  CHECK_AND_ASSERT_THROW_MES(i->blocks.empty(), "Next span is not empty");
+  // The caller read this span as scheduled a moment ago (get_next_span_if_scheduled),
+  // under its own lock. A receipt on another connection's strand can fill it
+  // in between, and a filled span has no request time to reset: nothing to do,
+  // not an invariant broken. Thrown out of the net loop this took a syncing
+  // node down (2026-10-30, a testnet sync from four peers).
+  if (!i->blocks.empty())
+    return;
   (boost::posix_time::ptime&)i->time = t; // sod off, time doesn't influence sorting
 }
 
@@ -380,6 +386,42 @@ bool block_queue::has_next_span(const boost::uuids::uuid &connection_id, bool &f
   filled = !i->blocks.empty();
   time = i->time;
   return true;
+}
+
+bool block_queue::get_next_span_from(uint64_t min_start, uint64_t &height, std::vector<cryptonote::block_complete_entry> &bcel, boost::uuids::uuid &connection_id, epee::net_utils::network_address &addr) const
+{
+  boost::unique_lock<boost::recursive_mutex> lock(mutex);
+  for (block_map::const_iterator i = blocks.begin(); i != blocks.end(); ++i)
+  {
+    if (i->start_block_height < min_start || i->blocks.empty())
+      continue;
+    height = i->start_block_height;
+    bcel = i->blocks;
+    connection_id = i->connection_id;
+    addr = i->origin;
+    return true;
+  }
+  return false;
+}
+
+bool block_queue::has_filled_span_from(uint64_t min_start) const
+{
+  boost::unique_lock<boost::recursive_mutex> lock(mutex);
+  for (const auto &span: blocks)
+    if (span.start_block_height >= min_start && !span.blocks.empty())
+      return true;
+  return false;
+}
+
+void block_queue::remove_spans_ending_before(uint64_t height)
+{
+  boost::unique_lock<boost::recursive_mutex> lock(mutex);
+  for (block_map::iterator i = blocks.begin(); i != blocks.end(); )
+  {
+    block_map::iterator j = i++;
+    if (j->start_block_height + j->nblocks <= height)
+      erase_block(j);
+  }
 }
 
 bool block_queue::has_next_span(uint64_t height, bool &filled, boost::posix_time::ptime &time, boost::uuids::uuid &connection_id) const

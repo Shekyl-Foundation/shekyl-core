@@ -104,11 +104,11 @@ impl InFlightState {
             Self::Refused { cause, .. } => Some(format!(
                 "{} Nothing more will be sent. Its funds stay set aside until \
                  its transaction can no longer be mined.",
-                refusal(*cause)
+                refusal(cause)
             )),
             Self::Expired {
                 cause: Some(cause), ..
-            } => Some(refusal(*cause).to_owned()),
+            } => Some(refusal(cause).into_owned()),
             Self::Held => Some(
                 "Every input this stake set aside has been spent, but the wallet has not \
                  seen the stake confirm. It is kept rather than withdrawn, so a stake that \
@@ -158,7 +158,7 @@ impl ReportedOutcome {
     pub fn reason(&self) -> String {
         let (sentence, linkable) = match self.outcome {
             OutcomeKind::Rejected(cause) => (
-                format!("{} Its funds are spendable again.", refusal(cause)),
+                format!("{} Its funds are spendable again.", refusal(&cause)),
                 true,
             ),
             OutcomeKind::Expired => (
@@ -174,7 +174,7 @@ impl ReportedOutcome {
                                    accepted, the reward it earned will appear in your balance.";
                 (
                     match cause {
-                        Some(cause) => format!("{} {unconfirmed}", refusal(cause)),
+                        Some(cause) => format!("{} {unconfirmed}", refusal(&cause)),
                         None => unconfirmed.to_owned(),
                     },
                     false,
@@ -215,22 +215,31 @@ fn noun(kind: RecordKind) -> &'static str {
 
 /// What a daemon's refusal means, in the user's words. Exhaustive with no
 /// wildcard: a new cause does not compile until it has a sentence.
-fn refusal(cause: TerminalCause) -> &'static str {
+fn refusal(cause: &TerminalCause) -> std::borrow::Cow<'static, str> {
     match cause {
-        TerminalCause::JoinMarketUnsupported => {
-            "Staking is not available on this node: it cannot accept the \
-             transaction that joins the archival market yet. Stake again once \
-             the node is updated."
+        TerminalCause::ConsensusRule { row } => std::borrow::Cow::Owned(format!(
+            "The chain refused it under consensus rule {row}. The post was sound; \
+             the chain's state did not admit it."
+        )),
+        // A record a pre-flip daemon refused; no daemon gives this answer
+        // now, so the sentence says what happened, not what to wait for.
+        TerminalCause::JoinMarketUnsupported => std::borrow::Cow::Borrowed(
+            "An older node refused it: that node could not accept a stake. \
+             Stake again.",
+        ),
+        TerminalCause::DoubleSpend => {
+            std::borrow::Cow::Borrowed("The node reports that funds this used were already spent.")
         }
-        TerminalCause::DoubleSpend => "The node reports that funds this used were already spent.",
-        TerminalCause::FeeTooLow => "The node refused its fee as too low.",
-        TerminalCause::Malformed => {
+        TerminalCause::FeeTooLow => {
+            std::borrow::Cow::Borrowed("The node refused its fee as too low.")
+        }
+        TerminalCause::Malformed => std::borrow::Cow::Borrowed(
             "The node refused the transaction as invalid. This is a wallet \
-             fault; check for a wallet update."
-        }
-        TerminalCause::Unrecognized => {
-            "The node refused it for a reason this wallet does not recognise."
-        }
+             fault; check for a wallet update.",
+        ),
+        TerminalCause::Unrecognized => std::borrow::Cow::Borrowed(
+            "The node refused it for a reason this wallet does not recognise.",
+        ),
     }
 }
 
@@ -680,7 +689,8 @@ mod tests {
             after.reason().expect("expired"),
         );
         assert!(
-            before.starts_with(refusal(cause)) && after.starts_with(refusal(cause)),
+            before.starts_with(refusal(&cause).as_ref())
+                && after.starts_with(refusal(&cause).as_ref()),
             "the same reason on both sides: {before} / {after}"
         );
     }
@@ -1004,7 +1014,7 @@ mod tests {
             }
             .reason()
             .expect("a refused record has a reason");
-            assert!(seen.insert(refusal(cause)), "{cause:?} shares a sentence");
+            assert!(seen.insert(refusal(&cause)), "{cause:?} shares a sentence");
             assert!(held.contains("Nothing more will be sent"), "{held}");
             for name in ["Refused", "TerminalCause", &format!("{cause:?}")] {
                 assert!(!held.contains(name), "{name} leaked into: {held}");
@@ -1072,7 +1082,7 @@ mod tests {
         );
         let reason = refused_claim.reason();
         assert!(
-            reason.starts_with(refusal(TerminalCause::FeeTooLow)),
+            reason.starts_with(refusal(&TerminalCause::FeeTooLow).as_ref()),
             "{reason}"
         );
         assert!(reason.contains("could not be confirmed"), "{reason}");

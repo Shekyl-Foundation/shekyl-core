@@ -45,9 +45,12 @@ target_include_directories(randomx-v2-full-parity
     "${CMAKE_SOURCE_DIR}/src"
     "${MONERO_GENERATED_HEADERS_DIR}")
 
-# - cryptonote_core: genesis derivation (generate_genesis_block /
-#   get_block_hash / get_block_hashing_blob) and, transitively, the Rust FFI
-#   image (${SHEKYL_FFI_LINK_LIBS}) that resolves shekyl_pow_randomx_v2_hash.
+# - cryptonote_core: the block/tx wire helpers the harness's own genesis
+#   assembly uses (parse_and_validate_tx_from_blob / get_block_hash /
+#   get_block_hashing_blob, via cryptonote_basic) and, transitively, the
+#   Rust FFI image (${SHEKYL_FFI_LINK_LIBS}) that resolves
+#   shekyl_pow_randomx_v2_hash. The C++ generate_genesis_block was deleted
+#   with the C++ chain (DRS-X); this file carries the assembly itself.
 # - shekyl_randomx_v2: the full-dataset C reference; the imported target
 #   propagates its include dir (randomx.h) via INTERFACE_INCLUDE_DIRECTORIES.
 # - ${SHEKYL_FFI_LINK_LIBS} is also named explicitly to mirror the sibling

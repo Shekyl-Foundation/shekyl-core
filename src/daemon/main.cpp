@@ -42,12 +42,10 @@
 #include "common/scoped_message_writer.h"
 #include "common/util.h"
 #include "cryptonote_core/cryptonote_core.h"
-#include "cryptonote_basic/miner.h"
 #include "daemon/command_server.h"
 #include "daemon/daemon.h"
 #include "misc_log_ex.h"
 #include "p2p/net_node.h"
-#include "rpc/core_rpc_server.h"
 #include "cryptonote_config.h"
 #include "version.h"
 #ifdef STACK_TRACE
@@ -187,6 +185,7 @@ int main(int argc, char const * const argv[])
   ShekylDaemonEntry entry;
   entry.release_name = SHEKYL_RELEASE_NAME;
   entry.version_full = SHEKYL_VERSION_FULL;
+  entry.is_release = SHEKYL_VERSION_IS_RELEASE;
   entry.protocol_version = SHEKYL_PROTOCOL_VERSION;
   entry.run = &remnant_run;
   entry.stop = &remnant_stop;

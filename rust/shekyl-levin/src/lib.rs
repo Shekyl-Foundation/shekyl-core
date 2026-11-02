@@ -140,8 +140,9 @@ pub use header::{
     PROTOCOL_VERSION_1,
 };
 pub use ingress::{
-    ingress_payload_cap, DefinedCommand, BLOCKS_IDS_SYNCHRONIZING_MAX_COUNT, FLAGS_DEFINED,
-    HANDSHAKE_FIXED_MAX_BYTES, MAX_OBJECT_REQUEST_COUNT, PEERLIST_ENTRY_MAX_ENCODED_BYTES,
+    ingress_payload_cap, DefinedCommand, BLOCKS_IDS_SYNCHRONIZING_DEFAULT_COUNT,
+    BLOCKS_IDS_SYNCHRONIZING_MAX_COUNT, FLAGS_DEFINED, HANDSHAKE_FIXED_MAX_BYTES,
+    MAX_OBJECT_REQUEST_COUNT, PEERLIST_ENTRY_MAX_ENCODED_BYTES,
 };
 pub use message::{invoke, notify, response};
 pub use payload::Error as PayloadError;

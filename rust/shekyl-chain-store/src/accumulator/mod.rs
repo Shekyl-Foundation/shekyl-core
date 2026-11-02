@@ -19,11 +19,11 @@
 //! | `derived` | — | recomputed from a named source at checkpoints |
 //! | `excluded` | — | not folded |
 //!
-//! The per-table assignment is [`TABLE_CLASSES`] / [`class_for_table`],
-//! matching the `Accumulator class` column of
+//! The per-table assignment is [`TABLE_CLASSES`] / [`class_for_table`]:
+//! one row per Rust table. A table that survived from the LMDB inventory
+//! keeps the class in
 //! [`docs/LMDB_WRITE_ATOMICITY_AUDIT.md`](../../../docs/LMDB_WRITE_ATOMICITY_AUDIT.md)
-//! §10. Set-shaped write contracts (where the Rust store must read before
-//! the C++ does) are [`SET_SHAPED_CONTRACTS`].
+//! §10. Set-shaped write contracts are [`SET_SHAPED_CONTRACTS`].
 //!
 //! # What these types fold
 //!
@@ -40,10 +40,10 @@
 //! arithmetically, so a fold over the caller's argument would inherit the
 //! reconstruction.
 //!
-//! The C++ delete path does **not** always have that value in hand. Of the
-//! fifteen [`AccumulatorClass::SetShaped`] tables, six delete by key
-//! alone (`mdb_del(…, nullptr)`) and ten overwrite without reading
-//! (`mdb_put(…, 0)`). [`SetShapedContract`] records which is which.
+//! The C++ delete path did **not** always have that value in hand. Of the
+//! eleven [`AccumulatorClass::SetShaped`] tables that remain, five delete
+//! by key alone and six overwrite without reading.
+//! [`SetShapedContract`] records which is which.
 //! redb can always read first; a port that transliterates the C++ as-is
 //! desynchronizes the accumulator silently.
 //!

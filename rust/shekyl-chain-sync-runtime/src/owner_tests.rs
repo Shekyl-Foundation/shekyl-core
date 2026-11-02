@@ -52,6 +52,7 @@ fn every_entry_reply_has_an_outcome() {
         ),
         (
             Reply::MissingBodies {
+                hash,
                 indices: vec![1, 3],
             },
             Outcome::MissingBodies {

@@ -1393,21 +1393,14 @@ can contain either.
   IG-Q49 both stand as written (RT-O36, ruled 2026-10-25). `/pop_blocks`
   has three users, all served there: the regtest roll-back helper, the
   Python framework and the CT-2 fixture generator (§6.4).
-  `inject_archival_serve_credit`'s row in the method table is armed
-  (`shekyl-rpc-types` `methods.rs`), so the RPC admits it through
-  `admit_armed` like the other two (RT-W10 step 1). **Its setter keeps one
-  narrower restriction, on purpose:**
-  `Blockchain::regtest_inject_archival_serve_credit`
-  ([`blockchain.cpp`](../../src/cryptonote_core/blockchain.cpp)) refuses
-  unless the network is regtest. With the switch armed on testnet or
-  stagenet, `generateblocks` and `/pop_blocks` are served and the inject
-  lever is refused ("Serve-credit injection failed", the daemon log naming
-  the network). The regtest e2e test
-  `the_armed_switch_on_testnet_serves_two_levers_and_the_setter_refuses_inject`
-  holds this on testnet; stagenet takes the same branch. Under RT-O36 that is a restriction, the network narrowing
-  what the switch enables, never the network enabling anything, so it is
-  neither a defect nor a leftover gate to delete. It goes with the C++
-  method at the DRS-X flip.
+  `inject_archival_serve_credit` went with the C++ chain at the DRS-X flip
+  (`DRS_X_STORE_FLIP.md` DX-Q3): the method table pins two armed levers,
+  and the daemon answers the old name as a method it does not know, armed
+  or not. With the switch armed on testnet or stagenet, `generateblocks`
+  and `/pop_blocks` are served; the regtest e2e test
+  `the_armed_switch_on_testnet_serves_two_levers_and_knows_no_third` holds
+  this on testnet, and stagenet takes the same branch. Under RT-O36 the
+  network narrows what the switch enables and never enables anything.
 
 *Why each `status` field is out of view.*
 
@@ -2151,8 +2144,8 @@ construction) instead of loopback TCP.
 - **Rendezvous label (§7.1):** a label set at `CreateFileW` refuses a
   low-integrity read; an inherited label and an `icacls`-applied label both
   carry `NW` only and admit it, while appearing as a Medium label.
-- **Item 4 — Windows callers today:** the Windows build produces only
-  `shekyld.exe` and `shekyl-mdb-copy.exe`; the wallet stack is linked into
+- **Item 4 — Windows callers today:** the Windows build produces
+  `shekyld.exe`; the wallet stack is linked into
   the GUI (`src-tauri` path-depends on `shekyl-engine-core`,
   `shekyl-rpc-client`, `shekyl-scanner`; its embedded engine builds its
   daemon client from the same address). Three consumers, one leg: the GUI's

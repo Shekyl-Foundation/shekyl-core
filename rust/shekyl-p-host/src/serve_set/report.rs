@@ -203,7 +203,7 @@ pub enum ReportedSet {
     /// (`COMPLETETREE_ACTIVATION.md` D-1): the obligation is
     /// `[0, frozen_count)` where `frozen_count` is the store's burial-gated
     /// freeze cursor (`LeafStore::next_freeze_seg` — **not**
-    /// `shekyl_archival_retention::frozen_segment_count`, the first-crossing
+    /// the frozen-segment count the archival C++ path read (deleted, `DEL-008`), the first-crossing
     /// helper, which would admit unburied segments as owed).
     ///
     /// **No pin outcomes — the posture flag is the pin.** A CompleteTree
