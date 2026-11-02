@@ -10,7 +10,7 @@
 use std::time::Instant;
 
 use shekyl_chain_rules::{
-    target_claim, Fault, FormAttempt, FormedHeader, HeaderView, OpenHeader, RuleSet,
+    target_claim, AtHeight, Fault, FormAttempt, FormedHeader, HeaderView, OpenHeader, RuleSet,
 };
 use shekyl_types::{BlockCount, BlockHash, BlockHeight};
 use shekyl_wire::{Block, BlockBody, PowBlob};
@@ -161,6 +161,15 @@ where
             return Ok(());
         };
         let parent = pow.header.previous;
+        // A header already in `T` was proved once; a second peer's copy
+        // is not proved again. Its body is bound if no body is held yet.
+        let hash = pow.identity();
+        if self.tree.contains(hash) {
+            if !self.body_accounted(hash) {
+                self.finish_announced(session, hash, body, out);
+            }
+            return Ok(());
+        }
         // The parent is not in `T` and is not the local tip, so this
         // announcement cannot be judged. A header request from our locator
         // is how its ancestors arrive; dropping it waits for timed sync.
@@ -279,7 +288,27 @@ where
             Proved::NotHeld => Ok(()),
             Proved::Formed(formed) => {
                 let parent = formed.previous();
-                match self.judge_standalone(main, parent, formed) {
+                let hash = formed.hash();
+                let height = announced.height;
+                // The proof took time. Another peer's copy may have been
+                // proved first, or main may have connected the block. A
+                // header main holds is judged by nobody: until 2026-11-02
+                // it was judged again, against a view of main at height
+                // zero, and a copy of the connected block went into `T` as
+                // a branch anchored at its parent. Every later announce was
+                // judged above the copy, and `H*` never left main's tip
+                // (#1237, the three-miner rehearsal).
+                if self.tree.contains(hash) {
+                    if !self.body_accounted(hash) {
+                        self.finish_announced(session, hash, &announced.body, out);
+                    }
+                    return Ok(());
+                }
+                if matches!(main.header_at(height)?, AtHeight::Recorded(record) if record.hash == hash)
+                {
+                    return Ok(());
+                }
+                match self.judge_standalone(main, parent, height, formed) {
                     Judged::View(fault) => {
                         if let Some(peer) = self.peers.get_mut(&session) {
                             peer.announced.push(announced);
@@ -395,22 +424,29 @@ where
         self.judged.retain(live);
     }
 
+    /// Judge an announced header at `height`, the connecting height the
+    /// announce was read at. A parent not in `T` is on main at the height
+    /// below, whether or not main's tip has moved past it since; a parent
+    /// main no longer holds there is gone.
     fn judge_standalone<'id, H: HeaderView<'id>>(
         &self,
         main: &H,
         parent: BlockHash,
+        height: BlockHeight,
         formed: &FormedHeader,
     ) -> Judged<H::Fault> {
-        let parent_height = self
-            .tree
-            .placement(parent)
-            .map(|placed| placed.height)
-            .or_else(|| {
-                self.local
-                    .filter(|local| local.hash == parent)
-                    .and_then(|local| local.height)
-            })
-            .unwrap_or(BlockHeight::ZERO);
+        let parent_height = match self.tree.placement(parent) {
+            Some(placed) => placed.height,
+            None if parent == BlockHash::NULL => BlockHeight::ZERO,
+            None => {
+                let below = BlockHeight::from_raw(height.to_raw().saturating_sub(1));
+                match main.header_at(below) {
+                    Ok(AtHeight::Recorded(record)) if record.hash == parent => below,
+                    Ok(_) => return Judged::Gone,
+                    Err(fault) => return Judged::View(fault),
+                }
+            }
+        };
         let view = self.view_for(main, parent, parent_height, Pending::NONE);
         match shekyl_chain_rules::judge_header(formed, &view, &formed.rule_set(), &self.trust) {
             Ok(Ok(judged)) => Judged::Ok(Box::new(judged)),

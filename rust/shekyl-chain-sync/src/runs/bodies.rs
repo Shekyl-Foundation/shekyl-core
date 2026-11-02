@@ -275,7 +275,7 @@ where
     }
 
     /// Held, in flight, offered, or already accepted by the entry.
-    fn body_accounted(&self, hash: BlockHash) -> bool {
+    pub(in crate::runs) fn body_accounted(&self, hash: BlockHash) -> bool {
         self.accepted.contains(&hash)
             || self.span_has(hash)
             || self.held.contains(hash)

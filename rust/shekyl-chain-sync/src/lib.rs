@@ -18,6 +18,8 @@
 #![deny(unsafe_code)]
 
 #[cfg(test)]
+mod announce_connected_tests;
+#[cfg(test)]
 mod announce_tests;
 #[cfg(test)]
 mod continuation_tests;

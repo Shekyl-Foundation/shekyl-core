@@ -1058,6 +1058,19 @@ nothing:
     - Dropping an honest announce is safe. The next announce's
       `Unlinked` reply, or a hint from another session, starts a
       solicited sync.
+    - **Amended 2026-11-02 (#1237, the CS-5 §10 rehearsal):** one hash
+      per *block*, not per announcing peer. An announce of a header
+      already in `T` is not proved; its body is bound if none is held.
+      A proof that lands after another peer's copy entered `T`, or
+      after main connected the block, is dropped: a header main holds
+      is judged by nobody. An announced header whose parent is on main
+      below the tip (main moved on while the proof ran) is judged above
+      the parent at its own height. Before the amendment the second
+      peer's proof was judged against a view of main at height zero and
+      a copy of the connected block entered `T` anchored at its parent;
+      every later announce was judged above the copy, and a node that
+      heard each block from two peers connected the first relayed block
+      and no later one (`announce_connected_tests`).
     - So an inbound flood can delay how fast we learn a new tip, but it
       cannot stall a sync in progress.
     - The cap's value is an `Assumption`.
