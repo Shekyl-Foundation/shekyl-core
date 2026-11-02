@@ -22,12 +22,12 @@ use std::ffi::c_int;
 use shekyl_daemon::Remnant;
 use shekyl_ffi::daemon_snapshot_ffi::ShekylDaemonSnapshot;
 
-// The remnant's two functions. `safe`: each is `noexcept` and catches every
-// exception; `run` checks its pointer and the snapshot's field count before
-// reading, and `stop` reads nothing. Neither has a precondition a caller
-// could violate.
+// The remnant's two functions, both `noexcept`. `run` dereferences the
+// snapshot it is given, so it is `unsafe`: its one caller,
+// `SnapshotData::call`, owes it a complete snapshot that outlives the call
+// and says so there. `stop` takes nothing and reads nothing, so it is `safe`.
 unsafe extern "C" {
-    safe fn shekyl_remnant_run(snapshot: *const ShekylDaemonSnapshot) -> c_int;
+    unsafe fn shekyl_remnant_run(snapshot: *const ShekylDaemonSnapshot) -> c_int;
     safe fn shekyl_remnant_stop();
 }
 

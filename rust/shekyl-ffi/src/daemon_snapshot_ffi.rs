@@ -150,11 +150,20 @@ impl SnapshotData {
     }
 
     /// Calls `run` with a snapshot over this data, which outlives the call.
+    ///
+    /// `run` is the remnant's entry, which dereferences the pointer it is
+    /// given; it is `unsafe` so that no safe Rust can hand C++ a pointer to
+    /// read (rule 40). This is its one call site.
     #[must_use]
-    pub fn call(&self, run: extern "C" fn(*const ShekylDaemonSnapshot) -> c_int) -> c_int {
+    #[allow(unsafe_code)]
+    pub fn call(&self, run: unsafe extern "C" fn(*const ShekylDaemonSnapshot) -> c_int) -> c_int {
         let command = self.command_ptrs();
         let snapshot = self.snapshot(&command);
-        run(&raw const snapshot)
+        // SAFETY: `snapshot` is a complete, initialised value on this frame,
+        // and every pointer in it addresses `self`'s allocations or
+        // `command`'s buffer; all three outlive the call, which returns
+        // before any is dropped. `run` is `noexcept` on the C++ side.
+        unsafe { run(&raw const snapshot) }
     }
 
     /// The console's command words, as text.

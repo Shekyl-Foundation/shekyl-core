@@ -29,7 +29,12 @@ use shekyl_ffi::daemon_snapshot_ffi::ShekylDaemonSnapshot;
 /// The remnant's `run`: constructs core, the protocol handler, the node
 /// server and the RPC from the snapshot, runs until stopped, and returns
 /// the exit status. `noexcept`: every C++ exception is caught inside it.
-pub type RunFn = extern "C" fn(*const ShekylDaemonSnapshot) -> c_int;
+/// `unsafe`: it dereferences the pointer, so the caller owes it a complete
+/// snapshot that outlives the call ([`SnapshotData::call`] is that caller,
+/// and the only one).
+///
+/// [`SnapshotData::call`]: shekyl_ffi::daemon_snapshot_ffi::SnapshotData::call
+pub type RunFn = unsafe extern "C" fn(*const ShekylDaemonSnapshot) -> c_int;
 
 /// The remnant's `stop`: requests the stop `run` is waiting for and
 /// returns at once. `noexcept`.
