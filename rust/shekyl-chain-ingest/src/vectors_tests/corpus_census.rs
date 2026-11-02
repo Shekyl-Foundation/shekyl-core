@@ -180,9 +180,8 @@ fn the_family_over_the_corpus_names_what_it_cannot_reach() {
     // chain's first spend also has nothing spent before it. `DuplicateBondPost`: this
     // census supplies no twins, and the *other* cause —
     // `NoArchivalBodyToDuplicate` — is the heights that carry no post,
-    // which is a reading of the corpus: *until 2026-10-12* the bond-post
-    // capture did carry the body, so a twin supply would have reached it
-    // (see the entry below). (`DuplicateClaim` was the
+    // which is a reading of the corpus: the bond-post capture carries the
+    // body (its JoinMarket at 98), so a twin supply would reach it. (`DuplicateClaim` was the
     // fifth until slice 8 row 9 retired it to the driver — `Mutation`
     // docs.) `DuplicateServeCredit` needs no supply (its
     // twin is the body itself) and is unreachable on the corpus alone: no
@@ -208,15 +207,16 @@ fn the_family_over_the_corpus_names_what_it_cannot_reach() {
             ),
             (
                 Mutation::DuplicateBondPost,
-                // *Moved 2026-10-12:* this also listed `NoTwinSupplied`
-                // — the bond-post capture carried the body, so only the
-                // twin was missing. That body is a keyless JoinMarket and
-                // the chain is read only below it now
-                // (`retired_keyless_join::RETIRED_KEYLESS_JOINS`), so no captured chain carries a
-                // post at all and the one cause is the corpus's.
-                vec![Unmutable::NoArchivalBodyToDuplicate {
-                    kind: ArchivalKind::BondPost
-                }]
+                // The other chains carry no post; `bond-post` carries one,
+                // a key-carrying JoinMarket, and only its twin is missing.
+                vec![
+                    Unmutable::NoArchivalBodyToDuplicate {
+                        kind: ArchivalKind::BondPost
+                    },
+                    Unmutable::NoTwinSupplied {
+                        kind: ArchivalKind::BondPost
+                    }
+                ]
             ),
             (Mutation::OverweightBlock, vec![Unmutable::NoBodySupply]),
             (
