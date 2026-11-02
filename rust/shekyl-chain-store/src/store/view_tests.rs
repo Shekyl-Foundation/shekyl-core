@@ -708,8 +708,8 @@ fn the_read_transaction_body_classifies_holes_and_bad_blobs_as_si7() {
 }
 
 /// §11.1(f): a `Coded<V>` table reports `V::FIXED_WIDTH` to the engine, and
-/// the engine **asserts** it in `LeafBuilder::append` (redb 4.1
-/// `btree_base.rs`) — a panic that poisons the transaction lock. So the
+/// the engine **asserts** it in `LeafBuilder::append` (redb 4.4
+/// `btree_base.rs:1191`) — a panic that poisons the transaction lock. So the
 /// scenario this test used to pin — `block_info[tip]` rewritten to 87 bytes,
 /// then SI-7 `Undecodable` on every classified read (the PR #764 review's
 /// case) — has **no representable instance**: the bytes never reach the

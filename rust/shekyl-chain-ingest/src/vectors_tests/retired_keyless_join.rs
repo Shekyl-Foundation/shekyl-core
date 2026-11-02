@@ -48,20 +48,18 @@ pub(crate) struct RetiredKeylessJoin {
     pub(crate) at: BlockHeight,
 }
 
-/// The two captured chains that post a bond. `emission-claim` was a
-/// [`super::PREDATES`] record until this date (refused at 98 by CEN-J15):
-/// the same block now fails to parse before any rule reads it, so that
-/// record could no longer be observed and is replaced by this one.
-pub(crate) const RETIRED_KEYLESS_JOINS: [RetiredKeylessJoin; 2] = [
-    RetiredKeylessJoin {
-        shape: "bond-post",
-        at: BlockHeight::from_raw(98),
-    },
-    RetiredKeylessJoin {
-        shape: "emission-claim",
-        at: BlockHeight::from_raw(98),
-    },
-];
+/// The one captured chain still from the C++ daemon that posts a bond.
+/// `emission-claim` was a [`super::PREDATES`] record until 2026-10-12
+/// (refused at 98 by CEN-J15): the same block now fails to parse before
+/// any rule reads it, so that record could no longer be observed and is
+/// replaced by this one. It is re-captured when serve credit has a
+/// production path (SO-D12 4b); `bond-post`, re-captured from the Rust
+/// daemon at the E2 re-baseline, carries a key-carrying join and reads
+/// whole.
+pub(crate) const RETIRED_KEYLESS_JOINS: [RetiredKeylessJoin; 1] = [RetiredKeylessJoin {
+    shape: "emission-claim",
+    at: BlockHeight::from_raw(98),
+}];
 
 /// The record for a captured chain, if it carries a keyless JoinMarket.
 pub(crate) fn retired_keyless_join(shape: &str) -> Option<&'static RetiredKeylessJoin> {

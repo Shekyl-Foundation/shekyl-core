@@ -244,7 +244,14 @@ ARMED_SLOW=(
 #     scripts/bench/capture_kept_chain.py. Not a pass/fail proposition for
 #     this lane: the subject is the keep, and the lane would spend a
 #     daemon start proving a bool. Sibling of generate_ct2_tier_b_fixture.
+#   bench_source::bench_tx_source — the performance budget's transaction
+#     source (DAEMON_REDB_STORE.md §1.3a, PB-S1's pool point). A load
+#     generator driven by scripts/bench/drs_crash.py against a daemon it
+#     did not start (SHEKYL_BENCH_DAEMON_RPC); without that daemon it has
+#     nothing to do. Not a pass/fail proposition: the crash harness judges
+#     the subject, and the source only feeds it.
 DECIDED_DARK=(
+  engine::regtest_e2e::bench_source::bench_tx_source
   engine::regtest_e2e::capture_chain_keeps_its_datadir
   engine::regtest_e2e::generate_ct2_tier_b_fixture
   engine::regtest_e2e::rt_p5::rt_p5_dry_run

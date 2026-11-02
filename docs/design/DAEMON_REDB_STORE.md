@@ -443,7 +443,7 @@ Marshal-tax remains qualitative; Path B stands on rule 40.
 **§1.3a.1 Rules**
 
 1. **When.** At the flip, as a record that gates nothing: the flip is gated by §1.3's ratio alone. From the first release cut after CS-5, **every release cut** gates on it. Daemon runs happen at releases, not on every build.
-2. **Where.** Two devices: the **reference** (§1.3's hardware class, x86_64 server class, CPU, RAM and disk recorded in the artifact) and the **floor** (the floor device of record, DX-Q8 Leg 5's). **Host qualification before any row runs**, two questions kept apart: *latency*, a 30-minute fsync-probe soak at rest with no stall above 1.5 s, the probe's median, p99 and maximum recorded; and *durability*, the storage's write-cache posture recorded as a fact (the device model; whether a volatile write cache is enabled and whether it is power-loss protected, from the NVMe controller's identification, `hdparm -W` for SATA, or the hypervisor's cache mode for a virtual disk), a volatile cache without power-loss protection failing the host because it voids DRS-D9 whatever the latency reads. A median flush in the microseconds is the signal to verify that posture, not a failure by itself: power-loss-protected storage completes durable flushes that fast, and slow acknowledgement proves nothing about persistence. No resident daemon runs. The probe runs beside every measured row as a control channel, and a row with a probe stall inside it does not count.
+2. **Where.** Two devices: the **reference** (§1.3's hardware class, x86_64 server class, CPU, RAM and disk recorded in the artifact) and the **floor** (the floor device of record, DX-Q8 Leg 5's). **Host qualification before any row runs**, two questions kept apart: *latency*, a 30-minute fsync-probe soak at rest with no stall above 1.5 s, the probe's median, p99 and maximum recorded; and *durability*, the storage's write-cache posture recorded as a fact (the device model; whether a volatile write cache is enabled and whether it is power-loss protected, from the NVMe controller's identification, `hdparm -W` for SATA, or the hypervisor's cache mode for a virtual disk), a volatile cache without power-loss protection failing the host because it voids DRS-D9 whatever the latency reads. A median flush in the microseconds is the signal to verify that posture, not a failure by itself: power-loss-protected storage completes durable flushes that fast, and slow acknowledgement proves nothing about persistence. No resident daemon runs. The probe runs beside every measured row as a control channel, and a row with a probe stall inside it does not count: `scripts/bench/fsync_probe.py` is the probe and the soak (`qualify`), and `drs_bench.py` runs it beside each measurement and records the window in the artifact (schema `shekyl_drs_bench_v2`), whose gate refuses a row with no probe block or a stall in it.
 3. **Durability.** Production policy only (DRS-D9: `Immediate`, two-phase commit), read back from the daemon into every artifact.
 4. **Load profiles**, pre-registered here and never chosen after a run: the **design load** of **30 transactions per block**, each a 2-in/2-out FCMP++ spend with the production signature set; the **stress load** of 4× the design load; the **adversarial block** of PB-D1.
 5. **Two runs per row.** Both meet the budget or the row misses.
@@ -464,7 +464,7 @@ Marshal-tax remains qualitative; Path B stands on rule 40.
 
 | Row | Subject | Budget: reference / floor | Why | How measured |
 | --- | --- | --- | --- | --- |
-| **PB-D1** | Adversarial block: validate, connect, commit, publish the tip | ≤ **2 s** / ≤ **10 s** | the interval is 120 s; relay and the next miner must not wait on our slowest node, and 10 s on the floor leaves more than 90 % of the interval | the block built from whichever shape in a pre-registered set costs the most to verify, the heaviest post-quantum signature kind among them, at the block weight limit |
+| **PB-D1** | Adversarial block: validate, connect, commit, publish the tip | ≤ **2 s** / ≤ **10 s** | the interval is 120 s; relay and the next miner must not wait on our slowest node, and 10 s on the floor leaves more than 90 % of the interval | the block built from whichever shape in §1.3a.7's pre-registered set costs the most to verify, the heaviest post-quantum signature kind among them, at the block weight limit |
 | **PB-D1s** | Store share of PB-D1 (connect plus commit, verification excluded) | ≤ **250 ms** / ≤ **1 s** | a store regression shows separately from a verifier regression | the same run, the writer's span timings |
 | **PB-D2** | Catch-up after a week offline (5,040 blocks at design load) to a usable tip | ≤ **15 min** / ≤ **2 h** | what a returning user feels; within the body horizon, so daemon and store work alone | the subject stops at a height, the seed advances a week, the subject resumes; the artifact reports the proof-of-work share of the time (the verifier's per-hash timings against the wall), so a miss at a release cut names its cause |
 | **PB-D2r** | Reads stay responsive during catch-up | wallet-path RPC p99 ≤ **250 ms** / ≤ **1 s** | a syncing node still answers its wallet; a writer must not starve readers | a fixed wallet-shaped RPC mix (`get_info`, header and block reads, curve-tree reads) during PB-D2 |
@@ -502,6 +502,23 @@ A full sync from genesis pulls the chain by consensus until the tip is the curre
 6. **PB-S5's ceiling** is 2× the no-reader growth, under the reader workload stated in the row.
 7. **Rule 2's durability question** is the storage's write-cache posture as the recorded fact; a microsecond median is the signal to verify it, not a failure.
 8. **The proof-of-work share of the per-block cost is read when it is needed**: before PB-D2's first run, or when CS-5's profiling asks, whichever comes first. The DRS lane reads it from the qualified F-A artifact's per-hash timings (`metrics.timed_hash` in `shekyl-chain-ingest`'s `substrate.rs`; the replay tool prints the mean). If hashing dominates, the remedy, checking proof of work across cores during catch-up, is chain-ingest's and so the DRS lane's, and CS-5's attribution of the cost is corrected; if it does not, the work stays with CS-5. For scale: a light-mode RandomX hash costs about 1.25 s per core on the floor device (`shekyl-chain-ingest`'s `admission.rs`), so a week of catch-up is about 1.75 h checked serially and about 26 min across four cores.
+
+**§1.3a.7 PB-D1's shape set (pre-registered; Rick, 2026-11-01)**
+
+Fixed before any run (rule 4), and never extended after a number is seen. Each shape is one block of transactions of that shape, filled to the block weight limit. PB-D1 is the block that costs the most to verify; PB-D1s is read on the same runs.
+
+| # | Shape | Why it is in the set |
+| --- | --- | --- |
+| 1 | 1-in/2-out spends | the per-transaction fixed costs (one proof and one signature set per transaction) are highest per byte in the smallest spend |
+| 2 | 8-in/2-out spends, at the input cap (`MAX_FCMP_INPUTS`) | the most membership proof and key images per transaction |
+| 3 | the multisig container at its maximum signers | the heaviest post-quantum signature kind |
+| 4 | spends at the output cap (`MAX_OUTPUTS`, 16) | the most range proof and outputs per transaction, and the most tree leaves per block |
+| 5 | emission claims | the claim's own verification path |
+| 6 | bond posts | the bond post's own verification path |
+| 7 | 8-in/2-out spends whose inputs' tree references are spread across the reference window, not all at the tip | the same verification as shape 2 with the most distinct store reads: the shape that stresses PB-D1s, the store's share |
+| 8 | the block's serve-credit bundle at its maximum record count | bundles are verified per block once SO-D12 4b lands, so their worst case belongs in the set. In the set **from the release cut where 4b lands**; its builder is 4b's, because 4b builds the bundle |
+
+The builder for shapes 1–7 is the DRS line's tooling (rule 7; the FOLLOWUPS row). It builds every transaction with the production wallet path and submits it through the subject's RPC, as the crash harness's transaction source does.
 
 ### 1.4 Non-unification (DRS-D3) — load-bearing rationale
 
@@ -2333,9 +2350,10 @@ discovered as a digest mismatch.
 
 **(c) redb's own on-disk format version is handled by rebuild, never by an
 in-place upgrade.** redb pins its file format independently of our schema —
-4.1.0 carries `FILE_FORMAT_VERSION3` and fails a mismatched file with
-*"Manual upgrade required"*
-(`/redb-4.1.0/src/error.rs`, read at the pinned source, not recalled). Policy: a
+4.4.0 carries `FILE_FORMAT_VERSION3` (as 4.1.0 did) and fails a mismatched
+file with `UpgradeRequired`
+(`/redb-4.4.0/src/tree_store/page_store/header.rs:502`, `:515`, read at the
+pinned source, not recalled). Policy: a
 redb upgrade that moves that constant is a **deliberate, artifact-recorded
 operation — build a fresh store and replay** (§11's "trivial migrator"), never
 redb's own upgrade path. The loud failure is the good case, and it is the reason
@@ -2493,7 +2511,15 @@ not change with its address:
   [`ARCHIVAL_FORCING_CORPUS.md`](ARCHIVAL_FORCING_CORPUS.md) §"ApplyPolicy")
   in a fresh file's **first** transaction, before any batch; `verify` runs on every writable and read-only
   open and returns `SchemaVersionAbsent` / `SchemaVersionMismatch { found,
-  expected }` / `CellCorrupt` — never a default. The key bytes are pinned by a
+  expected }` / `CellCorrupt` — never a default. A writable reopen runs it on a
+  **read-only** open first and opens writable only a file it accepted: a writable
+  open writes into the file even with nothing committed (redb records its
+  allocator state when it closes), so the file the read-only open refused is
+  left byte for byte. The two opens are by path: redb opens read-only only by
+  path, and a directory entry replaced between them is a different file, which
+  a later refusal has already marked for recovery. The
+  one exception is a file redb must repair, which a read-only open refuses
+  (`RepairAborted`): it is opened writable, repaired by redb, and judged after. The key bytes are pinned by a
   test on `codec::SchemaVersionCell::KEY`.
 - (b) is `codec::Canonical`: one fixed-width, strict encoding per stored value
   type, used both to store and to digest. Types are `u8`, `u64` (LE, matching
@@ -2814,8 +2840,8 @@ source, not to this table.
 | `scripts/ci/check_drs_p0d_digest_coverage.py` — `MIN_WALKER_CPP = 800` beside `MIN_DIGEST_RS = 2000` | The C++ walker (`shekyl_e2_trace_export.cpp`, `archival_snapshot.cpp` — rule 20 holds the latter to a marshal) covers what the Rust digest covers | **RETIRED 2026-10-28 the walker-side floor; the digest side stays.** Was: retire the walker-side floor, keep the digest-side. The oracle loses its C++ side; see the register row two below for what the comparison becomes |
 | `scripts/ci/check_chain_rules_coverage.py` over `census.rs`'s A1 and A4 rows (acceptance topology: `ALREADY_EXISTS`, `ORPHANED`) | Nothing over the C++: both rows are `held_by_store("shekyl-chain-ingest", …)`, held by the Rust ingest service's router, and the gate asserts the cited `#[test]` is defined in that crate | **Discharged (DRS-X PR 2, 2026-10-18).** Nothing goes red: no census row cites a C++ holder, so the core test that held A1 and A4 leaves with the C++ without a census consequence |
 | `scripts/ci/check_test_only_features.py` — `MET_TRIGGER_UNGOVERNED_AT_REGISTRATION` (fifteen entries, shrink-only; three record an edge into `shekyl-ffi`) | Each entry pins an *exact* hit set — feature, consumer, edge — and *"a recorded hit that vanished is red until deleted"* | **Delete the vanished hits, one entry at a time.** The three `shekyl-ffi` edges vanish when the C++ consumer of the FFI does; the other twelve leave on their own rows (`F-7`, the governance row). An entry is deleted when its hit is gone, not when the list is inconvenient |
-| `CONSENSUS_STORE_RECONCILIATION.md` — the verdict states `CHECKED-CONFORMANT` / `DIVERGENT`, and §(adjudication) *"after cutover the fixtures re-baseline from Rust and become permanent regression gates"* | Rust's store behaviour conforms to the C++'s, row by row | **Two states become unreachable; the existing verdicts stay.** A conformance verdict needs two sides; with one, no new row can take either state. Every pinned verdict is a records-was at its sha (`95-documentation-lifecycle.mdc`: the discriminator is artifact vs verdict) and is kept; the register's rule already names what the oracle becomes — the E2 corpus re-baselines from Rust. `CEN-L10` moved to bucket 3 on 2026-10-28 (E4 §9 had held it while the C++ freeze was live) |
-| The E2 trace corpus and the archival fixture replica (`shekyl-chain-ingest`, `archival_fixture_replica_tests.rs`; `DRS_E2_REPLAY_DRIVER.md`) | Six chains captured from the C++ daemon, replayed against Rust | **Re-baseline from Rust** (the rule above). The capture tooling's C++ half (`shekyl_e2_trace_export`) is `DEL-008`'s; the Rust replay and the corpus stay |
+| `CONSENSUS_STORE_RECONCILIATION.md` — the verdict states `CHECKED-CONFORMANT` / `DIVERGENT`, and §(adjudication) *"after cutover the fixtures re-baseline from Rust and become permanent regression gates"* | Rust's store behaviour conforms to the C++'s, row by row | **Done (2026-11-01).** The document is records-was at `43fadfb65e`: a conformance verdict needs two sides, so no row can take either state, and every pinned verdict is kept as the record at its sha. The two DIVERGENT rows, CEN-I4 and CEN-M3, close on the intended behaviour, the Rust's (the brief of 2026-11-01 named the second row L10; the register's second divergence was M3, and `CEN-L10` moved to bucket 3 on 2026-10-28). The grading machinery that read the register left with it: `shekyl-chain-store`'s `conformance` module, `shekyl-chain-ingest`'s `grader`, `shekyl-chain-replay replay --register`, the register fixture, `export_conformance_register.py` and the census↔register coverage gate (`check_conformance_coverage.py`), which would have demanded an ungradable record for every newly ratified row |
+| The E2 trace corpus and the archival fixture replica (`shekyl-chain-ingest`, `archival_fixture_replica_tests.rs`; `DRS_E2_REPLAY_DRIVER.md`) | Six chains captured from the C++ daemon, replayed against Rust | **Done (2026-11-01): re-baselined from Rust, five chains of six.** Five are re-captured from the Rust daemon and each of their `trace.e2` is `shekyl-chain-replay baseline`'s: the corpus replayed against a fresh store, then each height's facts and the tip's digest and archival rows read off it (`shekyl-chain-ingest`'s `rebaseline`). A regression gate, pinned at each manifest's `built_at_dev_sha`: a replay that disagrees with its baseline is a change in what the Rust derives. The re-baseline locks in the intended behaviour of the two rows that diverged from the C++: CEN-I4 by the mutation family's `TooManyInputs` over a captured regtest chain, CEN-M3 by its rule's own tests (the captured chains burn too little to move a floor). The sixth, `emission-claim`, stays the C++ daemon's pair, read to its retired keyless join at 98 (`RETIRED_KEYLESS_JOINS`): its walk's serve credit was injected by a lever the flip deleted, and serve credit's production path is SO-D12 4b's, whose evidence run re-captures it (FOLLOWUPS) |
 | `scripts/ci/check_levin_constant_parity.sh` (`LV-1`) and `test_check_doc_code_citations.py`'s C++ fixtures | Levin wire constants are hand-copies of C++ definitions; the citation gate's self-test cites `.cpp` paths | **Disposed (2026-11-01).** `LV-1` holds Rust's levin constants to their C++ definitions while the C++ p2p stack defines them. It inverts at RD's cutover, which deletes `levin_notify` and the relay entry: the C++ definitions leave, the gate is deleted in that PR, and the Rust constants are canonical under `shekyl-levin`'s own pins. Owner: RD, the relay driver. The citation self-test's C++ fixtures cite pinned shas, not live files, so they never go red or stale: no action |
 
 **Read and retired with the chain, though not listed above.** `check_drs_c_surface_map.py` asserted over `blockchain.cpp`. `check_archival_forcing_cells.py` asserted over the LMDB archival X-macro. `check_drop_verdict_classification.py` asserted over `tvc.m_double_spend`, `Blockchain::add_tx`, and the pool's spent-set lookup. The `blockchain_db` directory left `check_network_uniformity.sh`'s fence. The two C++ `require_call`s left `check_debit_auth_single_source.sh`; the Rust `cold_authority_pin` check stays. Dead relative links to the deleted sources were unlinked; the citation text remains.

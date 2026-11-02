@@ -17,6 +17,32 @@
 //! file is not one this store left behind. Everything that is not a sealed
 //! pool file is **refused and kept**.
 //!
+//! # The read-only open filters; the writable open admits
+//!
+//! A writable open writes into the file even when nothing is committed
+//! (the engine records its allocator state when it closes, and marks the
+//! file for recovery as the open begins). A file this store does not own
+//! is therefore filtered on a read-only open and refused with nothing
+//! written. That read is a filter, not the admission. A seal at
+//! another version is not a refusal: replacing it takes the writable
+//! open, because that open is the engine's exclusive lock. A shared
+//! reader does not stop a rename, so retiring without the lock zeroes a
+//! file a reader still holds. The lock is held across the rename; the
+//! open's shutdown write and the wipe both land on the discarded inode.
+//! A file the engine must repair (`RepairAborted` from the read-only
+//! open) takes the same writable open, which repairs it, and is then
+//! admitted like any other file.
+//!
+//! The filter and the claim are two opens of the path. redb's read-only
+//! open takes a path (`Builder::open_read_only`); a read-only database
+//! cannot be built from a `std::fs::File` the caller already holds, so
+//! the filter cannot hand its inode to the claim. A refusal writes
+//! nothing to the inode the filter opened. A directory entry replaced
+//! between the two opens is a different file. The claim admits that
+//! file, and a refusal of it drops the claim, whose shutdown write marks
+//! the inode the claim opened. An identity check after that open would
+//! report a write it did not prevent.
+//!
 //! # A recreate is recoverable at every step
 //!
 //! The old file held which transactions this node had in its stem phase,
@@ -28,7 +54,10 @@
 //! run left. An interruption anywhere leaves either the old sealed file or
 //! no file at the pool's path — never a half-wiped one the next open would
 //! refuse as foreign — and the discard path is the store's alone: nothing
-//! but a validated pool file is ever moved there.
+//! but a validated pool file is ever moved there. A crash after the
+//! writable open has marked the file for recovery and before the rename
+//! leaves that mark on the old file; the next open repairs it and judges
+//! again.
 
 use std::path::Path;
 
@@ -85,26 +114,100 @@ pub(super) fn open_or_create(path: &Path) -> Result<(Database, PoolOpen), StoreE
     builder.set_cache_size(POOL_CACHE_SIZE);
     match create_new(path) {
         Ok(file) => seal_fresh(&builder, file, path).map(|db| (db, PoolOpen::Created)),
-        Err(e) if e.kind() == std::io::ErrorKind::AlreadyExists => {
-            let db = match builder.open(path) {
-                Ok(db) => db,
-                Err(e) if open_is_foreign(&e) => return Err(StoreCannot::PoolFileForeign.into()),
-                Err(e) => return Err(EngineError::Open(e).into()),
-            };
-            match read_header(&db)? {
-                Header::Current => Ok((db, PoolOpen::Opened)),
-                Header::Other(from) => {
-                    // Release the engine's file lock before moving it.
-                    drop(db);
-                    retire(path).map_err(io_open)?;
-                    let file = create_new(path).map_err(io_open)?;
-                    let sealed = seal_fresh(&builder, file, path)?;
-                    finish_discard(path).map_err(io_open)?;
-                    Ok((sealed, PoolOpen::Recreated { from }))
-                }
-            }
-        }
+        Err(e) if e.kind() == std::io::ErrorKind::AlreadyExists => open_existing(&builder, path),
         Err(e) => Err(io_open(e).into()),
+    }
+}
+
+/// Reopen `path`. The read-only open is the refusal filter; the writable
+/// open is the exclusive claim and the admission.
+fn open_existing(builder: &redb::Builder, path: &Path) -> Result<(Database, PoolOpen), StoreError> {
+    filter_foreign(builder, path)?;
+    let claimed = claim(builder, path)?;
+    admit(builder, claimed, path)
+}
+
+/// Refuse, writing nothing, a file this store does not own.
+///
+/// A readable seal — current or another version — and a file the engine
+/// must repair (`RepairAborted`) both continue. The version a readable
+/// seal names is read again under [`claim`]: this pass holds only a
+/// shared lock, which does not stop a rename. The inode judged here is
+/// the one a refusal leaves unwritten.
+fn filter_foreign(builder: &redb::Builder, path: &Path) -> Result<(), StoreError> {
+    match builder.open_read_only(path) {
+        Ok(read_only) => match read_header(&read_only)? {
+            Header::Current | Header::Other(_) => Ok(()),
+        },
+        Err(redb::DatabaseError::RepairAborted) => Ok(()),
+        Err(e) => Err(open_error(e)),
+    }
+}
+
+/// The engine's exclusive lock on `path`, held by the returned database.
+///
+/// Fails with the file untouched when another handle already holds it:
+/// the lock is taken before the open writes anything.
+fn claim(builder: &redb::Builder, path: &Path) -> Result<Database, StoreError> {
+    builder.open(path).map_err(open_error)
+}
+
+/// Admit the file `claimed` holds. A seal at another version is replaced
+/// before `claimed` is dropped, so the lock covers the rename. A refusal
+/// drops `claimed` too, and that drop writes the inode the claim opened.
+fn admit(
+    builder: &redb::Builder,
+    claimed: Database,
+    path: &Path,
+) -> Result<(Database, PoolOpen), StoreError> {
+    match read_header(&claimed)? {
+        Header::Current => Ok((claimed, PoolOpen::Opened)),
+        Header::Other(from) => replace(builder, claimed, path, from),
+    }
+}
+
+/// Replace `path` while `claimed` still holds the engine's exclusive lock.
+///
+/// The old inode is renamed aside before the claim is dropped. The
+/// claim's shutdown write then lands on that inode, and only then is
+/// the inode wiped: wiping first would be undone by the shutdown write.
+fn replace(
+    builder: &redb::Builder,
+    claimed: Database,
+    path: &Path,
+    from: PoolSchemaVersion,
+) -> Result<(Database, PoolOpen), StoreError> {
+    let sealed = retire_and_seal(builder, path);
+    // Drop even when the seal failed. The shutdown write belongs on the
+    // inode the claim opened, which `retire` may already have moved, and
+    // it must land before any wipe: wiping first would be undone by it.
+    drop(claimed);
+    match sealed {
+        Ok(db) => {
+            finish_discard(path).map_err(io_open)?;
+            Ok((db, PoolOpen::Recreated { from }))
+        }
+        // Leave a discarded inode for the next open's `finish_discard`.
+        // Wiping on this path would report the wipe's error in place of
+        // the seal's, and the claim has already shut down onto that inode.
+        Err(e) => Err(e),
+    }
+}
+
+/// Rename `path` aside and seal a fresh file there.
+///
+/// The caller's claim stays held. This function does not drop it.
+fn retire_and_seal(builder: &redb::Builder, path: &Path) -> Result<Database, StoreError> {
+    retire(path).map_err(io_open)?;
+    let file = create_new(path).map_err(io_open)?;
+    seal_fresh(builder, file, path)
+}
+
+fn open_error(err: redb::DatabaseError) -> StoreError {
+    if open_is_foreign(&err) {
+        StoreCannot::PoolFileForeign.into()
+    } else {
+        EngineError::Open(err).into()
     }
 }
 
@@ -219,7 +322,7 @@ fn seal_fresh(
 /// verify the sealed table set. Absence or an undecodable cell, or a
 /// current-version seal over a missing or re-typed table, is
 /// [`StoreCannot::PoolFileForeign`].
-fn read_header(db: &Database) -> Result<Header, StoreError> {
+fn read_header(db: &impl ReadableDatabase) -> Result<Header, StoreError> {
     let txn = db.begin_read().map_err(EngineError::BeginRead)?;
     let table = match txn.open_table(POOL_HEADER) {
         Ok(t) => t,
