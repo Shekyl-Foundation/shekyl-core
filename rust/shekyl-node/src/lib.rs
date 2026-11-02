@@ -119,7 +119,7 @@ fn blocking_threads(permits: NonZeroUsize, window: NonZeroUsize) -> NonZeroUsize
 /// `Closed` when the peer list is closed, `Open` otherwise. Configuration,
 /// never the network type (rule 71). Public so the daemon's start can say,
 /// before the node opens, that an `Open` node's miner waits for a view
-/// ([`shekyl_daemon`]'s mining notice, DC-F41).
+/// (`shekyl-daemon`'s mining notice, DC-F41).
 #[must_use]
 pub fn declaration(config: &DaemonConfig) -> Declaration {
     if config.offline() {

@@ -40,14 +40,20 @@ pub use run::{Host, EXIT_FAILED, EXIT_REFUSED};
 #[must_use]
 pub fn main(remnant: Remnant, args: &[std::ffi::OsString]) -> i32 {
     if let Err(e) = shekyl_ffi::platform::harden_process() {
-        eprintln!("shekyld: process hardening {e}; not starting");
+        run::tell(
+            &mut std::io::stderr(),
+            &format!("shekyld: process hardening {e}; not starting"),
+        );
         return EXIT_FAILED;
     }
     shekyl_ffi::panic_hook::install();
     // The RPC's core reads, before anything could construct an RPC: the
     // remnant's `run` reaches `shekyl_daemon_rpc_start` from C++ (DC-F43).
     if !shekyl_daemon_rpc::seam::install(remnant.core) {
-        eprintln!("shekyld: the core seam was already installed; not starting");
+        run::tell(
+            &mut std::io::stderr(),
+            "shekyld: the core seam was already installed; not starting",
+        );
         return EXIT_FAILED;
     }
     run::main(remnant, args, &host())
