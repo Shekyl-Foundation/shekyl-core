@@ -32,11 +32,13 @@
 # src/daemon/CMakeLists.txt's and stays there.
 #
 # Tools. Cross builds produce a format the host's default tool may not parse
-# (the depends Cross-Mac leg links Mach-O on Linux), so each format has a
-# candidate list: the `--tool-prefix` (or `SHEKYL_TOOL_PREFIX`) tool first,
-# which for depends is `contrib/depends/<host>/native/bin/<host>-`, then the
-# plain and the LLVM names. The first candidate that parses the file is used;
-# if none can, the gate fails rather than passes (rule 47).
+# (the depends Cross-Mac leg links Mach-O on Linux), so ELF and Mach-O each
+# have a candidate list: the `--tool-prefix` (or `SHEKYL_TOOL_PREFIX`) tool
+# first, which for depends is `contrib/depends/<host>/native/bin/<host>-`,
+# then the plain and the LLVM names. The first candidate that parses the
+# file is used; if none can, the gate fails rather than passes (rule 47).
+# PE needs no tool: its headers are at fixed offsets and are read with `od`
+# (DC-F32).
 #
 # Rule 46: no verdict travels through a pipe. Tool output is captured once
 # into a variable and inspected with `grep` under `if`.
@@ -190,61 +192,78 @@ check_elf() {
   fi
 }
 
-check_pe() {
-  local bin="$1" tool text
-  local -a cands=()
-  for t in "${PREFIX}objdump" x86_64-w64-mingw32-objdump objdump llvm-objdump; do
-    if resolve_tool tool "$t"; then cands+=("$tool -p $bin"); fi
-  done
-  for t in "${PREFIX}readobj" llvm-readobj; do
-    if resolve_tool tool "$t"; then cands+=("$tool --file-headers $bin"); fi
-  done
-  # MSVC's dumpbin, on PATH inside a Visual Studio developer shell.
-  if resolve_tool tool dumpbin; then cands+=("$tool /headers $bin"); fi
-  if [ "${#cands[@]}" -eq 0 ]; then
-    fail "$bin: PE, but no objdump / llvm-readobj / dumpbin found"
-    return
-  fi
-  if ! run_first text "${cands[@]}"; then
-    fail "$bin: no PE tool could parse the file (tried: ${cands[*]})"
-    return
-  fi
+# pe_u16 / pe_u32 <file> <offset>: a little-endian field of the PE headers as
+# a decimal number, or nothing when the file ends before it. `od` exits
+# non-zero when asked to skip past the end; under `set -eo pipefail` that
+# would end the gate with no verdict line (rule 46), so the read is allowed
+# to fail and the empty result is the caller's finding.
+pe_u16() {
+  { od -An -tu2 -j "$2" -N2 "$1" 2>/dev/null || true; } | tr -d ' \n'
+}
+pe_u32() {
+  { od -An -tu4 -j "$2" -N4 "$1" 2>/dev/null || true; } | tr -d ' \n'
+}
 
-  # binutils objdump -p prints `Magic\t\t\t020b\t(PE32+)` and the raw word
-  # `DllCharacteristics\t00000160`; llvm-readobj --file-headers prints
-  # `Magic: 0x20B` and the word decoded, one `IMAGE_DLL_CHARACTERISTICS_*`
-  # name per line (its label is the bare `Characteristics`, which the COFF
-  # file header also uses, so the names are what is read); dumpbin /headers
-  # prints `20B magic # (PE32+)` and `8160 DLL characteristics`.
-  if printf '%s\n' "$text" | grep -Eq 'PE32\+|Magic:\s+0x20[Bb]\b'; then
-    ok "$bin: PE32+ (64-bit image)"
+check_pe() {
+  local bin="$1"
+  # Read from the bytes, not from a tool's text. The first form of this
+  # check asked objdump / llvm-readobj / dumpbin for the headers and matched
+  # their spellings; on both Windows legs the text it read carried the
+  # DllCharacteristics in a form it parsed and the magic in one it did not
+  # (DAEMON_CONFIG_CUTOVER.md DC-F32). The PE/COFF layout is fixed: the
+  # `e_lfanew` dword at 0x3c locates the `PE\0\0` signature; the COFF file
+  # header (20 bytes) follows it, with `Machine` at +4 and
+  # `SizeOfOptionalHeader` at +20; the optional header follows that, with
+  # `Magic` at +0 (0x20b PE32+, 0x10b PE32) and `DllCharacteristics` at +70
+  # in both forms. `od` reads them the same on every host, and the values
+  # read are printed so a verdict can be checked against the file.
+  local lfanew sig machine opt_size magic chars opt machine_name
+  lfanew=$(pe_u32 "$bin" 60)
+  if [ -z "$lfanew" ] || [ "$lfanew" -lt 64 ]; then
+    fail "$bin: no e_lfanew (dword at 0x3c read as '${lfanew:-nothing}')"
+    return
+  fi
+  sig=$(pe_u32 "$bin" "$lfanew")
+  if [ "${sig:-0}" -ne 17744 ]; then # 0x00004550, "PE\0\0"
+    fail "$bin: no PE signature at e_lfanew=$lfanew (read '${sig:-nothing}', want 17744)"
+    return
+  fi
+  machine=$(pe_u16 "$bin" $((lfanew + 4)))
+  opt_size=$(pe_u16 "$bin" $((lfanew + 20)))
+  opt=$((lfanew + 24))
+  magic=$(pe_u16 "$bin" "$opt")
+  if [ -z "$machine" ] || [ -z "$opt_size" ] || [ -z "$magic" ]; then
+    fail "$bin: the file ends inside its COFF header"
+    return
+  fi
+  if [ "$opt_size" -lt 72 ]; then
+    fail "$bin: SizeOfOptionalHeader $opt_size is too small to carry DllCharacteristics (+70)"
+    return
+  fi
+  case "$machine" in
+    34404) machine_name="x86-64" ;;  # 0x8664
+    43620) machine_name="ARM64" ;;   # 0xaa64
+    *) machine_name="" ;;
+  esac
+  if [ "$magic" -eq 523 ] && [ -n "$machine_name" ]; then # 0x20b
+    ok "$bin: PE32+ (magic 0x20b, machine $machine_name)"
+  elif [ "$magic" -eq 523 ]; then
+    fail "$bin: PE32+ (magic 0x20b) on a machine this gate does not name ($(printf '0x%x' "$machine"))"
   else
-    fail "$bin: not a PE32+ image"
+    fail "$bin: not a PE32+ image (magic $(printf '0x%x' "$magic"), machine $(printf '0x%x' "$machine"))"
   fi
 
   # IMAGE_DLLCHARACTERISTICS_* (winnt.h).
   local HIGH_ENTROPY_VA=$((0x0020)) DYNAMIC_BASE=$((0x0040)) NX_COMPAT=$((0x0100))
-  local chars chars_hex
-  if printf '%s\n' "$text" | grep -Eq '\bIMAGE_DLL_CHARACTERISTICS_'; then
-    chars=0
-    if printf '%s\n' "$text" | grep -Eq '\bIMAGE_DLL_CHARACTERISTICS_DYNAMIC_BASE\b'; then chars=$((chars | DYNAMIC_BASE)); fi
-    if printf '%s\n' "$text" | grep -Eq '\bIMAGE_DLL_CHARACTERISTICS_HIGH_ENTROPY_VA\b'; then chars=$((chars | HIGH_ENTROPY_VA)); fi
-    if printf '%s\n' "$text" | grep -Eq '\bIMAGE_DLL_CHARACTERISTICS_NX_COMPAT\b'; then chars=$((chars | NX_COMPAT)); fi
-    chars_hex=$(printf '%x' "$chars")
-  else
-    chars_hex=$(printf '%s\n' "$text" | grep -E '^\s*DllCharacteristics\s+[0-9a-fA-F]+\s*$' | grep -Eo '[0-9a-fA-F]+\s*$' | head -n1 || true)
-    if [ -z "$chars_hex" ]; then
-      chars_hex=$(printf '%s\n' "$text" | grep -E '^\s*[0-9a-fA-F]+ DLL characteristics\s*$' | grep -Eo '^\s*[0-9a-fA-F]+' | head -n1 || true)
-    fi
-    chars_hex=$(printf '%s' "$chars_hex" | tr -d '[:space:]')
-    if [ -z "$chars_hex" ]; then
-      fail "$bin: DllCharacteristics not found in the tool output"
-      return
-    fi
-    chars=$((16#$chars_hex))
+  chars=$(pe_u16 "$bin" $((opt + 70)))
+  if [ -z "$chars" ]; then
+    fail "$bin: the file ends before DllCharacteristics"
+    return
   fi
+  local chars_hex
+  chars_hex=$(printf '%04x' "$chars")
   if [ $((chars & DYNAMIC_BASE)) -ne 0 ]; then
-    ok "$bin: DYNAMIC_BASE (ASLR)"
+    ok "$bin: DYNAMIC_BASE (ASLR); DllCharacteristics 0x$chars_hex"
   else
     fail "$bin: DllCharacteristics 0x$chars_hex lacks DYNAMIC_BASE"
   fi
