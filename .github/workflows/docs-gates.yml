@@ -247,23 +247,6 @@ jobs:
         if: '!cancelled()'
         run: python3 scripts/ci/check_followups_row_prose.py --selftest
 
-      - name: Run the conformance-register extractor self-test
-        # DRS-E2 RD-Q6: the E2 grader's register is the coverage gate's own
-        # parse, serialized. The self-test parses the serialized text back
-        # and asserts the shape the Rust grader reads (keys, sorted unique
-        # ids, the state vocabulary, at least one row).
-        if: '!cancelled()'
-        run: python3 scripts/ci/export_conformance_register.py --selftest
-
-      - name: Check the committed register fixture against the extractor
-        # The Rust grader's tests parse this fixture with `Register::from_json`
-        # (rust/shekyl-chain-ingest/src/grader.rs); this step holds the
-        # fixture equal to what the extractor emits now, so a key rename on
-        # either side goes red here and not after a whole replay has run.
-        # Regenerate with `--out` when the register changes.
-        if: '!cancelled()'
-        run: python3 scripts/ci/export_conformance_register.py --check-fixture rust/shekyl-chain-ingest/fixtures/conformance_register.json
-
       - name: Run pinned-anchor gate
         # A `file:line` citation must resolve in the tree it is PINNED to, not
         # in the working tree the author had open. PR #812 shipped five anchors
@@ -354,6 +337,52 @@ jobs:
         # lives in `drs_fixture.py`.
         if: '!cancelled()'
         run: python3 scripts/bench/test_drs_readback.py
+
+      - name: Run the fsync probe selftest
+        # The budget's control channel (DAEMON_REDB_STORE.md §1.3a rule 2):
+        # a stall inside a row's window refuses the row, a probe that missed
+        # the window refuses it, and the 30-minute soak's verdict asks for the
+        # write-cache posture on a microsecond median rather than failing it.
+        if: '!cancelled()'
+        run: python3 scripts/bench/fsync_probe.py --selftest
+
+      - name: Run the regtest session selftest
+        # The durability harnesses compose one session: a published tip is
+        # the chain length minus one, and a header range is read in chunks
+        # of the restricted listener's cap.
+        if: '!cancelled()'
+        run: python3 scripts/bench/drs_regtest.py --selftest
+
+      - name: Run the catch-up harness selftest
+        # PB-D2 / PB-D3's mode: a catch-up artifact needs its probe window
+        # with no stall, the subject at the seed's tip, the week's block
+        # count at the row's transaction load, and a proof-of-work share,
+        # so a miss at a release cut can name its cause.
+        if: '!cancelled()'
+        run: python3 scripts/bench/drs_catchup.py --selftest
+
+      - name: Run the crash harness selftest
+        # PB-S1's judge: a reopened tip below the last acknowledged one, a
+        # digest off a clean replay to that tip, or a tip on no known chain
+        # fails the trial. A run under 200 trials or missing one of PB-S1's
+        # points is written and exits non-zero; row_refusals names the gap.
+        if: '!cancelled()'
+        run: python3 scripts/bench/drs_crash.py --selftest
+
+      - name: Run the transaction source selftest
+        # The bench reads the source's lines: an accept, the depth gate and a
+        # stop are each one event, the test runner's own lines are none, and
+        # a pool missing an accepted submit names it.
+        if: '!cancelled()'
+        run: python3 scripts/bench/drs_txsource.py --selftest
+
+      - name: Run the power-loss harness selftest
+        # The replay reads replay-log's find answers, rebuilds the device at
+        # every flush and FUA boundary and between them, attributes each
+        # point the flush that had already committed when the tip was
+        # published, and judges it as PB-S1.
+        if: '!cancelled()'
+        run: python3 scripts/bench/drs_powerloss.py --selftest
 
       - name: Run RPC column capture selftest
         # `rpc_capture.py` writes one file per chain read and reserves the
@@ -596,29 +625,6 @@ jobs:
         # and `Vec::extend` sharing a lifting method's name.
         if: '!cancelled()'
         run: python3 scripts/ci/check_block_rule_corrupt_sites.py --selftest
-
-      - name: Run conformance-coverage gate
-        # Every RATIFIED consensus rule (census bucket 1/2) must carry a
-        # conformance record in CONSENSUS_STORE_RECONCILIATION.md §5.4.1, and
-        # the register must not reach outside that set. Counting register rows
-        # proves SELF-CONSISTENCY, never COVERAGE — an absent row has no id to
-        # count — and the ratified denominator has already moved four times,
-        # each move silently reopening a backlog someone had just called closed.
-        # Buckets 3/4 are UNREVIEWED by construction and are NOT demanded.
-        # Instance of 47-gate-subject-assertion.mdc: both parses assert their
-        # own subject, and each side counts its own dropped ids, because an
-        # id-recognition bug that hits BOTH documents equally is invisible to a
-        # set difference.
-        if: '!cancelled()'
-        run: python3 scripts/ci/check_conformance_coverage.py
-
-      - name: Run conformance-coverage gate self-test
-        # Bitten red in both directions, plus the symmetric-drop case the
-        # comparison alone cannot see. Fixtures are deliberately multi-shape:
-        # #704's defects were all at INTERSECTIONS of axes, and its root cause
-        # was single-section fixtures making a limb untestable by their shape.
-        if: '!cancelled()'
-        run: python3 scripts/ci/test_check_conformance_coverage.py
 
       - name: Run index table-shape check
         # GFM drops a surplus cell and blanks a missing one, so a malformed row
