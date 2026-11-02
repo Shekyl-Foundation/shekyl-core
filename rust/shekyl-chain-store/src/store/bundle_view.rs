@@ -405,7 +405,7 @@ impl<V: BundleRows> BundleView for StoreBundleView<'_, V> {
         let Some(drawable) = self.drawable_epoch(epoch)? else {
             return Err(self.miss(epoch));
         };
-        // SI-42: the row is the schedule over the snapshot.
+        // SI-43: the row is the schedule over the snapshot.
         let mut roster = Vec::with_capacity(seats.len());
         for persona in seats.as_slice() {
             let Some(receipt_key) = drawable.support_key(persona) else {

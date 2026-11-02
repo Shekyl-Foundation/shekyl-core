@@ -250,11 +250,11 @@ fn first_scheduled_after_open(snapshot: &DrawableEpoch, epoch: u64) -> u64 {
         .expect("the epoch seats a tree after its open")
 }
 
-/// SI-42: a seat row that is not its epoch's schedule halts the read, in
+/// SI-43: a seat row that is not its epoch's schedule halts the read, in
 /// either direction. Red edits: drop the member check (a non-member seat
 /// reads as a roster); drop the scheduled check (an emptied row reads).
 #[test]
-fn a_seat_row_that_is_not_the_schedule_is_si_42() {
+fn a_seat_row_that_is_not_the_schedule_is_si_43() {
     /// What a case plants in place of the row.
     type Plant = dyn Fn(&SupportSeats) -> SupportSeats;
     let stranger = PCanonicalId::from_bytes([0xEE; 32]);
@@ -274,7 +274,7 @@ fn a_seat_row_that_is_not_the_schedule_is_si_42() {
         ("scheduled, not seated", &empty, "and the seat row does not"),
     ];
     for (label, plant, message) in cases {
-        // An SI-42 halts the writer, so each case has its chain.
+        // An SI-43 halts the writer, so each case has its chain.
         let Seated { chain, memo, .. } = seated(
             &format!("support-seats-si42-{}", label.len()),
             h_open(2) + 10,
@@ -295,7 +295,7 @@ fn a_seat_row_that_is_not_the_schedule_is_si_42() {
         let Err(TestErr::Store(refused)) = out else {
             panic!("{label}: the planted row read as a roster: {out:?}");
         };
-        assert!(refused.contains("SI-42"), "{label}: {refused}");
+        assert!(refused.contains("SI-43"), "{label}: {refused}");
         assert!(refused.contains(message), "{label}: {refused}");
         chain.finish();
     }

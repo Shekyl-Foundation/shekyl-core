@@ -304,10 +304,10 @@ pub enum StoreInvariant {
     /// plus the `txs_archival_len` rows (absent ⇔ `0`) of the storage ids
     /// `h` issued (`SHT-Q2`). `connect` writes both from one measurement of
     /// the segments, so they cannot disagree at the write; a disagreement
-    /// is a row or a cell changed under the store. Armed by the prune's
-    /// descent (`prune.rs` `walk_block`), which checks every block it
-    /// passes and would otherwise place a shard boundary by a cell the rows
-    /// do not support.
+    /// is a row or a cell changed under the store. Armed by
+    /// `archival_fold::block_span`, which the prune descent and the shard
+    /// read both call. Either would otherwise place a shard boundary by a
+    /// cell the rows do not support.
     ArchivalLengthsDisagree {
         /// The height whose rows were summed.
         height: u64,
@@ -527,7 +527,30 @@ pub enum StoreInvariant {
         /// The height whose row was being written.
         height: shekyl_types::BlockHeight,
     },
-    /// **SI-42** — a block's seat row is its epoch's schedule: every seat
+    /// **SI-41** — every stored bundle body has a holder, and every queue
+    /// entry's body is stored (`ARCHIVAL_SERVE_CREDIT_SPEC.md` §7.5). In
+    /// `SO-D12` increment 4c the bundle queue is the only holder kind; an
+    /// alternative block and a main-chain block not past `D_max` are 4b's.
+    /// The open reconciles the two tables and reports what it dropped;
+    /// after it, a read of the queue that finds them apart is this halt.
+    /// Not chain state, so it poisons the batch and leaves the writer
+    /// live. Never a verdict on a block.
+    BundleBodyHolder(BodyHolderFault),
+    /// **SI-42** — the archival good is one unit (`PDM-Q6` item 1; `SB-Q2`).
+    /// A 4-part transaction's prunable region (`txs_prunable[id]`) and its
+    /// `pqc_auths` region (`txs_pqc_auths[id]`) are written together by
+    /// `connect` and discarded together by the retention prune, which
+    /// deletes both tables over one id range (`prune.rs`). A read that finds
+    /// one held and the other not is this halt: it is neither §7.7 leg
+    /// (iii)'s discarded state nor a recorded body, and no path writes it.
+    /// Fatal, never a verdict on a block.
+    ArchivalGoodHalfHeld {
+        /// The storage id whose two regions disagree.
+        id: crate::ids::TxStorageId,
+        /// Which region is held; the other is not.
+        held: HeldRegion,
+    },
+    /// **SI-43** — a block's seat row is its epoch's schedule: every seat
     /// is a support member of the epoch snapshot, and every member the
     /// schedule puts on the height is seated
     /// ([`shekyl_chain_rules::scheduled_seats`]; `SO-D12` S1). The store's
@@ -542,18 +565,20 @@ pub enum StoreInvariant {
         /// Which direction failed.
         observed: SeatFault,
     },
-    /// **SI-41** — every stored bundle body has a holder, and every queue
-    /// entry's body is stored (`ARCHIVAL_SERVE_CREDIT_SPEC.md` §7.5). In
-    /// `SO-D12` increment 4c the bundle queue is the only holder kind; an
-    /// alternative block and a main-chain block not past `D_max` are 4b's.
-    /// The open reconciles the two tables and reports what it dropped;
-    /// after it, a read of the queue that finds them apart is this halt.
-    /// Not chain state, so it poisons the batch and leaves the writer
-    /// live. Never a verdict on a block.
-    BundleBodyHolder(BodyHolderFault),
 }
 
-/// Which half of SI-42 a seat row failed (payload of
+/// Which half of a half-held archival good is present (payload of
+/// [`StoreInvariant::ArchivalGoodHalfHeld`]).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum HeldRegion {
+    /// `txs_prunable[id]` is present and `txs_pqc_auths[id]` is not, under
+    /// a `txs_pqc_auth_hash` row that says the txid is 4-part.
+    Prunable,
+    /// `txs_pqc_auths[id]` is present and `txs_prunable[id]` is not.
+    PqcAuths,
+}
+
+/// Which half of SI-43 a seat row failed (payload of
 /// [`StoreInvariant::SupportSeatsNotScheduled`]).
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum SeatFault {
@@ -827,7 +852,8 @@ impl StoreInvariant {
             Self::VisibleDrawCountPastWidth { .. } => 39,
             Self::SupportBlockNotSingular { .. } => 40,
             Self::BundleBodyHolder(_) => 41,
-            Self::SupportSeatsNotScheduled { .. } => 42,
+            Self::ArchivalGoodHalfHeld { .. } => 42,
+            Self::SupportSeatsNotScheduled { .. } => 43,
         }
     }
 }
@@ -1138,6 +1164,33 @@ impl core::fmt::Display for StoreInvariant {
                 "archival_support_block already holds height {height}; a block records its \
                  support seats once"
             ),
+            Self::BundleBodyHolder(BodyHolderFault::EntryWithoutBody { h }) => write!(
+                f,
+                "the bundle queue's entry for height {h} names a body the body store does not \
+                 hold; an entry and its body are written and removed together"
+            ),
+            Self::BundleBodyHolder(BodyHolderFault::BodyWithoutHolder) => f.write_str(
+                "the body store holds a bundle body no holder names; every body has a holder",
+            ),
+            Self::BundleBodyHolder(BodyHolderFault::EntryNotItsHeight { h }) => write!(
+                f,
+                "the bundle queue's entry under height {h} is a reference for another block"
+            ),
+            Self::BundleBodyHolder(BodyHolderFault::EntryAbsent { h }) => write!(
+                f,
+                "the bundle queue has no entry at height {h}; a rewrite names a row the table does not hold"
+            ),
+            Self::ArchivalGoodHalfHeld { id, held } => {
+                let (held, missing) = match held {
+                    HeldRegion::Prunable => ("txs_prunable", "txs_pqc_auths"),
+                    HeldRegion::PqcAuths => ("txs_pqc_auths", "txs_prunable"),
+                };
+                write!(
+                    f,
+                    "transaction {id} holds its {held} region and not its {missing} region; the \
+                     archival good is one unit, held or discarded together"
+                )
+            }
             Self::SupportSeatsNotScheduled {
                 height,
                 persona,
@@ -1154,22 +1207,6 @@ impl core::fmt::Display for StoreInvariant {
             } => write!(
                 f,
                 "the schedule seats {persona:?} at height {height} and the seat row does not"
-            ),
-            Self::BundleBodyHolder(BodyHolderFault::EntryWithoutBody { h }) => write!(
-                f,
-                "the bundle queue's entry for height {h} names a body the body store does not \
-                 hold; an entry and its body are written and removed together"
-            ),
-            Self::BundleBodyHolder(BodyHolderFault::BodyWithoutHolder) => f.write_str(
-                "the body store holds a bundle body no holder names; every body has a holder",
-            ),
-            Self::BundleBodyHolder(BodyHolderFault::EntryNotItsHeight { h }) => write!(
-                f,
-                "the bundle queue's entry under height {h} is a reference for another block"
-            ),
-            Self::BundleBodyHolder(BodyHolderFault::EntryAbsent { h }) => write!(
-                f,
-                "the bundle queue has no entry at height {h}; a rewrite names a row the table does not hold"
             ),
             Self::DrawableMemoMiss { epoch } => write!(
                 f,
@@ -1239,8 +1276,9 @@ impl core::error::Error for StoreInvariant {
             | Self::DrawCommitmentUnreadable { .. }
             | Self::VisibleDrawCountPastWidth { .. }
             | Self::SupportBlockNotSingular { .. }
-            | Self::SupportSeatsNotScheduled { .. }
             | Self::BundleBodyHolder(_)
+            | Self::ArchivalGoodHalfHeld { .. }
+            | Self::SupportSeatsNotScheduled { .. }
             | Self::UndoLogIncoherent { .. } => None,
         }
     }

@@ -10,7 +10,7 @@
 //! `SO-D12` S1 ruled 2026-11-01), each at the `c` offsets
 //! [`support_seated_at`] names. The transition writes them as the block's
 //! row, and the store's bundle view checks a roster it reads against them
-//! (SI-42). One function, so the writer and the check cannot compute
+//! (SI-43). One function, so the writer and the check cannot compute
 //! different schedules.
 //!
 //! Only scheduled seats are on the connect path before the switch. A seat

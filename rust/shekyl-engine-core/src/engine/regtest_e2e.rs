@@ -6221,10 +6221,10 @@ async fn maybe_capture_chain_vector(
 /// Capture blocks `0..=tip` as one fixture chain (deterministic projection only).
 ///
 /// Fetches each block + its **full** (unpruned) non-miner txs directly — not the
-/// engine's `default_fetch_scannable_block`, whose `prune:true` leg currently
-/// rejects an FCMP++ spend (the refresh-over-spends gap recorded in FOLLOWUPS).
-/// The fixture needs only the prefix outputs + ct-base commitments + `0x07`, all
-/// of which a full tx carries and `shekyl_wire::Transaction::from_bytes` parses.
+/// engine's `default_fetch_scannable_block`, so the fixture records the bodies as
+/// the chain carries them rather than the skeletons the engine binds. The fixture
+/// needs only the prefix outputs + ct-base commitments + `0x07`, all of which a
+/// full tx carries and `shekyl_wire::Transaction::from_bytes` parses.
 async fn capture_chain(daemon: &RegtestDaemon, name: &str, tip: u64) -> serde_json::Value {
     let mut blocks = Vec::new();
     for height in 0..=tip {

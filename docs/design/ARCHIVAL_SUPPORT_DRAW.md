@@ -471,7 +471,7 @@ option 1.
    of an empty archive holds nothing a draw could select, as a compact
    holding of a shard not yet closed is no pair. Each block's support
    row holds its seats (SI-40), and the store's view checks a roster it
-   reads against the schedule over the snapshot (SI-42).
+   reads against the schedule over the snapshot (SI-43).
 2. **The carry stays inside its epoch** (`SO-D12r`; §2, as amended). The sentence
    "an epoch that opens while `c` are already unissued adds nothing" is
    struck by this ruling: no carry crosses an epoch. The carry is built

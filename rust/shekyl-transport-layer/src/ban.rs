@@ -6,10 +6,10 @@
 //! The ban list. IPv4 subnets and host addresses. Expiry is checked when
 //! an entry is looked up, not on a timer.
 //!
-//! RPC and misbehaviour scoring both write this list, through a duration
-//! added to the monotonic clock. A duration that does not fit a [`Tick`]
-//! is not stored. A ban from the operator's ban file has no deadline:
-//! it stays until it is lifted. One list lives in the socket table; this
+//! The operator is the only writer. RPC `set_bans` passes a duration
+//! added to the monotonic clock, and the ban file stores entries with
+//! no deadline. A duration that does not fit a [`Tick`] is not stored.
+//! A peer cannot make a ban. One list lives in the socket table; this
 //! type is that list.
 
 use std::collections::HashMap;
@@ -460,6 +460,45 @@ mod tests {
         assert!(bans.ban_subnet(subnet, Tick::new(100), Tick::new(1)));
         assert!(bans.lift_subnet(subnet));
         assert!(!bans.is_banned(v4([10, 1, 1, 1]), Tick::new(2)));
+    }
+
+    /// A second ban of the same target is one row, and lifting an
+    /// address that is not banned removes nothing.
+    #[test]
+    fn a_repeated_ban_is_one_row() {
+        let mut bans = BanList::new();
+        let now = Tick::new(1);
+        let until = Tick::new(1_000);
+        let host = v4([1, 2, 3, 4]);
+        assert!(bans.ban_host(host, until, now));
+        assert!(!bans.ban_host(host, until, now));
+        assert_eq!(bans.listed(now).len(), 1);
+        assert!(!bans.lift_host(v4([1, 2, 3, 5])));
+        assert!(bans.lift_host(host));
+        assert!(!bans.lift_host(host));
+
+        let slash8 = Ipv4Subnet::new(Ipv4Addr::new(1, 2, 3, 4), 8).expect("prefix");
+        assert!(bans.ban_subnet(slash8, until, now));
+        assert!(!bans.ban_subnet(slash8, until, now));
+        assert_eq!(bans.listed(now).len(), 1);
+    }
+
+    /// A lift names the stored prefix. A narrower prefix inside it is a
+    /// different row, and another address in the same prefix names the
+    /// same row.
+    #[test]
+    fn a_narrower_prefix_is_not_the_wider_ban() {
+        let mut bans = BanList::new();
+        let now = Tick::new(1);
+        let until = Tick::new(1_000);
+        let slash24 = Ipv4Subnet::new(Ipv4Addr::new(1, 2, 3, 4), 24).expect("prefix");
+        let slash8 = Ipv4Subnet::new(Ipv4Addr::new(1, 2, 3, 4), 8).expect("prefix");
+        assert!(bans.ban_subnet(slash8, until, now));
+        assert!(!bans.lift_subnet(slash24));
+        assert!(bans.is_banned(v4([1, 2, 3, 4]), now));
+        let same_prefix = Ipv4Subnet::new(Ipv4Addr::new(1, 255, 0, 0), 8).expect("prefix");
+        assert!(bans.lift_subnet(same_prefix));
+        assert!(bans.listed(now).is_empty());
     }
 
     #[test]

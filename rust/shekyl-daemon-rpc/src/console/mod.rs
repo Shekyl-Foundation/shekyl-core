@@ -38,7 +38,6 @@ mod tests;
 
 use alt_chain::alt_chain_info;
 use blockchain::{print_blockchain_dynamic_stats, print_blockchain_info};
-use shekyl_types::{ArchivalLength, PrunableHash};
 use status::show_status;
 
 /// Rendered; `out` holds the text to print as success output.
@@ -326,26 +325,20 @@ fn print_height(src: &Source) -> Result<String, String> {
     Ok(reply.height.to_string())
 }
 
-/// `print_transaction <hash> [+meta] [+hex] [+json]` — RK-4c. Reads
+/// `print_transaction <hash> [+meta] [+hex]` — RK-4c. Reads
 /// `get_transactions` and nothing else, which is why it migrates with it
-/// (§2.1).
-///
-/// The C++ rendered the JSON client-side: it parsed the hex back into a
-/// transaction and called `obj_to_json_str` locally. Here the daemon is asked
-/// for it (`decode_as_json`) and the reply's `as_json` is printed. Same
-/// string — both are epee over the same transaction — and it works on the
-/// remote arm, which has no core to render with.
+/// (§2.1). Its `+json` went with epee's rendering (IG-Q55; `tx show`'s
+/// `--json` is the session's).
 fn print_transaction(src: &Source, args: &[String]) -> Result<String, String> {
     let Some(hash) = args.first() else {
         return Err("Invalid syntax: At least one parameter expected. For more                     details, use the help command."
             .to_owned());
     };
-    let (mut meta, mut hex_out, mut json_out) = (false, false, false);
+    let (mut meta, mut hex_out) = (false, false);
     for flag in &args[1..] {
         match flag.as_str() {
             "+meta" => meta = true,
             "+hex" => hex_out = true,
-            "+json" => json_out = true,
             other => {
                 return Err(format!(
                     "Invalid syntax: Unexpected parameter: {other}. For more                      details, use the help command."
@@ -353,20 +346,11 @@ fn print_transaction(src: &Source, args: &[String]) -> Result<String, String> {
             }
         }
     }
-    // `split` is not a display preference here, it is what makes the
-    // "(pruned)" label answerable. The label asks whether the daemon holds
-    // this transaction's prunable half, and reads `prunable_as_hex` to decide
-    // — a field only the split form fills. Ask for the whole transaction
-    // instead and the halves arrive concatenated in `as_hex` with
-    // `prunable_as_hex` empty, which is indistinguishable from "pruned" and
-    // would label every ordinary confirmed transaction as such. The C++
-    // console set `req.split = true` for the same reason; the rendering below
-    // already reassembles the halves.
+    // The full form: the whole body, or `archived` with the shard it went
+    // in when this daemon discarded its archival good (`PDM-Q10`).
     let request = shekyl_rpc_types::GetTransactionsRequest {
         txs_hashes: vec![hash.clone()],
-        decode_as_json: json_out,
         prune: false,
-        split: true,
     };
     let reply = fetch_transactions(src, &request)?;
     if !reply.status.is_ok() {
@@ -386,6 +370,14 @@ fn print_transaction(src: &Source, args: &[String]) -> Result<String, String> {
         return Err(format!(
             "Transaction {hash} is not in the chain, and the daemon's pool is unavailable \
              until it restarts: whether the pool holds it is not known"
+        ));
+    }
+    if let [archived] = reply.archived.as_slice() {
+        return Err(format!(
+            "Transaction {hash} is in the chain, and its body is archived: this daemon \
+             discarded it with shard {}. Ask for it with prune, or from an archiver that \
+             serves that shard",
+            archived.shard
         ));
     }
     let tx = match reply.txs.as_slice() {
@@ -409,37 +401,21 @@ fn print_transaction(src: &Source, args: &[String]) -> Result<String, String> {
     // request; it does not make it so — every field of the reply is the
     // daemon's to choose, and the remote arm posts wherever the operator
     // pointed it. So the body is bound the way `parse_tx_batch` binds the
-    // wallet's: parse the bytes and recompute the identity. A reply carrying
-    // its prunable half (or a transaction with nothing prunable) rehashes
-    // whole; a storage-pruned body mixes the reply's `prunable_hash` and
-    // `archival_len` in, which turns a substituted body into a keccak
-    // preimage instead of a free choice. `as_json` stays unverified: it is the daemon's epee
-    // rendering of the same bytes the binding just checked (RK-D11).
-    //
-    // "(pruned)" below means the daemon holds no prunable half for a
-    // transaction that has one — `prunable_hash` distinguishes that from a
-    // coinbase, which has nothing prunable to begin with and whose hash is
-    // null or the hash of the empty string.
-    let pruned = tx.prunable_as_hex.is_empty() && !is_empty_prunable(&tx.prunable_hash);
-    let full_hex = if tx.as_hex.is_empty() {
-        format!("{}{}", tx.pruned_as_hex, tx.prunable_as_hex)
-    } else {
-        tx.as_hex.clone()
-    };
-    let blob = hex::decode(&full_hex)
+    // wallet's: parse the bytes and recompute the identity. The full form
+    // carries the whole body, so it rehashes whole; a reply that answers the
+    // full form with a pruned segment is refused here, not reassembled.
+    if tx.as_hex.is_empty() {
+        return Err(format!(
+            "print_transaction: the daemon answered {hash} in the pruned form to a request \
+             for the whole body"
+        ));
+    }
+    let blob = hex::decode(&tx.as_hex)
         .map_err(|_| format!("print_transaction: the daemon's body for {hash} is not hex"))?;
     let parsed = shekyl_wire::Transaction::from_bytes(&blob).map_err(|_| {
         format!("print_transaction: the daemon's body for {hash} is not a transaction")
     })?;
-    let derived = if pruned {
-        parsed.hash_with_supplied_prunable(
-            PrunableHash::from_bytes(tx.prunable_hash.to_bytes()),
-            ArchivalLength::from_raw(tx.archival_len),
-        )
-    } else {
-        parsed.hash()
-    };
-    let derived_hex = hex::encode(derived);
+    let derived_hex = hex::encode(parsed.hash());
     if !derived_hex.eq_ignore_ascii_case(hash) {
         return Err(format!(
             "print_transaction: the entry is labeled {hash} but its body hashes \
@@ -451,10 +427,7 @@ fn print_transaction(src: &Source, args: &[String]) -> Result<String, String> {
     match &tx.location {
         shekyl_rpc_types::TxLocation::Pooled { .. } => out.push("Found in pool".to_owned()),
         shekyl_rpc_types::TxLocation::Mined { block_height, .. } => {
-            out.push(format!(
-                "Found in blockchain at height {block_height}{}",
-                if pruned { " (pruned)" } else { "" }
-            ));
+            out.push(format!("Found in blockchain at height {block_height}"));
         }
     }
 
@@ -475,36 +448,9 @@ fn print_transaction(src: &Source, args: &[String]) -> Result<String, String> {
         out.push(format!("Weight: {}", parsed.weight()));
     }
     if hex_out {
-        out.push(full_hex);
-    }
-    if json_out {
-        let Some(json) = tx.as_json.clone() else {
-            return Err(format!(
-                "print_transaction: the daemon sent no JSON rendering for {hash}"
-            ));
-        };
-        out.push(json);
+        out.push(tx.as_hex.clone());
     }
     Ok(out.join("\n"))
-}
-
-/// A `prunable_hash` that means "there was nothing prunable" rather than "the
-/// prunable half was dropped": all-zero, or the hash of the empty string,
-/// which is what a transaction with no prunable part carries.
-///
-/// The constant is `crypto::cn_fast_hash("", 0)`, the expression the C++
-/// console computed once into a static. **Measured, not assumed** — an
-/// earlier draft of this function carried a plausible-looking wrong value,
-/// which would have printed "(pruned)" for transactions that are not:
-///
-/// ```text
-/// crypto::hash h = crypto::cn_fast_hash("", 0);   // -> c5d24601…d85a470
-/// ```
-const EMPTY_PRUNABLE_HASH: &str =
-    "c5d2460186f7233c927e7db2dcc703c0e500b653ca82273b7bfad8045d85a470";
-
-fn is_empty_prunable(h: &shekyl_rpc_types::HashHex) -> bool {
-    h.is_zero() || h.to_string() == EMPTY_PRUNABLE_HASH
 }
 
 /// `is_key_image_spent <key_image>` — RK-4c. Reads that method only.

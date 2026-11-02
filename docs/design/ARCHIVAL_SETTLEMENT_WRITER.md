@@ -1301,10 +1301,27 @@ This lane's increments, each its own change:
      (the sim pins that opening shortfall at 1536 when `|D|` is 512).
      Increment 4a does not call the verifier: a connect writes the plan
      only when it is handed bundles;
+   - the template's section, **staged** (4b preparation): `fill_section`
+     beside `check_section` in the rules crate walks the bundle queue's
+     references in ascending `h` and keeps those inside the window whose
+     epoch's `D` the view holds. A section spans at most two epochs. It
+     packs them oldest-first under the budget the epochs it keeps earn —
+     the largest `D` among those epochs, the cap `check_section` applies —
+     passing over one that would exceed it, and passing over one that would
+     crowd out the epoch earning a larger `D`. What it returns is a section
+     `check_section` admits. The block template calls it at the switch;
    - flip the switch as one rule-07 cutover, calling the verifier from
      `validate`. The `passed` bit is set by
      an admitted record and by nothing else, and the Fakechain door is
-     deleted;
+     deleted. Its callers move to admitted bundles before that, each when
+     what it needs exists: the economy chains first (4b preparation), on a
+     levered schedule long enough that the count rule, crediting at most
+     one draw a block onto a pair still short of its counted draws, issues
+     every pair those draws (`settled_epoch_blocks`, derived from the
+     rule; the shared 20-block epoch issues a pair about one draw); the
+     complete-tree chains once the support schedule is on the connect path;
+     and the round-tripped levered slash chain at the switch, where a
+     popped block returns its bundles to the queue;
    - the attestation-path deletions, with the Rust CEN-B4 rule and the
      census status for a row retired by ruling; and the serve-credit
      table with the two reads that stand on it (`SO-D10c`, `SO-D12j`).
