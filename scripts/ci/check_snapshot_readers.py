@@ -17,10 +17,10 @@ readers, not against a number.
 For every member of the structure it finds a read under `src/` through a
 variable of the snapshot's type (`snapshot.network`, `snapshot->network`,
 whatever the variable is called), excluding the header that declares the
-structure. A member with no read fails, unless `EXEMPT` names it with the
-reason; an exemption naming a member the structure no longer has fails as
-stale. The two pinned counts and the two member lists (Rust and C++, in
-order) must agree with the structure and with each other.
+structure. A member with no read fails; there is no exemption (Rick,
+2026-11-02: every field has a C++ reader or goes). The two pinned counts and
+the two member lists (Rust and C++, in order) must agree with the structure
+and with each other.
 
 Exit 0 when every field has a reader; 1 naming each field without one;
 2 when the structure, the counts or the snapshot-typed variables cannot be
@@ -39,14 +39,6 @@ RUST_SOURCE = "rust/shekyl-ffi/src/daemon_snapshot_ffi.rs"
 C_HEADER = "src/shekyl/shekyl_ffi.h"
 C_ROOT = "src"
 C_SUFFIXES = {".cpp", ".h", ".hpp", ".inl", ".cc"}
-
-# A member with no C++ reader that stays by decision, and why. Keep this
-# empty when it can be.
-EXEMPT: dict[str, str] = {
-    # The chain is the Rust store: core no longer opens LMDB at this path
-    # (DC-F25). Rick decides whether the field is deleted or kept.
-    "data_dir": "no C++ reader since the chain moved to the Rust store (DC-F25)",
-}
 
 
 def strip_comments(text: str) -> str:
@@ -106,7 +98,7 @@ def readers(repo: Path, fields: list[str]) -> tuple[dict[str, list[str]], set[st
     return found, names
 
 
-def check(repo: Path, exempt: dict[str, str]) -> tuple[list[str], list[str], int]:
+def check(repo: Path) -> tuple[list[str], list[str], int]:
     """(subject errors, findings, readers counted). Subject errors are the
     gate's own failures (exit 2); findings are fields without a reader (exit 1)."""
     subject: list[str] = []
@@ -145,16 +137,8 @@ def check(repo: Path, exempt: dict[str, str]) -> tuple[list[str], list[str], int
         return subject, [], total
     findings: list[str] = []
     for f in fields:
-        if found[f]:
-            continue
-        if f in exempt:
-            continue
-        findings.append(f"snapshot field `{f}` has no C++ reader under {C_ROOT}/; delete it or name it in EXEMPT with the reason")
-    for f in exempt:
-        if f not in fields:
-            findings.append(f"EXEMPT names `{f}`, which is not a snapshot field; the exemption is stale")
-        elif found[f]:
-            findings.append(f"EXEMPT names `{f}`, which has a C++ reader ({found[f][0]}); the exemption is stale")
+        if not found[f]:
+            findings.append(f"snapshot field `{f}` has no C++ reader under {C_ROOT}/; delete it")
     return [], findings, total
 
 
@@ -196,7 +180,7 @@ extern "C" int run(const ShekylDaemonSnapshot* s) noexcept
 def selftest() -> int:
     failures = 0
 
-    def case(title: str, rust: str, header: str, reader: str, exempt: dict[str, str], expect_subject: bool, expect: list[str]) -> None:
+    def case(title: str, rust: str, header: str, reader: str, expect_subject: bool, expect: list[str]) -> None:
         nonlocal failures
         with tempfile.TemporaryDirectory() as tmp:
             repo = Path(tmp)
@@ -206,7 +190,7 @@ def selftest() -> int:
             (repo / C_HEADER).write_text(header)
             (repo / C_ROOT / "d").mkdir(parents=True)
             (repo / C_ROOT / "d" / "daemon.cpp").write_text(reader)
-            subject, findings, _ = check(repo, exempt)
+            subject, findings, _ = check(repo)
         if expect_subject:
             ok = bool(subject) and not findings
         else:
@@ -214,16 +198,14 @@ def selftest() -> int:
         print(f"{'ok' if ok else 'FAIL'}: {title}" + ("" if ok else f" — got subject={subject} findings={findings}"))
         failures += 0 if ok else 1
 
-    case("every field read passes", RUST_FIXTURE, C_FIXTURE, READER_FIXTURE.replace("// s->gamma is only", "x = s->gamma; //"), {}, False, [])
-    case("a field read only in a comment is named", RUST_FIXTURE, C_FIXTURE, READER_FIXTURE, {}, False, ["`gamma` has no C++ reader"])
-    case("an exempt field passes with its reason", RUST_FIXTURE, C_FIXTURE, READER_FIXTURE, {"gamma": "why"}, False, [])
-    case("a stale exemption is named", RUST_FIXTURE, C_FIXTURE, READER_FIXTURE, {"gamma": "why", "delta": "gone"}, False, ["`delta`, which is not a snapshot field"])
-    case("an exemption with a reader is named", RUST_FIXTURE, C_FIXTURE, READER_FIXTURE, {"gamma": "why", "alpha": "has one"}, False, ["`alpha`, which has a C++ reader"])
-    case("a Rust count off by one is refused", RUST_FIXTURE.replace("= 3;", "= 4;"), C_FIXTURE, READER_FIXTURE, {"gamma": "why"}, True, [])
-    case("a C++ count off by one is refused", RUST_FIXTURE, C_FIXTURE.replace("3u", "2u"), READER_FIXTURE, {"gamma": "why"}, True, [])
-    case("a member missing on one side is refused", RUST_FIXTURE, C_FIXTURE.replace("  bool beta; // a comment\n", ""), READER_FIXTURE, {"gamma": "why"}, True, [])
-    case("no snapshot-typed variable is refused", RUST_FIXTURE, C_FIXTURE, "int main() { return 0; }\n", {"gamma": "why"}, True, [])
-    case("a missing structure is refused", "nothing here\n", C_FIXTURE, READER_FIXTURE, {}, True, [])
+    read_all = READER_FIXTURE.replace("// s->gamma is only", "x = s->gamma; //")
+    case("every field read passes", RUST_FIXTURE, C_FIXTURE, read_all, False, [])
+    case("a field read only in a comment is named", RUST_FIXTURE, C_FIXTURE, READER_FIXTURE, False, ["`gamma` has no C++ reader"])
+    case("a Rust count off by one is refused", RUST_FIXTURE.replace("= 3;", "= 4;"), C_FIXTURE, read_all, True, [])
+    case("a C++ count off by one is refused", RUST_FIXTURE, C_FIXTURE.replace("3u", "2u"), read_all, True, [])
+    case("a member missing on one side is refused", RUST_FIXTURE, C_FIXTURE.replace("  bool beta; // a comment\n", ""), read_all, True, [])
+    case("no snapshot-typed variable is refused", RUST_FIXTURE, C_FIXTURE, "int main() { return 0; }\n", True, [])
+    case("a missing structure is refused", "nothing here\n", C_FIXTURE, read_all, True, [])
     return 1 if failures else 0
 
 
@@ -232,7 +214,7 @@ def main(argv: list[str]) -> int:
         return selftest()
     repo = Path(__file__).resolve().parents[2]
     os.chdir(repo)
-    subject, findings, total = check(repo, EXEMPT)
+    subject, findings, total = check(repo)
     if subject:
         for e in subject:
             print(f"error: {e}", file=sys.stderr)
@@ -242,10 +224,7 @@ def main(argv: list[str]) -> int:
             print(f"error: {f}", file=sys.stderr)
         return 1
     fields = rust_fields((repo / RUST_SOURCE).read_text())
-    print(
-        f"snapshot readers: every field of ShekylDaemonSnapshot has a C++ reader "
-        f"({len(fields)} fields, {total} reads, {len(EXEMPT)} exempt: {', '.join(EXEMPT) or 'none'})"
-    )
+    print(f"snapshot readers: every field of ShekylDaemonSnapshot has a C++ reader ({len(fields)} fields, {total} reads)")
     return 0
 
 

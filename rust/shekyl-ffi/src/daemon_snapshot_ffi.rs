@@ -7,32 +7,22 @@
 //! (`DAEMON_CONFIG_CUTOVER.md` §2.9), and the snapshot export the C++ test
 //! binaries and the blockchain importer construct their core from.
 //!
-//! **Six fields** (§2.9). [`SNAPSHOT_FIELDS`] pins the count and
+//! **Five fields** (§2.9). [`SNAPSHOT_FIELDS`] pins the count and
 //! [`shekyl_daemon_snapshot_field_count`] exports it for the C++ to assert;
 //! `scripts/ci/check_snapshot_readers.py` holds every field to a C++ reader
-//! under `src/`, so a field whose reader moved into Rust fails there until
-//! it is deleted. The pool's weight bound left when `txpool-weight-max`
-//! became a rejected option (IG-Q11); the fixed difficulty, the mining
-//! address and the mining threads were deleted with the Rust binary
-//! (DC-Q24, §3.7): no C++ read them, and the Rust miner reads
-//! `mine-address` from the configuration itself. `dev-sync` is not a field: chain
-//! sync's owner reads it from the configuration. The advertised endpoints
-//! are not a field: their reader is Rust, the peer lists' own entry (§2.8),
-//! where the handshake's port check will read it (Rick, 2026-10-15); no C++
-//! reads them. The snapshot is the whole of what the remnant reads: it
-//! parses nothing.
+//! under `src/`, with no exemption: a field whose reader moved into Rust
+//! fails there until it is deleted (DC-Q19's deletion list). A value whose
+//! reader is Rust is not a field: the fixed difficulty, the mining address
+//! and threads, `dev-sync`, the data directory (the chain is the Rust
+//! store), the advertised endpoints (the peer lists' own entry, §2.8), and
+//! the pool's weight bound (a rejected option, IG-Q11). The snapshot is the
+//! whole of what the remnant reads: it parses nothing.
 //!
 //! **Here, in `shekyl-ffi`.** [`shekyl_daemon_snapshot_parse`] sits in the
 //! ordinary FFI library on top of `shekyl-daemon-config`, so the importer
-//! and `core_tests` link `libshekyl_ffi.a`. *Records-was (to 2026-11-01):*
-//! the export once lived in the daemon image, the staticlib the C++
-//! `shekyld` linked, whose daemon-RPC objects import C++ symbols only
-//! `shekyld` links; those binaries linked on Linux and macOS only because
-//! `--gc-sections` / `-dead_strip` dropped the unreferenced RPC code, and
-//! MinGW, which keeps it, failed the link (Rick, 2026-10-19). The image is
-//! retired with the C++ executable (DC-Q19). The `shekyld` binary carries
-//! this module too: `shekyl-daemon` starts the remnant with
-//! [`SnapshotData::call`].
+//! and `core_tests` link `libshekyl_ffi.a` and carry nothing of the daemon.
+//! The `shekyld` binary carries this module too: `shekyl-daemon` starts the
+//! remnant with [`SnapshotData::call`].
 //!
 //! **A test's snapshot.** [`shekyl_daemon_snapshot_parse`] builds a snapshot
 //! from an argument list through the one real parse
@@ -60,8 +50,7 @@ pub struct ShekylStringList {
 ///
 /// Four octets in network order, so a `memcpy` into a `uint32_t` is the
 /// value `inet_addr` would have returned, and the port in host order.
-/// `present` is false for a daemon start. One member of the snapshot, so
-/// the field count stays six.
+/// `present` is false for a daemon start. One member of the snapshot.
 #[repr(C)]
 #[derive(Clone, Copy, Debug)]
 pub struct ShekylClientEndpoint {
@@ -78,8 +67,6 @@ pub struct ShekylClientEndpoint {
 #[repr(C)]
 #[derive(Clone, Copy, Debug)]
 pub struct ShekylDaemonSnapshot {
-    /// The resolved data directory, NUL-terminated.
-    pub data_dir: *const c_char,
     /// The network, as `cryptonote::network_type`: 0 mainnet, 1 testnet,
     /// 2 stagenet, 3 fakechain (regtest). Read by core and the p2p server.
     pub network: u8,
@@ -100,7 +87,7 @@ const _: () = assert!(std::mem::align_of::<ShekylClientEndpoint>() == 2);
 
 /// The snapshot's field count. A gate asserts it against the definition
 /// above and the C++ asserts it against [`shekyl_daemon_snapshot_field_count`].
-pub const SNAPSHOT_FIELDS: u32 = 6;
+pub const SNAPSHOT_FIELDS: u32 = 5;
 
 /// The snapshot's field count, for the C++ to assert against the
 /// structure it reads. `no_mangle` is what the `unsafe_code` lint flags
@@ -114,7 +101,6 @@ pub extern "C" fn shekyl_daemon_snapshot_field_count() -> u32 {
 /// The owned data behind a snapshot: built on the calling thread, moved to
 /// the run thread, and alive for as long as `run` runs.
 pub struct SnapshotData {
-    data_dir: CString,
     network: u8,
     offline: bool,
     console: bool,
@@ -140,7 +126,6 @@ impl SnapshotData {
             },
         };
         Self {
-            data_dir: c(&config.data_dir.display().to_string()),
             network: config.network.cryptonote_code(),
             offline: config.offline(),
             console: config.session.console,
@@ -175,12 +160,6 @@ impl SnapshotData {
             .collect()
     }
 
-    /// The resolved data directory, as text.
-    #[cfg(test)]
-    fn data_dir(&self) -> String {
-        self.data_dir.to_string_lossy().into_owned()
-    }
-
     /// Pointers to the command words. Valid while `self` is borrowed, and
     /// while the returned vector is: the snapshot's `command.items` addresses
     /// this vector's buffer, not `self`.
@@ -192,7 +171,6 @@ impl SnapshotData {
     /// read of the result. `command.items` addresses `command`'s buffer.
     fn snapshot(&self, command: &[*const c_char]) -> ShekylDaemonSnapshot {
         ShekylDaemonSnapshot {
-            data_dir: self.data_dir.as_ptr(),
             network: self.network,
             offline: self.offline,
             console: self.console,
@@ -208,11 +186,11 @@ impl SnapshotData {
 /// A snapshot leased to a C++ caller: the structure first, so its address
 /// is the lease's, then what it points at.
 ///
-/// The command pointers address `_command`'s buffer, and the data-directory
-/// pointer `_data`'s allocation; neither moves when the lease is moved into
-/// the box `shekyl_daemon_snapshot_parse` hands to C++. C++ frees the lease
-/// on the same thread or any other; the value is not sent between Rust
-/// threads.
+/// The command pointers address `_command`'s buffer and the string
+/// pointers `_data`'s allocations; neither moves when the lease is moved
+/// into the box `shekyl_daemon_snapshot_parse` hands to C++. C++ frees the
+/// lease on the same thread or any other; the value is not sent between
+/// Rust threads.
 #[repr(C)]
 struct Leased {
     snapshot: ShekylDaemonSnapshot,
@@ -321,7 +299,7 @@ mod tests {
     }
 
     #[test]
-    fn the_snapshot_carries_the_six_values() {
+    fn the_snapshot_carries_the_five_values() {
         let d = tempfile::tempdir().unwrap();
         let args_v: Vec<OsString> = [
             "--network",
@@ -348,7 +326,6 @@ mod tests {
         assert!(data.client_endpoint.present);
         assert_eq!(data.client_endpoint.octets, [127, 0, 0, 1]);
         assert_eq!(data.client_endpoint.port, 11029);
-        assert_eq!(data.data_dir(), d.path().display().to_string());
         assert_eq!(data.network, 3);
         assert!(!data.offline, "regtest keeps the clearnet connector on");
         assert!(!data.console);

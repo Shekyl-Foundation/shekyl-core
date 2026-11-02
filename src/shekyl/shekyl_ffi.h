@@ -3056,7 +3056,7 @@ int shekyl_network_id(std::uint8_t nettype, std::uint8_t* out);
 /// `shekyl_daemon_snapshot_field_count()` at run, and
 /// `scripts/ci/check_snapshot_readers.py` holds every member to a C++
 /// reader under `src/`.
-#define SHEKYL_DAEMON_SNAPSHOT_FIELDS 6u
+#define SHEKYL_DAEMON_SNAPSHOT_FIELDS 5u
 
 /// A list of NUL-terminated strings.
 struct ShekylStringList {
@@ -3077,7 +3077,6 @@ static_assert(sizeof(ShekylClientEndpoint) == 8,
 
 /// The values whose reader is still C++ (§2.9), filled once by Rust.
 struct ShekylDaemonSnapshot {
-  const char* data_dir;
   uint8_t network;
   bool offline;
   bool console;
