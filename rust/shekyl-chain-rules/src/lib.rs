@@ -173,13 +173,14 @@ pub use archival::{
 // The serve-credit bundle rule (`archival/bundle.rs`): STAGED on the
 // connect path. The verifier and its view trait are exported for the
 // lanes that wire them (`SO-D12`'s cutover); the bundle queue runs the
-// verifier against the tip, and a block's producer derives its draws with
-// the verifier's own selection. `form` and `validate` do not call them.
+// verifier against the tip, a block's producer derives its draws with
+// the verifier's own selection, and the template fills its section at
+// the switch. `form` and `validate` do not call them.
 pub use archival::{
-    check_section, check_section_until_switch, draw_targets, judge_bundles, open_body,
-    open_reference, verify_bundle, AdmissionFault, Admitted, BundleInvalid, BundleRefused,
-    BundleUnanswered, BundleView, DerivedDraw, DrawOrigin, DrawTargets, Drawn, SectionCharge,
-    SectionCheckFailed, SectionRefused, SectionStanding, SupportSeat,
+    check_section, check_section_until_switch, draw_targets, fill_section, judge_bundles,
+    open_body, open_reference, verify_bundle, AdmissionFault, Admitted, BundleInvalid,
+    BundleRefused, BundleUnanswered, BundleView, DerivedDraw, DrawOrigin, DrawTargets, Drawn,
+    SectionCharge, SectionCheckFailed, SectionRefused, SectionStanding, SupportSeat,
 };
 pub use block::{
     Candidate, ProvenPow, ReferenceClaim, ReferenceClaims, StructurallyValid, TxIdentity,
