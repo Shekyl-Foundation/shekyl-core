@@ -349,6 +349,26 @@ Task Scheduler on Windows); the GUI wallet supervises its own bundled
 `contrib/packaging/linux/shekyld.service`. Nothing reads the daemon's
 stdin unless `--console` is given, so a unit needs no flag for that.
 
+**Crash dumps**
+
+`shekyld` hardens itself before it reads an argument: on every Unix it
+writes no core file whatever the system's limit, and on Linux and
+FreeBSD a process that is not root cannot attach a debugger to it. A
+fault ends it by the signal; a stack overflow prints the runtime's
+message and ends it by `SIGABRT` (on FreeBSD by `SIGSEGV` without the
+message). On Windows it raises no fault dialog, and the installer
+excludes `shekyld.exe` from Windows Error Reporting's reporting. That
+exclusion does not reach a **LocalDumps** policy: on a machine where
+`HKLM\SOFTWARE\Microsoft\Windows\Windows Error Reporting\LocalDumps`
+is set (by Group Policy or by hand), Windows writes a memory dump of a
+crashed `shekyld.exe` to that policy's folder (by default
+`%LOCALAPPDATA%\CrashDumps`) whatever the exclusion says, and gives no
+per-program way to stop it. If you run the daemon on such a machine,
+treat that folder as you treat the data directory: the dump holds the
+process's memory, and while the daemon holds no wallet keys, it does
+hold its onion service's secret key, its peer list and its mining
+address.
+
 ### Interactive console
 
 When `shekyld` is running in the foreground, you get an interactive console.

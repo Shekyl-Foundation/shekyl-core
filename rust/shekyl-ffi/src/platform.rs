@@ -69,10 +69,14 @@ impl std::error::Error for HardenError {
 /// - Windows: `SetErrorMode` with `SEM_NOGPFAULTERRORBOX`, so a fault ends
 ///   the process instead of blocking a headless service on a dialog, and
 ///   `SEM_FAILCRITICALERRORS` / `SEM_NOOPENFILEERRORBOX`, so a missing
-///   volume or file is an error the code sees, not a prompt. Windows Error
-///   Reporting's dump collection is excluded at install time
+///   volume or file is an error the code sees, not a prompt. Nothing here
+///   touches dumps: Windows Error Reporting is a per-machine setting, and
+///   the installer excludes `shekyld.exe` from its *reporting*
 ///   (`contrib/packaging/windows/shekyl.nsi`, the `ExcludedApplications`
-///   value), because that is a per-machine setting, not a per-process one.
+///   value). A machine-wide `LocalDumps` policy still writes a dump of an
+///   excluded name, and Windows documents no per-executable setting that
+///   stops it (`DAEMON_CONFIG_CUTOVER.md` DC-F38); on such a machine the
+///   dump is the operator's to manage.
 ///
 /// # Errors
 ///
