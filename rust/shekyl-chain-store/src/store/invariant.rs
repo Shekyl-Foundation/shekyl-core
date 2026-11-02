@@ -550,20 +550,21 @@ pub enum StoreInvariant {
         /// Which region is held; the other is not.
         held: HeldRegion,
     },
-    /// **SI-43** — a block's seat row is its epoch's schedule: every seat
-    /// is a support member of the epoch snapshot, and every member the
-    /// schedule puts on the height is seated
-    /// ([`shekyl_chain_rules::scheduled_seats`]; `SO-D12` S1). The store's
-    /// bundle view checks it when admission reads a roster. Raised before
-    /// any write. Fatal, never a verdict on the block.
+    /// **SI-43** — a block's seat row equals its epoch's schedule
+    /// ([`shekyl_chain_rules::scheduled_seats`], compared by
+    /// [`shekyl_types::archival::SupportSeats::first_one_sided`]; `SO-D12`
+    /// S1). The
+    /// store's bundle view checks it when admission reads a roster. A
+    /// persona on only one side is this halt: a member the schedule does
+    /// not seat, a stranger, and a scheduled member the row dropped. The
+    /// carry is staged and is not consulted; when it joins the transition
+    /// the seats it writes are the schedule this comparison takes. Raised
+    /// before any write. Fatal, never a verdict on the block.
     SupportSeatsNotScheduled {
         /// The height whose roster was read.
         height: shekyl_types::BlockHeight,
-        /// The persona seated without being a member, or scheduled without
-        /// being seated.
+        /// The first persona, in persona order, present on only one side.
         persona: shekyl_types::PCanonicalId,
-        /// Which direction failed.
-        observed: SeatFault,
     },
 }
 
@@ -576,16 +577,6 @@ pub enum HeldRegion {
     Prunable,
     /// `txs_pqc_auths[id]` is present and `txs_prunable[id]` is not.
     PqcAuths,
-}
-
-/// Which half of SI-43 a seat row failed (payload of
-/// [`StoreInvariant::SupportSeatsNotScheduled`]).
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub enum SeatFault {
-    /// The row seats a persona the epoch snapshot does not hold as a member.
-    NotAMember,
-    /// The schedule seats a member at this height and the row does not.
-    ScheduledNotSeated,
 }
 
 /// What an SI-41 check observed (payload of
@@ -1191,22 +1182,10 @@ impl core::fmt::Display for StoreInvariant {
                      archival good is one unit, held or discarded together"
                 )
             }
-            Self::SupportSeatsNotScheduled {
-                height,
-                persona,
-                observed: SeatFault::NotAMember,
-            } => write!(
+            Self::SupportSeatsNotScheduled { height, persona } => write!(
                 f,
-                "the seat row at height {height} seats {persona:?}, which its epoch snapshot \
-                 does not hold as a support member"
-            ),
-            Self::SupportSeatsNotScheduled {
-                height,
-                persona,
-                observed: SeatFault::ScheduledNotSeated,
-            } => write!(
-                f,
-                "the schedule seats {persona:?} at height {height} and the seat row does not"
+                "the seat row at height {height} is not the schedule: {persona:?} is on only \
+                 one side"
             ),
             Self::DrawableMemoMiss { epoch } => write!(
                 f,

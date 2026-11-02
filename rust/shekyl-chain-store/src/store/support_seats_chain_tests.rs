@@ -261,38 +261,54 @@ fn first_scheduled_after_open(snapshot: &DrawableEpoch, epoch: u64) -> u64 {
         .expect("the epoch seats a tree after its open")
 }
 
-/// SI-43: a seat row that is not its epoch's schedule halts the read, in
-/// either direction. Red edits: drop the member check (a non-member seat
-/// reads as a roster); drop the scheduled check (an emptied row reads).
+/// SI-43: a seat row that is not the schedule halts the read. The three
+/// plants are the three ways two strictly increasing lists differ: a
+/// stranger, a member the schedule does not seat, and a scheduled member
+/// the row drops. Red edit: replace the equality with the two inclusions
+/// (a member the schedule does not seat reads as a roster).
 #[test]
 fn a_seat_row_that_is_not_the_schedule_is_si_43() {
-    /// What a case plants in place of the row.
-    type Plant = dyn Fn(&SupportSeats) -> SupportSeats;
+    /// What a case plants, and the persona the refusal must name.
+    type Plant = dyn Fn(&SupportSeats) -> (SupportSeats, PCanonicalId);
     let stranger = PCanonicalId::from_bytes([0xEE; 32]);
+    let members: Vec<PCanonicalId> = (0..WITNESS_PERSONAS)
+        .map(|slot| shekyl_harness_spender::Persona::at(u32::try_from(slot).expect("small")).id())
+        .collect();
     let plant_stranger = move |row: &SupportSeats| {
         let mut seats = row.as_slice().to_vec();
         seats.push(stranger);
         seats.sort_unstable();
-        SupportSeats::new(seats).expect("ascending")
+        (SupportSeats::new(seats).expect("ascending"), stranger)
     };
-    let empty = |_: &SupportSeats| SupportSeats::EMPTY;
-    let cases: [(&str, &Plant, &str); 2] = [
-        (
-            "not a member",
-            &plant_stranger,
-            "does not hold as a support member",
-        ),
-        ("scheduled, not seated", &empty, "and the seat row does not"),
+    let plant_extra = move |row: &SupportSeats| {
+        let extra = members
+            .iter()
+            .copied()
+            .find(|persona| row.as_slice().binary_search(persona).is_err())
+            .expect("the first seated height does not seat every member");
+        let mut seats = row.as_slice().to_vec();
+        seats.push(extra);
+        seats.sort_unstable();
+        (SupportSeats::new(seats).expect("ascending"), extra)
+    };
+    let plant_dropped = |row: &SupportSeats| {
+        let missing = *row.as_slice().first().expect("the subject seats someone");
+        (SupportSeats::EMPTY, missing)
+    };
+    let cases: [(&str, &Plant); 3] = [
+        ("stranger", &plant_stranger),
+        ("extra member", &plant_extra),
+        ("dropped", &plant_dropped),
     ];
-    for (label, plant, message) in cases {
+    for (label, plant) in cases {
         // An SI-43 halts the writer, so each case has its chain.
         let Seated { chain, memo, .. } = seated(
-            &format!("support-seats-si42-{}", label.len()),
+            &format!("support-seats-si43-{}", label.len()),
             h_open(2) + 10,
         );
         let h = first_seated(&chain, 2);
         let at = BlockHeight::from_raw(h);
-        let planted = plant(&seat_row(&chain, h).expect("the row"));
+        let (planted, persona) = plant(&seat_row(&chain, h).expect("the row"));
         let out: Result<(), TestErr> = chain.store.write(|batch| {
             batch
                 .open_upsert_table(crate::schema::ARCHIVAL_SUPPORT_BLOCK)?
@@ -307,7 +323,14 @@ fn a_seat_row_that_is_not_the_schedule_is_si_43() {
             panic!("{label}: the planted row read as a roster: {out:?}");
         };
         assert!(refused.contains("SI-43"), "{label}: {refused}");
-        assert!(refused.contains(message), "{label}: {refused}");
+        assert!(
+            refused.contains("is not the schedule"),
+            "{label}: {refused}"
+        );
+        assert!(
+            refused.contains(&format!("{persona:?}")),
+            "{label}: {refused}"
+        );
         chain.finish();
     }
 }

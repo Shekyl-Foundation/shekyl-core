@@ -468,8 +468,8 @@ option 1.
    Support reuses the economy's paths: the same filing, digest, memo and
    no-rebuild contract (admission's miss is SI-35). A member is a
    complete tree of pin 1 at `h_open(E)`. Each block's support row holds
-   its seats (SI-40), and the store's view checks a roster it reads
-   against the schedule over the snapshot (SI-43).
+   its seats (SI-40), and the store's view requires that row to equal
+   the schedule over the snapshot (SI-43).
 2. **The carry stays inside its epoch** (`SO-D12r`; §2, as amended). The sentence
    "an epoch that opens while `c` are already unissued adds nothing" is
    struck by this ruling: no carry crosses an epoch. The carry is built

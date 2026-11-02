@@ -13,7 +13,12 @@
 //! writes the carried seats in the block's seat row and the counters in
 //! `archival_support_unissued`. Falsifier:
 //! `nothing_on_the_connect_path_calls_the_bundle_verifier`, which lists
-//! [`seats_with_carry`] and [`SupportCarry`].
+//! [`seats_with_carry`] and [`SupportCarry`]. Admission does not consult
+//! it either: the stored row is compared for equality to the seats the
+//! transition wrote
+//! ([`shekyl_types::archival::SupportSeats::first_one_sided`]). When this
+//! joins the transition, those seats are [`seats_with_carry`]'s and the
+//! comparison stays equality.
 //!
 //! # The rule
 //!

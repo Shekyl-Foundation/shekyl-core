@@ -30,7 +30,7 @@ use shekyl_types::archival::{
 };
 use shekyl_types::{BlockHash, BlockHeight, PCanonicalId, SettlementEpoch, ShardId};
 
-use super::error::{SeatFault, StoreError, StoreInvariant};
+use super::error::{StoreError, StoreInvariant};
 use super::view::BatchView;
 
 /// What the bundle view asks of the chain it reads, and what an invariant does.
@@ -406,36 +406,32 @@ impl<V: BundleRows> BundleView for StoreBundleView<'_, V> {
         let Some(drawable) = self.drawable_epoch(epoch)? else {
             return Err(self.miss(epoch));
         };
-        // SI-43: the row is the schedule over the snapshot. With no roster
-        // (no closed shard at the open) there is no member, so any seat is
-        // not one.
-        let members = drawable.support_roster();
-        let mut roster = Vec::with_capacity(seats.len());
-        for persona in seats.as_slice() {
-            let Some(receipt_key) = members.and_then(|members| members.key(persona)) else {
-                return Err(self.view.arm_row(StoreInvariant::SupportSeatsNotScheduled {
-                    height: h,
-                    persona: *persona,
-                    observed: SeatFault::NotAMember,
-                }));
-            };
-            roster.push(shekyl_chain_rules::SupportSeat {
-                persona: *persona,
-                receipt_key: receipt_key.clone(),
-            });
-        }
+        // SI-43: the row equals the schedule over the snapshot. A member the
+        // schedule does not seat, a stranger, and a scheduled member the row
+        // drops are one disagreement. The carry is staged and is not
+        // consulted: the transition writes `scheduled_seats`, and when the
+        // carry joins, the seats it writes are what this comparison takes.
+        // The comparison stays equality.
         let scheduled = shekyl_chain_rules::scheduled_seats(drawable, h, self.schedule)
             .map_err(|corrupt| self.view.arm_row(super::write::invariant_of(corrupt)))?;
-        if let Some(missing) = scheduled
-            .as_slice()
-            .iter()
-            .find(|persona| seats.as_slice().binary_search(persona).is_err())
-        {
-            return Err(self.view.arm_row(StoreInvariant::SupportSeatsNotScheduled {
-                height: h,
-                persona: *missing,
-                observed: SeatFault::ScheduledNotSeated,
-            }));
+        if let Some(persona) = seats.first_one_sided(&scheduled) {
+            return Err(self
+                .view
+                .arm_row(StoreInvariant::SupportSeatsNotScheduled { height: h, persona }));
+        }
+        // Equality holds, so every seat is a member: `scheduled_seats` emits
+        // only members of this snapshot. No roster means no seats.
+        let members = drawable.support_roster();
+        let mut roster = Vec::with_capacity(scheduled.len());
+        for persona in scheduled.as_slice() {
+            let receipt_key = members
+                .and_then(|members| members.key(persona))
+                .expect("scheduled_seats emits only members of this snapshot")
+                .clone();
+            roster.push(shekyl_chain_rules::SupportSeat {
+                persona: *persona,
+                receipt_key,
+            });
         }
         Ok(Some(roster))
     }

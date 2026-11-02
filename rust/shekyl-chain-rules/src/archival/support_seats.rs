@@ -9,9 +9,13 @@
 //! ([`DrawableEpoch::support_roster`], filed at `h_open(E)` with `D`,
 //! `SO-D12` S1 ruled 2026-11-01), each at the `c` offsets
 //! [`support_seated_at`] names. The transition writes them as the block's
-//! row, and the store's bundle view checks a roster it reads against them
-//! (SI-43). One function, so the writer and the check cannot compute
-//! different schedules.
+//! row. Admission requires the stored row to equal that value (SI-43,
+//! [`shekyl_types::archival::SupportSeats::first_one_sided`]): one function
+//! for the schedule, and the row type names where two rows differ, so the
+//! writer and the check cannot drift. A member the schedule does not seat
+//! is not the row. The carry is staged and off this path; when it joins
+//! the transition, the seats that join are the value the comparison takes,
+//! and the comparison stays equality.
 //!
 //! Only scheduled seats are on the connect path before the switch. A seat
 //! carried from an unfiled block joins with admission (G3 of the item's

@@ -170,7 +170,7 @@ pub use archival::{
 };
 // The support stream's schedule on the connect path (`SO-D12` S1): the
 // transition writes a block's seats with it, and the store's bundle view
-// checks a roster against it (SI-43).
+// requires the stored row to equal it (SI-43).
 pub use archival::scheduled_seats;
 // The serve-credit bundle rule (`archival/bundle.rs`): STAGED on the
 // connect path. The verifier and its view trait are exported for the
