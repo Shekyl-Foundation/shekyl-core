@@ -27,8 +27,8 @@ use shekyl_daemon_rpc::mining_facts::{
 use shekyl_daemon_rpc::mining_methods::codes;
 use shekyl_hash_budget::Budget;
 use shekyl_miner::{
-    DrainSlot, FoundBlocks, Job, JobBoard, Miner, MinerConfig, MinerStartRefused, MinerStatus,
-    MiningAddress,
+    DrainSlot, Draining, FoundBlocks, Job, JobBoard, Miner, MinerConfig, MinerStartRefused,
+    MinerStatus, MiningAddress,
 };
 use shekyl_pow_randomx::{CacheStore, Seedhash};
 use shekyl_rpc_types::errors::Diagnostic;
@@ -122,11 +122,13 @@ pub struct MiningControl {
     pool: PoolHealth,
     miner: Mutex<Option<Miner>>,
     /// The stopped miner's workers still finishing the hash they were in,
-    /// one set at most ([`DrainSlot`]). A stop does not wait for them;
-    /// [`Self::start`] waits for a set holding another seed's cache, and
-    /// [`Node::stop`](crate::Node::stop) joins what is left after the store
-    /// has closed.
+    /// one set at most ([`DrainSlot`]). Nothing joins a set while holding a
+    /// lock: a join can wait out a starved hash.
     draining: Mutex<DrainSlot>,
+    /// A set [`Self::close`] found still draining when it parked the last
+    /// one. Shutdown waits for no hash before the store closes, so it is
+    /// joined with the rest by [`Self::join_drained`].
+    closing: Mutex<Vec<Draining>>,
     /// Set by [`Node::stop`](crate::Node::stop): no miner starts after it.
     closed: AtomicBool,
 }
@@ -152,6 +154,7 @@ impl MiningControl {
             pool,
             miner: Mutex::new(None),
             draining: Mutex::new(DrainSlot::default()),
+            closing: Mutex::new(Vec::new()),
             closed: AtomicBool::new(false),
         }
     }
@@ -163,16 +166,31 @@ impl MiningControl {
         let mut running = self.lock();
         self.closed.store(true, Ordering::Release);
         if let Some(miner) = running.take() {
-            drop(running);
-            self.park(miner.stop());
+            // Signalled and parked under the miner lock: no start can slip
+            // in between and miss these workers.
+            let stopped = miner.stop();
+            if let Some(earlier) = self.drain_lock().park(stopped) {
+                // No start follows a close, so nothing can pile up; the
+                // earlier set is joined last, after the store has closed.
+                self.closing_lock().push(earlier);
+            }
         }
     }
 
     /// Join every stopped miner's workers. Waits for the hashes they are
     /// still in: [`Node::stop`](crate::Node::stop) calls it last, after the
-    /// store has closed.
+    /// store has closed. Taken out of their locks first, so nothing waits on
+    /// a lock while they finish.
     pub(crate) fn join_drained(&self) {
-        self.drain_lock().join();
+        let held = self.drain_lock().take();
+        let closing = std::mem::take(&mut *self.closing_lock());
+        for set in held.into_iter().chain(closing) {
+            set.join();
+        }
+    }
+
+    fn closing_lock(&self) -> std::sync::MutexGuard<'_, Vec<Draining>> {
+        self.closing.lock().unwrap_or_else(PoisonError::into_inner)
     }
 
     fn lock(&self) -> std::sync::MutexGuard<'_, Option<Miner>> {
@@ -183,24 +201,22 @@ impl MiningControl {
         self.draining.lock().unwrap_or_else(PoisonError::into_inner)
     }
 
-    /// Keep a stopped miner's workers. An earlier set still draining is
-    /// joined first ([`DrainSlot::park`]); with none, this waits for
-    /// nothing.
-    fn park(&self, workers: shekyl_miner::Draining) {
-        self.drain_lock().park(workers);
-    }
-
     /// Before a start: join the stopped workers that still hold a cache for
     /// a seed other than the posted job's, or for any seed when no job is
-    /// posted. Workers on the same seed share that cache with the new ones,
-    /// so a stop and a start never keep two seeds' caches alive at once.
-    /// Waits for at most one hash per worker joined.
+    /// posted. Workers on the posted seed hold the cache the store holds for
+    /// the new ones too, so they are kept. A stopped worker's cache can
+    /// outlive the store's copy only when the seed moves twice within one
+    /// hash (the store keeps the current seed's cache and the previous
+    /// one's). Waits for at most one hash, outside every lock.
     fn settle_drained(&self) {
         let seed = self
             .board
             .posted()
             .map(|(_, job)| Seedhash::from_bytes(*job.seed.as_bytes()));
-        self.drain_lock().settle_for(seed.as_ref());
+        let other = self.drain_lock().take_for(seed.as_ref());
+        if let Some(set) = other {
+            set.join();
+        }
     }
 
     /// Start the miner with `threads` workers; `None` is the host's
@@ -213,6 +229,10 @@ impl MiningControl {
         let Some(address) = self.address.clone() else {
             return Err(MiningRefused::NoAddress);
         };
+        // Settled before the miner lock is taken: its join can wait out a
+        // starved hash, and a concurrent stop or the node's close must not
+        // wait on the miner lock meanwhile.
+        self.settle_drained();
         let mut running = self.lock();
         if self.closed.load(Ordering::Acquire) {
             return Err(MiningRefused::NodeStopped);
@@ -220,7 +240,6 @@ impl MiningControl {
         if running.is_some() {
             return Err(MiningRefused::Running);
         }
-        self.settle_drained();
         let host = std::thread::available_parallelism().unwrap_or(NonZeroUsize::MIN);
         let threads = threads.unwrap_or(host);
         if threads > host {
@@ -241,14 +260,26 @@ impl MiningControl {
         Ok(())
     }
 
-    /// Stop the miner. `false` when it was not running. Returns without
-    /// waiting for the workers' hashes: nothing they finish after this
-    /// returns becomes a block. The node keeps running.
+    /// Stop the miner. `false` when it was not running. Does not wait for
+    /// its workers' hashes: nothing they finish after this returns becomes
+    /// a block. It waits only when an earlier stop's set is still draining,
+    /// for at most that set's hash, so stopping and restarting faster than
+    /// a hash cannot pile up threads. The node keeps running.
     pub fn stop(&self) -> bool {
-        let Some(miner) = self.lock().take() else {
-            return false;
+        let earlier = {
+            let mut running = self.lock();
+            let Some(miner) = running.take() else {
+                return false;
+            };
+            // Signalled and parked under the miner lock: no start can slip
+            // in between and miss these workers.
+            let stopped = miner.stop();
+            self.drain_lock().park(stopped)
         };
-        self.park(miner.stop());
+        // Joined outside every lock: nothing waits on one meanwhile.
+        if let Some(set) = earlier {
+            set.join();
+        }
         true
     }
 

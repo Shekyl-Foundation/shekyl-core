@@ -124,6 +124,21 @@ impl Marks {
             .lock()
             .unwrap_or_else(PoisonError::into_inner) = seed;
     }
+
+    /// Record `seed` as held unless the miner has stopped, deciding under
+    /// the slot's lock: a start reads the slots after the stop set its
+    /// flag, so a worker either recorded its seed before it can be read or
+    /// sees the stop and takes no cache.
+    fn hold_unless_stopped(&self, index: usize, seed: Seedhash, stop: &AtomicBool) -> bool {
+        let mut slot = self.held[index]
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner);
+        if stop.load(Ordering::Acquire) {
+            return false;
+        }
+        *slot = Some(seed);
+        true
+    }
 }
 
 /// Marks a worker exited when it returns, unwinding included.
@@ -182,7 +197,9 @@ fn work(shared: &Shared, index: usize, range: RangeInclusive<u32>) {
         // validator's spare, and the seed is the job's, not one this loop
         // pinned. `pin_canonical` is the fill. A template whose seed is not
         // held is the composition root's bug; this worker leaves the job.
-        shared.marks.hold(index, Some(seed));
+        if !shared.marks.hold_unless_stopped(index, seed, &shared.stop) {
+            break;
+        }
         let Some(cache) = shared.caches.lookup(&seed) else {
             shared.marks.hold(index, None);
             tracing::error!(
@@ -405,48 +422,52 @@ impl Drop for Draining {
     }
 }
 
-/// Where stopped miners' workers wait to be joined: **at most one** set at
-/// a time. A stop does not wait for its workers' hashes, so without a bound
-/// a caller stopping and restarting the miner faster than a hash finishes
-/// would leave a new set of threads behind on every cycle. Parking a set
-/// while an earlier one still drains joins the earlier one first, at most
-/// one hash; with nothing still draining, a park waits for nothing. Live
-/// workers are therefore never more than a running miner's and one
-/// draining set's.
+/// Where a stopped miner's workers wait to be joined: **at most one** set
+/// at a time. A stop does not wait for its workers' hashes, so without a
+/// bound a caller stopping and restarting the miner faster than a hash
+/// finishes would leave a new set of threads behind on every cycle.
+///
+/// Nothing here joins. [`park`](Self::park) and [`take_for`](Self::take_for)
+/// hand back the set to join, so the caller joins it **outside** any lock it
+/// holds: a join can wait out a starved hash, and nothing (a node's shutdown
+/// above all) may wait on a lock while it does. A stop joins what `park`
+/// hands back before it returns, so one caller cannot get ahead of its own
+/// sets: live workers are a running miner's, one parked set's, and the set
+/// each stop still in progress is joining.
 #[derive(Default)]
 pub struct DrainSlot {
     held: Option<Draining>,
 }
 
 impl DrainSlot {
-    /// Keep `stopped`, joining the set held before it.
-    pub fn park(&mut self, stopped: Draining) {
-        if let Some(earlier) = self.held.replace(stopped) {
-            earlier.join();
-        }
+    /// Keep `stopped`, and hand back the set held before it, for the caller
+    /// to join outside its locks. `None` when nothing was held.
+    #[must_use = "the earlier set is joined by the caller"]
+    pub fn park(&mut self, stopped: Draining) -> Option<Draining> {
+        self.held.replace(stopped)
     }
 
-    /// Before a start: join the held set if it still holds a cache for a
-    /// seed other than `seed` (any seed when `seed` is `None`), or has
-    /// finished. A set on the same seed shares that cache with the new
-    /// workers and is kept.
-    pub fn settle_for(&mut self, seed: Option<&Seedhash>) {
+    /// Before a start: hand back the held set if it still holds a cache for
+    /// a seed other than `seed` (any seed when `seed` is `None`), or has
+    /// finished, for the caller to join outside its locks. A set on the
+    /// same seed shares the store's cache with the new workers and is kept.
+    #[must_use = "the set handed back is joined by the caller"]
+    pub fn take_for(&mut self, seed: Option<&Seedhash>) -> Option<Draining> {
         if self
             .held
             .as_ref()
             .is_some_and(|set| set.finished() || set.holds_other_than(seed))
         {
-            if let Some(set) = self.held.take() {
-                set.join();
-            }
+            self.held.take()
+        } else {
+            None
         }
     }
 
-    /// Join whatever is held. Waits for the hashes still running.
-    pub fn join(&mut self) {
-        if let Some(set) = self.held.take() {
-            set.join();
-        }
+    /// Hand back whatever is held.
+    #[must_use = "the set handed back is joined by the caller"]
+    pub fn take(&mut self) -> Option<Draining> {
+        self.held.take()
     }
 }
 
@@ -505,38 +526,54 @@ mod tests {
         )
     }
 
+    /// A stop as `MiningControl::stop` makes one: park under the slot's
+    /// lock, then join what it handed back with the lock released.
+    fn stop_into(slot: &Mutex<DrainSlot>, stopped: Draining) {
+        let earlier = slot.lock().unwrap().park(stopped);
+        if let Some(set) = earlier {
+            set.join();
+        }
+    }
+
     /// The design review's bound (2026-11-01): stop/start faster than a
-    /// hash finishes must not grow the live workers. A park while an
-    /// earlier set still drains does not return until that set is joined,
-    /// so over any number of cycles at most one set drains beside the
-    /// running miner. Red edit: keep every parked set (an unbounded list),
-    /// and the second park returns at once with both sets alive.
+    /// hash finishes must not grow the live workers. A stop that parks a
+    /// set while an earlier one still drains is handed the earlier one and
+    /// joins it before it returns, so over any number of cycles one set
+    /// drains beside the running miner. The join holds no lock: the slot
+    /// stays free for a start or a node's close throughout. Red edits: keep
+    /// every parked set (`park` handing nothing back), and the stop returns
+    /// at once with both sets live; join under the slot's lock, and the
+    /// slot is held while the stop waits.
     #[test]
     fn a_stop_while_a_set_still_drains_joins_it_first() {
         const THREADS: usize = 3;
         let live = Arc::new(AtomicUsize::new(0));
         let slot = Arc::new(Mutex::new(DrainSlot::default()));
         let (first, mut releases) = blocked_set(THREADS, None, &live);
-        slot.lock().unwrap().park(first);
+        stop_into(&slot, first);
         for _cycle in 0..4 {
             let (next, next_releases) = blocked_set(THREADS, None, &live);
-            let (parked, done) = mpsc::channel();
-            let parker = {
+            let (stopped, done) = mpsc::channel();
+            let stopper = {
                 let slot = Arc::clone(&slot);
                 std::thread::spawn(move || {
-                    slot.lock().unwrap().park(next);
-                    parked.send(()).expect("the test waits");
+                    stop_into(&slot, next);
+                    stopped.send(()).expect("the test waits");
                 })
             };
             assert!(
                 done.recv_timeout(Duration::from_millis(200)).is_err(),
-                "a park returned while an earlier set still drained"
+                "a stop returned while an earlier set still drained"
+            );
+            assert!(
+                slot.try_lock().is_ok(),
+                "the slot's lock is held while a stop waits for a hash"
             );
             assert_eq!(live.load(Ordering::SeqCst), 2 * THREADS);
             drop(releases);
             done.recv_timeout(Duration::from_secs(10))
-                .expect("the park returns once the earlier set has drained");
-            parker.join().expect("the parker");
+                .expect("the stop returns once the earlier set has drained");
+            stopper.join().expect("the stopper");
             assert_eq!(
                 live.load(Ordering::SeqCst),
                 THREADS,
@@ -545,13 +582,16 @@ mod tests {
             releases = next_releases;
         }
         drop(releases);
-        slot.lock().unwrap().join();
+        let last = slot.lock().unwrap().take();
+        if let Some(set) = last {
+            set.join();
+        }
         assert_eq!(live.load(Ordering::SeqCst), 0);
     }
 
-    /// Before a start, a held set on the posted seed is kept (it shares
-    /// that cache with the new workers); one on another seed, or one that
-    /// has finished, is joined.
+    /// Before a start, a held set on the posted seed is kept (its workers
+    /// hold the cache the store holds for the new ones); one on another
+    /// seed, or one that has finished, is handed back to join.
     #[test]
     fn a_start_keeps_a_same_seed_set_and_joins_any_other() {
         let a = Seedhash::from_bytes([1; 32]);
@@ -559,25 +599,44 @@ mod tests {
         let live = Arc::new(AtomicUsize::new(0));
         let mut slot = DrainSlot::default();
         let (set, releases) = blocked_set(2, Some(a), &live);
-        slot.park(set);
-        slot.settle_for(Some(&a));
-        assert!(slot.held.is_some(), "the same seed's set is kept");
+        assert!(slot.park(set).is_none(), "nothing was held");
+        assert!(
+            slot.take_for(Some(&a)).is_none(),
+            "the same seed's set is kept"
+        );
         drop(releases);
-        slot.settle_for(Some(&b));
-        assert!(slot.held.is_none(), "another seed's set is joined");
+        slot.take_for(Some(&b))
+            .expect("another seed's set is handed back")
+            .join();
         assert_eq!(live.load(Ordering::SeqCst), 0);
 
         let (set, releases) = blocked_set(2, Some(a), &live);
-        slot.park(set);
+        assert!(slot.park(set).is_none());
         drop(releases);
-        while live.load(Ordering::SeqCst) != 0 {
-            std::thread::yield_now();
-        }
         while !slot.held.as_ref().is_some_and(Draining::finished) {
             std::thread::yield_now();
         }
-        slot.settle_for(Some(&a));
-        assert!(slot.held.is_none(), "a finished set is joined");
+        slot.take_for(Some(&a))
+            .expect("a finished set is handed back")
+            .join();
+        assert!(slot.held.is_none());
+    }
+
+    /// A worker records the seed whose cache it takes only while the miner
+    /// runs, deciding under the slot's lock a start reads: a stopped
+    /// worker takes no cache a start could fail to see (Copilot on #1251).
+    /// Red edit: record the seed before reading the stop flag.
+    #[test]
+    fn a_stopped_worker_records_no_seed() {
+        let a = Seedhash::from_bytes([1; 32]);
+        let marks = Marks::new(1);
+        let stop = AtomicBool::new(false);
+        assert!(marks.hold_unless_stopped(0, a, &stop), "running: recorded");
+        assert!(holds_other_than(&marks.held, None));
+        marks.hold(0, None);
+        stop.store(true, Ordering::Release);
+        assert!(!marks.hold_unless_stopped(0, a, &stop), "stopped: refused");
+        assert!(!holds_other_than(&marks.held, None), "nothing recorded");
     }
 
     /// A start waits only for stopped workers holding another seed's cache:
