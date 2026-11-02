@@ -18,11 +18,14 @@
 //!
 //! On Windows the hook does not return: it ends the process itself with
 //! `TerminateProcess` and `0xC0000409`, the code `abort` would report
-//! (DC-Q21, DC-F38). `abort` on MSVC is `__fastfail`, which reaches the
-//! kernel and Windows Error Reporting without passing the top-level
-//! exception filter `harden_process` installed, so a machine's
-//! `LocalDumps` policy would write the panicking process's memory to disk.
-//! `TerminateProcess` is an ordinary termination that path never sees.
+//! (DC-Q21, DC-F38). `abort` on MSVC is `__fastfail`, which passes no
+//! top-level exception filter, so the filter `harden_process` installed
+//! is not what stands between it and Windows Error Reporting; under the
+//! daemon's hardening a `__fastfail` wrote no dump in Rick's 2026-11-02
+//! control (DC-F44), which leaves the error-mode flag as what kept WER
+//! out, and that flag is process-wide state any library in the process can
+//! reset. `TerminateProcess` is an ordinary termination the fault path
+//! never sees, whatever the error mode is at the time.
 
 use std::panic::PanicHookInfo;
 

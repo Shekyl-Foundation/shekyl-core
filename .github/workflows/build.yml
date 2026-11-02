@@ -616,7 +616,11 @@ jobs:
       # ld and lld drop the unreferenced ones) and nine tests whose fixtures
       # assumed `/` paths and LF line ends. BLOCKING, with a floor per lib
       # test binary so a crate whose tests were cfg'd away or filtered out
-      # fails here instead of passing as nothing run (rule 47).
+      # fails here instead of passing as nothing run (rule 47). shekyl-ffi's
+      # `dc_q21_a_fault_ends_with_its_code` writes a scratch per-application
+      # `LocalDumps` policy under HKLM for its own binary (DC-F44) and so
+      # needs an elevated session, which this runner is; it refuses with the
+      # reason, never skips, when it is not.
       - name: "DC-F39: the daemon crates' tests link and pass on MSVC"
         shell: pwsh
         working-directory: rust

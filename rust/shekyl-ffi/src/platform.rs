@@ -67,29 +67,39 @@ impl std::error::Error for HardenError {
 ///   whatever the limit. It cannot be re-enabled by this process.
 /// - macOS: `RLIMIT_CORE` alone; the process has no dumpable flag to clear.
 /// - Windows: the process forbids its own dumps from inside, as on Unix
-///   (DC-F38, review 3 §4). `SetUnhandledExceptionFilter` installs
+///   (DC-F38, review 3 §4), by two lines that each close Windows Error
+///   Reporting's fault path on their own (DC-F44, measured in Rick's
+///   2026-11-02 controls: remove either and a fault still writes no dump;
+///   remove both and it does). `SetUnhandledExceptionFilter` installs
 ///   [`end_at_fault`], which ends the process at once with
 ///   `TerminateProcess` and the exception's code as the exit status
 ///   (`0xC0000005` for an access violation, `0xC00000FD` for a stack
-///   overflow): Windows Error Reporting's fault path runs *after* the
-///   top-level filter, so it never sees the fault — no dump and no report,
-///   whatever the machine's `LocalDumps` or reporting policy. Rust's
-///   stack-overflow handler is a vectored handler that prints its message
-///   and continues the search, so the message precedes the exit. The
-///   daemon's panic hook ends the process the same way with `0xC0000409`,
-///   the code `abort` would report, because `abort` on MSVC is
-///   `__fastfail`, which reaches the kernel and WER without passing any
-///   filter (`crate::panic_hook`). Also `SetErrorMode` with
-///   `SEM_NOGPFAULTERRORBOX`, so no fault blocks a headless service on a
-///   dialog, and `SEM_FAILCRITICALERRORS` / `SEM_NOOPENFILEERRORBOX`, so a
-///   missing volume or file is an error the code sees, not a prompt.
-///   **Not covered:** fail-fast paths the process does not route — an
-///   allocation failure's abort, heap corruption the OS heap detects, a
-///   `/GS` check in C++. For those the installer's `ExcludedApplications`
-///   value (`contrib/packaging/windows/shekyl.nsi`, 64-bit view) is the
-///   backstop against a report leaving the machine, and an administrator's
-///   `LocalDumps` policy can still capture a dump; the operator guide says
-///   so. `tests/dc_q21_a_fault_ends_with_its_code.rs` is the check.
+///   overflow): WER's fault path runs *after* the top-level filter, and
+///   that ordering is the documented contract, so this is the line the
+///   property rests on. `SetErrorMode` with `SEM_NOGPFAULTERRORBOX` is
+///   kept for its documented job — no fault blocks a headless service on a
+///   dialog — together with `SEM_FAILCRITICALERRORS` /
+///   `SEM_NOOPENFILEERRORBOX`, so a missing volume or file is an error the
+///   code sees, not a prompt; that the flag also keeps WER from writing a
+///   dump is observed, not promised, and the error mode is process-wide
+///   state any library in the process can reset. Rust's stack-overflow
+///   handler is a vectored handler that prints its message and continues
+///   the search, so the message precedes the exit. The daemon's panic hook
+///   ends the process the same way with `0xC0000409`, the code `abort`
+///   would report, rather than calling `abort` (`__fastfail` on MSVC,
+///   which passes no filter; `crate::panic_hook`). **Not covered:**
+///   fail-fast paths the process does not route — an allocation failure's
+///   abort, heap corruption the OS heap detects, a `/GS` check in C++. In
+///   the same controls a `__fastfail` under this hardening wrote no dump
+///   either; a fast-fail passes no filter, so that was the error-mode
+///   flag's doing, and it holds only while the flag is this process's.
+///   The installer's `ExcludedApplications` value
+///   (`contrib/packaging/windows/shekyl.nsi`, 64-bit view) is the backstop
+///   against a report leaving the machine, and an administrator's
+///   `LocalDumps` policy can capture a dump of an excluded name; the
+///   operator guide says so. `tests/dc_q21_a_fault_ends_with_its_code.rs`
+///   is the check, and it proves its own subject with an unhardened
+///   control child that must write a dump.
 ///
 /// # Errors
 ///

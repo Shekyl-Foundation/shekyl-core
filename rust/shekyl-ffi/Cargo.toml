@@ -225,3 +225,16 @@ windows-sys = { version = "0.61", features = [
   "Win32_System_Kernel",
   "Win32_System_Threading",
 ] }
+
+[target.'cfg(windows)'.dev-dependencies]
+# `tests/dc_q21_a_fault_ends_with_its_code.rs` sets a per-application
+# `LocalDumps` scratch policy for its own binary and removes it: the
+# registry module, and `Win32_Security` for the `SECURITY_ATTRIBUTES`
+# parameter `RegCreateKeyExW` is gated on (the `W` variant that takes the
+# 64-bit-view flag). It also clears the error mode its parent handed it
+# before hardening (`GetErrorMode`; DC-F44). Test-only: no shipped binary
+# writes the registry.
+windows-sys = { version = "0.61", features = [
+  "Win32_Security",
+  "Win32_System_Registry",
+] }
