@@ -2490,7 +2490,12 @@ not change with its address:
   [`ARCHIVAL_FORCING_CORPUS.md`](ARCHIVAL_FORCING_CORPUS.md) §"ApplyPolicy")
   in a fresh file's **first** transaction, before any batch; `verify` runs on every writable and read-only
   open and returns `SchemaVersionAbsent` / `SchemaVersionMismatch { found,
-  expected }` / `CellCorrupt` — never a default. The key bytes are pinned by a
+  expected }` / `CellCorrupt` — never a default. A writable reopen runs it on a
+  **read-only** open first and opens writable only a file it accepted: a writable
+  open writes into the file even with nothing committed (redb records its
+  allocator state when it closes), so a refused file is left byte for byte. The
+  one exception is a file redb must repair, which a read-only open refuses
+  (`RepairAborted`): it is opened writable, repaired by redb, and judged after. The key bytes are pinned by a
   test on `codec::SchemaVersionCell::KEY`.
 - (b) is `codec::Canonical`: one fixed-width, strict encoding per stored value
   type, used both to store and to digest. Types are `u8`, `u64` (LE, matching

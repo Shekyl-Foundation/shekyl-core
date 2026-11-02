@@ -344,6 +344,24 @@ impl ChainStore {
                 }
             },
             Err(e) if e.kind() == std::io::ErrorKind::AlreadyExists => {
+                // The header is judged on a read-only open first. A writable
+                // open writes into the file even when nothing is committed
+                // (the engine records its allocator state when it closes),
+                // so a file `verify` refuses is refused unwritten. The
+                // exception is a file the engine must repair first: a
+                // read-only open answers `RepairAborted`, and only the
+                // writable open below can repair it, after which it is
+                // judged.
+                match builder.open_read_only(path) {
+                    Ok(read_only) => {
+                        header::verify(
+                            &read_only.begin_read().map_err(EngineError::BeginRead)?,
+                            epoch,
+                        )?;
+                    }
+                    Err(redb::DatabaseError::RepairAborted) => {}
+                    Err(e) => return Err(EngineError::Open(e).into()),
+                }
                 let db = builder.open(path).map_err(EngineError::Open)?;
                 let provenance =
                     header::verify(&db.begin_read().map_err(EngineError::BeginRead)?, epoch)?;
