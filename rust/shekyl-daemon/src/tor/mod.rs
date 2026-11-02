@@ -7,7 +7,8 @@
 //!
 //! [`Drive`] is the manager's hands. The [`Core`] decides. This driver
 //! performs each [`Action`] and reports what happened, including a publish
-//! the endpoint was not ready for. It keeps no second schedule.
+//! the endpoint was not ready for and a republish a liveness sample has
+//! since ruled out. It keeps no second schedule.
 //!
 //! The Tor connector is not this driver. It reads the route a publish
 //! installs and dials. Questions to Tor stay on the owning control
@@ -35,13 +36,13 @@ use shekyl_tor_control_client::binary::{
     discover_and_verify, discover_and_verify_at, TorBinaryError, VerifiedTorBinary,
 };
 use shekyl_tor_control_client::control::{
-    parse_bootstrap_progress, parse_event, parse_network_view, parse_socks_listeners,
-    parse_traffic_read, BootstrapState, Command, ControlError, ControlReply, EventReceiver,
-    EventSink, Resume, ServiceId, SocksTimeout, TorEvent, UploadRounds,
+    parse_bootstrap_progress, parse_consensus_valid_after, parse_event, parse_network_view,
+    parse_socks_listeners, parse_traffic_read, BootstrapState, Command, ControlError, ControlReply,
+    EventReceiver, EventSink, Resume, ServiceId, SocksTimeout, TorEvent, UploadRounds,
 };
 use shekyl_tor_control_client::supervisor::{
-    clock_evidence_of, directory_input_of, held_sentence, input_of, install_sentence, render,
-    Action, Cause, Connectors, Core, DialTally, Input, ManagedRunning, NetworkView,
+    clock_evidence_of, directory_content_input_of, held_sentence, input_of, install_sentence,
+    render, Action, Cause, Connectors, Core, DialTally, Input, ManagedRunning, NetworkView,
     OriginVerdict as FoldedOrigin, Policy, Space, Step, Syncing, TorSetting,
 };
 use shekyl_tor_control_daemon::{
@@ -88,6 +89,11 @@ const NETWORK_LIVENESS: &str = "network-liveness";
 const CIRCUIT_ESTABLISHED: &str = "status/circuit-established";
 /// `GETINFO` key for the SOCKS listeners.
 const SOCKS_LISTENERS: &str = "net/listeners/socks";
+/// `GETINFO` key for the consensus's `valid-after`: the clock this machine's
+/// is judged against (§4.2). Asked on its own: before Tor holds a consensus
+/// it is an error, and one failing key fails the whole `GETINFO` (tor
+/// 0.4.9.14 `control_getinfo.c:1760`).
+const CONSENSUS_VALID_AFTER: &str = "consensus/valid-after";
 
 /// Keys one sample asks. The network keys are Running only (§4.2).
 fn sample_keys(reads_network: bool) -> Vec<String> {
@@ -501,7 +507,27 @@ impl Drive {
         self.step = Step { actions, deadline };
     }
 
+    /// An action this core no longer wants. A remedial republish becomes
+    /// [`Input::RepublishWithheld`], which puts the lifetime it started
+    /// back. A probe or directory fetch already handed over is dropped.
+    fn withheld(&self, action: &Action) -> Option<Vec<Input>> {
+        if self.core.action_stands(action) {
+            return None;
+        }
+        match action {
+            Action::RepublishOnion => Some(vec![Input::RepublishWithheld]),
+            Action::Probe
+            | Action::CheckDirectories
+            | Action::FetchFromDirectory { .. }
+            | Action::RefetchDescriptor => Some(Vec::new()),
+            _ => None,
+        }
+    }
+
     async fn act(&mut self, action: Action, halt: &mut bool) -> Vec<Input> {
+        if let Some(instead) = self.withheld(&action) {
+            return instead;
+        }
         match action {
             Action::Announce => {
                 let status = self.core.status();
@@ -577,7 +603,13 @@ impl Drive {
                 }
             }
             Action::ProbeAfterJump => vec![probe::jump_probe()],
-            Action::CheckDirectories => vec![self.directories_drawn()],
+            Action::CheckDirectories => {
+                let mut stop = self.stop.clone();
+                match race_stop(&mut stop, self.directories_drawn()).await {
+                    Ok(input) => self.resume_before(vec![input]),
+                    Err(shutdown) => vec![shutdown],
+                }
+            }
             Action::FetchFromDirectory { hsdir } => {
                 let mut stop = self.stop.clone();
                 match race_stop(&mut stop, self.fetch_from(hsdir)).await {
@@ -595,7 +627,7 @@ impl Drive {
             Action::DescriptorOverdue => {
                 tracing::info!(
                     target: "tor",
-                    "no descriptor upload began within the descriptor's lifetime; publishing this node's onion again"
+                    "no descriptor upload began within the descriptor's lifetime"
                 );
                 Vec::new()
             }
@@ -604,6 +636,7 @@ impl Drive {
                 Vec::new()
             }
             Action::RepublishOnion => {
+                tracing::info!(target: "tor", "publishing this node's onion again");
                 let mut stop = self.stop.clone();
                 match race_stop(&mut stop, self.republish()).await {
                     Ok(input) => self.resume_before(vec![input]),
@@ -668,8 +701,9 @@ impl Drive {
         self.step.deadline = due.deadline;
     }
 
-    /// One event batch from Tor: the round resync, the clock evidence, the
-    /// statement, and the round marks, in that order, folded as one step.
+    /// One event batch from Tor: the round resync, this onion's descriptor
+    /// line (one consumer), the clock evidence, and the statement, in that
+    /// order, folded as one step.
     /// Folding each input on its own replaces the step, and the earlier
     /// actions, a recovery among them, would never be performed.
     fn event_inputs(&mut self, reply: &ControlReply) -> Vec<Input> {
@@ -688,8 +722,24 @@ impl Drive {
                         reason = ?desc.reason,
                         "Tor's descriptor event"
                     );
-                    // A fetch of this onion: the directory check's evidence.
-                    inputs.extend(directory_input_of(desc));
+                    // One consumer: an upload's line is the round's, a fetch's
+                    // is the directory check's.
+                    inputs.extend(self.read_hs_desc(desc));
+                }
+            }
+            // A directory's copy of this onion's descriptor, after a fetch:
+            // its counter is the directory check's answer. The descriptor
+            // itself is not logged.
+            if let TorEvent::HsDescContent(content) = &parsed {
+                if content.address.is_some() && content.address == self.service {
+                    tracing::debug!(
+                        target: "tor",
+                        hsdir = ?content.hsdir,
+                        descriptor_id = ?content.descriptor_id,
+                        revision_counter = ?content.revision_counter,
+                        "a directory's copy of this onion's descriptor"
+                    );
+                    inputs.extend(directory_content_input_of(content));
                 }
             }
             // Evidence first: a problem that is also the blocked link is
@@ -702,10 +752,6 @@ impl Drive {
                 // A Tor statement the supervisor acts on, said as it
                 // arrives: what a run records.
                 tracing::info!(target: "tor", "Tor says {input:?}");
-                inputs.push(input);
-            }
-            for input in self.round_marks(&parsed) {
-                probe::say_round(&input);
                 inputs.push(input);
             }
         }
@@ -873,7 +919,41 @@ impl Drive {
             }
             inputs.push(Input::NetworkView(view));
         }
+        match self.consensus_clock().await {
+            Ok(Some(clock)) => inputs.push(clock),
+            Ok(None) => {}
+            Err(fault) => {
+                // The directory sample already read is still folded. The
+                // fault ends the incarnation after it.
+                inputs.push(fault);
+                return inputs;
+            }
+        }
         inputs
+    }
+
+    /// The consensus's `valid-after` against this machine's wall time
+    /// (§4.2). The core reads it only while Bootstrapping or Running. Tor
+    /// having no consensus yet is no input. An ask that fails is a process
+    /// fault, the same as the sample's own ask: it is not "no consensus".
+    /// The wall time is read here and passed as a value: the core's own
+    /// clock is monotonic.
+    async fn consensus_clock(&mut self) -> Result<Option<Input>, Input> {
+        let Some(control) = self.control.as_mut() else {
+            return Ok(None);
+        };
+        let asked = control
+            .ask(Command::GetInfo(vec![CONSENSUS_VALID_AFTER.to_owned()]))
+            .await;
+        let parsed = match &asked {
+            Ok(reply) => Ok(parse_consensus_valid_after(reply)),
+            Err(error) => Err(error),
+        };
+        let wall = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .ok()
+            .map(|elapsed| elapsed.as_secs());
+        consensus_sample(parsed, wall)
     }
 
     fn watch_state(&self) -> Option<Input> {
@@ -1059,6 +1139,19 @@ fn input_of_ask(error: &DaemonTorStartError) -> Input {
     }
 }
 
+/// A consensus ask beside the wall time it is compared with. `Ok(None)` is
+/// Tor with no `valid-after` yet, or no wall time to compare. An ask that
+/// failed is the process fault [`input_of_ask`] names.
+fn consensus_sample(
+    asked: Result<Option<u64>, &DaemonTorStartError>,
+    wall: Option<u64>,
+) -> Result<Option<Input>, Input> {
+    let valid_after = asked.map_err(input_of_ask)?;
+    Ok(valid_after
+        .zip(wall)
+        .map(|(valid_after, wall)| Input::ConsensusClock { valid_after, wall }))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -1073,6 +1166,34 @@ mod tests {
         assert!(running.iter().any(|key| key == NETWORK_LIVENESS));
         assert!(running.iter().any(|key| key == CIRCUIT_ESTABLISHED));
         assert!(running.starts_with(&bootstrap));
+    }
+
+    /// A consensus ask that fails is a process fault. Tor having no
+    /// `valid-after` yet, or no wall time to compare, is no clock input.
+    /// Fails if `consensus_sample` turns a timeout into `Ok(None)`: the
+    /// supervisor would keep a dead control connection and never name the
+    /// clock.
+    #[test]
+    fn a_failed_consensus_ask_is_a_process_fault_and_a_missing_consensus_is_not() {
+        let timeout = DaemonTorStartError::Control(ControlError::Timeout);
+        let closed = DaemonTorStartError::Control(ControlError::ConnectionClosed);
+        assert_eq!(
+            consensus_sample(Err(&timeout), Some(1)),
+            Err(Input::ReplyLate)
+        );
+        assert_eq!(
+            consensus_sample(Err(&closed), Some(1)),
+            Err(Input::ControlEnded)
+        );
+        assert_eq!(consensus_sample(Ok(None), Some(1)), Ok(None));
+        assert_eq!(consensus_sample(Ok(Some(10)), None), Ok(None));
+        assert_eq!(
+            consensus_sample(Ok(Some(10)), Some(20)),
+            Ok(Some(Input::ConsensusClock {
+                valid_after: 10,
+                wall: 20,
+            }))
+        );
     }
 
     /// The posture line's `quiet_after` is the Tor connector's span S, read
