@@ -142,7 +142,6 @@ from a directory service that does not list its accounts are not seen by
 it: keep the daemon's group a local group.
 
 <!-- shekyld-example: begin -->
-```toml
 # shekyld configuration file. Every key is an option's name, spelled
 # as on the command line without the leading dashes. The network is
 # always given on the command line, because it chooses the file.
@@ -243,7 +242,10 @@ it: keep the daemon's group a local group.
 # {expected}.
 # notify-block-rate = ["/path/to/command", "{window}"]
 
-# Mine to this address from start.
+# Start the miner at start, to mine-address.
+# mine = "off"
+
+# The address the miner pays.
 # mine-address = "<address>"
 
 # The mining thread count, or `auto`.
@@ -262,7 +264,6 @@ it: keep the daemon's group a local group.
 
 # The RPC connection cap.
 # rpc-connections-max = 25
-```
 <!-- shekyld-example: end -->
 
 Every option's name, kind and default is in `shekyld --help`.
@@ -310,7 +311,8 @@ whether `option_set` changes it while the daemon runs.
 | `notify-block` | command (an array of words; placeholders `{height}`, `{hash}`) | — | file | no | A command to run on a new block, with {height} and {hash}. |
 | `notify-reorg` | command (an array of words; placeholders `{split-height}`, `{height}`, `{added}`, `{removed}`) | — | file | no | A command to run on a reorganization, with {split-height}, {height}, {added} and {removed}. |
 | `notify-block-rate` | command (an array of words; placeholders `{window}`, `{observed}`, `{expected}`) | — | file | no | A command to run on a block-rate warning, with {window}, {observed} and {expected}. |
-| `mine-address` | Shekyl address | — | both | no | Mine to this address from start. |
+| `mine` | `on` / `off` | `off` | both | no | Start the miner at start, to mine-address. |
+| `mine-address` | Shekyl address | — | both | no | The address the miner pays. |
 | `mine-threads` | integer ≥ 1, or `auto` | `auto` | both | no | The mining thread count, or `auto`. |
 | `rpc-admin-listen` | list of IP endpoint (`address:port`) (`none` for empty) | 127.0.0.1 and the network's rpc port | both | no | The plaintext full-access listeners, loopback only; `none` is no admin listener. |
 | `rpc-view-listen` | list of IP endpoint (`address:port`) (`none` for empty) | `none` | both | no | The plaintext view listeners, loopback only. |
@@ -840,14 +842,20 @@ mine until it has caught up.
 
 ### Mining from start
 
-To mine from the moment the daemon starts, give it the address and the
-thread count (`mine-threads` defaults to `auto`, one per core):
+To mine from the moment the daemon starts, turn the miner on and give it
+the address it pays; `mine-threads` is the thread count (`auto`, the
+default, is one per core, and a count above the machine's is refused
+before the daemon starts):
 
 ```bash
-./shekyld --mine-address <address> --mine-threads 2
+./shekyld --mine on --mine-address <address> --mine-threads 2
 ```
 
-The same two rows go in the configuration file.
+The same rows go in the configuration file. `mine-address` alone starts
+nothing: the daemon holds the address for `start_mining` (or
+`shekyl-cli mine start`) to use later. `mine = on` without an address is
+refused before the daemon starts. The start-up configuration line shows
+the address shortened to its first and last eight characters.
 
 ### The 60-block lock
 

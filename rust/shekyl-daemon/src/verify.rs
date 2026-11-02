@@ -11,6 +11,7 @@
 //! for the check, performs the effects the walk withheld. The questions
 //! stay beside those effects; this module is the order and the printing.
 
+use std::num::NonZeroUsize;
 use std::path::Path;
 
 use shekyl_daemon_config::sections::{log_location_creatable, DaemonConfig, Tor};
@@ -46,7 +47,9 @@ impl From<Diagnostic> for Stopped {
 /// file; whether the host has a network id; the marker, read and not
 /// written; whether the account could create the log directory and open
 /// the log file; the owner values the table accepted, judged and not
-/// latched; and the managed Tor's pin, read and not started. Nothing is
+/// latched; a `mine-threads` count above the host's parallelism, refused
+/// here so the start-time miner never asks for it (Rick, 2026-11-02); and
+/// the managed Tor's pin, read and not started. Nothing is
 /// created, opened for writing, locked or latched, so the check can run
 /// while a daemon is up and leaves the machine as it found it.
 pub(crate) fn walk(
@@ -76,6 +79,18 @@ pub(crate) fn walk(
         dev.archival_reorg_depth,
     ) {
         return Err(owner_refusal(resolved, refusal.row(), refusal.rule()).into());
+    }
+    if let Some(threads) = config.mine.threads {
+        let host = std::thread::available_parallelism().map_or(1, NonZeroUsize::get);
+        let asked = usize::try_from(threads.get()).unwrap_or(usize::MAX);
+        if asked > host {
+            return Err(owner_refusal(
+                resolved,
+                Some("mine-threads"),
+                &format!("at most the host's parallelism, {host}"),
+            )
+            .into());
+        }
     }
     let mut warnings = Vec::new();
     if let Tor::Managed { binary } = &config.tor {

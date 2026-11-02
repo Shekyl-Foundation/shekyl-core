@@ -98,7 +98,10 @@
 # {expected}.
 # notify-block-rate = ["/path/to/command", "{window}"]
 
-# Mine to this address from start.
+# Start the miner at start, to mine-address.
+# mine = "off"
+
+# The address the miner pays.
 # mine-address = "<address>"
 
 # The mining thread count, or `auto`.

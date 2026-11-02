@@ -230,6 +230,113 @@ fn a_thread_count_past_the_hosts_parallelism_starts_nothing() {
     assert_eq!(refused.diagnostic.code, codes::TOO_MANY_THREADS);
     assert!(!running, "no miner started");
 }
+/// `mine = on` on regtest at difficulty one: open starts the miner once,
+/// with no RPC call, and the chain grows past genesis (Rick,
+/// 2026-11-02). Red edit: leave the start to `start_mining`.
+#[test]
+fn mine_on_mines_a_real_block_with_no_rpc_call() {
+    let dir = tempfile::tempdir().expect("temp");
+    std::fs::create_dir_all(dir.path()).expect("dir");
+    let address = mining_address(shekyl_address::Network::Mainnet);
+    let config = config_on(
+        dir.path(),
+        "regtest",
+        &[
+            "--mine",
+            "on",
+            "--mine-address",
+            &address,
+            "--mine-threads",
+            "1",
+            "--dev-difficulty",
+            "1",
+        ],
+    );
+    assert!(config.mine.start);
+    let node = match Node::open(OpenArgs {
+        config: &config,
+        version: "test".to_owned(),
+        protocol_version: 1,
+        release_build: false,
+        request_stop: Arc::new(|| {}),
+    }) {
+        Ok(node) => node,
+        Err(OpenError::Mining(MiningRefused::Start(
+            shekyl_miner::MinerStartRefused::OnePermit,
+        ))) => return, // a one-permit host never mines
+        Err(other) => panic!("the node did not open: {other}"),
+    };
+    assert!(node.mining().running(), "open started the miner");
+    let handles = node.handles();
+    let started = std::time::Instant::now();
+    loop {
+        let count = handles
+            .chain
+            .chain_tip()
+            .map(|tip| tip.chain_height.to_raw())
+            .unwrap_or(0);
+        if count >= 2 {
+            break;
+        }
+        assert!(
+            started.elapsed() < Duration::from_secs(120),
+            "nothing mined: count {count}, posting {:?}",
+            *node.posting().borrow()
+        );
+        std::thread::sleep(Duration::from_millis(20));
+    }
+    node.stop();
+    assert!(!node.mining().running());
+}
+/// `mine = off` with an address: the template is posted and nothing is
+/// mined until `start_mining`; a `start_mining` that names no count uses
+/// the `mine-threads` row's (Rick, 2026-11-02). Red edit: start the miner
+/// whenever an address is set.
+#[test]
+fn mine_off_with_an_address_mines_nothing_until_start_mining() {
+    use shekyl_daemon_rpc::mining_methods::{codes, mining_status, start_mining};
+    let dir = tempfile::tempdir().expect("temp");
+    let node = open_posted(dir.path(), &["--mine", "off", "--mine-threads", "1"]);
+    assert!(!node.mining().running(), "an address alone starts nothing");
+    std::thread::sleep(Duration::from_millis(300));
+    let handles = node.handles();
+    let count = handles
+        .chain
+        .chain_tip()
+        .map(|tip| tip.chain_height.to_raw())
+        .expect("tip");
+    assert_eq!(count, 1, "genesis only: {count}");
+    assert!(!node.mining().running());
+    let auto = shekyl_rpc_types::mining::StartMiningRequest {
+        threads: shekyl_rpc_types::mining::MinerThreads::Auto,
+    };
+    match a_runtime().block_on(start_mining(&handles.mining, auto)) {
+        Ok(_) => {}
+        Err(refused) if refused.diagnostic.code == codes::ONE_PERMIT => {
+            node.stop();
+            return;
+        }
+        Err(other) => panic!("the miner did not start: {other:?}"),
+    }
+    let status = mining_status(&*handles.mining).expect("status");
+    assert!(status.active);
+    assert_eq!(status.threads_count, 1, "`auto` is the mine-threads row's");
+    let started = std::time::Instant::now();
+    while handles
+        .chain
+        .chain_tip()
+        .map(|tip| tip.chain_height.to_raw())
+        .unwrap_or(0)
+        < 2
+    {
+        assert!(
+            started.elapsed() < Duration::from_secs(120),
+            "nothing mined after start_mining"
+        );
+        std::thread::sleep(Duration::from_millis(20));
+    }
+    node.stop();
+}
 /// After `Node::stop`, mining control starts no miner (the review of
 /// #1165). Red edit: start without reading the latch.
 #[test]

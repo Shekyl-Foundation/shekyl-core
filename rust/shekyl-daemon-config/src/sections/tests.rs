@@ -441,6 +441,43 @@ fn notify_commands_and_levers_are_carried() {
     assert_eq!(c.mine.threads, None, "auto");
 }
 
+/// `mine` defaults off; `on` needs `mine-address`, refused at parse naming
+/// that row (IG-11; Rick, 2026-11-02); an address alone starts nothing.
+/// Red edit: let `mine = on` build without an address.
+#[test]
+fn mine_on_needs_an_address_and_an_address_alone_starts_nothing() {
+    let c = build_from(&[], "").unwrap();
+    assert!(!c.mine.start);
+    assert_eq!(
+        codes(build_from(&["--mine", "on"], "")),
+        vec![(Code::ValueRequires, "mine".into())]
+    );
+    let refused = build_from(&["--mine", "on"], "").unwrap_err();
+    assert_eq!(
+        refused[0].params,
+        vec![("requires", "mine-address".to_owned())]
+    );
+    assert_eq!(
+        codes(build_from(&["--mine", "maybe"], "")),
+        vec![(Code::ValueWord, "mine".into())]
+    );
+    let text = shekyl_address::ShekylAddress::new(
+        shekyl_address::Network::Mainnet,
+        [0xaa; 32],
+        [0xbb; 32],
+        [0xee; shekyl_address::MSG_SIGN_PK_LEN],
+        vec![0xcc; shekyl_address::PQC_PAYLOAD_LEN],
+    )
+    .encode()
+    .unwrap();
+    let c = build_from(&["--mine-address", &text], "").unwrap();
+    assert!(!c.mine.start, "an address alone starts nothing");
+    let c = build_from(&["--mine", "on", "--mine-address", &text], "").unwrap();
+    assert!(c.mine.start);
+    let c = build_from(&["--mine", "off", "--mine-address", &text], "").unwrap();
+    assert!(!c.mine.start);
+}
+
 /// The decode's keys stay with the address. The miner assembles from them
 /// and does not parse the text a second time.
 #[test]

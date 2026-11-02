@@ -651,6 +651,44 @@ mod tests {
         );
     }
 
+    /// `mine = on` without `mine-address` is the parser's refusal, naming
+    /// that row; a `mine-threads` count above the host's parallelism is
+    /// the configuration check's. Both exit 2 before anything starts
+    /// (Rick, 2026-11-02). Red edit: let either reach the node.
+    #[test]
+    fn mine_on_without_an_address_and_too_many_threads_both_exit_two() {
+        let d = tempfile::tempdir().unwrap();
+        let runs_before = RUNS.load(Ordering::SeqCst);
+        assert_eq!(
+            main(
+                remnant(),
+                &args(&["--network", "regtest", "--mine", "on"]),
+                &host(d.path())
+            ),
+            EXIT_REFUSED
+        );
+        let host_threads = std::thread::available_parallelism().map_or(1, NonZeroUsize::get);
+        let past = (host_threads + 1).to_string();
+        assert_eq!(
+            main(
+                remnant(),
+                &args(&[
+                    "--network",
+                    "regtest",
+                    "--clearnet",
+                    "off",
+                    "--tor",
+                    "off",
+                    "--mine-threads",
+                    &past
+                ]),
+                &host(d.path())
+            ),
+            EXIT_REFUSED
+        );
+        assert_eq!(RUNS.load(Ordering::SeqCst), runs_before, "nothing started");
+    }
+
     #[test]
     fn client_mode_calls_run_without_a_lock_and_returns_its_status() {
         let d = tempfile::tempdir().unwrap();

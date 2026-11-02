@@ -278,8 +278,9 @@ Legend — **R** rename or fold (no trace), **K** kept as is, **X** REJECTED row
 | `block-notify` | `notify-block` | command | unset | file |  |  | R (IG-Q5); placeholders `{height}`, `{hash}` |
 | `reorg-notify` | `notify-reorg` | command | unset | file |  |  | R (IG-Q5); placeholders `{split-height}` (the last block both chains share), `{height}` (the new tip), `{added}` (blocks in the new chain), `{removed}` (blocks discarded) |
 | `block-rate-notify` | `notify-block-rate` | command | unset | file |  |  | R (IG-Q5); placeholders `{window}` (the window in seconds), `{observed}`, `{expected}` |
-| `start-mining` | `mine-address` | address | unset | both |  |  | R; set means mine from start; `mine start` builds it while running (IG-12) |
-| `mining-threads` | `mine-threads` | integer ≥ 1, or `auto` | `auto` | both |  |  | R (IG-Q21); `mine start` builds it while running (IG-12); one default for starting the miner on every surface: `shekyl-cli mine start` with no count is `auto` (`grammar.rs:539-540`); the miner's owner defines `auto` once |
+| — | `mine` | `on` / `off` | `off` | both |  |  | R (IG-Q21, amended 2026-11-02); `on` starts the miner once the node has opened, to `mine-address`, with `mine-threads`; `on` with no `mine-address` is refused at parse naming `mine-address` (IG-11, exit 2) |
+| `start-mining` | `mine-address` | address | unset | both |  |  | R (IG-Q21, amended 2026-11-02); the address the miner pays; it starts nothing by itself; `mine start` builds it while running (IG-12); the effective-configuration line shows it shortened to its first and last eight characters, `option show` the whole value under its grant |
+| `mining-threads` | `mine-threads` | integer ≥ 1, or `auto` | `auto` | both |  |  | R (IG-Q21); the node's thread count for the start-time miner and for a `start_mining` that names none; a count above the host's parallelism is refused by the configuration check (exit 2); `mine start` builds it while running (IG-12); one default for starting the miner on every surface: `shekyl-cli mine start` with no count is `auto` (`grammar.rs:539-540`); the miner's owner defines `auto` once |
 | `bg-mining-*` (5) | — | | | |  |  | X (Monero background mining) |
 
 ### RPC, named for the ratified RPC_CHANNEL model
@@ -328,7 +329,7 @@ Criterion: a REJECTED row exists for a capability a user could reasonably ask fo
 
 The `removed_flags` shim, its FOLLOWUPS sunset row, and its C++ tests go with the cutover; the X rows live in the Rust table.
 
-**Count:** 83 registered options and 4 environment levers today, plus PR-3's `p2p-disclose-early`, DRS-X's `dev-rpc` and Part D's `config-verify`; 49 live names after, the four environment levers among them (`rpc-listen` arrives at RT-W10 and `rpc-admin-listen` becomes an X row at RT-W12, RT-O33; 50 between the two; `txpool-weight-max` became an X row with IG-Q11).
+**Count:** 83 registered options and 4 environment levers today, plus PR-3's `p2p-disclose-early`, DRS-X's `dev-rpc` and Part D's `config-verify`; 50 live names after, the four environment levers among them (`rpc-listen` arrives at RT-W10 and `rpc-admin-listen` becomes an X row at RT-W12, RT-O33; 50 between the two; `txpool-weight-max` became an X row with IG-Q11; `mine` arrived with IG-Q21's 2026-11-02 amendment).
 
 ---
 
@@ -683,7 +684,7 @@ The four acts of the genesis ceremony tool under IG-3 (IG-Q35). `geblock` has no
 
 ## 15. Questions for Part B
 
-**IG-Q21 — `mine` — RULED 2026-10-14.** `mine` is the subject everywhere; Part A's `mining-address` and `mining-threads` are `mine-address` and `mine-threads` (§5).
+**IG-Q21 — `mine` — RULED 2026-10-14; amended 2026-11-02.** `mine` is the subject everywhere; Part A's `mining-address` and `mining-threads` are `mine-address` and `mine-threads` (§5). **Amendment (Rick, 2026-11-02):** `mine` is also a row, kind one-of `on`/`off`, default `off`, both surfaces, help "Start the miner at start, to mine-address." Not `mine-start`: the subject alone is the name, and starting is what the row does. `mine-address` has no default and starts nothing by itself; its help is "The address the miner pays." `mine = on` with no `mine-address` is refused at parse (IG-11, exit 2) naming `mine-address`. `mine-threads` is the node's thread count for the start-time miner and for a `start_mining` that names no count; a count above the host's parallelism is refused by the configuration check, exit 2. With `mine = on` the node calls the miner's start once after it opens, with that count; the miner idles until a job is posted; `start_mining` and `stop_mining` act on the running node, and a restart returns to the configuration. The effective-configuration line shows `mine-address` shortened to its first and last eight characters; `option show` gives the full value under its grant.
 
 **IG-Q22 — `out`, `outputs` and `size` — RULED 2026-10-14.** `address --file`, `tx list --direction in|out`, `fee --input-count` / `--output-count`, `shard fetch --png-file` / `--png-pixels`, `shard list held`.
 

@@ -96,6 +96,15 @@ pub struct MiningStatus {
     pub no_job: Option<NoJob>,
 }
 
+/// The `mine-address` and `mine-threads` rows, as the miner takes them.
+pub(crate) struct Configured {
+    /// The address the miner pays; `None` posts nothing.
+    pub(crate) address: Option<MiningAddress>,
+    /// The `mine-threads` row's count: what a start that names none uses.
+    /// `None` is `auto`, the host's parallelism.
+    pub(crate) threads: Option<NonZeroUsize>,
+}
+
 /// What the follower publishes that the miner's reads follow: the board's
 /// posting state and the chain's tip.
 pub(crate) struct Watched {
@@ -111,6 +120,9 @@ pub struct MiningControl {
     budget: Budget,
     found: FoundBlocks,
     address: Option<MiningAddress>,
+    /// The `mine-threads` row's count: what a start that names none uses.
+    /// `None` is `auto`, the host's parallelism.
+    threads: Option<NonZeroUsize>,
     posting: watch::Receiver<Posting>,
     /// The chain's tip, as the connector publishes it: a posted job is
     /// served only while it is the next block of this tip (N2, one
@@ -130,7 +142,7 @@ impl MiningControl {
         caches: Arc<CacheStore>,
         budget: Budget,
         found: FoundBlocks,
-        address: Option<MiningAddress>,
+        configured: Configured,
         watches: Watched,
         pool: PoolHealth,
     ) -> Self {
@@ -139,7 +151,8 @@ impl MiningControl {
             caches,
             budget,
             found,
-            address,
+            address: configured.address,
+            threads: configured.threads,
             posting: watches.posting,
             tips: watches.tips,
             pool,
@@ -162,8 +175,9 @@ impl MiningControl {
         self.miner.lock().unwrap_or_else(PoisonError::into_inner)
     }
 
-    /// Start the miner with `threads` workers; `None` is the host's
-    /// parallelism, which is also the most a count may ask for.
+    /// Start the miner with `threads` workers; `None` is the `mine-threads`
+    /// row's count, and that row's `auto` is the host's parallelism, which
+    /// is also the most a count may ask for.
     ///
     /// # Errors
     ///
@@ -180,7 +194,7 @@ impl MiningControl {
             return Err(MiningRefused::Running);
         }
         let host = std::thread::available_parallelism().unwrap_or(NonZeroUsize::MIN);
-        let threads = threads.unwrap_or(host);
+        let threads = threads.or(self.threads).unwrap_or(host);
         if threads > host {
             return Err(MiningRefused::TooManyThreads {
                 asked: threads.get(),

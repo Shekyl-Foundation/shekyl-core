@@ -499,8 +499,9 @@ supplies, with no FFI (RT-O26):
   its old and new value. A table gate holds that no row is both runtime
   and secret (RT-O27).
 - **`mine start` and `mine stop`** build `mine-address` and `mine-threads`
-  through their constructors and are the one request that still reaches
-  C++, carrying validated values, until the miner moves to Rust.
+  through their constructors and act on the running node; `mine = on`
+  (IG-Q21's 2026-11-02 amendment) is the row that starts the miner at
+  open, and a restart returns to the configuration.
 
 The live value belongs to its owner. Deleted with their handlers and
 callers: `/set_limit`, `/in_peers`, `/out_peers`, `/set_log_level`,
