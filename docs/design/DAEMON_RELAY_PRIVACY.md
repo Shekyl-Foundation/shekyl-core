@@ -15685,7 +15685,10 @@ adopted anonymity timer is **1148 s**
 (`shekyl_dandelionpp_origin_retry_interval_seconds`).
 
 That is a constant with a live provenance rather than a point inside a bracket:
-if `alpha` moves the interval follows, instead of decoupling silently. Same
+if `alpha` moves the interval follows, instead of decoupling silently. It stays
+fixed at 1148 s through the DRS-X flip and the rebuild, and is revisited after
+the rebuild against the Rust relay as built (Rick, 2026-10-30; owner RD, the
+FOLLOWUPS row *Revisit the origin's first retry*). Same
 shape as §94.8's argument for deriving rather than choosing, and it removes the
 self-invented bar this arc has been bitten by twice.
 

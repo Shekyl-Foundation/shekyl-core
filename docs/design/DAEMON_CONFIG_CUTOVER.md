@@ -539,10 +539,11 @@ cutover replaces their callers.
 | the console's RPC endpoint | the remnant's `run` (the console client) | the first `rpc-admin-listen` endpoint when it is IPv4: four octets in network order and a port, present only in client mode. A client whose endpoint is not IPv4 is refused at parse (`config.value.range`). Absence of any admin endpoint is refused at parse (§2.2) |
 
 **Six fields** (DC-Q24, §3.7 of the Rust-binary PR). *Records-was:* the
-cutover landed ten; the fixed difficulty, the pool's weight bound, the
-decoded mining address and the mining threads were deleted with the Rust
-binary, because no C++ read them (DC-F25) — the miner is Rust and reads
-`mine-address` from the configuration itself. **The gate compares the
+cutover landed ten; the pool's weight bound left when `txpool-weight-max`
+became a rejected option (IG-Q11, on `dev` beside this PR); the fixed
+difficulty, the decoded mining address and the mining threads were deleted
+with the Rust binary, because no C++ read them (DC-F25) — the miner is
+Rust and reads `mine-address` from the configuration itself. **The gate compares the
 structure against its readers, not against a number:**
 `scripts/ci/check_snapshot_readers.py` finds a read of every member under
 `src/` through a variable of the snapshot's type, holds the two pinned
@@ -620,7 +621,6 @@ kinds and defaults are `INPUT_GRAMMAR.md` §5's and are not restated. The
 | Tor connector | `shekyl-tor` and the zone host | the posture: `Off`, `Managed` with the Tor binary's path, or `Operator` with a SOCKS proxy and its RFC 1929 pair (§2.5) and an optional onion with its local listen endpoint | `no-ephemeral-tor`, `tx-proxy`, `anonymous-inbound`, `SHEKYL_TOR_BINARY` (environment) |
 | p2p policy | the dialer and the peer lists | the operator's peers, the closed-network declaration (absent or non-empty, DC-F11), the local-range override, early disclosure, the ban file's entries, the two rate bounds | `add-peer`, `seed-node`, `add-exclusive-node`, `allow-local-ip`, `p2p-disclose-early` (PR-3), `ban-list`, `in-peers`, `limit-rate-up`, `limit-rate-down`, `limit-rate`, `out-peers`, `tos-flag`, `no-igd`, `igd` |
 | rpc | `shekyl-daemon-rpc` | the admin and view listener sets, the origin list, the connection cap | `rpc-bind-ip`, `rpc-bind-ipv6-address`, `rpc-use-ipv6`, `rpc-bind-port`, `rpc-restricted-bind-ip`, `rpc-restricted-bind-ipv6-address`, `rpc-restricted-bind-port`, `restricted-rpc`, `rpc-access-control-origins`, `rpc-max-connections`, `rpc-max-connections-per-public-ip`, `rpc-max-connections-per-private-ip`, `rpc-response-soft-limit`, `disable-rpc-ban` |
-| txpool | core, through the snapshot | the weight bound | `max-txpool-weight` |
 | notify | the Rust runner (DC-Q14) | three commands, each an argument array with its named placeholders | `block-notify`, `reorg-notify`, `block-rate-notify` |
 | mine | the miner, through the snapshot | the address and the thread count | `start-mining`, `mining-threads`, the five `bg-mining-*` |
 | dev | each lever's owner | the levers of `INPUT_GRAMMAR.md` §5, each accepted only on the networks its row names, never on mainnet (IG-8) | `fixed-difficulty`, `no-sync`, `clearnet-transport-encrypt`, `carrier-development`, the four environment levers |
@@ -635,7 +635,10 @@ durability is a constant, `shekyl_chain_store::store::DURABILITY`
 and the node logs it at open; no sync turns the fsync off. Chain sync's four (`prep-blocks-threads`,
 `block-sync-size`, `span-limit`, `block-download-max-size`) are rejected rows,
 refused with CS-Q12's reason (`P2P_3_CHAIN_SYNC_BRIEF.md` CS-Q12, Rick
-2026-10-18).
+2026-10-18). `txpool-weight-max` is a rejected row, refused because the
+pool's cap derives from the chain (CEN-M10: `REFERENCE_BLOCK_MAX_AGE` blocks
+at the block weight limit; `DRS_E5_POOL_ALT_PRUNE.md`, `INPUT_GRAMMAR.md`
+IG-Q11).
 
 ---
 
@@ -964,7 +967,6 @@ chain-sync lanes do not touch the option surface.
 | DC-F1, the genesis-at-open check on a store's contents (no longer a blocker) | [`DAEMON_REDB_STORE.md`](DAEMON_REDB_STORE.md) |
 | DC-N2, the console moves to `shekyl-cli` | RT-15, [`RPC_CHANNEL.md`](RPC_CHANNEL.md) |
 | the blockchain utilities' option sets | IG Part B; this brief §9 |
-| the inherited default of `txpool-weight-max` (IG-Q11) | [`DRS_E5_POOL_ALT_PRUNE.md`](DRS_E5_POOL_ALT_PRUNE.md), the pool's live document |
 | the inherited default of `rpc-connections-max` (IG-Q12) | RT-O9.4, [`RPC_CHANNEL.md`](RPC_CHANNEL.md) |
 | the `removed_flags` shim sunset | this brief §4; the row leaves with the files |
 
@@ -978,7 +980,7 @@ recorded in §1.1 and an edit to this list in the same change.
 | Item | What was found | Options |
 | --- | --- | --- |
 | `data_dir` in the snapshot (DC-F25) | no C++ reader; the chain is the Rust store | delete and drop the `EXEMPT` row, or name the reader it is kept for |
-| `dev-difficulty`, `txpool-weight-max`, `mine-threads` (DC-F25) | grammar rows with no reader in either language since their snapshot fields went | delete the rows (REJECTED or gone, IG-10), or name their Rust readers |
+| `dev-difficulty`, `mine-threads` (DC-F25) | grammar rows with no reader in either language since their snapshot fields went (`txpool-weight-max`, the third, became a REJECTED row on `dev` beside this PR, IG-Q11) | delete the rows (REJECTED or gone, IG-10), or name their Rust readers |
 | `shekyl_log_install_tracing_forwarder` (DC-F19) | the C export has no C++ caller; its Rust function is the one in use | delete the export and its C declaration, or keep it as the test binaries' pin |
 | `tools::setup_crash_dump` (`src/common/util.cpp`, DC-F27) | dead in every binary now that `on_startup` is gone | delete |
 | `src/common/stack_trace.cpp` | lives on as the `stack_trace` library for `enable_stack_trace`'s C++ executables and `unit_tests`; no shipped binary links it | keep for the C++ utilities' lifetime, or delete with `enable_stack_trace` |
@@ -1023,7 +1025,7 @@ cover).
 | DC-F22 | `/GS-` in the MSVC definitions (root `CMakeLists.txt`) disabled the compiler's stack-buffer security checks for every C++ object, which the Rust binary links. Nothing in the tree or its history recorded why | absorbed by DC-Q21: deleted; the comment in its place records the absence |
 | DC-F23 | The hardening flag list was a claim, not a reading. `LD_SECURITY_FLAGS` and `STATIC_FLAGS` are set in the root `CMakeLists.txt` and reached the C++ executables through `CMAKE_EXE_LINKER_FLAGS`, which a Corrosion-imported target does not read; no gate read PIE, RELRO, `BIND_NOW`, the stack flag or the PE characteristics off a built binary | absorbed by DC-Q21: the flags reach rustc through `corrosion_add_target_local_rustflags`, and `check_binary_hardening.sh` reads them off every staged binary in `build.yml` and `depends.yml` |
 | DC-F24 | `SHEKYL_PROTOCOL_VERSION` in `src/cryptonote_config.h` had one C++ reader, `main.cpp`'s banner; `SHEKYL_RELEASE_NAME` was a literal in `src/version.cpp.in`, outside `cmake/Version.cmake` | absorbed by DC-Q20 |
-| DC-F25 | Four snapshot fields had no C++ reader: `fixed_difficulty`, `txpool_weight_max`, `mine_address` and `mine_threads` (the Rust miner reads `mine-address` from the configuration itself; core opens no LMDB). The count gate pinned a number and could not see a reader leave. `data_dir` has no C++ reader either (the chain is the Rust store), and the grammar rows `dev-difficulty`, `txpool-weight-max` and `mine-threads` have no reader in either language | absorbed by DC-Q24 for the four; `data_dir` is `EXEMPT` and goes to Rick with the three rows (§10.1) |
+| DC-F25 | Four snapshot fields had no C++ reader: `fixed_difficulty`, `txpool_weight_max`, `mine_address` and `mine_threads` (the Rust miner reads `mine-address` from the configuration itself; core opens no LMDB). The count gate pinned a number and could not see a reader leave. `data_dir` has no C++ reader either (the chain is the Rust store), and the grammar rows `dev-difficulty`, `txpool-weight-max` and `mine-threads` have no reader in either language | absorbed by DC-Q24 for the four; `data_dir` is `EXEMPT` and goes to Rick with the rows (§10.1); `txpool-weight-max` was ruled on `dev` beside this PR (REJECTED, IG-Q11) and leaves the list |
 | DC-F26 | Retiring the daemon image took `shekyl_daemon_ctl_*` out of `unit_tests`' link: the C++ test reached those exports through the image, and the exports lived in `shekyl-daemon-rpc`, which `shekyl-ffi` did not link | fixed in the Rust-binary PR. *Records-was, to `191e1fd7d7`:* `shekyl-ffi` re-exported `shekyl-daemon-rpc` whole. *Corrected by DC-F30:* the exports moved to their own crate, `rust/shekyl-daemon-ctl`, which `shekyl-ffi` re-exports; the server stays out of the archive |
 | DC-F27 | The `__cxa_throw` hook had a second path. `common/stack_trace.cpp` was a member of `libcommon`; in a non-STATIC build (the default developer and CI Linux build) its object defines `__cxa_throw` itself, resolving `__real` through `dlsym` per throw, so every binary that linked `common` resolved its throws to the hook before libstdc++ was searched, the Rust `shekyld` included. Observed: a refused RPC bind printed nine `[stacktrace]` frames to standard error past the Rust log sink. DC-F17's premise, that the remnant carried no hook because it was not built by `shekyl_add_executable`, was the link-flag path only | fixed in the Rust-binary PR: `stack_trace` is its own library, linked by `enable_stack_trace` and `unit_tests`; `nm shekyld` shows `U __cxa_throw` and no `log_stack_trace`. `util.cpp`'s `setup_crash_dump` is now dead in every binary and goes to Rick (§10.1) |
 | DC-F28 | The C++ daemon's CMake target was named `daemon` (`shekyl_add_executable(daemon …)`, `OUTPUT_NAME shekyld`); `corrosion_import_crate` names the Rust binary's build target `cargo-build_shekyld` and `shekyld` is its IMPORTED target with no build step, so `cmake --build … --target daemon` (and `--target shekyld`) is refused. Six live sites still named the old target after §3's rename: the nightly full-parity job of `.github/workflows/randomx-v2-differential.yml`, three recipes in `docs/COMPILING_DEBUGGING_TESTING.md`, the `SHEKYLD_BIN` hint in `rust/shekyl-engine-core/src/engine/regtest_e2e.rs`, `check_randomx_symbol_isolation.sh`'s FATAL line, and `rust/shekyld/build.rs`'s own warning (which named `shekyld`). Found by the §4 acceptance builds (the old spelling failed on every host) | fixed in the Rust-binary PR: every live site names `cargo-build_shekyld`; `WINDOWS_WALLET_SUPPORT.md` §8 carries the rename as records-was; `git grep -E -- '--target[ =]+(daemon\|shekyld)\b'` outside `docs/completed`, the CHANGELOG and the audit trail → 0 |

@@ -14,7 +14,7 @@ use super::connect_fixtures::{candidate, expected_target, FixtureSubstrate};
 use super::store_tests::{cleanup, tmp, TestErr, EPOCH};
 use super::*;
 use crate::codec::RuleSetInForce;
-use crate::schema::HF_VERSIONS;
+use crate::schema::RULE_SET_IN_FORCE;
 
 #[test]
 fn a_fakechain_verdict_connects_when_the_fakechain_set_is_in_force() {
@@ -53,7 +53,7 @@ fn a_fakechain_verdict_connects_when_the_fakechain_set_is_in_force() {
     // set (the caveat at the belt).
     let snap = store.begin_read().expect("read");
     let recorded: RuleSetInForce = snap
-        .open_table(HF_VERSIONS)
+        .open_table(RULE_SET_IN_FORCE)
         .expect("sealed")
         .get(0u64)
         .expect("read")

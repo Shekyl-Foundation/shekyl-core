@@ -2005,7 +2005,7 @@ pending a hash row (F14).** A ruling that takes both GOOD rows retains
 | `curve_tree_layers` layers 1..depth−2 | 32 B/chunk | none after seal | recompose from layer 0 | CACHE — **already pruned** by every node (`prune_curve_tree_intermediate_layers`) |
 | `curve_tree_meta`, `curve_tree_checkpoints` | small | trim, integrity check (`Derived`, F11) | from leaves (F11) — re-grade | CACHE / KEEP-C (root layer) |
 | `block_burn` | 8–16 B/block | emission / burn accounting | rebuild from fees | CACHE (kept; small) |
-| `hf_versions`, `hf_starting_heights`, `properties` | small | consensus versioning, receipts (V12 prune watermark) | — | KEEP-C (constant size) |
+| `rule_set_in_force`, `properties` | small | consensus versioning, receipts (V12 prune watermark) | — | KEEP-C (constant size) |
 
 ### 9.4 Archival / staking state (the 18 `archival_*` tables + `block_burn`)
 
@@ -2022,7 +2022,7 @@ must keep to *verify new blocks* versus which it may retire.
 | `archival_slash_applied` | SetShaped | slash dedupe | slashes ever | KEEP-C |
 | `archival_serve_credit`, `archival_settlement`, `archival_r_market`, `archival_sigma_work`, `archival_budget`, `archival_budget_accrual`, `archival_attestation_witness` | Small | settlement / epoch close within `W` | **retention prune at `tip − W`** (`db_lmdb.cpp:7704-7739`, un-journaled) | LOCAL-BOUNDED — already retired; nothing owed |
 | `archival_alt_attestation_witness` | Excluded | alt-chain reconnect | alt blocks | LOCAL-BOUNDED (alt) |
-| `archival_bond_unbond_log`, `archival_bond_holdings_update_log` *(empty by construction since 2026-09-20 — kind REJECTED; deletion owed, `FOLLOWUPS.md`)*, `archival_bond_reinstate_log`, `archival_emission_claim_log`, `archival_epoch_close_log` | AppendMostly | pop path only (`revert_*_at_height`) | **nothing today** | LOCAL-BOUNDED in principle (reorg window); unbounded on disk (F16) — Q1 |
+| `archival_bond_unbond_log`, `archival_bond_holdings_update_log` *(empty by construction since 2026-09-20 — kind REJECTED; neither is in the Rust store, whose family set dropped both at layout 34)*, `archival_bond_reinstate_log`, `archival_emission_claim_log`, `archival_epoch_close_log` | AppendMostly | pop path only (`revert_*_at_height`) | **nothing today** | LOCAL-BOUNDED in principle (reorg window); unbounded on disk (F16) — Q1 |
 | `archival_slash_log` | AppendMostly | pop path + `archival_slash_removed_holding_after` (`:5243`, scans above `at_height`); `at_height = h_fire` on both entry paths, bounded by credit deadline / watermark + window, not by a check (F19) | **nothing today** | LOCAL-BOUNDED — horizon `tip − (CRB + n·SEB + reorg)`, minted with its check (F19) — Q1 |
 
 The table above is the C++ store's. The Rust store retires the per-epoch

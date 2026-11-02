@@ -81,11 +81,9 @@
 //! It holds no **pool**: which bodies are offered, and in what order, is
 //! the mempool's. The selection decision it owns is [`Fill`], the ruled
 //! reward-aware policy: admit a body only when listing it does not lower
-//! the gross coinbase. That rule is policy, not consensus. The daemon's
-//! live scan, `tx_memory_pool::fill_block_template`, is the other policy
-//! (one body may cross the median, then the scan ends). [`Fill`] is the
-//! replacement. The daemon still runs the C++ scan until `tx_pool.cpp`
-//! deletes at the DRS-X flip.
+//! the gross coinbase. That rule is policy, not consensus, and it is the
+//! only fill the node runs: the inherited scan (one body could cross the
+//! median, then the scan ended) left with the C++ pool at the DRS-X flip.
 //!
 //! # How it is tested, by design
 //!

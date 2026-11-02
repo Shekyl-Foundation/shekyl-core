@@ -355,7 +355,7 @@ fn le_u64(b: &[u8]) -> u64 {
 // crate must not depend on.
 // ---------------------------------------------------------------------------
 
-/// `hf_versions[height]` — the rule set in force at a height (CEN-B3's
+/// `rule_set_in_force[height]` — the rule set in force at a height (CEN-B3's
 /// belt), as a value this crate owns. The rules crate's id, stored as its
 /// raw `u8`.
 ///
@@ -368,7 +368,7 @@ fn le_u64(b: &[u8]) -> u64 {
 /// crate neither home may reach gets the one named adapter
 /// (`CURVE_TREE_STORE_SHAPES.md` CTS-Q6).
 ///
-/// `NAME` stays `"rule_set_id"`, so `hf_versions`' value `TypeName` is the
+/// `NAME` stays `"rule_set_id"`, so `rule_set_in_force`'s value `TypeName` is the
 /// `shekyl::Coded<rule_set_id>` it already was and the committed
 /// `rule_set_id.snap` fixtures do not move: the adapter names the codec's
 /// home, not a new layout.
@@ -575,7 +575,7 @@ mod tests {
     }
 
     /// `RuleSetInForce` is a home for the codec, not a layout: the bytes
-    /// are the id's raw `u8`, and `NAME` is what `hf_versions`' value
+    /// are the id's raw `u8`, and `NAME` is what `rule_set_in_force`'s value
     /// `TypeName` and `rule_set_id.snap` were already written against.
     #[test]
     fn rule_set_in_force_is_the_ids_raw_byte_under_the_unmoved_name() {

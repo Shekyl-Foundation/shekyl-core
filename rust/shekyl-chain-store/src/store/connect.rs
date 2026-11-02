@@ -33,7 +33,7 @@
 //!  5. witness      archival_attestation_witness[h] = the verdict's sidecar,
 //!                  when non-empty — `archival_write.rs`
 //!  6. block        blocks[h], block_heights[hash], block_info[h] (SI-2)
-//!  7. rule set     hf_versions[h] = in_force (the CEN-B3 belt)
+//!  7. rule set     rule_set_in_force[h] = in_force (the CEN-B3 belt)
 //!  8. burn         block_burn[h] only if h > 0 && burned > 0
 //!                  (blockchain.cpp:6148); total_burned += burned + Σ slash
 //!                  burns, one fold (SI-8; ARW-6) — `archival_write.rs`
@@ -101,9 +101,9 @@ use crate::codec::{
 use crate::ids::{AmountIndex, OutputSlot, OutputStorageId, TxStorageId};
 use crate::lmdb_order::LmdbHashKey;
 use crate::schema::{
-    BLOCKS, BLOCK_HEIGHTS, BLOCK_INFO, BLOCK_POW, CURVE_TREE_ROOTS, HF_VERSIONS, OUTPUT_AMOUNTS,
-    OUTPUT_TXS, SPENT_KEYS, TXS_ARCHIVAL_LEN, TXS_PQC_AUTHS, TXS_PQC_AUTH_HASH, TXS_PRUNABLE,
-    TXS_PRUNABLE_HASH, TXS_PRUNED, TX_INDICES, TX_OUTPUTS,
+    BLOCKS, BLOCK_HEIGHTS, BLOCK_INFO, BLOCK_POW, CURVE_TREE_ROOTS, OUTPUT_AMOUNTS, OUTPUT_TXS,
+    RULE_SET_IN_FORCE, SPENT_KEYS, TXS_ARCHIVAL_LEN, TXS_PQC_AUTHS, TXS_PQC_AUTH_HASH,
+    TXS_PRUNABLE, TXS_PRUNABLE_HASH, TXS_PRUNED, TX_INDICES, TX_OUTPUTS,
 };
 
 use super::bundle_view::StoreBundleView;
@@ -385,7 +385,7 @@ impl<'id> WriteBatch<'_, 'id> {
         // schedule position the height was judged at; a reader that needs
         // the set (a Fakechain target) does not have it here and must not
         // pretend to (RD-Q10, ruled 2026-09-19).
-        self.open_insert_table(HF_VERSIONS, StoreInvariant::TipMismatch)?
+        self.open_insert_table(RULE_SET_IN_FORCE, StoreInvariant::TipMismatch)?
             .insert(height, RuleSetInForce(in_force.id()).encoded().as_encoded())?;
 
         // ---- 8. burn (`archival_write.rs`) ------------------------------

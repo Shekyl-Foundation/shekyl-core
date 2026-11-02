@@ -112,10 +112,6 @@ archival_families! {
     SlashLog => "archival_slash_log",
     /// `archival_emission_claim_log`
     EmissionClaimLog => "archival_emission_claim_log",
-    /// `archival_bond_unbond_log`
-    BondUnbondLog => "archival_bond_unbond_log",
-    /// `archival_bond_holdings_update_log`
-    BondHoldingsUpdateLog => "archival_bond_holdings_update_log",
     /// `archival_bond_reinstate_log`
     BondReinstateLog => "archival_bond_reinstate_log",
     /// `archival_r_market`

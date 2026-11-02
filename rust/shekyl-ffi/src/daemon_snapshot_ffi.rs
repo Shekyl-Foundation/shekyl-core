@@ -11,7 +11,8 @@
 //! [`shekyl_daemon_snapshot_field_count`] exports it for the C++ to assert;
 //! `scripts/ci/check_snapshot_readers.py` holds every field to a C++ reader
 //! under `src/`, so a field whose reader moved into Rust fails there until
-//! it is deleted. The fixed difficulty, the pool's weight bound, the mining
+//! it is deleted. The pool's weight bound left when `txpool-weight-max`
+//! became a rejected option (IG-Q11); the fixed difficulty, the mining
 //! address and the mining threads were deleted with the Rust binary
 //! (DC-Q24, §3.7): no C++ read them, and the Rust miner reads
 //! `mine-address` from the configuration itself. `dev-sync` is not a field: chain

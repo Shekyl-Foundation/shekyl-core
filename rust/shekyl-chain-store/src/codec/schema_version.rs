@@ -363,7 +363,25 @@ use super::{Canonical, CodecError};
 ///   does not know, so the bump refuses either at open. `queued_bundle.snap`
 ///   and `queued_body.snap` are new and `tables.snap` gains the two rows.
 ///   Rebuild from the block corpus, as at every bump.
-pub const SCHEMA_VERSION: SchemaVersion = SchemaVersion::new(33);
+/// - `34` — two archival families for kinds that do not exist leave
+///   (`DAEMON_REDB_STORE.md` §7; rule 23): `archival_bond_unbond_log`
+///   (`Unbond` is `Release`'s old name) and `archival_bond_holdings_update_log`
+///   (`HoldingsUpdate` REJECTED 2026-09-20). Neither had a table in this
+///   store (`NOT_PORTED`), but each held a bit in [`FamilySet`], so every
+///   family after them moves down two bits and a stored apply-policy or
+///   provenance cell would name the wrong families; `family_set.snap`
+///   re-pins. In the same bump the catalogue drops its two dead tables,
+///   `txs` (never written, DRS-W4) and `hf_starting_heights` (never
+///   written, DRS-W5), so every ordinal from `txs`' (3) on moves and an
+///   undo-log entry written under `33` would name the wrong
+///   table; and `hf_versions` is renamed `rule_set_in_force`, what its
+///   rows are (CEN-B3's belt), so a `33` binary would not find it by name.
+///   With no table left `Unshaped`, every catalogued table is sealed.
+///   `tables.snap` re-pins. No row's bytes move. A `33` file is refused at
+///   open. Rebuild from the block corpus, as at every bump.
+///
+/// [`FamilySet`]: crate::family_set::FamilySet
+pub const SCHEMA_VERSION: SchemaVersion = SchemaVersion::new(34);
 
 /// A layout version as stored in the `schema_version` cell.
 ///
@@ -420,10 +438,10 @@ mod tests {
         // Moves with every layout bump, on purpose: the history list above
         // this constant is the record, and this line is what makes a bump
         // without a history entry visible in review.
-        assert_eq!(SCHEMA_VERSION, SchemaVersion::new(33));
-        assert_eq!(SCHEMA_VERSION.encode(), [33, 0, 0, 0, 0, 0, 0, 0]);
+        assert_eq!(SCHEMA_VERSION, SchemaVersion::new(34));
+        assert_eq!(SCHEMA_VERSION.encode(), [34, 0, 0, 0, 0, 0, 0, 0]);
         assert_eq!(
-            SchemaVersion::decode(&[33, 0, 0, 0, 0, 0, 0, 0]),
+            SchemaVersion::decode(&[34, 0, 0, 0, 0, 0, 0, 0]),
             Ok(SCHEMA_VERSION)
         );
     }
