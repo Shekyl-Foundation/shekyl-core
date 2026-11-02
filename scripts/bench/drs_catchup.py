@@ -5,31 +5,29 @@
 # BSD-3-Clause
 #
 # The budget's catch-up harness mode (DAEMON_REDB_STORE.md §1.3a, PB-D2 and
-# PB-D3; rule 7): a subject synced to a height stops, the seed advances, the
-# subject resumes, and the time from its first answered get_info to the
-# seed's tip is the row. The fsync probe runs beside the whole run and its
-# window over the timed catch-up is recorded (rule 2); the artifact reports
-# the proof-of-work share of the subject's CPU over that window (§1.3a.6
-# item 8), so a miss at a release cut names its cause.
+# PB-D3; rule 7): a subject synced to a height stops, the seed advances a
+# week, the subject resumes, and the time from its first answered get_info
+# to the seed's tip is the row. The fsync probe runs beside the whole run
+# and its window over the timed catch-up is recorded (rule 2). The artifact
+# reports the proof-of-work share of the subject's CPU over that window
+# (§1.3a.6 item 8), so a miss at a release cut names its cause.
 #
-# The proof-of-work share is read, not guessed: the replay tool connects the
-# seed's chain under the production substrate and writes its per-hash
-# timings (`shekyl-chain-replay baseline --metrics-out`, `metrics.timed_hash`).
-# The share is the advanced blocks' hashes at that mean, over the subject's
-# CPU seconds in the window. One hash per block: the validator hashes each
-# block once (CEN-D1/D2), so the count is the block count.
+# The share is read, not guessed: the replay tool connects the seed's chain
+# under the production substrate and writes its per-hash timings. The share
+# is the advanced blocks' hashes at that mean, over the subject's CPU
+# seconds. One hash per block: the validator hashes each block once
+# (CEN-D1/D2), so the count is the block count.
 #
-# The design load (30 transactions per block, §1.3a.6 item 1) is the seed
-# chain's: this mode times whatever chain the seed holds and records its
-# transactions per block, and the row's gate reads that figure.
+# The row names its load (§1.3a rule 4): PB-D2 is 30 transactions per block,
+# PB-D3 is 4× that, each for the week's 5,040 blocks (PB-D2; the interval
+# is 120 s). The harness counts `num_txes` on every advanced block and
+# refuses a chain that is not the load the row names. The adversarial-block
+# builder is a later piece; a coinbase-only chain fails here, loudly.
 #
 # Commands:
-#   run    --daemon D --work-dir W --height H --advance N --out F
-#          [--replay-bin R] [--disk-class C]
+#   run    --daemon D --replay-bin R --work-dir W --height H --row PB-D2|PB-D3
+#          --out F [--disk-class C]
 #   --selftest
-#
-# Python under scripts/bench/, beside drs_bench.py, whose daemon helpers it
-# uses.
 
 from __future__ import annotations
 
@@ -43,11 +41,34 @@ import time
 
 import drs_artifact as A  # noqa: E402
 import drs_bench as B  # noqa: E402
+import drs_regtest as R  # noqa: E402
 import fsync_probe  # noqa: E402
-import armed_lever  # noqa: E402
 
 SCHEMA = "shekyl_drs_catchup_v1"
 HERE = os.path.dirname(os.path.abspath(__file__))
+
+# §1.3a rule 4. The stress load is 4× the design load.
+DESIGN_TX_PER_BLOCK = 30
+STRESS_MULTIPLE = 4
+STRESS_TX_PER_BLOCK = DESIGN_TX_PER_BLOCK * STRESS_MULTIPLE
+# PB-D1 and PB-R3: the block interval. PB-D2 is one week of those blocks.
+BLOCK_INTERVAL_S = 120
+WEEK_S = 7 * 24 * 60 * 60
+WEEK_BLOCKS = WEEK_S // BLOCK_INTERVAL_S
+ROW_LOAD = {"PB-D2": DESIGN_TX_PER_BLOCK, "PB-D3": STRESS_TX_PER_BLOCK}
+
+
+def one_load(counts):
+    """The transaction count every advanced block carries, or None.
+
+    A chain whose blocks do not share one count is not a named row.
+    """
+    if not counts:
+        return None
+    first = counts[0]
+    if any(count != first for count in counts):
+        return None
+    return first
 
 
 def pow_share(advanced_blocks, hash_ns_mean, subject_cpu_s):
@@ -63,116 +84,93 @@ def pow_share(advanced_blocks, hash_ns_mean, subject_cpu_s):
             "hashes": advanced_blocks}
 
 
-def artifact_refusals(a):
+def artifact_refusals(artifact):
     """Why this catch-up artifact is not a measurement. Empty == usable."""
-    r = []
-    if not isinstance(a, dict):
+    reasons = []
+    if not isinstance(artifact, dict):
         return ["artifact is not a JSON object"]
-    if a.get("schema_version") != SCHEMA:
-        r.append(f"schema_version is {a.get('schema_version')!r}, expected {SCHEMA!r}")
-    r.extend(A.probe_refusals(a.get("probe")))
-    c = a.get("catchup")
-    if not isinstance(c, dict):
-        return r + ["catchup block absent"]
-    for k in ("height_stopped", "blocks_advanced", "height_reached", "wall_s",
-              "subject_cpu_s", "peak_rss_bytes", "tx_per_block"):
-        if not isinstance(c.get(k), (int, float)):
-            r.append(f"catchup.{k} is {c.get(k)!r}, not a number")
-    if isinstance(c.get("blocks_advanced"), int) and c["blocks_advanced"] <= 0:
-        r.append("catchup.blocks_advanced is not positive: nothing was caught up")
-    if c.get("height_reached") is not None and c.get("height_stopped") is not None \
-            and c.get("blocks_advanced") is not None \
-            and c["height_reached"] != c["height_stopped"] + c["blocks_advanced"]:
-        r.append("catchup.height_reached is not height_stopped + blocks_advanced: "
-                 "the subject did not reach the seed's tip")
-    if "pow" not in a:
-        r.append("pow block absent: PB-D2 and PB-D3 report the proof-of-work share "
-                 "(§1.3a), and a run without it cannot name a miss's cause")
-    elif a["pow"] is not None and not isinstance(a["pow"].get("share_of_subject_cpu"),
-                                                 (int, float)):
-        r.append("pow.share_of_subject_cpu is not a number")
-    if not isinstance(a.get("hardware"), dict):
-        r.append("hardware block absent")
-    if not A.is_hex64(a.get("subject_binary_sha256")):
-        r.append("subject_binary_sha256 is not a sha-256")
-    return r
+    if artifact.get("schema_version") != SCHEMA:
+        reasons.append(
+            f"schema_version is {artifact.get('schema_version')!r}, expected {SCHEMA!r}")
+    reasons.extend(A.probe_refusals(artifact.get("probe")))
+    catchup = artifact.get("catchup")
+    if not isinstance(catchup, dict):
+        return reasons + ["catchup block absent"]
+    for key in ("height_stopped", "blocks_advanced", "height_reached", "wall_s",
+                "subject_cpu_s", "peak_rss_bytes", "tx_per_block"):
+        if not isinstance(catchup.get(key), (int, float)):
+            reasons.append(f"catchup.{key} is {catchup.get(key)!r}, not a number")
+    if isinstance(catchup.get("blocks_advanced"), int) and catchup["blocks_advanced"] <= 0:
+        reasons.append("catchup.blocks_advanced is not positive: nothing was caught up")
+    if catchup.get("height_reached") is not None and catchup.get("height_stopped") is not None \
+            and catchup.get("blocks_advanced") is not None \
+            and catchup["height_reached"] != catchup["height_stopped"] + catchup["blocks_advanced"]:
+        reasons.append("catchup.height_reached is not height_stopped + blocks_advanced: "
+                       "the subject did not reach the seed's tip")
+    row = artifact.get("row")
+    load = ROW_LOAD.get(row)
+    if load is None:
+        reasons.append(f"row is {row!r}; PB-D2 and PB-D3 are the catch-up rows")
+    else:
+        if catchup.get("tx_per_block") != load:
+            reasons.append(
+                f"catchup.tx_per_block is {catchup.get('tx_per_block')!r}, not {row}'s "
+                f"{load} (§1.3a rule 4)")
+        if catchup.get("blocks_advanced") != WEEK_BLOCKS:
+            reasons.append(
+                f"catchup.blocks_advanced is {catchup.get('blocks_advanced')!r}, not a week "
+                f"of {BLOCK_INTERVAL_S}s blocks ({WEEK_BLOCKS})")
+    if "pow" not in artifact or artifact.get("pow") is None:
+        reasons.append("pow share absent: PB-D2 and PB-D3 report the proof-of-work share "
+                       "(§1.3a.6 item 8), and a run without it cannot name a miss's cause")
+    elif not isinstance(artifact["pow"].get("share_of_subject_cpu"), (int, float)):
+        reasons.append("pow.share_of_subject_cpu is not a number")
+    if not isinstance(artifact.get("hardware"), dict):
+        reasons.append("hardware block absent")
+    if not A.is_hex64(artifact.get("subject_binary_sha256")):
+        reasons.append("subject_binary_sha256 is not a sha-256")
+    return reasons
 
 
 def _metrics_pow(replay_bin, seed_rpc_port, work, tip_count):
-    """The replay tool's mean light-mode hash over the seed's chain, or None
-    when no replay binary was given."""
-    if replay_bin is None:
-        return None
+    """The replay tool's mean light-mode hash over the seed's chain.
+
+    The store is a file inside a directory. Removing the directory removes
+    the file; removing the file's path as a directory does not.
+    """
     corpus = os.path.join(work, "seed.corpus.e2")
-    store = os.path.join(work, "pow-store")
+    store_dir = os.path.join(work, "pow")
+    shutil.rmtree(store_dir, ignore_errors=True)
+    os.makedirs(store_dir)
+    store = os.path.join(store_dir, "chain.db")
     trace = os.path.join(work, "pow.trace.e2")
     metrics = os.path.join(work, "pow.metrics.json")
-    shutil.rmtree(store, ignore_errors=True)
     subprocess.run([replay_bin, "fetch", "--daemon", f"http://127.0.0.1:{seed_rpc_port}",
-                    "--chain", "regtest", "--from", "0", "--to", str(tip_count),
+                    *R.REPLAY_CHAIN, "--from", "0", "--to", str(tip_count),
                     "--out", corpus], check=True, capture_output=True)
     subprocess.run([replay_bin, "baseline", "--corpus", corpus, "--store", store,
-                    "--chain", "regtest", "--fixed-difficulty", "1",
-                    "--out", trace, "--metrics-out", metrics],
+                    *R.REPLAY_CHAIN, "--out", trace, "--metrics-out", metrics],
                    check=True, capture_output=True)
-    shutil.rmtree(store, ignore_errors=True)
+    shutil.rmtree(store_dir, ignore_errors=True)
     with open(metrics, encoding="utf-8") as fh:
         return json.load(fh).get("hash_ns_mean")
 
 
 def run(args):
-    work = os.path.abspath(args.work_dir)
-    os.makedirs(work, exist_ok=True)
-    daemon = B.daemon_executable(args.daemon)
+    session = R.Session(args)
+    work = session.work
     seed_dir = os.path.join(work, "seed")
     subj_dir = os.path.join(work, "subject")
-    for d in (seed_dir, subj_dir):
-        shutil.rmtree(d, ignore_errors=True)
-        os.makedirs(d)
+    for directory in (seed_dir, subj_dir):
+        shutil.rmtree(directory, ignore_errors=True)
+        os.makedirs(directory)
     addr = B.mining_address(args.cargo_timeout)
-    (sp2p, srpc, bp2p, brpc), held = B._reserve_ports(4)
-    for sk in held:
-        sk.close()
-    common = ["--network", "regtest", "--dev-difficulty", "1", "--p2p-local",
-              "--tor", "off", "--log-level", "info"]
-
-    def spawn(tag, d, extra, offline=False):
-        p2p, rpcp = (sp2p, srpc) if tag == "seed" else (bp2p, brpc)
-        net = ["--clearnet", "off"] if offline else ["--clearnet-listen", f"127.0.0.1:{p2p}"]
-        argv = [daemon] + common + ["--data-dir", d] + net + [
-            "--rpc-admin-listen", f"127.0.0.1:{rpcp}",
-            "--log-file", os.path.join(work, f"{tag}.daemon.log")] + extra
-        log = open(os.path.join(work, f"{tag}.log"), "a", encoding="utf-8")
-        try:
-            return subprocess.Popen(argv, stdout=log, stderr=subprocess.STDOUT, cwd=d)
-        finally:
-            log.close()
-
-    def running(proc, port):
-        return B._RunningDaemon(proc, port, args.startup_timeout, args.shutdown_timeout)
-
-    def generate(count):
-        # generateblocks is an armed test lever, served only with the dev-rpc
-        # switch set; the daemon announces it at start. The log is appended,
-        # so only the bytes this spawn wrote count.
-        seed_log = os.path.join(work, "seed.log")
-        seed_from = armed_lever.log_size(seed_log)
-        proc = spawn("seed", seed_dir, [armed_lever.FLAG, "--mine-address", addr], offline=True)
-        with running(proc, srpc) as seed:
-            if not seed.ready:
-                B._fail(f"generating seed never came up; see {work}/seed.log")
-            if not armed_lever.announced_since(seed_log, seed_from):
-                B._fail(f"the generating seed did not announce {armed_lever.ANNOUNCEMENT!r} "
-                        f"at start; see {seed_log}")
-            B._await_posted(srpc, args.startup_timeout)
-            resp = B._rpc(srpc, "generateblocks", {"count": count}, timeout=args.gen_timeout)
-            if resp.get("result", {}).get("status") != "OK":
-                B._fail(f"generateblocks refused: {json.dumps(resp)[:300]}")
-            return B._rpc(srpc, "get_info")["result"]["height"]
 
     def sync_subject(target, timed):
-        proc = spawn("subject", subj_dir, ["--p2p-closed-peer", f"127.0.0.1:{sp2p}"])
-        with running(proc, brpc) as subj:
+        proc = session.spawn("subject", subj_dir,
+                             ["--p2p-closed-peer", f"127.0.0.1:{session.sp2p}"],
+                             session.bp2p, session.brpc)
+        with session.running(proc, session.brpc) as subj:
             if not subj.ready:
                 B._fail(f"subject never came up; see {work}/subject.log")
             t0 = subj.ready_at
@@ -182,7 +180,7 @@ def run(args):
             deadline = t0 + args.sync_timeout
             while time.time() < deadline:
                 try:
-                    reached = B._rpc(brpc, "get_info")["result"]["height"]
+                    reached = B._rpc(session.brpc, "get_info")["result"]["height"]
                 except (OSError, ValueError):
                     time.sleep(1)
                     continue
@@ -210,19 +208,20 @@ def run(args):
          "--dir", os.path.join(work, "probe"), "--out", probe_out],
         stdout=subprocess.DEVNULL, stderr=subprocess.STDOUT)
     try:
-        stopped_count = generate(args.height)
-        seed = spawn("seed", seed_dir, [])
-        with running(seed, srpc) as s:
-            if not s.ready:
+        stopped_count = session.generate(seed_dir, args.height, addr)
+        seed = session.spawn("seed", seed_dir, [], session.sp2p, session.srpc)
+        with session.running(seed, session.srpc) as ready:
+            if not ready.ready:
                 B._fail("networked seed never came up")
             sync_subject(stopped_count, timed=False)
-        tip_count = generate(args.advance)
-        seed = spawn("seed", seed_dir, [])
-        with running(seed, srpc) as s:
-            if not s.ready:
+        tip_count = session.generate(seed_dir, WEEK_BLOCKS, addr)
+        seed = session.spawn("seed", seed_dir, [], session.sp2p, session.srpc)
+        with session.running(seed, session.srpc) as ready:
+            if not ready.ready:
                 B._fail("networked seed never came up")
             timed = sync_subject(tip_count, timed=True)
-            hash_ns_mean = _metrics_pow(args.replay_bin, srpc, work, tip_count)
+            load = one_load(session.tx_counts(session.srpc, stopped_count, tip_count - 1))
+            hash_ns_mean = _metrics_pow(session.replay, session.srpc, work, tip_count)
     finally:
         probe.terminate()
         try:
@@ -231,16 +230,27 @@ def run(args):
             probe.kill()
             probe.wait()
 
+    if load is None:
+        B._fail("the advanced blocks do not share one transaction count, so they are not "
+                f"{args.row}; the adversarial-block builder is what puts that load on a chain")
+    if load != ROW_LOAD[args.row]:
+        B._fail(f"the advanced chain carries {load} transaction(s) per block, not "
+                f"{args.row}'s {ROW_LOAD[args.row]} (§1.3a rule 4). A coinbase-only chain "
+                "is not this row; the adversarial-block builder has not landed")
+    advanced = tip_count - stopped_count
+    if advanced != WEEK_BLOCKS:
+        B._fail(f"the seed advanced {advanced} block(s), not a week ({WEEK_BLOCKS})")
+
     window = fsync_probe.window(fsync_probe.read(probe_out), timed["t0"],
                                 timed["t0"] + timed["wall_s"])
     probe_block = fsync_probe.summary(window)
     probe_block["window_s"] = timed["wall_s"]
-    advanced = tip_count - stopped_count
     artifact = {
         "schema_version": SCHEMA,
+        "row": args.row,
         "git_rev": subprocess.run(["git", "-C", A.ROOT, "rev-parse", "HEAD"], check=True,
                                   capture_output=True, text=True).stdout.strip(),
-        "subject_binary_sha256": B.binary_sha256(daemon),
+        "subject_binary_sha256": B.binary_sha256(session.daemon),
         "hardware": A.hardware_fingerprint(subj_dir, args.disk_class),
         "catchup": {
             "height_stopped": stopped_count,
@@ -249,7 +259,7 @@ def run(args):
             "wall_s": timed["wall_s"],
             "subject_cpu_s": timed["cpu_s"],
             "peak_rss_bytes": timed["peak_rss_bytes"],
-            "tx_per_block": 0,
+            "tx_per_block": load,
             "window": "the subject's first answered get_info after the restart to "
                       "height == the seed's tip; EXCLUDES process start and store open",
         },
@@ -263,71 +273,106 @@ def run(args):
     with open(args.out, "w", encoding="utf-8") as fh:
         json.dump(artifact, fh, indent=2, sort_keys=True)
         fh.write("\n")
-    share = artifact["pow"]["share_of_subject_cpu"] if artifact["pow"] else None
-    print(f"wrote {args.out}: caught up {advanced} block(s) in {timed['wall_s']} s, "
-          f"cpu {timed['cpu_s']} s, proof-of-work share {share}, probe "
-          f"{probe_block['samples']} sample(s), no stall")
+    print(f"wrote {args.out}: {args.row} caught up {advanced} block(s) at {load} tx/block "
+          f"in {timed['wall_s']} s, cpu {timed['cpu_s']} s, proof-of-work share "
+          f"{artifact['pow']['share_of_subject_cpu']}, probe {probe_block['samples']} sample(s), "
+          "no stall")
+
+
+def _good():
+    return {
+        "schema_version": SCHEMA,
+        "row": "PB-D2",
+        "subject_binary_sha256": "ab" * 32,
+        "hardware": {"cpu_model": "x"},
+        "catchup": {"height_stopped": 100, "blocks_advanced": WEEK_BLOCKS,
+                    "height_reached": 100 + WEEK_BLOCKS,
+                    "wall_s": 10.0, "subject_cpu_s": 20.0, "peak_rss_bytes": 1 << 30,
+                    "tx_per_block": DESIGN_TX_PER_BLOCK},
+        "pow": pow_share(WEEK_BLOCKS, 1.25e9, 100.0),
+        "probe": {"window_s": 10.0, "samples": 10, "stalls": 0},
+    }
 
 
 def _selftest():
     fails = []
 
     def check(name, got, want):
+        check.names.append(name)
         if got != want:
             fails.append(f"{name}: got {got!r}, want {want!r}")
 
-    good = {
-        "schema_version": SCHEMA,
-        "subject_binary_sha256": "ab" * 32,
-        "hardware": {"cpu_model": "x"},
-        "catchup": {"height_stopped": 100, "blocks_advanced": 50, "height_reached": 150,
-                    "wall_s": 10.0, "subject_cpu_s": 20.0, "peak_rss_bytes": 1 << 30,
-                    "tx_per_block": 0},
-        "pow": pow_share(50, 1.25e9, 100.0),
-        "probe": {"window_s": 10.0, "samples": 10, "stalls": 0},
-    }
+    check.names = []
+    good = _good()
     check("the control is accepted", artifact_refusals(good), [])
-    check("the share is the hashes over the CPU", good["pow"]["share_of_subject_cpu"], 0.625)
+    check("the share is the hashes over the CPU",
+          pow_share(50, 1.25e9, 100.0)["share_of_subject_cpu"], 0.625)
+    check("a week of 120s blocks is 5040", WEEK_BLOCKS, 5040)
+    check("stress is four times the design load", STRESS_TX_PER_BLOCK, 120)
+    bad = json.loads(json.dumps(good))
+    bad["pow"] = None
+    check("a null pow share is refused",
+          any("pow share absent" in reason for reason in artifact_refusals(bad)), True)
     bad = json.loads(json.dumps(good))
     bad.pop("pow")
-    check("no pow block is refused", any("pow block absent" in x for x in artifact_refusals(bad)), True)
+    check("no pow block is refused",
+          any("pow share absent" in reason for reason in artifact_refusals(bad)), True)
     bad = json.loads(json.dumps(good))
-    bad["catchup"]["height_reached"] = 149
-    check("a short catch-up is refused", any("did not reach" in x for x in artifact_refusals(bad)), True)
+    bad["catchup"]["height_reached"] = bad["catchup"]["height_stopped"] + WEEK_BLOCKS - 1
+    check("a short catch-up is refused",
+          any("did not reach" in reason for reason in artifact_refusals(bad)), True)
     bad = json.loads(json.dumps(good))
     bad["probe"]["stalls"] = 1
-    check("a probe stall is refused", any("does not count" in x for x in artifact_refusals(bad)), True)
+    check("a probe stall is refused",
+          any("does not count" in reason for reason in artifact_refusals(bad)), True)
     bad = json.loads(json.dumps(good))
     bad["catchup"]["blocks_advanced"] = 0
     bad["catchup"]["height_reached"] = 100
-    check("nothing advanced is refused", any("not positive" in x for x in artifact_refusals(bad)), True)
-    check("no replay binary is no share", pow_share(50, None, 10.0), None)
+    check("nothing advanced is refused",
+          any("not positive" in reason for reason in artifact_refusals(bad)), True)
+    bad = json.loads(json.dumps(good))
+    bad["catchup"]["tx_per_block"] = 0
+    check("a coinbase-only chain is not the design load",
+          any("tx_per_block" in reason for reason in artifact_refusals(bad)), True)
+    bad = json.loads(json.dumps(good))
+    bad["row"] = "PB-D3"
+    check("the stress row refuses the design load",
+          any("PB-D3" in reason for reason in artifact_refusals(bad)), True)
+    bad = json.loads(json.dumps(good))
+    bad["catchup"]["blocks_advanced"] = WEEK_BLOCKS - 1
+    bad["catchup"]["height_reached"] = 100 + WEEK_BLOCKS - 1
+    check("a short week is refused",
+          any("not a week" in reason for reason in artifact_refusals(bad)), True)
+    check("one count is that count", one_load([30, 30, 30]), 30)
+    check("mixed counts are not a row", one_load([30, 0]), None)
+    check("no blocks are not a row", one_load([]), None)
     if fails:
-        for f in fails:
-            print("FAIL", f, file=sys.stderr)
+        for failure in fails:
+            print("FAIL", failure, file=sys.stderr)
         sys.exit(1)
-    print("catch-up harness selftest: 7 cases OK")
+    print(f"catch-up harness selftest: {len(check.names)} cases OK")
 
 
 def main(argv=None):
     ap = argparse.ArgumentParser(description="The budget's catch-up mode (PB-D2, PB-D3)")
     ap.add_argument("--selftest", action="store_true")
     sub = ap.add_subparsers(dest="cmd")
-    r = sub.add_parser("run")
-    r.add_argument("--daemon", required=True)
-    r.add_argument("--work-dir", required=True)
-    r.add_argument("--height", type=int, required=True, help="blocks before the stop")
-    r.add_argument("--advance", type=int, required=True, help="blocks the seed adds")
-    r.add_argument("--out", required=True)
-    r.add_argument("--replay-bin", default=None,
-                   help="shekyl-chain-replay, for the proof-of-work share")
-    r.add_argument("--disk-class", choices=A.ALLOWED_DISK_CLASSES, default=None)
-    r.add_argument("--cargo-timeout", type=int, default=1800)
-    r.add_argument("--startup-timeout", type=int, default=600)
-    r.add_argument("--shutdown-timeout", type=int, default=120)
-    r.add_argument("--gen-timeout", type=int, default=86400)
-    r.add_argument("--sync-timeout", type=int, default=86400)
-    r.add_argument("--poll-interval", type=float, default=0.5)
+    run_cmd = sub.add_parser("run")
+    run_cmd.add_argument("--daemon", required=True)
+    run_cmd.add_argument("--replay-bin", required=True,
+                         help="shekyl-chain-replay, for the proof-of-work share")
+    run_cmd.add_argument("--work-dir", required=True)
+    run_cmd.add_argument("--height", type=int, required=True, help="blocks before the stop")
+    run_cmd.add_argument("--row", required=True, choices=sorted(ROW_LOAD),
+                         help="PB-D2 is the design load; PB-D3 is the stress load")
+    run_cmd.add_argument("--out", required=True)
+    run_cmd.add_argument("--disk-class", choices=A.ALLOWED_DISK_CLASSES, default=None)
+    run_cmd.add_argument("--cargo-timeout", type=int, default=1800)
+    run_cmd.add_argument("--startup-timeout", type=int, default=600)
+    run_cmd.add_argument("--shutdown-timeout", type=int, default=120)
+    run_cmd.add_argument("--gen-timeout", type=int, default=86400)
+    run_cmd.add_argument("--sync-timeout", type=int, default=86400)
+    run_cmd.add_argument("--poll-interval", type=float, default=0.5)
     args = ap.parse_args(argv)
     if args.selftest:
         _selftest()

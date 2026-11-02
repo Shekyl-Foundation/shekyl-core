@@ -11,30 +11,22 @@
 # each flush and FUA boundary, and at points between them, and holds each
 # rebuilt store to PB-S1's condition.
 #
-# Capture (`capture`, needs root for the device mapper): the subject's data
-# directory is on ext4 over a `dm-log-writes` device, so every write and
-# every flush lands in a log in order. Each time the subject publishes a new
-# tip, the harness writes a mark into that log (`dmsetup message ... mark`):
-# the acknowledgements known at any point of the capture are exactly the
-# marks before it. The subject syncs the main chain from a seed, then meets
-# a heavier fork and switches to it, and is killed. While each seed serves,
-# the clean replays' digests are taken for every height a rebuilt store
-# can reopen at.
+# The acknowledgement is the latest flush or FUA already in the log when
+# get_info published a tip. Under D9 that flush is the commit of the tip:
+# the commit is durable before get_info answers. A mark written afterwards
+# is not the oracle. A tip is never attributed to a flush that has not
+# moved, and never to a flush inside the mkfs image: the first would judge
+# a new tip against an older prefix, and the second would judge genesis
+# against an empty filesystem.
 #
-# Replay (`replay`, needs root): the log's flush and FUA entries, and points
-# between them, are replayed in order onto a zeroed device. At each point
-# the device is copied, the copy mounted (ext4 replays its journal), the
-# subject daemon reopens the store offline (its own recovery path, the real
-# door), and the store is digested. A point passes when:
-#   - before any acknowledgement, the store is absent or opens;
-#   - otherwise the reopened tip is at or above the last acknowledged one,
-#     on a chain a seed served, and its digest is the clean replay's at
-#     that tip (drs_crash.judge).
+# Capture (`capture`, needs root for the device mapper) and replay
+# (`replay`, needs root) both take xfstests' `replay-log`. While each seed
+# serves, one baseline walk records the digest at every height.
 #
 # Commands (run inside a disposable machine with root; DAEMON_REDB_STORE.md
 # §1.3a.6 and the tooling row: never beside a fleet daemon):
-#   capture --daemon D --replay-bin R --work-dir W --mine-address A
-#           --fork-address F --height H --git-rev SHA
+#   capture --daemon D --replay-bin R --replay-log L --work-dir W
+#           --mine-address A --fork-address F --height H --git-rev SHA
 #   replay  --daemon D --replay-bin R --work-dir W --replay-log L
 #           [--between N] [--max-points N] --out F
 #   --selftest
@@ -52,6 +44,7 @@ import time
 import drs_artifact as A  # noqa: E402
 import drs_bench as B  # noqa: E402
 import drs_crash as C  # noqa: E402
+import drs_regtest as R  # noqa: E402
 
 SCHEMA = "shekyl_drs_powerloss_v1"
 CAPTURE = "capture.json"
@@ -59,6 +52,7 @@ DM_NAME = "drs-pbs2"
 DATA_BYTES = 4 << 30
 LOG_BYTES = 16 << 30
 SECTOR = 512
+_FLUSH_FLAGS = ("--next-flush", "--next-fua")
 
 
 def sh(*argv, check=True, capture=False):
@@ -84,29 +78,82 @@ def parse_found(out):
     return int(head) if head.isdigit() else None
 
 
-def mark_name(chain, height):
-    return f"ack-{chain}-{height}"
+def find_entry(replay_log, log_dev, flag, start):
+    """The index of the next entry matching `flag` at or after `start`, or None."""
+    proc = subprocess.run(
+        ["sudo", "-n", replay_log, "--log", log_dev, "--find", flag,
+         "--start-entry", str(start)],
+        check=False, capture_output=True, text=True)
+    return parse_found(proc.stdout) if proc.returncode == 0 else None
 
 
-def parse_mark(name):
-    """`(chain, height)` for an acknowledgement mark, else None."""
-    parts = name.split("-")
-    if len(parts) != 3 or parts[0] != "ack" or not parts[2].isdigit():
-        return None
-    return parts[1], int(parts[2])
+class LogCursor:
+    """The latest flush or FUA already in the log, read while the device is attached.
+
+    The walk remembers where each flag left off, so a poll does not rescan
+    the image it has already passed.
+    """
+
+    def __init__(self, replay_log, log_dev):
+        self.replay_log = replay_log
+        self.log_dev = log_dev
+        self.starts = {flag: 0 for flag in _FLUSH_FLAGS}
+        self.latest = None
+
+    def num_entries(self):
+        text = sh(self.replay_log, "--log", self.log_dev, "--num-entries", capture=True).strip()
+        return int(text)
+
+    def advance(self):
+        total = self.num_entries()
+        for flag in _FLUSH_FLAGS:
+            at = self.starts[flag]
+            while at < total:
+                entry = find_entry(self.replay_log, self.log_dev, flag, at)
+                if entry is None or entry < at:
+                    break
+                if self.latest is None or entry > self.latest:
+                    self.latest = entry
+                at = entry + 1
+            self.starts[flag] = at
+        return self.latest
 
 
-def acked_at(marks, entry):
-    """The last acknowledgement whose mark precedes `entry`: `(chain,
-    height)`, or None before the first. `marks` is `[(entry, name)]`."""
+def attribute_tip(acks, chain, height, latest, mkfs_entries):
+    """Record `(chain, height)` against `latest` when that flush is past mkfs
+    and newer than every ack already held.
+
+    Returns whether an ack now covers this tip. An older flush is left
+    alone: raising its tip would fail a clean prefix of the previous tip,
+    and writing the ack after the flush would let that prefix pass. A flush
+    still inside the mkfs image is not an acknowledgement of a chain tip.
+    """
+    if latest is None or latest < mkfs_entries:
+        return False
+    newest = max(acks) if acks else None
+    if newest is not None and latest <= newest:
+        held = acks.get(latest)
+        return held is not None and held["chain"] == chain and held["height"] >= height
+    acks[latest] = {"entry": latest, "chain": chain, "height": height}
+    return True
+
+
+def acked_at(acks, point):
+    """The last acknowledgement whose flush entry is strictly below `point`.
+
+    A replay point is `flush_entry + 1` (the first entries through that
+    flush). Sorting is by entry, then height: mark names do not order
+    `ack-main-10` before `ack-main-9`.
+    """
     last = None
-    for at, name in sorted(marks):
-        if at >= entry:
+    rows = acks.values() if isinstance(acks, dict) else acks
+    for ack in sorted(rows, key=lambda row: (row["entry"], row["height"])):
+        if ack["entry"] >= point:
             break
-        parsed = parse_mark(name)
-        if parsed is not None:
-            last = parsed
-    return last
+        last = ack
+    if last is None:
+        return None
+    return last["chain"], last["height"]
 
 
 def checkpoints(boundaries, total, between, max_points):
@@ -114,19 +161,34 @@ def checkpoints(boundaries, total, between, max_points):
     `between` evenly spaced points inside each gap, and the log's end, in
     order. With `max_points`, an even subsample that always keeps the first
     and last; the artifact records the coverage."""
-    points = set(b for b in boundaries if 0 < b <= total)
+    points = set(boundary for boundary in boundaries if 0 < boundary <= total)
     edges = sorted(points | {0, total})
     for lo, hi in zip(edges, edges[1:]):
-        for k in range(1, between + 1):
-            p = lo + (hi - lo) * k // (between + 1)
-            if lo < p < hi:
-                points.add(p)
+        for step in range(1, between + 1):
+            point = lo + (hi - lo) * step // (between + 1)
+            if lo < point < hi:
+                points.add(point)
     points.add(total)
-    ordered = sorted(p for p in points if p > 0)
+    ordered = sorted(point for point in points if point > 0)
     if max_points and len(ordered) > max_points:
-        step = (len(ordered) - 1) / (max_points - 1)
-        ordered = sorted({ordered[round(i * step)] for i in range(max_points)})
+        stride = (len(ordered) - 1) / (max_points - 1)
+        ordered = sorted({ordered[round(i * stride)] for i in range(max_points)})
     return ordered
+
+
+def boundaries_of(replay_log, log_dev, total):
+    """Replay points just past each flush and each FUA: the first entries
+    through that entry."""
+    found = set()
+    for flag in _FLUSH_FLAGS:
+        at = 0
+        while at < total:
+            entry = find_entry(replay_log, log_dev, flag, at)
+            if entry is None or entry < at:
+                break
+            found.add(entry + 1)
+            at = entry + 1
+    return found
 
 
 def judge_point(point):
@@ -143,66 +205,57 @@ def judge_point(point):
     return C.judge(dict(point, acked_tip=point["acked"]))
 
 
-class Powerloss(C.Harness):
-    def __init__(self, args):  # pylint: disable=super-init-not-called
+class Powerloss:
+    """A capture and its replay over one regtest session. No wallet: the
+    two chains are mined to the addresses the capture names."""
+
+    def __init__(self, args):
         self.args = args
-        self.work = os.path.abspath(args.work_dir)
-        os.makedirs(self.work, exist_ok=True)
-        self.daemon = B.daemon_executable(args.daemon)
-        self.replay = os.path.abspath(args.replay_bin)
-        (self.sp2p, self.srpc, self.fp2p, self.frpc, self.bp2p, self.brpc), held = \
-            B._reserve_ports(6)
-        for sk in held:
-            sk.close()
-        self.tx = None
-        self.addr = getattr(args, "mine_address", None)
-        self.expected = {}
-        self.hashes = {"main": {}, "fork": {}}
-        self.prefix = None
-        self.mnt = os.path.join(self.work, "mnt")
+        self.session = R.Session(args)
+        self.acks = {}
+        self.mnt = os.path.join(self.session.work, "mnt")
 
-    # -- capture ---------------------------------------------------------
-
-    def mark(self, name):
-        sh("dmsetup", "message", DM_NAME, "0", "mark", name)
-
-    def follow(self, chain, until, deadline_s):
-        """Poll the subject's tip, marking each new one, until it reaches
-        `until` on `chain`'s hashes."""
-        seen = None
+    def follow(self, chain, until, deadline_s, cursor, mkfs_entries):
+        """Poll the subject's tip until a post-mkfs flush is attributed a
+        tip at or above `until` on `chain`."""
+        session = self.session
         deadline = time.time() + deadline_s
         while time.time() < deadline:
             try:
-                h = B._rpc(self.brpc, "get_info", timeout=2)["result"]["height"] - 1
-                hsh = B._rpc(self.brpc, "get_block_header_by_height", {"height": h},
-                             timeout=2)["result"]["block_header"]["hash"]
+                height = B._rpc(session.brpc, "get_info", timeout=2)["result"]["height"]
+                tip = R.published_tip(height)
+                if tip is None:
+                    time.sleep(0.05)
+                    continue
+                header = B._rpc(session.brpc, "get_block_header_by_height", {"height": tip},
+                                timeout=2)["result"]["block_header"]["hash"]
             except (OSError, ValueError, KeyError, TypeError):
                 time.sleep(0.05)
                 continue
-            if seen is None or h != seen:
-                on = self.chain_of(h, hsh) or chain
-                self.mark(mark_name(on, h))
-                seen = h
-                if on == chain and h >= until:
-                    return h
+            on = session.chain_of(tip, header)
+            # An unidentified tip is not the chain this follow is waiting
+            # for. Attributing it there would acknowledge a height no
+            # served chain has published.
+            if on is None:
+                time.sleep(0.02)
+                continue
+            latest = cursor.advance()
+            attribute_tip(self.acks, on, tip, latest, mkfs_entries)
+            reached = [ack for ack in self.acks.values()
+                       if ack["chain"] == chain and ack["height"] >= until]
+            if reached:
+                return max(ack["height"] for ack in reached)
             time.sleep(0.02)
         B._fail(f"the subject did not reach {until} on {chain} within {deadline_s}s")
 
     def capture(self):
-        a = self.args
-        seed_dir, fork_dir = (os.path.join(self.work, d) for d in ("seed", "fork"))
-        for d in (seed_dir, fork_dir):
-            shutil.rmtree(d, ignore_errors=True)
-            os.makedirs(d)
-        prefix = a.height - a.fork_depth
-        self.prefix = prefix
-        self.generate(seed_dir, prefix, self.addr)
-        shutil.rmtree(fork_dir)
-        shutil.copytree(seed_dir, fork_dir)
-        main_tip = self.generate(seed_dir, a.fork_depth, self.addr) - 1
-        fork_tip = self.generate(fork_dir, a.fork_depth + 2, a.fork_address) - 1
+        args = self.args
+        session = self.session
+        seed_dir, fork_dir = (os.path.join(session.work, name) for name in ("seed", "fork"))
+        prefix, main_tip, fork_tip = session.lay_fork(
+            seed_dir, fork_dir, args.height, args.fork_depth, args.mine_address, args.fork_address)
 
-        data, log = (os.path.join(self.work, f) for f in ("data.img", "log.img"))
+        data, log = (os.path.join(session.work, name) for name in ("data.img", "log.img"))
         sparse_file(data, DATA_BYTES)
         sparse_file(log, LOG_BYTES)
         data_dev, log_dev = loop_attach(data), loop_attach(log)
@@ -211,41 +264,38 @@ class Powerloss(C.Harness):
            f"0 {sectors} log-writes {data_dev} {log_dev}")
         dm = f"/dev/mapper/{DM_NAME}"
         sh("mkfs.ext4", "-q", "-F", dm)
-        self.mark("mkfs")
+        cursor = LogCursor(args.replay_log, log_dev)
+        mkfs_entries = cursor.num_entries()
         os.makedirs(self.mnt, exist_ok=True)
         sh("mount", dm, self.mnt)
         sh("chown", f"{os.getuid()}:{os.getgid()}", self.mnt)
-        subj = os.path.join(self.mnt, "subject")
-        os.makedirs(subj)
-        self.mark("start")
+        subject = os.path.join(self.mnt, "subject")
+        os.makedirs(subject)
 
-        # Sync the main chain, marking each tip the subject publishes.
-        seed = self.spawn("seed", seed_dir, [], self.sp2p, self.srpc)
-        with self.running(seed, self.srpc) as s:
-            if not s.ready:
+        seed = session.spawn("seed", seed_dir, [], session.sp2p, session.srpc)
+        with session.running(seed, session.srpc) as ready:
+            if not ready.ready:
                 B._fail("the main chain's seed never came up")
-            self.record_hashes("main", self.srpc, main_tip)
-            for h in range(0, main_tip + 1):
-                self.expected_digest(self.srpc, "main", h)
-            proc = self.spawn("subject", subj, ["--p2p-closed-peer", f"127.0.0.1:{self.sp2p}"],
-                              self.bp2p, self.brpc)
-            self.follow("main", main_tip, a.startup_timeout)
+            session.record_hashes("main", session.srpc, main_tip)
+            session.digest_chain(session.srpc, "main", main_tip)
+            proc = session.spawn("subject", subject,
+                                 ["--p2p-closed-peer", f"127.0.0.1:{session.sp2p}"],
+                                 session.bp2p, session.brpc)
+            self.follow("main", main_tip, args.startup_timeout, cursor, mkfs_entries)
             proc.terminate()
-            proc.wait(a.shutdown_timeout)
-        # Meet the heavier fork and switch to it; killed at its tip.
-        fork = self.spawn("fork", fork_dir, [], self.fp2p, self.frpc)
-        with self.running(fork, self.frpc) as f:
-            if not f.ready:
+            proc.wait(args.shutdown_timeout)
+        fork = session.spawn("fork", fork_dir, [], session.fp2p, session.frpc)
+        with session.running(fork, session.frpc) as ready:
+            if not ready.ready:
                 B._fail("the fork's daemon never came up")
-            self.record_hashes("fork", self.frpc, fork_tip)
-            for h in range(prefix, fork_tip + 1):
-                self.expected_digest(self.frpc, "fork", h)
-            proc = self.spawn("subject", subj, ["--p2p-closed-peer", f"127.0.0.1:{self.fp2p}"],
-                              self.bp2p, self.brpc)
-            self.follow("fork", fork_tip, a.startup_timeout)
+            session.record_hashes("fork", session.frpc, fork_tip)
+            session.digest_chain(session.frpc, "fork", fork_tip)
+            proc = session.spawn("subject", subject,
+                                 ["--p2p-closed-peer", f"127.0.0.1:{session.fp2p}"],
+                                 session.bp2p, session.brpc)
+            self.follow("fork", fork_tip, args.startup_timeout, cursor, mkfs_entries)
             proc.kill()
             proc.wait()
-        self.mark("end")
         sh("umount", self.mnt)
         sh("dmsetup", "remove", DM_NAME)
         sh("losetup", "-d", data_dev)
@@ -253,70 +303,43 @@ class Powerloss(C.Harness):
         os.remove(data)
         record = {
             "schema_version": SCHEMA,
-            "git_rev": a.git_rev,
-            "subject_binary_sha256": B.binary_sha256(self.daemon),
+            "git_rev": args.git_rev,
+            "subject_binary_sha256": B.binary_sha256(session.daemon),
             "chain": {"main_tip": main_tip, "fork_tip": fork_tip, "prefix": prefix},
-            "hashes": self.hashes,
-            "expected": {f"{k[0]}:{k[1]}": v for k, v in self.expected.items()},
+            "hashes": session.hashes,
+            "digests": {chain: {str(height): digest for height, digest in table.items()}
+                        for chain, table in session.digests.items()},
+            "acks": [self.acks[entry] for entry in sorted(self.acks)],
+            "mkfs_entries": mkfs_entries,
             "data_bytes": DATA_BYTES,
         }
-        with open(os.path.join(self.work, CAPTURE), "w", encoding="utf-8") as fh:
+        with open(os.path.join(session.work, CAPTURE), "w", encoding="utf-8") as fh:
             json.dump(record, fh, indent=2, sort_keys=True)
-        print(f"captured: main tip {main_tip}, fork tip {fork_tip}; log {log}")
-
-    # -- replay ----------------------------------------------------------
-
-    def find(self, replay_log, log_dev, *opts):
-        """The index of the first entry matching `opts` (replay-log prints
-        `entry@position`), or None when there is none."""
-        proc = subprocess.run(["sudo", "-n", replay_log, "--log", log_dev, "--find", *opts],
-                              check=False, capture_output=True, text=True)
-        return parse_found(proc.stdout) if proc.returncode == 0 else None
-
-    def boundaries(self, replay_log, log_dev, total):
-        found = set()
-        for flag in ("--next-fua", "--next-flush"):
-            at = 0
-            while at < total:
-                entry = self.find(replay_log, log_dev, flag, "--start-entry", str(at))
-                if entry is None or entry < at:
-                    break
-                # The device as it stood once that entry was written: the
-                # first `entry + 1` entries.
-                found.add(entry + 1)
-                at = entry + 1
-        return found
-
-    def marks(self, replay_log, log_dev, names):
-        out = []
-        for name in names:
-            entry = self.find(replay_log, log_dev, "--end-mark", name)
-            if entry is not None:
-                out.append((entry, name))
-        return out
+            fh.write("\n")
+        print(f"captured: main tip {main_tip}, fork tip {fork_tip}; "
+              f"{len(self.acks)} acknowledgement(s); log {log}")
 
     def reopen(self, copy_img, point):
         """Mount a copy of the rebuilt device, start the subject on it
-        offline (whatever it holds: a torn data directory is a first-start
-        power loss too), digest the store, and unmount. Each point's logs
-        are its own."""
+        offline, digest the store, and unmount."""
+        session = self.session
         dev = loop_attach(copy_img)
         try:
             if sh("mount", dev, self.mnt, check=False) != 0:
                 point["error"] = "the filesystem did not mount after mkfs had completed"
                 return point
             sh("chown", "-R", f"{os.getuid()}:{os.getgid()}", self.mnt)
-            subj = os.path.join(self.mnt, "subject")
-            store = os.path.join(subj, "chain.db")
+            subject = os.path.join(self.mnt, "subject")
+            store = os.path.join(subject, "chain.db")
             point["store"] = os.path.exists(store)
-            os.makedirs(subj, exist_ok=True)
-            proc = self.spawn(f"reopen-{point['entry']}", subj, [], self.bp2p, self.brpc,
-                              offline=True)
-            with self.running(proc, self.brpc) as r:
-                if not r.ready:
+            os.makedirs(subject, exist_ok=True)
+            proc = session.spawn(f"reopen-{point['entry']}", subject, [], session.bp2p,
+                                 session.brpc, offline=True)
+            with session.running(proc, session.brpc) as ready:
+                if not ready.ready:
                     point["error"] = "the subject did not reopen the rebuilt store"
                     return point
-            got = self.store_digest(store)
+            got = session.store_digest(store)
             point.update(reopened_tip=got["tip"], hash=got["hash"], digest=got["digest"])
             return point
         finally:
@@ -324,73 +347,74 @@ class Powerloss(C.Harness):
             sh("losetup", "-d", dev, check=False)
 
     def run_replay(self):
-        a = self.args
-        with open(os.path.join(self.work, CAPTURE), encoding="utf-8") as fh:
+        args = self.args
+        session = self.session
+        with open(os.path.join(session.work, CAPTURE), encoding="utf-8") as fh:
             cap = json.load(fh)
-        self.hashes = {k: {int(h): v for h, v in d.items()} for k, d in cap["hashes"].items()}
-        self.prefix = cap["chain"]["prefix"]
-        self.expected = {(k.split(":")[0], int(k.split(":")[1])): v
-                         for k, v in cap["expected"].items()}
-        log_dev = loop_attach(os.path.join(self.work, "log.img"))
-        target = os.path.join(self.work, "replay.img")
+        session.hashes = {key: {int(height): value for height, value in table.items()}
+                          for key, table in cap["hashes"].items()}
+        session.prefix = cap["chain"]["prefix"]
+        session.digests = {chain: {int(height): digest for height, digest in table.items()}
+                           for chain, table in cap["digests"].items()}
+        acks = cap["acks"]
+        mkfs_entries = cap["mkfs_entries"]
+        log_dev = loop_attach(os.path.join(session.work, "log.img"))
+        target = os.path.join(session.work, "replay.img")
         sparse_file(target, cap["data_bytes"])
         target_dev = loop_attach(target)
         os.makedirs(self.mnt, exist_ok=True)
         try:
-            total = int(sh(a.replay_log, "--log", log_dev, "--num-entries",
+            total = int(sh(args.replay_log, "--log", log_dev, "--num-entries",
                            capture=True).strip())
-            names = ([mark_name("main", h) for h in range(cap["chain"]["main_tip"] + 1)]
-                     + [mark_name("fork", h) for h in range(self.prefix,
-                                                           cap["chain"]["fork_tip"] + 1)])
-            marks = self.marks(a.replay_log, log_dev, names)
-            mkfs = self.find(a.replay_log, log_dev, "--end-mark", "mkfs") or 0
-            bounds = self.boundaries(a.replay_log, log_dev, total)
-            points = [p for p in checkpoints(bounds, total, a.between, a.max_points)
-                      if p > mkfs]
+            bounds = boundaries_of(args.replay_log, log_dev, total)
+            points = [point for point in checkpoints(bounds, total, args.between, args.max_points)
+                      if point >= mkfs_entries]
             replayed = 0
             results = []
-            for p in points:
-                sh(a.replay_log, "--log", log_dev, "--replay", target_dev,
-                   "--start-entry", str(replayed), "--limit", str(p - replayed))
-                replayed = p
-                copy_img = os.path.join(self.work, "point.img")
+            for point_at in points:
+                sh(args.replay_log, "--log", log_dev, "--replay", target_dev,
+                   "--start-entry", str(replayed), "--limit", str(point_at - replayed))
+                replayed = point_at
+                copy_img = os.path.join(session.work, "point.img")
                 subprocess.run(["cp", "--sparse=always", target, copy_img], check=True)
-                acked = acked_at(marks, p)
-                point = {"entry": p, "kind": "boundary" if p in bounds else "between",
+                acked = acked_at(acks, point_at)
+                point = {"entry": point_at,
+                         "kind": "boundary" if point_at in bounds else "between",
                          "acked": None if acked is None else acked[1],
                          "acked_chain": None if acked is None else acked[0]}
                 self.reopen(copy_img, point)
                 os.remove(copy_img)
                 tip = point.get("reopened_tip")
                 if tip is not None:
-                    point["chain"] = self.chain_of(tip, point.get("hash"))
-                    point["expected_digest"] = self.expected.get((point["chain"], tip))
+                    point["chain"] = session.chain_of(tip, point.get("hash"))
+                    point["expected_digest"] = session.expected_digest(point["chain"], tip)
                 point["verdict"] = judge_point(point) or "pass"
                 results.append(point)
-                print(f"entry {p}/{total} ({point['kind']}): acked {point['acked']} "
+                print(f"entry {point_at}/{total} ({point['kind']}): acked {point['acked']} "
                       f"reopened {tip} -> {point['verdict']}", flush=True)
         finally:
             sh("losetup", "-d", target_dev, check=False)
             sh("losetup", "-d", log_dev, check=False)
         artifact = dict(
-            {k: cap[k] for k in ("schema_version", "git_rev", "subject_binary_sha256",
-                                 "chain")},
-            hardware=A.hardware_fingerprint(self.work, a.disk_class),
+            {key: cap[key] for key in ("schema_version", "git_rev", "subject_binary_sha256",
+                                       "chain")},
+            hardware=A.hardware_fingerprint(session.work, args.disk_class),
             log_entries=total,
             boundaries=len(bounds),
-            marks=len(marks),
+            acknowledgements=len(acks),
+            mkfs_entries=mkfs_entries,
             points=results,
-            sampled=bool(a.max_points) and len(points) < len(bounds),
+            sampled=bool(args.max_points) and len(points) < len(bounds),
         )
-        with open(a.out, "w", encoding="utf-8") as fh:
+        with open(args.out, "w", encoding="utf-8") as fh:
             json.dump(artifact, fh, indent=2, sort_keys=True)
             fh.write("\n")
-        failed = [r for r in results if r["verdict"] != "pass"]
-        print(f"wrote {a.out}: {len(results)} point(s) over {total} entries "
-              f"({len(bounds)} boundaries, {len(marks)} acknowledgements), "
+        failed = [row for row in results if row["verdict"] != "pass"]
+        print(f"wrote {args.out}: {len(results)} point(s) over {total} entries "
+              f"({len(bounds)} boundaries, {len(acks)} acknowledgements), "
               f"{len(failed)} failed")
-        for r in failed:
-            print(f"FAIL entry {r['entry']}: {r['verdict']}")
+        for row in failed:
+            print(f"FAIL entry {row['entry']}: {row['verdict']}")
         sys.exit(1 if failed else 0)
 
 
@@ -398,17 +422,33 @@ def _selftest():
     fails = []
 
     def check(name, got, want):
+        check.names.append(name)
         if got != want:
             fails.append(f"{name}: got {got!r}, want {want!r}")
 
+    check.names = []
     check("a find answer is its entry", parse_found("4127@88412\n"), 4127)
     check("an empty find answer is none", parse_found(""), None)
-    check("a mark parses", parse_mark("ack-main-12"), ("main", 12))
-    check("a non-ack mark is not one", parse_mark("mkfs"), None)
-    marks = [(10, "mkfs"), (40, "ack-main-1"), (90, "ack-main-2"), (200, "ack-fork-3")]
-    check("before the first acknowledgement", acked_at(marks, 40), None)
-    check("the last mark before the point", acked_at(marks, 91), ("main", 2))
-    check("a fork acknowledgement", acked_at(marks, 500), ("fork", 3))
+    acks = {}
+    check("no flush yet records nothing", attribute_tip(acks, "main", 1, None, 10), False)
+    check("a mkfs flush is not an acknowledgement",
+          attribute_tip(acks, "main", 1, 9, 10), False)
+    check("those refusals leave the table empty", acks, {})
+    check("the first post-mkfs flush takes the tip",
+          attribute_tip(acks, "main", 1, 10, 10), True)
+    check("the same flush does not take a later tip",
+          attribute_tip(acks, "main", 4, 10, 10), False)
+    check("the tip on that flush stayed", acks[10]["height"], 1)
+    check("a newer flush takes the tip seen now",
+          attribute_tip(acks, "main", 4, 15, 10), True)
+    check("the ack stores the flush's own index", acks[15]["entry"], 15)
+    rows = [{"entry": 90, "chain": "main", "height": 2},
+            {"entry": 40, "chain": "main", "height": 1},
+            {"entry": 200, "chain": "fork", "height": 3}]
+    check("the flush's own entry is not yet the replay point", acked_at(rows, 40), None)
+    check("the point after that flush sees it", acked_at(rows, 41), ("main", 1))
+    check("a later entry wins numerically", acked_at(rows, 100), ("main", 2))
+    check("a fork acknowledgement", acked_at(rows, 500), ("fork", 3))
     pts = checkpoints({100, 50}, 200, 1, None)
     check("boundaries, midpoints and the end", pts, [25, 50, 75, 100, 150, 200])
     check("a subsample keeps both ends",
@@ -428,10 +468,10 @@ def _selftest():
     check("a torn digest fails",
           "torn" in (judge_point(dict(ok, digest="b" * 64)) or ""), True)
     if fails:
-        for f in fails:
-            print("FAIL", f, file=sys.stderr)
+        for failure in fails:
+            print("FAIL", failure, file=sys.stderr)
         sys.exit(1)
-    print("power-loss harness selftest: 17 cases OK")
+    print(f"power-loss harness selftest: {len(check.names)} cases OK")
 
 
 def main(argv=None):
@@ -439,25 +479,26 @@ def main(argv=None):
     ap.add_argument("--selftest", action="store_true")
     sub = ap.add_subparsers(dest="cmd")
     for name in ("capture", "replay"):
-        p = sub.add_parser(name)
-        p.add_argument("--daemon", required=True)
-        p.add_argument("--replay-bin", required=True, help="shekyl-chain-replay")
-        p.add_argument("--work-dir", required=True)
-        p.add_argument("--startup-timeout", type=int, default=600)
-        p.add_argument("--shutdown-timeout", type=int, default=120)
-    c = sub.choices["capture"]
-    c.add_argument("--mine-address", required=True)
-    c.add_argument("--fork-address", required=True)
-    c.add_argument("--height", type=int, required=True)
-    c.add_argument("--fork-depth", type=int, default=6)
-    c.add_argument("--git-rev", required=True)
-    r = sub.choices["replay"]
-    r.add_argument("--replay-log", required=True, help="xfstests' src/log-writes/replay-log")
-    r.add_argument("--between", type=int, default=1,
-                   help="points replayed inside each gap between boundaries")
-    r.add_argument("--max-points", type=int, default=None)
-    r.add_argument("--disk-class", choices=A.ALLOWED_DISK_CLASSES, default=None)
-    r.add_argument("--out", required=True)
+        cmd = sub.add_parser(name)
+        cmd.add_argument("--daemon", required=True)
+        cmd.add_argument("--replay-bin", required=True, help="shekyl-chain-replay")
+        cmd.add_argument("--replay-log", required=True,
+                         help="xfstests' src/log-writes/replay-log")
+        cmd.add_argument("--work-dir", required=True)
+        cmd.add_argument("--startup-timeout", type=int, default=600)
+        cmd.add_argument("--shutdown-timeout", type=int, default=120)
+    capture = sub.choices["capture"]
+    capture.add_argument("--mine-address", required=True)
+    capture.add_argument("--fork-address", required=True)
+    capture.add_argument("--height", type=int, required=True)
+    capture.add_argument("--fork-depth", type=int, default=6)
+    capture.add_argument("--git-rev", required=True)
+    replay = sub.choices["replay"]
+    replay.add_argument("--between", type=int, default=1,
+                        help="points replayed inside each gap between boundaries")
+    replay.add_argument("--max-points", type=int, default=None)
+    replay.add_argument("--disk-class", choices=A.ALLOWED_DISK_CLASSES, default=None)
+    replay.add_argument("--out", required=True)
     args = ap.parse_args(argv)
     if args.selftest:
         _selftest()

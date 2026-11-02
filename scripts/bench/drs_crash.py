@@ -9,13 +9,11 @@
 #
 # A trial passes when every operation the daemon acknowledged before the
 # kill survives the reopen, and the reopened chain's logical-state digest
-# equals a clean replay of the same chain to the reopened tip. The harness
-# records each acknowledgement as it arrives: a tip the subject's get_info
-# published (its height, polled), so the reopened tip must be at or above
-# the last one seen. The clean replay is `shekyl-chain-replay baseline`
-# over the seed's chain fetched to that tip, and the reopened side is
-# `shekyl-chain-replay digest` over the subject's store; both read the same
-# digest function, so a difference is the crash's.
+# equals a clean replay of the same chain to the reopened tip. The
+# acknowledgement is a tip the subject's get_info published. The clean
+# replay is one `shekyl-chain-replay baseline --digests-out` of the seed's
+# chain, and the reopened side is `shekyl-chain-replay digest` over the
+# subject's store. Both read the same digest function.
 #
 # Scenarios, round-robin over the trials:
 #   sync    a fresh subject syncs from the seed and is killed mid-sync,
@@ -26,9 +24,12 @@
 #   pool    a synced subject, offline, takes the transaction source's
 #           spends (drs_txsource.py) and is killed while it admits them.
 #           Every submit it answered ACCEPTED must be in the reopened pool.
+#           The chain tip it published before the spends is the
+#           acknowledgement: admitting a transaction does not move the tip.
 #           Run with --tx-source-bin; without it the seed mines to the
 #           emitter's address, no transaction exists, and the artifact's
-#           scenarios say the pool point was not reached.
+#           scenarios say the pool point was not reached. That run is not
+#           PB-S1's verdict.
 #
 # Commands:
 #   run    --daemon D --replay-bin R --work-dir W --height H --trials N --out F
@@ -49,7 +50,7 @@ import urllib.request
 
 import drs_artifact as A  # noqa: E402
 import drs_bench as B  # noqa: E402
-import armed_lever  # noqa: E402
+import drs_regtest as R  # noqa: E402
 import drs_txsource as T  # noqa: E402
 
 SCHEMA = "shekyl_drs_crash_v1"
@@ -58,10 +59,6 @@ SCENARIOS = ("sync", "idle", "switch")
 POOL = "pool"
 # PB-S1's floor on the trial count.
 MIN_TRIALS = 200
-# The regtest seed runs the production schedule pair; the replay's levers
-# must name the same pair or the store refuses the first block.
-LEVERS = ["--chain", "regtest", "--fixed-difficulty", "1",
-          "--settlement-epoch-blocks", "10000", "--reorg-cap", "720"]
 
 
 def judge(trial):
@@ -89,217 +86,131 @@ def judge(trial):
     return None
 
 
-def artifact_refusals(a):
-    r = []
-    if not isinstance(a, dict):
+def artifact_refusals(artifact):
+    reasons = []
+    if not isinstance(artifact, dict):
         return ["artifact is not a JSON object"]
-    if a.get("schema_version") != SCHEMA:
-        r.append(f"schema_version is {a.get('schema_version')!r}, expected {SCHEMA!r}")
-    trials = a.get("trials")
+    if artifact.get("schema_version") != SCHEMA:
+        reasons.append(
+            f"schema_version is {artifact.get('schema_version')!r}, expected {SCHEMA!r}")
+    trials = artifact.get("trials")
     if not isinstance(trials, list) or not trials:
-        return r + ["no trials"]
-    for t in trials:
-        why = judge(t)
+        return reasons + ["no trials"]
+    for trial in trials:
+        why = judge(trial)
         if why:
-            r.append(f"trial {t.get('index')} ({t.get('scenario')}): {why}")
-    ran = sorted({t.get("scenario") for t in trials})
-    if a.get("scenarios") != ran:
-        r.append(f"scenarios is {a.get('scenarios')!r} but the trials ran {ran!r}")
-    if not A.is_hex64(a.get("subject_binary_sha256")):
-        r.append("subject_binary_sha256 is not a sha-256")
-    return r
+            reasons.append(f"trial {trial.get('index')} ({trial.get('scenario')}): {why}")
+    ran = sorted({trial.get("scenario") for trial in trials})
+    if artifact.get("scenarios") != ran:
+        reasons.append(f"scenarios is {artifact.get('scenarios')!r} but the trials ran {ran!r}")
+    if not A.is_hex64(artifact.get("subject_binary_sha256")):
+        reasons.append("subject_binary_sha256 is not a sha-256")
+    return reasons
 
 
-def gate_refusals(a):
+def gate_refusals(artifact):
     """Why the run is not PB-S1's verdict: under the floor's trial count, or a
-    scenario PB-S1 names that the run did not reach. Separate from
-    `artifact_refusals`: a short run is a valid record and not a pass."""
-    r = []
-    trials = a.get("trials") or []
+    scenario PB-S1 names that the run did not reach. A short run is still a
+    record. It is not a pass, and the process exits with the record written.
+    """
+    reasons = []
+    trials = artifact.get("trials") or []
     if len(trials) < MIN_TRIALS:
-        r.append(f"{len(trials)} trial(s), under PB-S1's {MIN_TRIALS}")
-    missing = [s for s in SCENARIOS + (POOL,) if s not in (a.get("scenarios") or [])]
+        reasons.append(f"{len(trials)} trial(s), under PB-S1's {MIN_TRIALS}")
+    missing = [name for name in SCENARIOS + (POOL,)
+               if name not in (artifact.get("scenarios") or [])]
     if missing:
-        r.append(f"PB-S1's points not reached: {missing}")
-    return r
+        reasons.append(f"PB-S1's points not reached: {missing}")
+    return reasons
 
 
 def pool_hashes(port):
     """The daemon's pool, as txids (`/get_transaction_pool_hashes`)."""
     req = urllib.request.Request(f"http://127.0.0.1:{port}/get_transaction_pool_hashes",
                                  data=b"{}", headers={"Content-Type": "application/json"})
-    with urllib.request.urlopen(req, timeout=60) as r:
-        body = json.load(r)
+    with urllib.request.urlopen(req, timeout=60) as response:
+        body = json.load(response)
     if body.get("status") != "OK":
         B._fail(f"the reopened pool did not read: {json.dumps(body)[:300]}")
     return body.get("tx_hashes") or []
 
 
 class Harness:
+    """PB-S1's trials over one regtest session. The wallet, when a pool
+    point is asked for, is this harness's; the session does not own one."""
+
     def __init__(self, args):
         self.args = args
-        self.work = os.path.abspath(args.work_dir)
-        os.makedirs(self.work, exist_ok=True)
-        self.daemon = B.daemon_executable(args.daemon)
-        self.replay = os.path.abspath(args.replay_bin)
-        (self.sp2p, self.srpc, self.fp2p, self.frpc, self.bp2p, self.brpc), held = \
-            B._reserve_ports(6)
-        for sk in held:
-            sk.close()
-        # With a transaction source the seed mines to its wallet, and every
-        # pool spend goes to the subject's RPC port.
+        self.session = R.Session(args)
         self.tx = args.tx_source_bin and os.path.abspath(args.tx_source_bin)
         if self.tx:
             # Creating the wallet reads its daemon, and no chain exists yet:
             # an empty daemon serves the subject's port for the creation.
-            empty = os.path.join(self.work, "wallet-init")
+            empty = os.path.join(self.session.work, "wallet-init")
             shutil.rmtree(empty, ignore_errors=True)
             os.makedirs(empty)
-            proc = self.spawn("wallet-init", empty, [], self.bp2p, self.brpc, offline=True)
-            with self.running(proc, self.brpc) as r:
-                if not r.ready:
+            proc = self.session.spawn("wallet-init", empty, [], self.session.bp2p,
+                                      self.session.brpc, offline=True)
+            with self.session.running(proc, self.session.brpc) as ready:
+                if not ready.ready:
                     B._fail(f"the wallet's creation daemon never came up; see "
-                            f"{self.work}/wallet-init.log")
-                self.addr = T.address(self.tx, self.brpc, args.startup_timeout)
+                            f"{self.session.work}/wallet-init.log")
+                self.addr = T.address(self.tx, self.session.brpc, args.startup_timeout)
             shutil.rmtree(empty)
         else:
             self.addr = B.mining_address(args.cargo_timeout)
-        self.expected = {}
-        # Each chain's block hash per height, from the fork point up: a
-        # reopened tip is judged against the chain its hash is on.
-        self.hashes = {"main": {}, "fork": {}}
-        self.prefix = None
 
-    def spawn(self, tag, d, extra, p2p, rpc, offline=False):
-        common = ["--network", "regtest", "--dev-difficulty", "1", "--p2p-local",
-                  "--tor", "off", "--log-level", "info"]
-        net = ["--clearnet", "off"] if offline else ["--clearnet-listen", f"127.0.0.1:{p2p}"]
-        argv = [self.daemon] + common + ["--data-dir", d] + net + [
-            "--rpc-admin-listen", f"127.0.0.1:{rpc}",
-            "--log-file", os.path.join(self.work, f"{tag}.daemon.log")] + extra
-        log = open(os.path.join(self.work, f"{tag}.log"), "a", encoding="utf-8")
-        try:
-            return subprocess.Popen(argv, stdout=log, stderr=subprocess.STDOUT, cwd=d)
-        finally:
-            log.close()
-
-    def running(self, proc, rpc):
-        return B._RunningDaemon(proc, rpc, self.args.startup_timeout, self.args.shutdown_timeout)
-
-    def generate(self, d, count, address):
-        # generateblocks is an armed test lever, served only with the dev-rpc
-        # switch set; the daemon announces it at start. The log is appended
-        # across generations, so only the bytes this spawn wrote count.
-        gen_log = os.path.join(self.work, "gen.log")
-        gen_from = armed_lever.log_size(gen_log)
-        proc = self.spawn("gen", d, [armed_lever.FLAG, "--mine-address", address],
-                          self.sp2p, self.srpc, offline=True)
-        with self.running(proc, self.srpc) as g:
-            if not g.ready:
-                B._fail(f"a generating daemon never came up; see {self.work}/gen.log")
-            if not armed_lever.announced_since(gen_log, gen_from):
-                B._fail(f"the generating daemon did not announce {armed_lever.ANNOUNCEMENT!r} "
-                        f"at start; see {gen_log}")
-            B._await_posted(self.srpc, self.args.startup_timeout)
-            resp = B._rpc(self.srpc, "generateblocks", {"count": count}, timeout=86400)
-            if resp.get("result", {}).get("status") != "OK":
-                B._fail(f"generateblocks refused: {json.dumps(resp)[:300]}")
-            return B._rpc(self.srpc, "get_info")["result"]["height"]
-
-    def expected_digest(self, seed_rpc, chain_key, tip):
-        """A clean replay's digest of the serving seed's chain at `tip`,
-        cached per chain and tip."""
-        key = (chain_key, tip)
-        if key not in self.expected:
-            d = os.path.join(self.work, f"expected-{chain_key}-{tip}")
-            shutil.rmtree(d, ignore_errors=True)
-            os.makedirs(d)
-            corpus = os.path.join(d, "corpus.e2")
-            subprocess.run([self.replay, "fetch", "--daemon", f"http://127.0.0.1:{seed_rpc}",
-                            "--chain", "regtest", "--from", "0", "--to", str(tip + 1),
-                            "--out", corpus], check=True, capture_output=True)
-            store = os.path.join(d, "store")
-            subprocess.run([self.replay, "baseline", "--corpus", corpus, "--store", store,
-                            *LEVERS, "--out", os.path.join(d, "trace.e2")],
-                           check=True, capture_output=True)
-            self.expected[key] = self.store_digest(store)["digest"]
-            shutil.rmtree(d, ignore_errors=True)
-        return self.expected[key]
-
-    def store_digest(self, store):
-        out = subprocess.run([self.replay, "digest", "--store", store, *LEVERS],
-                             check=True, capture_output=True, text=True).stdout
-        return json.loads(out)
-
-    def record_hashes(self, chain_key, rpc, top):
-        for h in range(self.prefix, top + 1):
-            hdr = B._rpc(rpc, "get_block_header_by_height", {"height": h})
-            self.hashes[chain_key][h] = hdr["result"]["block_header"]["hash"]
-
-    def chain_of(self, tip, tip_hash):
-        """Which chain a reopened tip is on: below the fork point both are
-        one chain, the main chain's; above it, the one holding that hash."""
-        if tip < self.prefix:
-            return "main"
-        for key, hashes in self.hashes.items():
-            if hashes.get(tip) == tip_hash:
-                return key
-        return None
-
-    def trial(self, scenario, subj_dir, seed_rpc, seed_p2p, chain_key, kill_after):
+    def trial(self, scenario, subj_dir, seed_p2p, kill_after):
         """Start the subject toward the seed, kill it after `kill_after`
         seconds of answered RPC, reopen it offline, and judge it against the
-        chain its reopened tip is on. `chain_key` names the serving chain,
-        whose clean replays can still be computed; the other's come from the
-        cache filled while it served."""
-        proc = self.spawn("subject", subj_dir, ["--p2p-closed-peer", f"127.0.0.1:{seed_p2p}"],
-                          self.bp2p, self.brpc)
+        chain its reopened tip is on."""
+        session = self.session
+        proc = session.spawn("subject", subj_dir, ["--p2p-closed-peer", f"127.0.0.1:{seed_p2p}"],
+                             session.bp2p, session.brpc)
         acked = None
-        t0 = None
+        started = None
         deadline = time.time() + self.args.startup_timeout
         while time.time() < deadline:
             if proc.poll() is not None:
-                B._fail(f"the subject exited before the kill; see {self.work}/subject.log")
+                B._fail(f"the subject exited before the kill; see {session.work}/subject.log")
             try:
-                h = B._rpc(self.brpc, "get_info", timeout=2)["result"]["height"]
-                acked = h - 1 if acked is None else max(acked, h - 1)
-                t0 = t0 or time.time()
+                height = B._rpc(session.brpc, "get_info", timeout=2)["result"]["height"]
+                tip = R.published_tip(height)
+                if tip is not None:
+                    acked = tip if acked is None else max(acked, tip)
+                started = started or time.time()
             except (OSError, ValueError, KeyError):
                 pass
-            if t0 is not None and time.time() - t0 >= kill_after:
+            if started is not None and time.time() - started >= kill_after:
                 break
             time.sleep(0.02)
         proc.kill()
         proc.wait()
-        reopen = self.spawn("reopen", subj_dir, [], self.bp2p, self.brpc, offline=True)
-        with self.running(reopen, self.brpc) as r:
-            if not r.ready:
+        reopen = session.spawn("reopen", subj_dir, [], session.bp2p, session.brpc, offline=True)
+        with session.running(reopen, session.brpc) as ready:
+            if not ready.ready:
                 return {"scenario": scenario, "kill_after_s": kill_after, "acked_tip": acked,
                         "reopened_tip": None, "error": "the reopened daemon never came up"}
-        got = self.store_digest(os.path.join(subj_dir, "chain.db"))
-        tip = got["tip"]
-        on = None if tip is None else self.chain_of(tip, got["hash"])
-        if on is None:
-            expected = None
-        elif on == chain_key:
-            expected = self.expected_digest(seed_rpc, chain_key, tip)
-        else:
-            expected = self.expected.get((on, tip))
-        return {"scenario": scenario, "kill_after_s": round(kill_after, 3), "acked_tip": acked,
-                "reopened_tip": tip, "hash": got["hash"], "chain": on, "digest": got["digest"],
-                "expected_digest": expected}
+        return self._reopened(scenario, kill_after, acked, subj_dir)
 
-    def pool_trial(self, subj_dir, seed_rpc, kill_after):
+    def pool_trial(self, subj_dir, kill_after):
         """Start the synced subject offline, feed it the source's spends
         until the first is ACCEPTED, then kill it `kill_after` seconds into
-        the spends that follow; reopen it offline and judge its pool and
-        its chain. Each spend run is a fresh wallet, so every trial starts
-        from the same spendable outputs."""
-        proc = self.spawn("subject", subj_dir, [], self.bp2p, self.brpc, offline=True)
-        if not B._wait_rpc(self.brpc, self.args.startup_timeout, proc):
-            B._fail(f"the pool subject never came up; see {self.work}/subject.log")
-        src = T.Spender(self.tx, self.brpc, self.args.spend_amount,
-                        os.path.join(self.work, "tx-source.log"))
+        the spends that follow. The tip get_info published before the kill
+        is the acknowledgement, including when the reopen does not come up.
+        Each spend run is a fresh wallet, so every trial starts from the
+        same spendable outputs."""
+        session = self.session
+        proc = session.spawn("subject", subj_dir, [], session.bp2p, session.brpc, offline=True)
+        if not B._wait_rpc(session.brpc, self.args.startup_timeout, proc):
+            B._fail(f"the pool subject never came up; see {session.work}/subject.log")
+        acked = session.observed_tip(session.brpc, self.args.startup_timeout)
+        if acked is None:
+            proc.kill()
+            proc.wait()
+            B._fail("the pool subject published no tip")
+        src = T.Spender(self.tx, session.brpc, self.args.spend_amount,
+                        os.path.join(session.work, "tx-source.log"))
         src.first.wait(self.args.startup_timeout)
         if not src.acked:
             proc.kill()
@@ -309,140 +220,133 @@ class Harness:
                 B._fail("the source's outputs are not yet spendable at the main tip: the "
                         "chain is too short for its coinbase to be spent; raise --height")
             B._fail(f"no spend was ACCEPTED before the kill window opened: {src.stopped}; "
-                    f"see {self.work}/tx-source.log")
+                    f"see {session.work}/tx-source.log")
         time.sleep(kill_after)
         proc.kill()
         proc.wait()
-        acked = src.finish(self.args.startup_timeout)
-        reopen = self.spawn("reopen", subj_dir, [], self.bp2p, self.brpc, offline=True)
-        with self.running(reopen, self.brpc) as r:
-            if not r.ready:
-                return {"scenario": POOL, "kill_after_s": kill_after, "acked_tip": None,
-                        "reopened_tip": None, "acked_txs": acked,
+        accepted = src.finish(self.args.startup_timeout)
+        reopen = session.spawn("reopen", subj_dir, [], session.bp2p, session.brpc, offline=True)
+        with session.running(reopen, session.brpc) as ready:
+            if not ready.ready:
+                return {"scenario": POOL, "kill_after_s": kill_after, "acked_tip": acked,
+                        "reopened_tip": None, "acked_txs": accepted,
                         "error": "the reopened daemon never came up"}
-            pool = pool_hashes(self.brpc)
-        got = self.store_digest(os.path.join(subj_dir, "chain.db"))
+            pool = pool_hashes(session.brpc)
+        trial = self._reopened(POOL, kill_after, acked, subj_dir)
+        trial.update(acked_txs=accepted, reopened_pool=pool, source_stopped_by=src.stopped)
+        return trial
+
+    def _reopened(self, scenario, kill_after, acked, subj_dir):
+        session = self.session
+        got = session.store_digest(os.path.join(subj_dir, "chain.db"))
         tip = got["tip"]
-        on = None if tip is None else self.chain_of(tip, got["hash"])
-        expected = self.expected_digest(seed_rpc, "main", tip) if on == "main" else None
-        return {"scenario": POOL, "kill_after_s": round(kill_after, 3), "acked_tip": None,
+        on = None if tip is None else session.chain_of(tip, got["hash"])
+        expected = None if on is None else session.expected_digest(on, tip)
+        return {"scenario": scenario, "kill_after_s": round(kill_after, 3), "acked_tip": acked,
                 "reopened_tip": tip, "hash": got["hash"], "chain": on, "digest": got["digest"],
-                "expected_digest": expected, "acked_txs": acked, "reopened_pool": pool,
-                "source_stopped_by": src.stopped}
+                "expected_digest": expected}
 
     def run(self):
-        a = self.args
-        rng = random.Random(a.seed)
-        seed_dir = os.path.join(self.work, "seed")
-        fork_dir = os.path.join(self.work, "fork")
-        for d in (seed_dir, fork_dir):
-            shutil.rmtree(d, ignore_errors=True)
-            os.makedirs(d)
-        # The main chain, and a heavier fork of it from `fork_depth` below
-        # its tip: the fork's daemon starts from a copy of the main chain's
-        # prefix and mines past it to another address.
-        prefix = a.height - a.fork_depth
-        self.prefix = prefix
-        self.generate(seed_dir, prefix, self.addr)
-        shutil.rmtree(fork_dir)
-        shutil.copytree(seed_dir, fork_dir)
-        main_tip = self.generate(seed_dir, a.fork_depth, self.addr) - 1
-        fork_tip = self.generate(fork_dir, a.fork_depth + 2, a.fork_address or self.addr) - 1
-        synced = os.path.join(self.work, "synced-main")
+        args = self.args
+        session = self.session
+        rng = random.Random(args.seed)
+        seed_dir = os.path.join(session.work, "seed")
+        fork_dir = os.path.join(session.work, "fork")
+        prefix, main_tip, fork_tip = session.lay_fork(
+            seed_dir, fork_dir, args.height, args.fork_depth, self.addr,
+            args.fork_address or self.addr)
+        synced = os.path.join(session.work, "synced-main")
         trials = []
-        # Two thirds of the trials against the main chain's seed alone, the
-        # rest against the fork's daemon alone: the two never serve at once,
-        # so neither can reorganise the other.
+        # Two chains never serve at once, so neither can reorganise the other.
         kinds = SCENARIOS + ((POOL,) if self.tx else ())
-        plan = [kinds[i % len(kinds)] for i in range(a.trials)]
+        plan = [kinds[i % len(kinds)] for i in range(args.trials)]
 
-        def record(t, i):
-            t["index"] = i
-            t["verdict"] = judge(t) or "pass"
-            trials.append(t)
-            print(f"trial {i} {t['scenario']}: acked {t['acked_tip']} reopened "
-                  f"{t['reopened_tip']} -> {t['verdict']}", flush=True)
+        def record(trial, index):
+            trial["index"] = index
+            trial["verdict"] = judge(trial) or "pass"
+            trials.append(trial)
+            print(f"trial {index} {trial['scenario']}: acked {trial['acked_tip']} reopened "
+                  f"{trial['reopened_tip']} -> {trial['verdict']}", flush=True)
 
-        def fresh(subj, from_dir=None):
-            shutil.rmtree(subj, ignore_errors=True)
+        def fresh(subject, from_dir=None):
+            shutil.rmtree(subject, ignore_errors=True)
             if from_dir is None:
-                os.makedirs(subj)
+                os.makedirs(subject)
             else:
-                shutil.copytree(from_dir, subj)
+                shutil.copytree(from_dir, subject)
 
-        subj = os.path.join(self.work, "subject")
-        seed = self.spawn("seed", seed_dir, [], self.sp2p, self.srpc)
-        with self.running(seed, self.srpc) as s:
-            if not s.ready:
+        subject = os.path.join(session.work, "subject")
+        seed = session.spawn("seed", seed_dir, [], session.sp2p, session.srpc)
+        with session.running(seed, session.srpc) as ready:
+            if not ready.ready:
                 B._fail("the main chain's seed never came up")
-            self.record_hashes("main", self.srpc, main_tip)
+            session.record_hashes("main", session.srpc, main_tip)
+            session.digest_chain(session.srpc, "main", main_tip)
             fresh(synced)
-            prepared = self.trial("prepare", synced, self.srpc, self.sp2p, "main",
-                                  kill_after=a.sync_estimate)
+            prepared = self.trial("prepare", synced, session.sp2p, kill_after=args.sync_estimate)
             if prepared["reopened_tip"] != main_tip:
                 B._fail(f"the preparing sync reached {prepared['reopened_tip']}, not "
                         f"{main_tip}; raise --sync-estimate")
-            # A crash mid-switch can reopen anywhere on the main chain from
-            # the fork point up, after its seed has stopped serving: those
-            # clean replays are taken now.
-            for h in range(prefix - 1, main_tip + 1):
-                self.expected_digest(self.srpc, "main", h)
-            for i, scenario in enumerate(plan):
+            for index, scenario in enumerate(plan):
                 if scenario == "sync":
-                    fresh(subj)
-                    record(self.trial("sync", subj, self.srpc, self.sp2p, "main",
-                                      rng.uniform(0.0, a.sync_estimate)), i)
+                    fresh(subject)
+                    record(self.trial("sync", subject, session.sp2p,
+                                      rng.uniform(0.0, args.sync_estimate)), index)
                 elif scenario == "idle":
-                    fresh(subj, synced)
-                    record(self.trial("idle", subj, self.srpc, self.sp2p, "main",
-                                      rng.uniform(0.0, 3.0)), i)
+                    fresh(subject, synced)
+                    record(self.trial("idle", subject, session.sp2p,
+                                      rng.uniform(0.0, 3.0)), index)
                 elif scenario == POOL:
-                    fresh(subj, synced)
-                    record(self.pool_trial(subj, self.srpc,
-                                           rng.uniform(0.0, a.pool_estimate)), i)
-        fork = self.spawn("fork", fork_dir, [], self.fp2p, self.frpc)
-        with self.running(fork, self.frpc) as f:
-            if not f.ready:
+                    fresh(subject, synced)
+                    record(self.pool_trial(subject, rng.uniform(0.0, args.pool_estimate)), index)
+        fork = session.spawn("fork", fork_dir, [], session.fp2p, session.frpc)
+        with session.running(fork, session.frpc) as ready:
+            if not ready.ready:
                 B._fail("the fork's daemon never came up")
-            self.record_hashes("fork", self.frpc, fork_tip)
-            for i, scenario in enumerate(plan):
+            session.record_hashes("fork", session.frpc, fork_tip)
+            session.digest_chain(session.frpc, "fork", fork_tip)
+            for index, scenario in enumerate(plan):
                 if scenario == "switch":
-                    fresh(subj, synced)
-                    record(self.trial("switch", subj, self.frpc, self.fp2p, "fork",
-                                      rng.uniform(0.0, a.switch_estimate)), i)
+                    fresh(subject, synced)
+                    record(self.trial("switch", subject, session.fp2p,
+                                      rng.uniform(0.0, args.switch_estimate)), index)
         artifact = {
             "schema_version": SCHEMA,
             "git_rev": subprocess.run(["git", "-C", A.ROOT, "rev-parse", "HEAD"], check=True,
                                       capture_output=True, text=True).stdout.strip(),
-            "subject_binary_sha256": B.binary_sha256(self.daemon),
-            "hardware": A.hardware_fingerprint(self.work, a.disk_class),
-            "chain": {"main_tip": main_tip, "fork_tip": fork_tip, "fork_depth": a.fork_depth},
-            "seed": a.seed,
+            "subject_binary_sha256": B.binary_sha256(session.daemon),
+            "hardware": A.hardware_fingerprint(session.work, args.disk_class),
+            "chain": {"main_tip": main_tip, "fork_tip": fork_tip, "fork_depth": args.fork_depth,
+                      "prefix": prefix},
+            "seed": args.seed,
             "transaction_source": T.TEST if self.tx else None,
-            "scenarios": sorted({t["scenario"] for t in trials}),
+            "scenarios": sorted({trial["scenario"] for trial in trials}),
             "trials": trials,
         }
-        with open(a.out, "w", encoding="utf-8") as fh:
-            json.dump(artifact, fh, indent=2, sort_keys=True)
-            fh.write("\n")
         refusals = artifact_refusals(artifact)
         gate = gate_refusals(artifact)
-        print(f"wrote {a.out}: {len(trials)} trial(s), "
-              f"{sum(1 for t in trials if t['verdict'] == 'pass')} passed")
-        for x in refusals:
-            print("FAIL", x)
-        for x in gate:
-            print("NOT PB-S1:", x)
-        sys.exit(1 if refusals else 0)
+        artifact["row_refusals"] = gate
+        with open(args.out, "w", encoding="utf-8") as fh:
+            json.dump(artifact, fh, indent=2, sort_keys=True)
+            fh.write("\n")
+        print(f"wrote {args.out}: {len(trials)} trial(s), "
+              f"{sum(1 for trial in trials if trial['verdict'] == 'pass')} passed")
+        for reason in refusals:
+            print("FAIL", reason)
+        for reason in gate:
+            print("NOT PB-S1:", reason)
+        sys.exit(1 if refusals or gate else 0)
 
 
 def _selftest():
     fails = []
 
     def check(name, got, want):
+        check.names.append(name)
         if got != want:
             fails.append(f"{name}: got {got!r}, want {want!r}")
 
+    check.names = []
     ok = {"acked_tip": 10, "reopened_tip": 10, "chain": "main", "digest": "a" * 64,
           "expected_digest": "a" * 64}
     check("an intact reopen passes", judge(ok), None)
@@ -454,59 +358,59 @@ def _selftest():
     check("no tip fails", judge(dict(ok, reopened_tip=None)) is not None, True)
     check("a tip on no known chain fails",
           "neither" in (judge(dict(ok, chain=None)) or ""), True)
-    a = {"schema_version": SCHEMA, "subject_binary_sha256": "c" * 64,
-         "scenarios": ["idle", "sync"],
-         "trials": [dict(ok, scenario="sync"), dict(ok, scenario="idle")]}
-    check("a clean record is accepted", artifact_refusals(a), [])
-    check("a short run is not PB-S1's verdict", bool(gate_refusals(a)), True)
-    bad = json.loads(json.dumps(a))
+    artifact = {"schema_version": SCHEMA, "subject_binary_sha256": "c" * 64,
+                "scenarios": ["idle", "sync"],
+                "trials": [dict(ok, scenario="sync"), dict(ok, scenario="idle")]}
+    check("a clean record is accepted", artifact_refusals(artifact), [])
+    check("a short run is not PB-S1's verdict", bool(gate_refusals(artifact)), True)
+    bad = json.loads(json.dumps(artifact))
     bad["trials"][1]["digest"] = "d" * 64
     check("a failed trial refuses the record", len(artifact_refusals(bad)), 1)
     pooled = dict(ok, acked_txs=["t1", "t2"], reopened_pool=["t2", "t1", "t0"])
     check("a pool holding every acknowledged submit passes", judge(pooled), None)
     check("a lost acknowledged submit fails",
           "not in the reopened pool" in (judge(dict(pooled, reopened_pool=["t1"])) or ""), True)
-    full = dict(a, scenarios=["idle", "pool", "switch", "sync"],
-                trials=[dict(ok, scenario=s) for s in ("idle", "pool", "switch", "sync")])
-    check("all four points reached leaves only the count",
-          [x for x in gate_refusals(full) if "points" in x], [])
+    names = ("idle", "pool", "switch", "sync")
+    full = dict(artifact, scenarios=list(names),
+                trials=[dict(ok, scenario=names[i % len(names)]) for i in range(MIN_TRIALS)])
+    check("two hundred trials over all four points is PB-S1", gate_refusals(full), [])
     if fails:
-        for f in fails:
-            print("FAIL", f, file=sys.stderr)
+        for failure in fails:
+            print("FAIL", failure, file=sys.stderr)
         sys.exit(1)
-    print("crash harness selftest: 12 cases OK")
+    print(f"crash harness selftest: {len(check.names)} cases OK")
 
 
 def main(argv=None):
     ap = argparse.ArgumentParser(description="The budget's crash harness (PB-S1)")
     ap.add_argument("--selftest", action="store_true")
     sub = ap.add_subparsers(dest="cmd")
-    r = sub.add_parser("run")
-    r.add_argument("--daemon", required=True)
-    r.add_argument("--replay-bin", required=True, help="shekyl-chain-replay")
-    r.add_argument("--work-dir", required=True)
-    r.add_argument("--height", type=int, required=True, help="the main chain's blocks")
-    r.add_argument("--fork-depth", type=int, default=6,
-                   help="blocks below the main tip the heavier fork starts from")
-    r.add_argument("--fork-address", default=None,
-                   help="the fork's payout address (a different block content)")
-    r.add_argument("--trials", type=int, default=MIN_TRIALS)
-    r.add_argument("--sync-estimate", type=float, default=30.0,
-                   help="seconds a full sync takes; sync kills land inside it")
-    r.add_argument("--switch-estimate", type=float, default=10.0)
-    r.add_argument("--tx-source-bin", default=None,
-                   help="the transaction source's test binary (drs_txsource.py build); "
-                        "the pool point needs it")
-    r.add_argument("--pool-estimate", type=float, default=20.0,
-                   help="seconds of spends after the first acceptance that pool kills land in")
-    r.add_argument("--spend-amount", type=int, default=1_000_000_000,
-                   help="atomic units each pool spend pays the wallet itself")
-    r.add_argument("--seed", type=int, default=1)
-    r.add_argument("--out", required=True)
-    r.add_argument("--disk-class", choices=A.ALLOWED_DISK_CLASSES, default=None)
-    r.add_argument("--cargo-timeout", type=int, default=1800)
-    r.add_argument("--startup-timeout", type=int, default=600)
-    r.add_argument("--shutdown-timeout", type=int, default=120)
+    run = sub.add_parser("run")
+    run.add_argument("--daemon", required=True)
+    run.add_argument("--replay-bin", required=True, help="shekyl-chain-replay")
+    run.add_argument("--work-dir", required=True)
+    run.add_argument("--height", type=int, required=True, help="the main chain's blocks")
+    run.add_argument("--fork-depth", type=int, default=6,
+                     help="blocks below the main tip the heavier fork starts from")
+    run.add_argument("--fork-address", default=None,
+                     help="the fork's payout address (a different block content)")
+    run.add_argument("--trials", type=int, default=MIN_TRIALS)
+    run.add_argument("--sync-estimate", type=float, default=30.0,
+                     help="seconds a full sync takes; sync kills land inside it")
+    run.add_argument("--switch-estimate", type=float, default=10.0)
+    run.add_argument("--tx-source-bin", default=None,
+                     help="the transaction source's test binary (drs_txsource.py build); "
+                          "the pool point needs it")
+    run.add_argument("--pool-estimate", type=float, default=20.0,
+                     help="seconds of spends after the first acceptance that pool kills land in")
+    run.add_argument("--spend-amount", type=int, default=1_000_000_000,
+                     help="atomic units each pool spend pays the wallet itself")
+    run.add_argument("--seed", type=int, default=1)
+    run.add_argument("--out", required=True)
+    run.add_argument("--disk-class", choices=A.ALLOWED_DISK_CLASSES, default=None)
+    run.add_argument("--cargo-timeout", type=int, default=1800)
+    run.add_argument("--startup-timeout", type=int, default=600)
+    run.add_argument("--shutdown-timeout", type=int, default=120)
     args = ap.parse_args(argv)
     if args.selftest:
         _selftest()

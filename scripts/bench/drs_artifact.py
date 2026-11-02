@@ -858,13 +858,13 @@ def comparability_refusals(base, cand):
         r.append("durability blocks differ — a ratio between different durability "
                  "policies measures the policy, not the engine")
     bf, cf = base.get("fixture", {}), cand.get("fixture", {})
-    # NOT compared, deliberately, and both would be false reds:
+    # NOT compared, deliberately, and it would be a false red:
     #   height_requested -- two runs that ASKED for different heights but REACHED the
     #     same one did the same work, and `height_reached` is what is compared.
-    #   schema_version -- both artifacts are validated against SCHEMA individually,
-    #     so they cannot differ while both are usable.
-    # Left alone rather than mechanically added: a refusal that cannot correspond to
-    # a real difference trains readers to ignore refusals.
+    # schema_version is compared above: a v1 artifact has no probe, so a ratio
+    # against it is not one the budget reads. Left alone rather than mechanically
+    # added: a refusal that cannot correspond to a real difference trains readers
+    # to ignore refusals.
     for k in ("nettype", "height_reached", "reference_height", "verify_exercised",
               "tx_per_block", "peers_used", "prunable_region"):
         if bf.get(k) != cf.get(k):
