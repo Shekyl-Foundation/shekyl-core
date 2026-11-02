@@ -34,11 +34,11 @@ use shekyl_types::archival::FirstPayingHeight;
 use shekyl_types::{BlockCount, BlockHeight, SettlementEpoch, ShardId};
 use shekyl_wire::Transaction;
 
+use crate::admitted_draws::{assert_issued_pair, mine_serving, DriverWitness};
 use crate::archival_driver::{first_spending_height, record_of, ENDPOINT, FEE};
 use crate::archival_slash_tests::{run_levered_slash_chain, ConnectMode};
 use crate::chain_drive::{
-    assert_counted_draws_issued, catch_up, mine_serving, priced_emission_claim,
-    spender_owning_before, Driven, DriverWitness, EmissionClaimParts,
+    catch_up, priced_emission_claim, spender_owning_before, Driven, EmissionClaimParts,
 };
 use crate::emission_assembly::ClaimTerms;
 use crate::frozen_membership::{drive_frozen_membership, price_frozen_claim};
@@ -389,11 +389,9 @@ async fn a_popped_claim_restores_the_epoch_its_prune_dropped_and_a_second_claim_
         &witness,
         &[&persona],
         after(e_old),
-        |_, _| true,
     )
-    .await
-    .assert_only_and_every_draw_passed((persona.id(), shard));
-    assert_counted_draws_issued(&scenario, e_old, (persona.id(), shard));
+    .await;
+    assert_issued_pair(&scenario, e_old, (persona.id(), shard));
 
     let claim = |fee_index: usize,
                  epoch: SettlementEpoch,
@@ -446,11 +444,9 @@ async fn a_popped_claim_restores_the_epoch_its_prune_dropped_and_a_second_claim_
         &witness,
         &[&persona],
         after(e_new),
-        |_, _| true,
     )
-    .await
-    .assert_only_and_every_draw_passed((persona.id(), shard));
-    assert_counted_draws_issued(&scenario, e_new, (persona.id(), shard));
+    .await;
+    assert_issued_pair(&scenario, e_new, (persona.id(), shard));
 
     // 2. `E_new` at the first block of `at_epoch`: the insert prunes `E_old`.
     let second_connecting = BlockHeight::from_raw(schedule.open_height(at_epoch));

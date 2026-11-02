@@ -78,11 +78,9 @@ use shekyl_types::{BlockCount, BlockHeight, SettlementEpoch, ShardId};
 use shekyl_wire::Transaction;
 use zeroize::Zeroizing;
 
+use crate::admitted_draws::{assert_issued_pair, mine_serving, DriverWitness};
 use crate::archival_driver::{first_spending_height, refused_at, ENDPOINT, FEE};
-use crate::chain_drive::{
-    assert_counted_draws_issued, catch_up, mine_serving, spender_owning_before, Driven,
-    DriverWitness,
-};
+use crate::chain_drive::{catch_up, spender_owning_before, Driven};
 use crate::emission_assembly::{
     assemble_emission_claim, assemble_emission_claim_breaking_fee_proof, ClaimTerms,
 };
@@ -207,17 +205,15 @@ async fn the_drivers_emission_claim_connects_and_pays_the_persona() {
     let shard = ShardId::from_raw(0);
     let witness = DriverWitness::new(0x61);
     let after_served = BlockHeight::from_raw((served.to_raw() + 1) * settled_epoch_blocks());
-    let admitted = mine_serving(
+    mine_serving(
         &mut scenario,
         &mut mined,
         &witness,
         &[&persona],
         after_served,
-        |_, _| true,
     )
     .await;
-    admitted.assert_only_and_every_draw_passed((persona.id(), shard));
-    assert_counted_draws_issued(&scenario, served, (persona.id(), shard));
+    assert_issued_pair(&scenario, served, (persona.id(), shard));
 
     // Up to the slash pass of `served`, not through it. The epoch closed
     // when the count reached `(served + 1) · SEB`, at the block before

@@ -79,8 +79,8 @@ pub const SETTLED_PAIRS: u64 = 2;
 
 /// The settled epoch, in blocks: the shortest levered epoch in which the
 /// count rule issues every pair of a set of up to [`SETTLED_PAIRS`] its
-/// [`COUNTED_DRAWS`] when every drawing block's bundle is admitted by the
-/// next block.
+/// [`COUNTED_DRAWS`], when every drawing block's bundle is admitted by
+/// the next block.
 ///
 /// [`EPOCH_BLOCKS`] is too short for that. The count rule's horizon has a
 /// floor (`draw_horizon_floor_blocks`, 200 blocks) far above a 20-block
@@ -89,18 +89,23 @@ pub const SETTLED_PAIRS: u64 = 2;
 /// under this schedule instead. The rule itself is not touched: the epoch
 /// is found by running it.
 ///
-/// Derived, not written down: the epoch is searched from the shortest one
-/// with a response window, one window step at a time, running the count
-/// phase's own arithmetic ([`draw_horizon`], [`draw_count`]) block by block
-/// as the transition does. The shortfall opens at `COUNTED_DRAWS · D`; a
-/// block's visible shortfall is its predecessor's less the draws its
-/// predecessor admitted; the block before is still in flight when a block
-/// counts; and the last block's draws are admitted by the first block of
-/// the next epoch. The first epoch that leaves no shortfall for every set
-/// size from one to [`SETTLED_PAIRS`] is the answer. A chain that moves
-/// onto it still asserts that its pairs reached [`COUNTED_DRAWS`] before
-/// it reads a settlement (rule 47): the derivation is the reason to expect
-/// it, the chain's own index is the evidence.
+/// Derived, not written down. The search walks epochs that have a response
+/// window, one window step at a time, and runs the count phase's own steps
+/// ([`draw_horizon`], [`draw_count`]). At the open, `visible` is
+/// `COUNTED_DRAWS · |D|` and `in_flight` is zero. Later, `visible` is what
+/// the per-pair rooms still owe and `in_flight` is the previous block's
+/// count: lag-1 admission leaves only that block unrevealed. `unsettled`
+/// is `visible` less `in_flight`. A credit is one draw onto a pair that is
+/// still short — selection's short preference, not a model of the attempt
+/// that selects without asking — and a block that draws more than one is
+/// refused. Admission can credit less than that count, and subtracting the
+/// count would bless an epoch that leaves a pair short. The last block's
+/// draw is issued into this epoch by the next epoch's open. The first
+/// length that clears every pair, for every set size from one pair to
+/// [`SETTLED_PAIRS`], is the answer. A chain that moves onto it still
+/// reads its issued-draw index before it reads a settlement (rule 47):
+/// the derivation is the reason to expect the pair to be full, and the
+/// index is the evidence.
 pub fn settled_epoch_blocks() -> u64 {
     static SETTLED: std::sync::OnceLock<u64> = std::sync::OnceLock::new();
     *SETTLED.get_or_init(|| {
@@ -111,33 +116,125 @@ pub fn settled_epoch_blocks() -> u64 {
     })
 }
 
-/// Whether an epoch of `blocks` leaves no shortfall for a set of `pairs`
-/// (see [`settled_epoch_blocks`]).
+/// How many of one pair's [`COUNTED_DRAWS`] are not yet visible.
+///
+/// The rooms together are the epoch's visible shortfall. A credit takes
+/// one room, so the aggregate cannot get ahead of the pairs.
+struct PairRooms {
+    remaining_of: Vec<u32>,
+}
+
+impl PairRooms {
+    fn opening(pairs: u64) -> Self {
+        let room = u32::try_from(COUNTED_DRAWS).expect("counted draws fit a room");
+        let pairs = usize::try_from(pairs).expect("a test set of pairs fits");
+        Self {
+            remaining_of: vec![room; pairs],
+        }
+    }
+
+    /// Draws still owed across the set.
+    fn remaining(&self) -> u64 {
+        self.remaining_of.iter().map(|room| u64::from(*room)).sum()
+    }
+
+    fn all_clear(&self) -> bool {
+        self.remaining() == 0
+    }
+
+    /// Credit one draw to the lowest-index pair that is still short.
+    /// `false` when every pair is full: the draw is issued, and the
+    /// shortfall does not move.
+    fn take_one(&mut self) -> bool {
+        let Some(room) = self.remaining_of.iter_mut().find(|room| **room > 0) else {
+            return false;
+        };
+        *room -= 1;
+        true
+    }
+}
+
+/// What one admitted block takes off the visible shortfall.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum ShortfallCredit {
+    /// Nothing was drawn, or the one draw found every pair already full.
+    None,
+    /// One draw, onto a pair that was still short.
+    One,
+}
+
+/// A block drew more than one. The per-pair room can credit less than
+/// the count, so an epoch that produced it is not vouched for.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+struct DrawsNotVouched;
+
+/// `count` as a draw this derivation can vouch for: none, or one.
+fn vouched_draw(count: u64) -> Result<u64, DrawsNotVouched> {
+    match count {
+        0 | 1 => Ok(count),
+        _ => Err(DrawsNotVouched),
+    }
+}
+
+/// Credit `count` against `rooms`, as admission's per-pair room would
+/// when the block drew at most one and selection preferred a short pair.
+///
+/// `Err` when `count` is above one: two draws can land on one pair, the
+/// second then finds no room, and the credit is not the count. A vouched
+/// draw against full rooms credits [`ShortfallCredit::None`] and leaves
+/// the rooms as they were.
+fn credit_admitted(rooms: &mut PairRooms, count: u64) -> Result<ShortfallCredit, DrawsNotVouched> {
+    let credit = match vouched_draw(count)? {
+        0 => ShortfallCredit::None,
+        _ => {
+            if rooms.take_one() {
+                ShortfallCredit::One
+            } else {
+                ShortfallCredit::None
+            }
+        }
+    };
+    Ok(credit)
+}
+
+/// Whether an epoch of `blocks` issues every one of `pairs` its counted
+/// draws (see [`settled_epoch_blocks`]).
+///
+/// `false` when the schedule has no response window, or when a block's
+/// count is more than one draw. The rooms are the visible shortfall, so
+/// the credit and the number the next block counts from are one value.
 fn issues_every_pair(blocks: u64, pairs: u64) -> bool {
     let schedule = SettlementSchedule::new(SettlementEpochBlocks::new(blocks).expect("non-zero"));
     let Some(window) = schedule.challenge_response_blocks() else {
         return false;
     };
     let params = shekyl_archival_retention::archival_params();
-    let counted = u64::try_from(COUNTED_DRAWS).expect("a small constant");
-    let mut visible = counted * pairs;
+    let mut rooms = PairRooms::opening(pairs);
+    // The previous block's count, still unrevealed, and the carry it
+    // left. The open has neither: the window starts there, and the
+    // carry is zero.
+    let mut in_flight = 0u64;
     let mut carry = 0u32;
-    let mut previous = 0u64;
     for relative in 0..blocks {
-        // The predecessor admitted the draws of the block before it.
-        let admitted = previous.min(visible);
-        let unsettled = visible.saturating_sub(previous);
+        let visible = rooms.remaining();
+        let unsettled = visible.saturating_sub(in_flight);
         let horizon = draw_horizon(relative, blocks, window.get(), params);
-        let (count, next_carry) = draw_count(pairs, unsettled, horizon, blocks, carry, params)
+        let (count, carry_out) = draw_count(pairs, unsettled, horizon, blocks, carry, params)
             .expect("the levered schedule has a target");
-        carry = next_carry;
-        if relative > 0 {
-            visible -= admitted;
-        }
-        previous = count;
+        let Ok(count) = vouched_draw(count) else {
+            return false;
+        };
+        // This block admits `in_flight`. That credit is its issued_short;
+        // the next block's visible shortfall is what the rooms hold after.
+        // The open admits the previous epoch, which is not in `in_flight`.
+        credit_admitted(&mut rooms, in_flight).expect("only a vouched count is admitted");
+        carry = carry_out;
+        in_flight = count;
     }
-    // The epoch's last block is admitted by the next epoch's first.
-    visible.saturating_sub(previous) == 0
+    // The next epoch's open admits this epoch's last draw into this
+    // epoch's index. No later block of this epoch reads that credit.
+    credit_admitted(&mut rooms, in_flight).expect("only a vouched count is admitted");
+    rooms.all_clear()
 }
 
 /// Regtest rules under the settled schedule ([`settled_epoch_blocks`]),
@@ -404,7 +501,9 @@ mod settled_tests {
     /// share the arithmetic, so the moved chains' own index assertions
     /// (rule 47) are the evidence the arithmetic is right. Red edits: search
     /// past the first epoch that works (a longer epoch is returned); accept
-    /// an epoch that leaves shortfall (the levered epoch then passes).
+    /// an epoch that leaves shortfall (the levered epoch then passes);
+    /// drop the refusal of a block that draws more than one (a shorter
+    /// epoch can then pass while a pair is still short).
     #[test]
     fn the_settled_epoch_is_the_shortest_that_issues_every_pair() {
         let blocks = settled_epoch_blocks();
@@ -422,6 +521,74 @@ mod settled_tests {
             !issues_every_pair(EPOCH_BLOCKS, 1),
             "the levered epoch is too short"
         );
+        assert!(
+            !issues_every_pair(step - 1, 1),
+            "an epoch with no response window draws nothing"
+        );
         let _ = settled_rules();
+    }
+
+    fn counted_draws() -> u64 {
+        u64::try_from(COUNTED_DRAWS).expect("counted draws fit")
+    }
+
+    /// Two pairs open owing [`COUNTED_DRAWS`] each.
+    #[test]
+    fn two_pairs_open_at_counted_draws_each() {
+        let rooms = PairRooms::opening(SETTLED_PAIRS);
+        assert_eq!(rooms.remaining(), counted_draws() * SETTLED_PAIRS);
+        assert!(!rooms.all_clear());
+    }
+
+    /// A block that draws nothing takes nothing off the shortfall.
+    #[test]
+    fn a_block_that_draws_nothing_credits_nothing() {
+        let mut rooms = PairRooms::opening(1);
+        let owed = rooms.remaining();
+        assert_eq!(credit_admitted(&mut rooms, 0), Ok(ShortfallCredit::None));
+        assert_eq!(rooms.remaining(), owed);
+    }
+
+    /// One draw fills one room of the first pair that is still short.
+    #[test]
+    fn one_draw_credits_one_short_pair() {
+        let mut rooms = PairRooms::opening(SETTLED_PAIRS);
+        let owed = rooms.remaining();
+        assert_eq!(credit_admitted(&mut rooms, 1), Ok(ShortfallCredit::One));
+        assert_eq!(rooms.remaining(), owed - 1);
+        assert_eq!(
+            rooms.remaining_of[0],
+            u32::try_from(COUNTED_DRAWS).expect("fits") - 1
+        );
+        assert_eq!(
+            rooms.remaining_of[1],
+            u32::try_from(COUNTED_DRAWS).expect("fits")
+        );
+    }
+
+    /// A draw after every pair is full is issued and does not move the
+    /// shortfall. Subtracting it would corrupt the next block's visible.
+    #[test]
+    fn a_draw_after_every_pair_is_full_credits_nothing() {
+        let mut rooms = PairRooms::opening(1);
+        let owed = rooms.remaining();
+        for _ in 0..owed {
+            assert_eq!(credit_admitted(&mut rooms, 1), Ok(ShortfallCredit::One));
+        }
+        assert!(rooms.all_clear());
+        assert_eq!(credit_admitted(&mut rooms, 1), Ok(ShortfallCredit::None));
+        assert!(rooms.all_clear());
+    }
+
+    /// Two draws in one block are not a credit, and the rooms do not move.
+    /// Red edit: return [`ShortfallCredit::One`] (or subtract `count`).
+    #[test]
+    fn two_draws_in_one_block_are_not_vouched() {
+        let mut rooms = PairRooms::opening(SETTLED_PAIRS);
+        let owed = rooms.remaining();
+        assert!(credit_admitted(&mut rooms, 2).is_err());
+        assert_eq!(rooms.remaining(), owed);
+        assert_eq!(credit_admitted(&mut rooms, 1), Ok(ShortfallCredit::One));
+        assert_eq!(rooms.remaining(), owed - 1);
     }
 }
