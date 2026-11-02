@@ -729,7 +729,11 @@ fn a_crlf_file_builds_what_its_lf_twin_builds() {
 
     let bad = "log-level = 'debug'\r\nmine-threads = 'two'\r\n";
     let refused = build_from(&[], bad).unwrap_err();
-    assert_eq!(refused[0].option.as_deref(), Some("mine-threads"), "{refused:?}");
+    assert_eq!(
+        refused[0].option.as_deref(),
+        Some("mine-threads"),
+        "{refused:?}"
+    );
     assert!(
         matches!(&refused[0].source, Source::File { line: 2, .. }),
         "{:?}",
