@@ -144,8 +144,8 @@ session held past 24 hours expired its own address.* A confirm-and-close
 address already white keeps its clock. Contact
 that arrived inbound does not. White is known-working (Rick, 2026-10-26):
 a white address whose test fails, its retries included (on clearnet one
-redial), moves to gray and cools on the ladder, except in the dialer's
-quiet stretch; the clock demotes one that is not tested. *Records-was:
+redial), moves to gray and cools on the ladder, unless the dialer's judge
+excuses the failure; the clock demotes one that is not tested. *Records-was:
 one failed redial did not demote; only the clock did.*
 
 *Wargame (white is known-working).* A restart already reloads white as
@@ -155,8 +155,8 @@ on-path party who drops this node's connections to one honest peer can
 push it out of white. That is a permanent, accepted residual, since
 clearnet can encrypt and recognize but never authenticate a destination;
 the address stays in gray, at the cost of the cooldown ladder. A block
-does not empty white: in the dialer's quiet stretch a failed white test
-does not demote (`P2P_3_SLICE_3_DIALER_BRIEF.md`, the gray lifecycle).
+does not empty white: a failed white test the dialer's judge excuses does
+not demote (`DIALER_OUTAGE_EVIDENCE.md` §4.2).
 
 **Address validity — RULED 2026-10-11 (Rick; formerly the dialer
 brief's D2a; scope settled the same day; R4 2026-10-12).** An address
@@ -448,7 +448,7 @@ The peerlist offers uniform draws and no ordered walk:
 | `SessionAccepted` | Outstanding gray draw: move to white and set `last_observed`. The session stays. Already white, on a session this node opened: move the clock. Anything else: white unchanged. The clock moves again when the kept session closes (`session_ended`, 2026-10-24), and expiry skips the address while the session is live |
 | `Confirmed` | Outstanding gray draw: the same white write. No session remains. Anything else: white unchanged |
 | *`HarvestDone` — DELETED (2026-10-11; no crate symbol)* | Absorbed into `Confirmed` (dialer brief arm 2): a confirm-and-close dial learns the peer's sample as a harvest did and writes white. The variant, its `address()` arm, its `apply` arm and its test are gone. *Records-was, same day: the variant remained and wrote no white, deferred to PR-3 as "more than one line"; before that: one of the six Foundation hosts, the same white write, from any seat* |
-| `DialFailed`, `PeerlistRefused` | Outstanding gray draw: the cause's marks decide (2026-10-24). One that proves misbehaviour drops the address. Any other keeps it gray and cools it: 2 min, doubling per consecutive failed test, capped at 1 h, each with U(0, 50%) jitter; a cooling address is not drawable, and `Confirmed` or `SessionAccepted` clears the count. A white address is known-working (Rick, 2026-10-26): proof drops it as for gray; any other failure moves it to gray, cooling at the first rung, except in the dialer's quiet stretch, where it stays white. *Records-was: dropped whatever the cause (Rick, 2026-10-16; #1092); to 2026-10-26, a white address stayed white* |
+| `DialFailed`, `PeerlistRefused` | Outstanding gray draw: the dialer's judge decides (#1235; `DIALER_OUTAGE_EVIDENCE.md`). Proof of misbehaviour drops the address. A counted failure keeps it gray and cools it: 2 min, doubling per consecutive failed test, capped at 1 h, each with U(0, 50%) jitter; a cooling address is not drawable, and `Confirmed` or `SessionAccepted` clears the count. A white address is known-working (Rick, 2026-10-26): proof drops it as for gray; a counted failure moves it to gray, cooling at the first rung; an excused one leaves it white. An excused failure holds the rung: counted failures cool at the current rung, none waits the outage retry. *Records-was: dropped whatever the cause (Rick, 2026-10-16; #1092); to 2026-10-26, a white address stayed white* |
 | `PayloadRefused` | No promotion, no demotion. An outstanding draw returns to drawable gray |
 
 *Records-was: `handshake_confirmed` was the only writer, and `draw_failed`
@@ -877,7 +877,7 @@ They check different things. Neither stands for the other.
    carries no clock; `DialFailed` and `PeerlistRefused` drop an outstanding
    gray draw; `PayloadRefused` returns that
    draw to drawable gray; a failed white test moves it to cooling gray,
-   and in the quiet stretch leaves it white.
+   and an excused one leaves it white.
    The harness fails if it has no sequence (rule 47).
 4. **The C++ list is gone, and so is the old spelling** (met 2026-10-13, PR-3: the RPC wire history's `_v1`/`_v2` vectors that carried the stripe seed went with it, Rick's ruling of the same day). `rg -n 'm_peers_white|peerlist_manager' src/p2p`
    returns nothing. `rg -n pruning_seed src rust tests` returns nothing,

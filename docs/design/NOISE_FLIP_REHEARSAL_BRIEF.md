@@ -2,7 +2,7 @@
 
 **Status: OPEN** — active plan, revision 2, ruled 2026-10-30 (Rick). Not started: it waits on its four prerequisites below (A1 ruled, B merged, the accept-rate bound merged, A6 shipped).
 **Revision 2, 2026-10-30.** It replaces revision 1. The accept-rate bound and the soak period are ruled (Rick, 2026-10-30).
-**For:** the transport lane, with the dialer lane for the K and S follow-up (C4) and the refusal cells.
+**For:** the transport lane, with the dialer lane for the refusal cells. (The K and S follow-up, C4, closed with the guard in #1235.)
 **Read at:** `dev` `dc2a617d22`. Re-read every anchor at your own pin.
 **Order (Rick, 2026-10-30):**
 1. A: evidence;
@@ -47,8 +47,8 @@
 4. **Re-derive the clearnet deadlines on the final wire.**
    - Dial, handshake and gap (`spans.rs`: 1.415 s, 1.426 s, 1.430 s) were derived from the 2026-09-29 cross-build, with the option off.
    - Re-measure on the LAN, New York and South America legs, with the Pi at each end, using D9's method.
-   - The quiet span S follows on its own: it is derived from the dial profile's deadline.
-   - **C4, the dialer lane:** re-derive K only if clearnet's live-dial failure rate leaves the band registered in item 2. The source is the fleet's clearnet live-dial outcomes, as §97 names it.
+   - *Records-was:* the quiet span S followed on its own, derived from the dial profile's deadline; #1235 deleted S with the guard, and the judge's bracket δ is the connector's own row, not a function of the deadline.
+   - *Records-was, CLOSED (#1235):* C4 asked the dialer lane to re-derive K if clearnet's live-dial failure rate left the band registered in item 2. #1235 deleted K with the quiet guard; the judge has no threshold for that rate to move.
 5. **Final fuzz campaigns on the flip head.**
    - Targets: `fuzz_read_message1`, `fuzz_read_message2`, `fuzz_open_one`, `fuzz_classed_opener`, and B's record decoder.
    - Each is time-boxed with its duration stated; record the corpus.
