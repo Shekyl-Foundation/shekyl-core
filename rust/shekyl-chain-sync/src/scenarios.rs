@@ -236,7 +236,7 @@ fn a_spend_chain_skeleton_is_bound_and_wanted_in_full_from_another_session() {
     );
 }
 
-struct Prefix<'a>(&'a [HeaderRecord]);
+pub(crate) struct Prefix<'a>(pub(crate) &'a [HeaderRecord]);
 
 impl HeaderView<'static> for Prefix<'_> {
     type Fault = core::convert::Infallible;

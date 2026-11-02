@@ -369,17 +369,34 @@ pub unsafe extern "C" fn shekyl_seam_bind(ctx: *mut c_void, post: Option<PostFn>
     let clock: Arc<dyn Clock + Send + Sync> = process_clock();
     // The table this hub is built on and the store of the hub are one
     // critical section with [`install_process_sockets`].
+    // The node's chain-sync owner, when it left itself for this bind.
+    let attach = crate::chain_sync_ffi::take();
     let hub = {
         let _table = hold_table();
-        // The Rust Levin router is the post sink. Until the chain-sync
-        // cutover attaches the sync owner it is pass-through: every post
+        // The Rust Levin router is the post sink. With the node's owner it
+        // is attached: chain sync's messages go to the owner and the rest
+        // reach the C++ handler. Without one (a test's bind) every post
         // reaches the C++ handler unchanged.
-        let sink = Router::pass_through(Arc::new(move |item: Post| post_one(&bound, item)));
+        let forward: shekyl_chain_sync_runtime::router::Forward =
+            Arc::new(move |item: Post| post_one(&bound, item));
+        let (sink, hub_tx) = match attach {
+            Some((router_tx, hub_tx)) => (Router::attached(forward, router_tx), Some(hub_tx)),
+            None => (Router::pass_through(forward), None),
+        };
         let hub = Hub::new(process_sockets(), ceiling, sink.into_sink(), clock);
         // `store` stops the previous hub's dialer; this hub's is built after.
         store(Some(hub.clone()));
-        hub
+        (hub, hub_tx)
     };
+    let (hub, hub_tx) = hub;
+    if let Some(hub_tx) = hub_tx {
+        // The owner gone already is a node that stopped before its seam
+        // bound; the router then finds its sender closed and hands every
+        // session to the C++ handler.
+        if hub_tx.send(Arc::new(hub.clone())).is_err() {
+            tracing::info!(target: "p2p", "the chain-sync owner stopped before the seam bound");
+        }
+    }
     crate::dialer_ffi::ensure_dialer(&hub);
     0
 }
@@ -819,6 +836,9 @@ fn post_one(bound: &Bound, item: Post) {
                 );
             }
         }
+        // Chain sync's owner's: the router keeps it, and the strand does
+        // not read it.
+        Post::Opened { .. } => {}
         Post::HandshakeResult {
             id,
             connector,

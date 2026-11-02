@@ -6,17 +6,12 @@
 // Cross-language drift sentinel for the RandomX seed-epoch schedule.
 //
 // The schedule lives in Rust (shekyl_pow_randomx::seed_epoch, exported
-// via shekyl-ffi); C++ consensus consumes it through the FFI. Two
-// invariants are pinned here so that a change on either side fails a
-// test instead of silently forking:
-//
-// 1. The Rust SEEDHASH_EPOCH_BLOCKS default must equal C++'s
-//    BLOCKS_SYNCHRONIZING_MAX_COUNT (cryptonote_config.h) — the block
-//    sync batch size may never exceed one seed epoch, or a batch could
-//    span an epoch boundary whose seed block is inside the batch.
-// 2. The schedule itself at mainnet defaults (KAT values mirrored from
-//    the Rust seed_epoch unit tests — a divergence means the FFI wiring
-//    or the schedule changed).
+// via shekyl-ffi). The schedule itself is pinned here at mainnet
+// defaults (KAT values mirrored from the Rust seed_epoch unit tests — a
+// divergence means the FFI wiring or the schedule changed). The C++
+// block-sync batch this file also held to one seed epoch went with the
+// handler's sync half (CS-5): the Rust owner proves each header under
+// its own earned seed.
 //
 // Note: these assertions hold under the default environment. The
 // SEEDHASH_EPOCH_* regtest override changes the effective schedule by
@@ -27,14 +22,6 @@
 
 #include "cryptonote_config.h"
 #include "shekyl/shekyl_ffi.h"
-
-TEST(seed_epoch, epoch_blocks_matches_sync_max_count)
-{
-  if (shekyl_pow_randomx_v2_seed_epoch_overridden())
-    GTEST_SKIP() << "SEEDHASH_EPOCH_* override active; sentinel applies to defaults";
-  EXPECT_EQ(shekyl_pow_randomx_v2_seed_epoch_blocks(),
-            static_cast<uint64_t>(BLOCKS_SYNCHRONIZING_MAX_COUNT));
-}
 
 TEST(seed_epoch, mainnet_schedule_pinned_values)
 {

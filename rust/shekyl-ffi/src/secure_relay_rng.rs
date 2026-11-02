@@ -10,7 +10,7 @@ use shekyl_draw_rng::RelayRng;
 /// Production RNG: a CSPRNG reading OS entropy each draw, matching the C++
 /// `crypto::random_device` the inherited timers and scheduling used — never the
 /// deterministic `SplitMix64` the measurement suite draws from.
-pub(crate) struct SecureRelayRng;
+pub struct SecureRelayRng;
 
 impl RelayRng for SecureRelayRng {
     fn next_u64(&mut self) -> u64 {

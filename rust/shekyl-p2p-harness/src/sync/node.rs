@@ -14,6 +14,11 @@
 //!
 //! The node's clock is a hand clock: a deadline fires only when a test
 //! moves it ([`Node::advance`]).
+//!
+//! A node started with [`Node::start_mining`] also seats the tip
+//! follower's job, reading the state the owner publishes, as the daemon's
+//! node does (`shekyl-node`): the follower posts a template only while
+//! that state is `Synced`.
 
 use std::collections::HashMap;
 use std::net::{IpAddr, Ipv4Addr};
@@ -23,6 +28,10 @@ use std::sync::{Arc, Mutex};
 use std::thread::JoinHandle;
 use std::time::{Duration, Instant};
 
+use shekyl_block_template::MinerKeys;
+use shekyl_bundle_producer::WitnessRing;
+use shekyl_chain_ingest::follower::{JobSeat, MinerFeed, NoJob, Posting};
+use shekyl_chain_ingest::service::Follow;
 use shekyl_chain_ingest::{Metrics, ProductionSubstrate};
 use shekyl_chain_sync::SyncState;
 use shekyl_chain_sync_runtime::executor::Executor;
@@ -30,6 +39,7 @@ use shekyl_chain_sync_runtime::owner::{self, OwnerParts, Running};
 use shekyl_chain_sync_runtime::router::Router;
 use shekyl_draw_rng::RelayRng;
 use shekyl_hash_budget::Budget;
+use shekyl_miner::{FoundBlocks, JobBoard};
 use shekyl_peer_policy::InboundCeiling;
 use shekyl_pow_randomx::CacheStore;
 use shekyl_seam::{Endpoint, Hub, Post, SocketId, SyncPayload};
@@ -65,6 +75,16 @@ impl StubLog {
     }
 }
 
+/// The tip follower's job seat on a node that mines (module docs).
+pub struct MinerSeat {
+    /// The board the follower posts the node's template on.
+    pub board: Arc<JobBoard>,
+    /// What the follower says the board holds.
+    pub posting: tokio::sync::watch::Receiver<Posting>,
+    /// The miner's sender, held so the found-block sink stays open.
+    _found: FoundBlocks,
+}
+
 /// The node (module docs).
 pub struct Node {
     /// The node's store and service.
@@ -81,6 +101,8 @@ pub struct Node {
     pub metrics: Arc<Metrics>,
     /// What the stub handler recorded.
     pub stub: Arc<Mutex<StubLog>>,
+    /// The follower's job seat, on a node started to mine.
+    pub miner: Option<MinerSeat>,
     engine: EngineService<ManualClock>,
     running: Option<Running>,
     stub_thread: Option<JoinHandle<()>>,
@@ -124,9 +146,85 @@ impl Node {
     where
         R: RelayRng + Send + 'static,
     {
+        Self::start_seated(tag, rules, before, permits, rng, None).await
+    }
+
+    /// [`Node::start`], with the tip follower's job seated: templates pay
+    /// `keys`, and the follower reads the state the owner publishes.
+    ///
+    /// # Panics
+    ///
+    /// A part does not start.
+    pub async fn start_mining<R>(
+        tag: &str,
+        rules: shekyl_chain_ingest::ChainRules,
+        before: &[super::chain::Step],
+        permits: usize,
+        rng: R,
+        keys: MinerKeys,
+    ) -> Self
+    where
+        R: RelayRng + Send + 'static,
+    {
+        Self::start_seated(tag, rules, before, permits, rng, Some(keys)).await
+    }
+
+    async fn start_seated<R>(
+        tag: &str,
+        rules: shekyl_chain_ingest::ChainRules,
+        before: &[super::chain::Step],
+        permits: usize,
+        rng: R,
+        keys: Option<MinerKeys>,
+    ) -> Self
+    where
+        R: RelayRng + Send + 'static,
+    {
         let (substrate, metrics) = substrate();
         let budget = Budget::new(NonZeroUsize::new(permits).expect("non-zero"));
-        let chain = Chain::empty(tag, rules, Arc::new(substrate.clone()), budget.clone());
+        // The published state, as the node's handle holds it.
+        let state = tokio::sync::watch::Sender::new(SyncState::NoView);
+        let (mut follow, miner) = match keys {
+            None => (Follow::default(), None),
+            Some(keys) => {
+                let board = Arc::new(JobBoard::new());
+                let (found, inbox) = shekyl_miner::found_blocks();
+                let (posting_tx, posting) =
+                    tokio::sync::watch::channel(Posting::Withdrawn(NoJob::Starting));
+                let seat = JobSeat {
+                    board: Arc::clone(&board),
+                    keys: Some(keys),
+                    miner: MinerFeed {
+                        found: inbox,
+                        sync: state.subscribe(),
+                    },
+                    posting: posting_tx,
+                    witness: Arc::new(WitnessRing::new()),
+                };
+                let follow = Follow {
+                    job: Some(seat),
+                    ..Follow::default()
+                };
+                (
+                    follow,
+                    Some(MinerSeat {
+                        board,
+                        posting,
+                        _found: found,
+                    }),
+                )
+            }
+        };
+        // The substrate's sink, which the executor shares, as the daemon's
+        // node wires it: the per-block profile's phases in one place.
+        follow.metrics = Some(Arc::clone(&metrics));
+        let chain = Chain::empty_following(
+            tag,
+            rules,
+            Arc::new(substrate.clone()),
+            budget.clone(),
+            follow,
+        );
         chain.apply(before).await;
 
         let stub = Arc::new(Mutex::new(StubLog::default()));
@@ -153,24 +251,32 @@ impl Node {
             std::thread::spawn(move || run_stub(&hub, &stub_rx, &stub))
         };
 
-        // The published state, as the node's handle holds it.
-        let state = tokio::sync::watch::Sender::new(SyncState::NoView);
         let engine = EngineService::start(clock.clone());
         let timer = engine
             .handle()
             .register(OwnerClass::Sync)
             .expect("registered");
         let executor = Arc::new(Executor::new(budget, substrate));
+        // The harness's seam is bound already: the hub goes at once.
+        let (hub_tx, hub_rx) = tokio::sync::oneshot::channel();
+        assert!(
+            hub_tx.send(Arc::new(hub.clone())).is_ok(),
+            "the receiver is held here"
+        );
         let parts = OwnerParts {
             store: Arc::clone(&chain.store),
             door: chain.service.door(),
             alarm: chain.service.alarm(),
             tips: chain.service.watch_tip().await.expect("the tip watch"),
             latch: chain.service.watch_latch().await.expect("the latch watch"),
-            hub: Arc::new(hub.clone()),
+            hub: hub_rx,
             executor,
             timer,
             rules,
+            requesting: shekyl_chain_sync::Requesting::On,
+            // A harness node is on an open network: no peer list is closed,
+            // so it has no view until its opening resolves.
+            declaration: shekyl_chain_sync::Declaration::Open,
             rng,
             pool_hashes: Arc::new(Vec::new),
             routed: routed_rx,
@@ -189,6 +295,7 @@ impl Node {
             state,
             metrics,
             stub,
+            miner,
             engine,
             running: Some(running),
             stub_thread: Some(stub_thread),
@@ -261,6 +368,21 @@ impl Node {
     #[must_use]
     pub fn alarm(&self) -> bool {
         *self.running.as_ref().expect("running").alarm().borrow()
+    }
+
+    /// The model's view (CS-5 §7), as the owner last published it.
+    ///
+    /// # Panics
+    ///
+    /// The node was stopped.
+    #[must_use]
+    pub fn view(&self) -> shekyl_chain_sync::SyncView<SocketId> {
+        self.running
+            .as_ref()
+            .expect("running")
+            .view()
+            .borrow()
+            .clone()
     }
 
     /// Wait until `done` holds, at most `limit`. `true` when it held.
@@ -356,11 +478,11 @@ fn run_stub(hub: &Hub, posts: &mpsc::Receiver<Option<Post>>, log: &Mutex<StubLog
     while let Ok(Some(post)) = posts.recv() {
         match post {
             Post::Established { id, .. } => {
-                sessions.insert(id, Buckets::default());
+                sessions.insert(id, Buckets::cpp_ingress());
                 hub.handler_armed(id, true);
             }
             Post::Deliver { id, bytes, .. } => {
-                let buckets = sessions.entry(id).or_default();
+                let buckets = sessions.entry(id).or_insert_with(Buckets::cpp_ingress);
                 let commands = buckets.feed(&bytes);
                 let broken = buckets.broken();
                 let mut log = log.lock().expect("stub log");
@@ -376,6 +498,8 @@ fn run_stub(hub: &Hub, posts: &mpsc::Receiver<Option<Post>>, log: &Mutex<StubLog
             Post::HandshakeResult { id, .. } => {
                 log.lock().expect("stub log").handshakes.push(id);
             }
+            // The owner's; the router keeps it.
+            Post::Opened { .. } => {}
             Post::Closed { id, cause, .. } => {
                 log.lock()
                     .expect("stub log")

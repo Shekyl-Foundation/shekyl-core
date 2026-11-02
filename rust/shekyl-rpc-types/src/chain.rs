@@ -224,7 +224,15 @@ pub const CORE_RPC_VERSION_MAJOR: u32 = 3;
 /// `send_raw_transaction` reject-cause set: the Rust daemon admits a
 /// JoinMarket bond post, and no daemon authors the cause. `get_version`
 /// gains nothing.
-pub const CORE_RPC_VERSION_MINOR: u32 = 63;
+/// 3.64: chain sync's cutover (CS-5 §7). `sync_info` carries the sync
+/// owner's view under its own names: `height`, `target_height` (now always
+/// a count), `state`, `stalled`, and `peers[]` with `connection_id`,
+/// `address`, `claimed_height`, `mode`, `header_request`, `body_requests`
+/// and `rate`. `spans` and `overview`, which rendered the deleted block
+/// queue, are gone, and a 3.63 reader refuses the reply. `get_connections`
+/// takes `height` (the claim's count) and `state` (the session's mode, or
+/// null) from the view. `get_version` gains nothing.
+pub const CORE_RPC_VERSION_MINOR: u32 = 64;
 /// `MAKE_CORE_RPC_VERSION(major, minor)` = `(major << 16) | minor`.
 pub const CORE_RPC_VERSION: u32 = (CORE_RPC_VERSION_MAJOR << 16) | CORE_RPC_VERSION_MINOR;
 
@@ -649,11 +657,12 @@ mod tests {
         // refusal the error object (RT-W10 step 1). 3.63 is the flip's
         // client shapes: `start_mining` takes threads and no address,
         // `generateblocks` takes a count (FLIP-Q4), and the reject cause
-        // `join_market_unsupported` leaves the set.
-        assert_eq!(CORE_RPC_VERSION, 196_671);
-        assert_eq!(CORE_RPC_VERSION, (3 << 16) | 63);
+        // `join_market_unsupported` leaves the set. 3.64 is chain sync's
+        // cutover: `sync_info` is the sync owner's view (CS-5 §7).
+        assert_eq!(CORE_RPC_VERSION, 196_672);
+        assert_eq!(CORE_RPC_VERSION, (3 << 16) | 64);
         assert_eq!(CORE_RPC_VERSION_MAJOR, 3);
-        assert_eq!(CORE_RPC_VERSION_MINOR, 63);
+        assert_eq!(CORE_RPC_VERSION_MINOR, 64);
     }
 
     #[test]

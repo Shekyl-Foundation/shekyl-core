@@ -157,6 +157,17 @@ pub enum Command<K> {
         /// When the response is late.
         deadline: Instant,
     },
+    /// Wake the model at `deadline` with `Event::Deadline { session, request:
+    /// id }`: the opening's bound, the first session's header deadline
+    /// (CS-Q2 step 8). It fires whether or not `session` is still open.
+    ArmOpening {
+        /// The session the opening started with.
+        session: K,
+        /// The id `Deadline` carries back.
+        id: u64,
+        /// The first session's header deadline.
+        deadline: Instant,
+    },
     /// Bodies along `H*`.
     RequestBodies {
         /// The session.
@@ -211,8 +222,10 @@ pub enum Command<K> {
     Relay {
         /// The block.
         hash: BlockHash,
-        /// The session that supplied it.
-        from: K,
+        /// The session that supplied it. `None` is a tip no session
+        /// supplied, such as a block this node mined: it goes to every
+        /// established session.
+        from: Option<K>,
     },
     /// An announce is missing transactions.
     RequestMissingTxs {

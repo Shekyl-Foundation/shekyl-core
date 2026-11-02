@@ -78,6 +78,13 @@ impl Executor {
         self.budget.wake();
     }
 
+    /// The measurement sink the substrate hashes into, which the owner
+    /// also times its own phases into (CS-5, the per-block profile).
+    #[must_use]
+    pub fn metrics(&self) -> &Arc<shekyl_chain_ingest::Metrics> {
+        self.substrate.metrics()
+    }
+
     /// The budget's permits: the most items of one job hashed at once, and
     /// the owner row's blocking-thread cap.
     #[must_use]

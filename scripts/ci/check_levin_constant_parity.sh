@@ -29,11 +29,11 @@
 # The protocol has no compression (Rick, 2026-10-19), so there are no
 # compression constants and no 0x10 flag to compare, and no support flags
 # either (deleted with compression). Twice-defined constants: framing values
-# in levin_base.h and the PWD-B3 ingress table inputs (`BLOCKS_IDS_SYNCHRONIZING_MAX_COUNT`,
-# `CURRENCY_PROTOCOL_MAX_OBJECT_REQUEST_COUNT`) copied into
-# rust/shekyl-levin/src/ingress.rs. The handshake cap's input is
-# `DISCLOSE_COUNT`, Rust-owned since the P2P-3 cutover (2026-10-13): the C++
-# `P2P_MAX_PEERS_IN_HANDSHAKE` is deleted, so there is no copy to compare.
+# in levin_base.h. The PWD-B3 ingress table's inputs are Rust-owned: the
+# handshake cap's `DISCLOSE_COUNT` since the P2P-3 cutover (2026-10-13), and
+# the hash-list caps' `BLOCKS_IDS_SYNCHRONIZING_MAX_COUNT` and
+# `MAX_OBJECT_REQUEST_COUNT` since chain sync's cutover (CS-5) deleted the
+# C++ copies with the handler's sync half. No copy is left to compare.
 
 set -euo pipefail
 
@@ -42,11 +42,8 @@ cd "$repo_root"
 
 levin_base="contrib/epee/include/net/levin_base.h"
 rust_header="rust/shekyl-levin/src/header.rs"
-config_h="src/cryptonote_config.h"
-rust_ingress="rust/shekyl-levin/src/ingress.rs"
-protocol_h="src/cryptonote_protocol/cryptonote_protocol_handler.h"
 
-for f in "$levin_base" "$rust_header" "$config_h" "$rust_ingress" "$protocol_h"; do
+for f in "$levin_base" "$rust_header"; do
   if [[ ! -f "$f" ]]; then
     echo "FAIL: expected file is missing: $f" >&2
     echo "      (a move or rename must update this gate, not bypass it)" >&2
@@ -167,14 +164,6 @@ else
   compare "HEADER_SIZE" "$header_size_cpp" "$(rust_const HEADER_SIZE "$rust_header")"
 fi
 
-# PWD-B3: the hash-list cap inputs. (The handshake cap is derived in Rust
-# from DISCLOSE_COUNT and the entry's pinned encoding; no C++ copy exists.)
-compare "BLOCKS_IDS_SYNCHRONIZING_MAX_COUNT" \
-  "$(cpp_define BLOCKS_IDS_SYNCHRONIZING_MAX_COUNT "$config_h")" \
-  "$(rust_const BLOCKS_IDS_SYNCHRONIZING_MAX_COUNT "$rust_ingress")"
-compare "CURRENCY_PROTOCOL_MAX_OBJECT_REQUEST_COUNT" \
-  "$(cpp_define CURRENCY_PROTOCOL_MAX_OBJECT_REQUEST_COUNT "$protocol_h")" \
-  "$(rust_const MAX_OBJECT_REQUEST_COUNT "$rust_ingress")"
 
 echo
 if [[ "$failures" -ne 0 ]]; then

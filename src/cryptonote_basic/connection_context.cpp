@@ -50,23 +50,4 @@ namespace cryptonote
       return std::numeric_limits<size_t>::max();
     return static_cast<size_t>(cap);
   }
-
-  void cryptonote_connection_context::set_state_normal()
-  {
-    m_state = state_normal;
-    m_expected_heights_start = 0;
-    m_needed_objects.clear();
-    m_needed_objects.shrink_to_fit();
-    m_expected_heights.clear();
-    m_expected_heights.shrink_to_fit();
-    m_requested_objects.clear();
-  }
-
-  std::optional<crypto::hash> cryptonote_connection_context::get_expected_hash(const uint64_t height) const
-  {
-    const auto difference = height - m_expected_heights_start;
-    if (height < m_expected_heights_start || m_expected_heights.size() <= difference)
-      return std::nullopt;
-    return m_expected_heights[difference];
-  }
 } // cryptonote

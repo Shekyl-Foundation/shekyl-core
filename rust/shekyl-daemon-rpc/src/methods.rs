@@ -22,9 +22,9 @@ use shekyl_rpc_types::{
     CORE_RPC_ERROR_CODE_WRONG_PARAM,
 };
 use shekyl_rpc_types::{
-    ConnectionInfo, ConnectionState, GetConnectionsResponse, GetNetStatsResponse,
-    GetPeerListRequest, GetPeerListResponse, P2pReply, Peer, SyncInfoPeer, SyncInfoResponse,
-    SyncSpan,
+    ConnectionInfo, GetConnectionsResponse, GetNetStatsResponse, GetPeerListRequest,
+    GetPeerListResponse, P2pReply, Peer, SyncBodyRequest, SyncHeaderRequest, SyncInfoPeer,
+    SyncInfoResponse,
 };
 use shekyl_rpc_types::{GetTransactionsRequest, GetTransactionsResponse, TxEntry, TxLocation};
 use shekyl_types::{ArchivalLength, BlockHeight, ChainCount};
@@ -32,6 +32,7 @@ use shekyl_units::AtomicUnits;
 use shekyl_wire::{Ct, Transaction};
 
 use crate::chain_facts::{BlockLookup, ChainFacts, FactsFault, P2pFacts};
+use crate::sync_facts::{SyncSessionFacts, SyncViewRead};
 use shekyl_rpc_types::{
     BlockHeaderSlot, FeeTiers, GetBlockHeaderByHashRequest, GetBlockHeaderByHashResponse,
     GetBlockHeadersRangeRequest, GetBlockHeadersRangeResponse, GetFeeEstimateRequest,
@@ -1130,49 +1131,12 @@ const ADDRESS_TYPE_IPV4: u8 = 1;
 /// The unit `avg_*` and `current_*` report in.
 const BYTES_PER_KIB: u64 = 1024;
 
-/// Longest run of gap characters [`render_overview`] will emit for one span.
-///
-/// A **deliberate divergence** from the C++, which emitted
-/// `(gap / nblocks)` underscores with no bound. The gap is derived from a
-/// span's `start_block_height`, which comes from peer-advertised heights, so
-/// the unbounded form makes the length of a display string a function of what
-/// a peer claims — an allocation with no ceiling in a reply any admin caller
-/// can ask for. The overview is an ASCII picture for a human; a run longer
-/// than this conveys nothing a shorter one does not, and reproducing an
-/// unbounded loop faithfully would be reproducing the defect.
-const MAX_OVERVIEW_GAP: u64 = 128;
-
-/// Round half up, totally.
-///
-/// The C++ wrote `(uint32_t)(x + 0.5f)`, which is **undefined** when the
-/// result is negative or does not fit — and `rate` is a float the block queue
-/// computes from measured byte counts over measured intervals. This clamps
-/// instead: NaN and negatives become 0, anything past `u32::MAX` saturates.
-#[expect(
-    clippy::cast_possible_truncation,
-    clippy::cast_sign_loss,
-    reason = "the clamp above the cast is what makes it total"
-)]
-#[deny(clippy::arithmetic_side_effects)]
-fn round_half_up(value: f32) -> u32 {
-    if !value.is_finite() || value <= 0.0 {
-        return 0;
-    }
-    let rounded = (f64::from(value) + 0.5).floor();
-    if rounded >= f64::from(u32::MAX) {
-        u32::MAX
-    } else {
-        rounded as u32
-    }
-}
-
 /// Bytes per second as whole KiB per second, totally.
 ///
 /// The C++ divided a `double` by 1024 and let the implicit conversion to
 /// `uint64_t` truncate. That conversion is **undefined** for a NaN, an
 /// infinity, a negative or a value past the integer range, and the input is a
-/// rate estimator's output — the same hazard [`round_half_up`] exists for,
-/// one field away. The division happens in floating point, as it did, so the
+/// rate estimator's output. The division happens in floating point, as it did, so the
 /// answer is `trunc(bytes_per_second / 1024)` and not
 /// `trunc(bytes_per_second) / 1024`.
 #[expect(
@@ -1224,8 +1188,16 @@ fn average_kib(total: u64, seconds: u64) -> u64 {
 /// The subtractions saturate. A `now` earlier than a connection's `started`
 /// means the clock moved backwards, and C++'s unsigned wrap turned that into
 /// an idle time of some hundreds of years; zero is the honest answer.
+///
+/// `session` is chain sync's row for the connection (3.64): the claim's
+/// count and the session's mode. A connection chain sync does not hold,
+/// such as one before its handshake, has neither.
 #[deny(clippy::arithmetic_side_effects)]
-fn project_connection(c: &crate::core::ConnectionFacts, now: u64) -> ConnectionInfo {
+fn project_connection(
+    c: &crate::core::ConnectionFacts,
+    now: u64,
+    session: Option<&SyncSessionFacts>,
+) -> ConnectionInfo {
     let live_time = now.saturating_sub(c.started);
     let ipv4 = c.address_type == ADDRESS_TYPE_IPV4;
     ConnectionInfo {
@@ -1248,11 +1220,7 @@ fn project_connection(c: &crate::core::ConnectionFacts, now: u64) -> ConnectionI
         recv_idle_time: now.saturating_sub(c.started.max(c.last_recv)),
         send_count: c.send_count,
         send_idle_time: now.saturating_sub(c.started.max(c.last_send)),
-        state: if c.claims_known {
-            ConnectionState::from(c.state)
-        } else {
-            ConnectionState::Unknown
-        },
+        state: session.map(|session| session.mode),
         live_time,
         avg_download: average_kib(c.recv_count, live_time),
         current_download: kib_per_second(c.current_speed_down),
@@ -1262,57 +1230,9 @@ fn project_connection(c: &crate::core::ConnectionFacts, now: u64) -> ConnectionI
         // `epee::string_tools::pod_to_hex` produced for this uuid — and it is
         // the encoder this file already uses four times over.
         connection_id: hex::encode(c.connection_id),
-        height: c.claims_known.then_some(c.height),
+        height: session.and_then(|session| session.claimed_height),
         address_type: c.address_type,
     }
-}
-
-/// The block queue as an ASCII picture, from the same spans the reply lists.
-///
-/// Mirrors `block_queue::get_overview`, which the C++ handler called as a
-/// **second** read of the queue after the one that produced `spans` — so the
-/// picture could describe a queue the span list no longer matched. Rendering
-/// both from one snapshot removes that, which is why `filled` is exported
-/// rather than inferred: the branch below is the only reader of it.
-///
-/// `<` is a span already behind the chain; `_` runs are the gap ahead of the
-/// last span; `.` is requested-not-yet-arrived, `m` the span at the tip, `o`
-/// any other arrived span.
-#[deny(clippy::arithmetic_side_effects)]
-fn render_overview(spans: &[crate::core::SyncSpanFacts], chain_height: u64) -> String {
-    if spans.is_empty() {
-        return "[]".to_owned();
-    }
-    let mut out = String::from("[");
-    let mut expected = chain_height;
-    for span in spans {
-        if expected > span.start_block_height {
-            out.push('<');
-            continue;
-        }
-        if expected < span.start_block_height {
-            let stride = if span.nblocks == 0 { 1 } else { span.nblocks };
-            let gap = span
-                .start_block_height
-                .saturating_sub(expected)
-                .checked_div(stride)
-                .unwrap_or(1)
-                .clamp(1, MAX_OVERVIEW_GAP);
-            for _ in 0..gap {
-                out.push('_');
-            }
-        }
-        out.push(if !span.filled {
-            '.'
-        } else if span.start_block_height == chain_height {
-            'm'
-        } else {
-            'o'
-        });
-        expected = span.start_block_height.saturating_add(span.nblocks);
-    }
-    out.push(']');
-    out
 }
 
 /// `/get_net_stats`: process start plus the global throttle counters.
@@ -1332,17 +1252,21 @@ pub fn get_net_stats(facts: &dyn P2pFacts) -> Result<GetNetStatsResponse, RpcFau
 /// A daemon started offline answers `offline` alone (Rick,
 /// 2026-10-14): it has no connections by configuration, and an empty list
 /// would read as a running node with none.
-pub fn get_connections(facts: &dyn P2pFacts) -> Result<P2pReply<GetConnectionsResponse>, RpcFault> {
+pub fn get_connections(
+    facts: &dyn P2pFacts,
+    view: &dyn SyncViewRead,
+) -> Result<P2pReply<GetConnectionsResponse>, RpcFault> {
     if facts.p2p_state()? == P2pRead::Offline {
         return Ok(P2pReply::Offline);
     }
     let snapshot = facts.connections()?;
+    let view = view.sync_view()?;
     Ok(P2pReply::Running(GetConnectionsResponse {
         status: RpcStatus::ok(),
         connections: snapshot
             .connections
             .iter()
-            .map(|c| project_connection(c, snapshot.now))
+            .map(|c| project_connection(c, snapshot.now, view.session(&c.connection_id)))
             .collect(),
     }))
 }
@@ -1388,55 +1312,66 @@ pub fn get_peer_list(
     }))
 }
 
-/// `sync_info` (JSON-RPC, admin-only): where this node is in its download.
+/// `sync_info` (JSON-RPC, admin-only): chain sync's view (3.64). Whether
+/// the node is syncing, toward what, from whom and how fast, and whether it
+/// is stuck.
 ///
-/// The one method in this slice that reads both fact sources, and it takes
-/// them as two arguments so that stays visible. They are not synchronised
-/// with each other — the C++ handler read the chain, the connection list and
-/// the queue in three separate acquisitions too, and closing that would mean
-/// holding a p2p lock across a chain read.
+/// Three reads: the chain's tip, the sync owner's view and the board, for
+/// each session's address. They are not one snapshot: a session the view
+/// lists and the board no longer holds has closed since, and is left out.
 ///
-/// A daemon started offline answers `offline` alone: it downloads
-/// from no peer, so it has no sync to report.
+/// A daemon started offline answers `offline` alone: it syncs from no
+/// peer, so it has no sync to report.
 pub fn sync_info(
     chain: &dyn ChainFacts,
+    view: &dyn SyncViewRead,
     p2p: &dyn P2pFacts,
 ) -> Result<P2pReply<SyncInfoResponse>, RpcFault> {
     if p2p.p2p_state()? == P2pRead::Offline {
         return Ok(P2pReply::Offline);
     }
     let tip = chain.chain_tip()?;
-    let connections = p2p.connections()?;
-    let queue = p2p.sync_spans()?;
-    let height = tip.chain_height.to_raw();
+    let view = view.sync_view()?;
+    let board = p2p.connections()?;
+    let peers = view
+        .sessions
+        .iter()
+        .filter_map(|session| {
+            let row = board
+                .connections
+                .iter()
+                .find(|c| c.connection_id == session.connection_id)?;
+            Some(SyncInfoPeer {
+                connection_id: hex::encode(session.connection_id),
+                address: row.address.clone(),
+                claimed_height: session.claimed_height,
+                mode: session.mode,
+                header_request: session.header_request.map(|timing| SyncHeaderRequest {
+                    age_ms: timing.age_ms,
+                    due_in_ms: timing.due_in_ms,
+                }),
+                body_requests: session
+                    .body_requests
+                    .iter()
+                    .map(|span| SyncBodyRequest {
+                        start_height: span.start_height,
+                        count: span.count,
+                        planned_bytes: span.planned_bytes,
+                        age_ms: span.timing.age_ms,
+                        due_in_ms: span.timing.due_in_ms,
+                    })
+                    .collect(),
+                rate: session.rate,
+            })
+        })
+        .collect();
     Ok(P2pReply::Running(SyncInfoResponse {
         status: RpcStatus::ok(),
-        height,
-        // The same member `get_version` and `get_info` report: the core's
-        // target, `null` when it has none.
-        target_height: tip.target_height.map(ChainCount::to_raw).into(),
-        peers: connections
-            .connections
-            .iter()
-            .map(|c| SyncInfoPeer {
-                info: project_connection(c, connections.now),
-            })
-            .collect(),
-        spans: queue
-            .spans
-            .iter()
-            .map(|s| SyncSpan {
-                start_block_height: s.start_block_height,
-                nblocks: s.nblocks,
-                connection_id: hex::encode(s.connection_id),
-                rate: round_half_up(s.rate),
-                // 0..1 on the queue, a percentage on the wire.
-                speed: round_half_up(s.speed_fraction * 100.0),
-                size: s.size,
-                remote_address: s.remote_address.clone(),
-            })
-            .collect(),
-        overview: render_overview(&queue.spans, height),
+        height: tip.chain_height.to_raw(),
+        target_height: view.target,
+        state: view.state,
+        stalled: view.stalled,
+        peers,
     }))
 }
 
@@ -1447,9 +1382,11 @@ pub(crate) mod tests {
         decode_target_count, BlockAt, BlockFacts, BlockHashAt, BlockHeaderAt, BlockHeaderFacts,
         ChainTip, DaemonIdentity, FeeEstimate, NetStats,
     };
-    use crate::core::{ConnectionsSnapshot, SyncSpansSnapshot};
+    use crate::core::ConnectionsSnapshot;
+    use crate::sync_facts::{BodySpanFacts, RequestTiming, SyncSessionFacts, SyncViewFacts};
     use serde_json::json;
     use shekyl_rpc_types::Nullable;
+    use shekyl_rpc_types::{ChainSyncState, SyncMode};
     use shekyl_types::{
         AttestationRoot, BlockCount, BlockHash, BlockHeight, ChainCount, CurveTreeRoot, TxHash,
     };
@@ -2091,10 +2028,10 @@ pub(crate) mod tests {
         );
 
         let mut ours: serde_json::Value = serde_json::to_value(&out).unwrap();
-        // Head of the `get_version` chain (`_v40` = 3.63). A bump that
+        // Head of the `get_version` chain (`_v41` = 3.64). A bump that
         // forgets this include fails on `version` below.
         let mut oracle: serde_json::Value = serde_json::from_str(include_str!(
-            "../../shekyl-rpc-types/tests/vectors/rpc/get_version_synced_v40.json"
+            "../../shekyl-rpc-types/tests/vectors/rpc/get_version_synced_v41.json"
         ))
         .unwrap();
         for moving in ["consensus_constants_digest", "genesis_hash"] {
@@ -2911,7 +2848,6 @@ pub(crate) mod tests {
     pub(crate) struct FakeP2p {
         pub net: Result<NetStats, FactsFault>,
         pub connections: Result<ConnectionsSnapshot, FactsFault>,
-        pub spans: Result<SyncSpansSnapshot, FactsFault>,
         pub peers: Result<P2pRead<Vec<crate::core::PeerEntry>>, FactsFault>,
         pub state: Result<P2pRead<()>, FactsFault>,
         pub asked_public_only: AtomicBool,
@@ -2931,7 +2867,6 @@ pub(crate) mod tests {
                     now: 0,
                     connections: Vec::new(),
                 }),
-                spans: Ok(SyncSpansSnapshot { spans: Vec::new() }),
                 peers: Ok(P2pRead::Running(Vec::new())),
                 state: Ok(P2pRead::Running(())),
                 asked_public_only: AtomicBool::new(false),
@@ -2946,9 +2881,6 @@ pub(crate) mod tests {
         fn connections(&self) -> Result<ConnectionsSnapshot, FactsFault> {
             self.connections.clone()
         }
-        fn sync_spans(&self) -> Result<SyncSpansSnapshot, FactsFault> {
-            self.spans.clone()
-        }
         fn peer_list(
             &self,
             public_only: bool,
@@ -2958,6 +2890,56 @@ pub(crate) mod tests {
         }
         fn p2p_state(&self) -> Result<P2pRead<()>, FactsFault> {
             self.state.clone()
+        }
+    }
+
+    /// In-memory chain sync view.
+    pub(crate) struct FakeView(pub Result<SyncViewFacts, FactsFault>);
+
+    impl FakeView {
+        /// No session: a node chain sync holds nothing for.
+        pub(crate) fn empty() -> Self {
+            Self(Ok(SyncViewFacts {
+                state: ChainSyncState::NoView,
+                stalled: false,
+                target: 1_234_567,
+                sessions: Vec::new(),
+            }))
+        }
+
+        /// One session, for [`connection_facts`]'s connection: it claims
+        /// 1,234,567 blocks and its header run is reachable.
+        pub(crate) fn one() -> Self {
+            Self(Ok(SyncViewFacts {
+                state: ChainSyncState::Behind,
+                stalled: false,
+                target: 1_234_600,
+                sessions: vec![SyncSessionFacts {
+                    connection_id: connection_facts().connection_id,
+                    claimed_height: Some(1_234_567),
+                    mode: SyncMode::Reachable,
+                    header_request: Some(RequestTiming {
+                        age_ms: 250,
+                        due_in_ms: 257_750,
+                    }),
+                    body_requests: vec![BodySpanFacts {
+                        start_height: 1_234_568,
+                        count: 20,
+                        planned_bytes: 8_388_608,
+                        timing: RequestTiming {
+                            age_ms: 1_500,
+                            due_in_ms: 1_022_500,
+                        },
+                    }],
+                    rate: Some(4096),
+                }],
+            }))
+        }
+    }
+
+    impl crate::sync_facts::SyncViewRead for FakeView {
+        fn sync_view(&self) -> Result<SyncViewFacts, FactsFault> {
+            self.0.clone()
         }
     }
 
@@ -2981,10 +2963,7 @@ pub(crate) mod tests {
             send_count: 600 * 1024,
             current_speed_down: 4096.0,
             current_speed_up: 2048.0,
-            height: 1_234_567,
             port: 18080,
-            state: 3,
-            claims_known: true,
             address_type: ADDRESS_TYPE_IPV4,
             incoming: true,
             localhost: false,
@@ -3015,7 +2994,7 @@ pub(crate) mod tests {
             }),
             ..FakeP2p::default()
         };
-        let res = get_connections(&facts)
+        let res = get_connections(&facts, &FakeView::one())
             .expect("connections")
             .into_running()
             .expect("P2P runs");
@@ -3031,41 +3010,38 @@ pub(crate) mod tests {
         assert_eq!(c.current_upload, 2);
         // Zero-padded to 16, as `peerid_to_string` pads.
         assert_eq!(c.connection_id, "151c232a31383f464d545b626970777e");
-        assert_eq!(c.state, ConnectionState::Normal);
+        // The claim's count and the session's mode, from chain sync's view.
+        assert_eq!(c.state, Some(SyncMode::Reachable));
         assert_eq!(c.height, Some(1_234_567));
         // ipv4: `ip` echoes the host and `port` is the number as a string.
         assert_eq!(c.ip, "192.0.2.7");
         assert_eq!(c.port, "18080");
     }
 
-    /// A claim that has not landed is unknown. Zero height and a real state
-    /// would read as a peer that had answered.
+    /// A connection chain sync does not hold, such as one before its
+    /// handshake, has no claim and no mode: both are null, never a zero
+    /// height or some mode's name.
     #[test]
-    fn an_unknown_claim_is_null_height_and_unknown_state() {
-        let mut raw = connection_facts();
-        raw.claims_known = false;
-        raw.height = 1_234_567;
-        raw.state = 3;
+    fn a_connection_chain_sync_does_not_hold_has_null_height_and_state() {
         let facts = FakeP2p {
             connections: Ok(ConnectionsSnapshot {
                 now: 1600,
-                connections: vec![raw],
+                connections: vec![connection_facts()],
             }),
             ..FakeP2p::default()
         };
-        let c = &get_connections(&facts)
+        let c = &get_connections(&facts, &FakeView::empty())
             .expect("connections")
             .into_running()
             .expect("P2P runs")
             .connections[0];
-        assert_eq!(c.state, ConnectionState::Unknown);
+        assert_eq!(c.state, None);
         assert_eq!(c.height, None);
         let json = serde_json::to_value(c).expect("json");
         assert!(json["height"].is_null());
-        // `support_flags` left the P2P wire (2026-10-19), and with it the
-        // only source this field had.
+        assert!(json["state"].is_null());
+        // `support_flags` left the P2P wire (2026-10-19).
         assert!(json.get("support_flags").is_none());
-        assert_eq!(json["state"], "unknown");
     }
 
     /// A connection younger than a second divides by zero in the naive form.
@@ -3079,7 +3055,7 @@ pub(crate) mod tests {
             }),
             ..FakeP2p::default()
         };
-        let c = &get_connections(&facts)
+        let c = &get_connections(&facts, &FakeView::empty())
             .expect("connections")
             .into_running()
             .expect("P2P runs")
@@ -3101,7 +3077,7 @@ pub(crate) mod tests {
             }),
             ..FakeP2p::default()
         };
-        let c = &get_connections(&facts)
+        let c = &get_connections(&facts, &FakeView::empty())
             .expect("connections")
             .into_running()
             .expect("P2P runs")
@@ -3126,7 +3102,7 @@ pub(crate) mod tests {
             }),
             ..FakeP2p::default()
         };
-        let c = &get_connections(&facts)
+        let c = &get_connections(&facts, &FakeView::empty())
             .expect("connections")
             .into_running()
             .expect("P2P runs")
@@ -3135,23 +3111,6 @@ pub(crate) mod tests {
         assert_eq!(c.port, "");
         assert_eq!(c.address, "abcdefghijklmnop.onion:18080");
         assert_eq!(c.host, "abcdefghijklmnop.onion");
-    }
-
-    /// Every state the C++ enum defines, plus the `default:` arm it falls
-    /// through to. A raw value outside the enum is `Unknown` and not some
-    /// other state's name.
-    #[test]
-    fn every_protocol_state_maps_to_its_own_name() {
-        for (raw, expected) in [
-            (0u8, ConnectionState::BeforeHandshake),
-            (1, ConnectionState::Synchronizing),
-            (2, ConnectionState::Standby),
-            (3, ConnectionState::Normal),
-            (4, ConnectionState::Unknown),
-            (255, ConnectionState::Unknown),
-        ] {
-            assert_eq!(ConnectionState::from(raw), expected, "raw {raw}");
-        }
     }
 
     /// `include_blocked` is applied here, on the request, and the white/gray
@@ -3216,18 +3175,20 @@ pub(crate) mod tests {
     fn an_offline_daemon_answers_the_state_on_every_p2p_method() {
         let off = FakeP2p {
             connections: Err(FactsFault::Internal),
-            spans: Err(FactsFault::Internal),
             peers: Ok(P2pRead::Offline),
             state: Ok(P2pRead::Offline),
             ..FakeP2p::default()
         };
-        assert_eq!(get_connections(&off).expect("a state"), P2pReply::Offline);
+        assert_eq!(
+            get_connections(&off, &FakeView::empty()).expect("a state"),
+            P2pReply::Offline
+        );
         assert_eq!(
             get_peer_list(&GetPeerListRequest::default(), &off).expect("a state"),
             P2pReply::Offline
         );
         assert_eq!(
-            sync_info(&facts(false, 0), &off).expect("a state"),
+            sync_info(&facts(false, 0), &FakeView::empty(), &off).expect("a state"),
             P2pReply::Offline
         );
     }
@@ -3241,9 +3202,9 @@ pub(crate) mod tests {
             state: Err(FactsFault::NotReady),
             ..FakeP2p::default()
         };
-        assert!(get_connections(&broken).is_err());
+        assert!(get_connections(&broken, &FakeView::empty()).is_err());
         assert!(get_peer_list(&GetPeerListRequest::default(), &broken).is_err());
-        assert!(sync_info(&facts(false, 0), &broken).is_err());
+        assert!(sync_info(&facts(false, 0), &FakeView::empty(), &broken).is_err());
     }
 
     /// The lifetime average, including the two inputs that would divide by
@@ -3278,121 +3239,60 @@ pub(crate) mod tests {
         );
     }
 
-    /// Round half up, on the values the C++ cast was undefined for.
+    /// `sync_info` is chain sync's view (3.64): the chain's height, the
+    /// view's target, state and stall, and one row per session the board
+    /// still holds, with its address from the board.
     #[test]
-    fn rates_round_half_up_and_never_leave_the_range() {
-        assert_eq!(round_half_up(0.0), 0);
-        assert_eq!(round_half_up(0.4), 0);
-        assert_eq!(round_half_up(0.5), 1);
-        assert_eq!(round_half_up(4095.6), 4096);
-        assert_eq!(round_half_up(-1.0), 0, "negative is clamped, not cast");
-        assert_eq!(round_half_up(f32::NAN), 0);
-        assert_eq!(round_half_up(f32::INFINITY), 0, "not finite");
-        assert_eq!(round_half_up(1e30), u32::MAX, "saturates rather than wraps");
-    }
-
-    fn span(start: u64, nblocks: u64, filled: bool) -> crate::core::SyncSpanFacts {
-        crate::core::SyncSpanFacts {
-            remote_address: "192.0.2.7:18080".to_owned(),
-            start_block_height: start,
-            nblocks,
-            size: 4096,
-            connection_id: [0u8; 16],
-            rate: 4096.0,
-            speed_fraction: 0.75,
-            filled,
-        }
-    }
-
-    /// Every character the overview can emit, in one picture.
-    #[test]
-    fn the_overview_renders_each_span_state() {
-        // Chain at 100. A span behind it is `<`; the span at the tip that has
-        // arrived is `m`; a later arrived span is `o`; an outstanding one is
-        // `.`; and the gap before a far span is underscores.
-        let spans = vec![
-            span(50, 10, true),
-            span(100, 10, true),
-            span(110, 10, true),
-            span(120, 10, false),
-        ];
-        assert_eq!(render_overview(&spans, 100), "[<mo.]");
-        assert_eq!(render_overview(&[], 100), "[]", "an empty queue is `[]`");
-    }
-
-    /// The gap run: `(start - expected) / nblocks`, at least one.
-    #[test]
-    fn the_overview_fills_the_gap_ahead_of_a_span() {
-        // Chain at 100, span starts at 150, 10 blocks wide: five underscores.
-        assert_eq!(render_overview(&[span(150, 10, true)], 100), "[_____o]");
-        // A gap smaller than one span still gets one underscore.
-        assert_eq!(render_overview(&[span(105, 10, true)], 100), "[_o]");
-    }
-
-    /// The divergence this rendering makes on purpose. A span's
-    /// `start_block_height` follows peer-advertised heights, so the C++
-    /// `(gap / nblocks)` loop had no ceiling — a peer claiming a height far
-    /// ahead sized a string with its claim. The run is clamped.
-    #[test]
-    fn an_absurd_gap_cannot_size_the_overview() {
-        let rendered = render_overview(&[span(u64::MAX / 2, 1, true)], 0);
-        assert_eq!(
-            u64::try_from(rendered.len()).expect("length fits"),
-            MAX_OVERVIEW_GAP + 3,
-            "clamped run, plus the brackets and the span's own character"
-        );
-    }
-
-    /// `sync_info` reads both sources and reports the core's target, synced
-    /// or not. Writing 0 for the synced case made the two states one value.
-    #[test]
-    fn sync_info_reports_the_core_target() {
+    fn sync_info_renders_the_view_and_joins_the_board() {
         let p2p = FakeP2p {
-            spans: Ok(SyncSpansSnapshot {
-                spans: vec![span(100, 10, true)],
-            }),
             connections: Ok(ConnectionsSnapshot {
                 now: 1600,
                 connections: vec![connection_facts()],
             }),
             ..FakeP2p::default()
         };
-
-        let behind = facts(false, 1_234_600);
-        let res = sync_info(&behind, &p2p)
+        let res = sync_info(&facts(false, 0), &FakeView::one(), &p2p)
             .expect("sync info")
             .into_running()
             .expect("P2P runs");
         assert_eq!(res.height, 1_234_567);
-        assert_eq!(res.target_height, Nullable::value(1_234_600));
-        assert_eq!(
-            res.peers.len(),
-            1,
-            "peers carry the connection under `info`"
-        );
-        assert_eq!(res.spans.len(), 1);
-        assert_eq!(res.spans[0].rate, 4096);
-        assert_eq!(res.spans[0].speed, 75, "0.75 becomes a percentage");
+        assert_eq!(res.target_height, 1_234_600);
+        assert_eq!(res.state, ChainSyncState::Behind);
+        assert!(!res.stalled);
+        assert_eq!(res.peers.len(), 1);
+        let peer = &res.peers[0];
+        assert_eq!(peer.connection_id, "151c232a31383f464d545b626970777e");
+        assert_eq!(peer.address, "192.0.2.7:18080");
+        assert_eq!(peer.claimed_height, Some(1_234_567));
+        assert_eq!(peer.mode, SyncMode::Reachable);
+        assert_eq!(peer.header_request.map(|r| r.due_in_ms), Some(257_750));
+        assert_eq!(peer.body_requests.len(), 1);
+        assert_eq!(peer.body_requests[0].start_height, 1_234_568);
+        assert_eq!(peer.rate, Some(4096));
+    }
 
-        let synced = facts(true, 1_234_600);
-        let res = sync_info(&synced, &p2p)
+    /// A session the view lists and the board no longer holds closed
+    /// between the two reads: it is left out, not shown without an address.
+    #[test]
+    fn a_session_gone_from_the_board_is_left_out() {
+        let res = sync_info(&facts(false, 0), &FakeView::one(), &FakeP2p::default())
             .expect("sync info")
             .into_running()
             .expect("P2P runs");
-        assert_eq!(res.target_height, Nullable::value(1_234_600));
+        assert!(res.peers.is_empty());
+    }
 
-        // No target is `null` on this method too, the same encoding as
-        // `get_version` and `get_info` (RK-Q7).
-        for synchronized in [true, false] {
-            let res = sync_info(&facts(synchronized, 0), &p2p)
-                .expect("sync info")
-                .into_running()
-                .expect("P2P runs");
-            assert_eq!(res.target_height, Nullable::NULL);
-            assert_eq!(
-                serde_json::to_value(&res).unwrap()["target_height"],
-                serde_json::Value::Null
-            );
-        }
+    /// A stalled view says so on the wire.
+    #[test]
+    fn a_stall_is_reported() {
+        let mut view = FakeView::empty().0.expect("a view");
+        view.state = ChainSyncState::Behind;
+        view.stalled = true;
+        let res = sync_info(&facts(false, 0), &FakeView(Ok(view)), &FakeP2p::default())
+            .expect("sync info")
+            .into_running()
+            .expect("P2P runs");
+        assert!(res.stalled);
+        assert_eq!(serde_json::to_value(&res).unwrap()["stalled"], true);
     }
 }

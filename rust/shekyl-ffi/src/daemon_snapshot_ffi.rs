@@ -7,10 +7,11 @@
 //! (`DAEMON_CONFIG_CUTOVER.md` §2.9), and the snapshot export the C++ test
 //! binaries and the blockchain importer construct their core from.
 //!
-//! **Ten fields** (§2.9). [`SNAPSHOT_FIELDS`] pins the count and
+//! **Nine fields** (§2.9). [`SNAPSHOT_FIELDS`] pins the count and
 //! [`shekyl_daemon_snapshot_field_count`] exports it for the C++ to assert;
-//! each later slice that moves a reader into Rust deletes its field. The
-//! advertised endpoints are not a field: their reader is Rust, the peer
+//! each later slice that moves a reader into Rust deletes its field.
+//! `dev-sync` is not a field: chain sync's owner reads it from the
+//! configuration. The advertised endpoints are not a field: their reader is Rust, the peer
 //! lists' own entry (§2.8), where the handshake's port check will read it
 //! (Rick, 2026-10-15); no C++ reads them. The snapshot is the whole of what
 //! the remnant reads: it parses nothing.
@@ -101,8 +102,6 @@ pub struct ShekylDaemonSnapshot {
     pub offline: bool,
     /// The fixed difficulty, or 0 for none; read by core.
     pub fixed_difficulty: u64,
-    /// Chain synchronisation on; read by the protocol handler.
-    pub sync: bool,
     /// The decoded mining address, or null for none; read by the miner.
     pub mine_address: *const ShekylMineAddress,
     /// The mining thread count, or 0 for `auto`; read by the miner. The
@@ -123,7 +122,7 @@ const _: () = assert!(std::mem::align_of::<ShekylClientEndpoint>() == 2);
 
 /// The snapshot's field count. A gate asserts it against the definition
 /// above and the C++ asserts it against [`shekyl_daemon_snapshot_field_count`].
-pub const SNAPSHOT_FIELDS: u32 = 10;
+pub const SNAPSHOT_FIELDS: u32 = 9;
 
 /// The snapshot's field count, for the C++ to assert against the
 /// structure it reads. `no_mangle` is what the `unsafe_code` lint flags
@@ -155,7 +154,6 @@ pub struct SnapshotData {
     network: u8,
     offline: bool,
     fixed_difficulty: u64,
-    sync: bool,
     mine: Option<MineOwned>,
     mine_threads: u32,
     console: bool,
@@ -191,7 +189,6 @@ impl SnapshotData {
             network: config.network.cryptonote_code(),
             offline: config.offline(),
             fixed_difficulty: config.dev.difficulty.unwrap_or(0),
-            sync: config.dev.sync,
             mine,
             // 0 is auto. The miner chooses the count; this does not collapse
             // it to one thread.
@@ -264,7 +261,6 @@ impl SnapshotData {
             network: self.network,
             offline: self.offline,
             fixed_difficulty: self.fixed_difficulty,
-            sync: self.sync,
             mine_address: match mine {
                 Some(header) => header,
                 None => std::ptr::null(),
@@ -402,7 +398,7 @@ mod tests {
     }
 
     #[test]
-    fn the_snapshot_carries_the_ten_values() {
+    fn the_snapshot_carries_the_nine_values() {
         let d = tempfile::tempdir().unwrap();
         let args_v: Vec<OsString> = [
             "--network",

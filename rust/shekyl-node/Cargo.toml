@@ -26,6 +26,7 @@ shekyl-archival-fetch-sched = { path = "../shekyl-archival-fetch-sched" }
 # The sync state the follower posts on: chain sync's own type, so its
 # cutover plugs a publisher in and changes nothing else (DX-Q3, Q13).
 shekyl-chain-sync = { path = "../shekyl-chain-sync" }
+shekyl-chain-sync-runtime = { path = "../shekyl-chain-sync-runtime" }
 # The coinbase keys the node's one template pays (N2).
 shekyl-block-template = { path = "../shekyl-block-template" }
 shekyl-chain-rules = { path = "../shekyl-chain-rules" }
@@ -40,6 +41,8 @@ shekyl-miner = { path = "../shekyl-miner" }
 shekyl-pow-randomx = { path = "../shekyl-pow-randomx" }
 shekyl-rpc-types = { path = "../shekyl-rpc-types" }
 shekyl-runtime = { path = "../shekyl-runtime" }
+shekyl-seam = { path = "../shekyl-seam" }
+shekyl-timing-engine = { path = "../shekyl-timing-engine" }
 shekyl-relay = { path = "../shekyl-relay" }
 shekyl-transport-layer = { path = "../shekyl-transport-layer" }
 shekyl-types = { path = "../shekyl-types" }
@@ -64,7 +67,6 @@ shekyl-chain-rules = { path = "../shekyl-chain-rules", features = ["harness"] }
 shekyl-crypto-pq = { path = "../shekyl-crypto-pq" }
 shekyl-difficulty = { path = "../shekyl-difficulty" }
 shekyl-options = { path = "../shekyl-options" }
-shekyl-timing-engine = { path = "../shekyl-timing-engine" }
 shekyl-store-codec = { path = "../shekyl-store-codec" }
 tempfile = "3"
 redb = { workspace = true }

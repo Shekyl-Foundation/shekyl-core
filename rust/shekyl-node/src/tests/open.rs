@@ -327,3 +327,37 @@ fn one_archival_lever_opens_and_a_cap_outside_the_epoch_does_not() {
         "a reorg cap that is not inside the epoch is refused"
     );
 }
+
+/// **The state at open reads the declaration, never the network** (rule
+/// 71; CS-Q2 step 8, Rick 2026-11-01). Both connectors off is `Offline`
+/// and synced from open; clearnet on with no closed list is `Open` and
+/// has no view. The same declaration gives the same state on every
+/// network. Red edit: select the opening state by network, as
+/// `sync_at_open` did (regtest synced, every other network `NoView`).
+#[test]
+fn the_state_at_open_reads_the_declaration_not_the_network() {
+    for network in ["regtest", "testnet", "stagenet", "mainnet"] {
+        for (declared, config, want) in [
+            (
+                "offline",
+                config_on as fn(&Path, &str, &[&str]) -> DaemonConfig,
+                SyncState::Synced,
+            ),
+            ("open", config_open, SyncState::NoView),
+        ] {
+            let dir = tempfile::tempdir().expect("temp");
+            let config = config(dir.path(), network, &[]);
+            let node = Node::open(OpenArgs {
+                config: &config,
+                version: "test".to_owned(),
+                protocol_version: 1,
+                release_build: false,
+                request_stop: Arc::new(|| {}),
+            })
+            .expect("node");
+            let state = *node.sync().borrow();
+            node.stop();
+            assert_eq!(state, want, "{declared} on {network}");
+        }
+    }
+}

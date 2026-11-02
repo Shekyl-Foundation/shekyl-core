@@ -26,14 +26,14 @@
 // STRICT LIABILITY, OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF
 // THE USE OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 
-//! The sync-half facts handle: net stats, connections, sync spans, and
-//! stem tallies. Chain and pool reads go through the store.
+//! The p2p facts handle: net stats, the board's connections, the peer
+//! lists and stem tallies. Chain and pool reads go through the store, and
+//! chain sync's view is the node's (CS-5 §7).
 //!
-//! Each read names its deleter (`DRS_X_STORE_FLIP.md` FLIP-Q5): `net_stats`,
-//! `connections` and `sync_spans` read the C++ protocol handler's sync half
-//! and go at chain sync's cutover; `peer_list` reads the inbound handshake's
-//! side and goes with slice 4; `stem_tallies` reads `levin_notify` and goes
-//! with RD.
+//! Each read names its deleter (`DRS_X_STORE_FLIP.md` FLIP-Q5): `net_stats`
+//! and `connections` read the C++ node server and the board and go with
+//! slice 4, as does `peer_list`, the inbound handshake's side;
+//! `stem_tallies` reads `levin_notify` and goes with RD.
 
 use crate::ffi;
 use std::ffi::CStr;
@@ -114,15 +114,7 @@ pub struct ConnectionFacts {
     /// an out-of-range value, so the truncation happens here, clamped.
     pub current_speed_down: f64,
     pub current_speed_up: f64,
-    /// The peer's claimed blockchain height.
-    pub height: u64,
     pub port: u16,
-    /// `cryptonote_connection_context::state`, unmapped — the name it renders
-    /// to is the wire projection's business. Meaningful when `claims_known`.
-    pub state: u8,
-    /// The strand read height and state. False means those two have not
-    /// landed and must not be rendered as zeroes.
-    pub claims_known: bool,
     /// epee type id: 1 ipv4, 2 ipv6, 4 tor, …
     pub address_type: u8,
     pub incoming: bool,
@@ -136,31 +128,6 @@ pub struct ConnectionsSnapshot {
     /// Unix seconds; one clock read for the whole list.
     pub now: u64,
     pub connections: Vec<ConnectionFacts>,
-}
-
-/// One span in the block-download queue, copied out of the C++ view.
-#[derive(Debug, Clone, PartialEq)]
-pub struct SyncSpanFacts {
-    /// `network_address::str()` of the span's origin.
-    pub remote_address: String,
-    pub start_block_height: u64,
-    pub nblocks: u64,
-    /// Bytes held for this span.
-    pub size: u64,
-    pub connection_id: [u8; 16],
-    /// Bytes/s.
-    pub rate: f32,
-    /// 0..1; the wire carries 100x this.
-    pub speed_fraction: f32,
-    /// Whether the span's blocks have arrived, as opposed to being requested
-    /// and still outstanding.
-    pub filled: bool,
-}
-
-/// The download queue.
-#[derive(Debug, Clone, PartialEq)]
-pub struct SyncSpansSnapshot {
-    pub spans: Vec<SyncSpanFacts>,
 }
 
 /// A P2P read from a daemon that may have been started offline
@@ -354,10 +321,7 @@ impl CoreRpc {
                         send_count: e.send_count,
                         current_speed_down: e.current_speed_down,
                         current_speed_up: e.current_speed_up,
-                        height: e.height,
                         port: e.port,
-                        state: e.state,
-                        claims_known: e.claims_known != 0,
                         address_type: e.address_type,
                         incoming: e.incoming != 0,
                         localhost: e.localhost != 0,
@@ -367,46 +331,6 @@ impl CoreRpc {
             }
             ffi::shekyl_rpc_connections_free(owner);
             Ok(ConnectionsSnapshot { now, connections })
-        }
-    }
-
-    /// The block-download queue (`shekyl_rpc_sync_spans`), copied out before
-    /// the owner is released.
-    pub fn sync_spans(&self) -> Result<SyncSpansSnapshot, i32> {
-        if self.handle.is_null() {
-            return Err(ffi::SHEKYL_RPC_FACTS_ERR_NULL);
-        }
-        let mut rows: *const ffi::SyncSpanFactsFfi = std::ptr::null();
-        let mut len: usize = 0;
-        let mut owner: *mut std::ffi::c_void = std::ptr::null_mut();
-        // SAFETY: as `connections` above.
-        unsafe {
-            let rc = ffi::shekyl_rpc_sync_spans(
-                self.handle,
-                &raw mut rows,
-                &raw mut len,
-                &raw mut owner,
-            );
-            if rc != ffi::SHEKYL_RPC_FACTS_OK {
-                return Err(rc);
-            }
-            let mut spans = Vec::with_capacity(len);
-            if !rows.is_null() {
-                for e in std::slice::from_raw_parts(rows, len) {
-                    spans.push(SyncSpanFacts {
-                        remote_address: borrowed_string(e.remote_address, e.remote_address_len),
-                        start_block_height: e.start_block_height,
-                        nblocks: e.nblocks,
-                        size: e.size,
-                        connection_id: e.connection_id,
-                        rate: e.rate,
-                        speed_fraction: e.speed_fraction,
-                        filled: e.filled != 0,
-                    });
-                }
-            }
-            ffi::shekyl_rpc_sync_spans_free(owner);
-            Ok(SyncSpansSnapshot { spans })
         }
     }
 

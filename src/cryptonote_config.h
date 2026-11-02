@@ -97,12 +97,6 @@
 #define CRYPTONOTE_LOCKED_TX_ALLOWED_DELTA_BLOCKS       1
 
 
-#define BLOCKS_IDS_SYNCHRONIZING_DEFAULT_COUNT          10000  //by default, blocks ids count in synchronizing
-#define BLOCKS_IDS_SYNCHRONIZING_MAX_COUNT              25000  //max blocks ids count in synchronizing
-#define BLOCKS_SYNCHRONIZING_DEFAULT_COUNT_PRE_V4       100    //by default, blocks count in blocks downloading
-#define BLOCKS_SYNCHRONIZING_DEFAULT_COUNT              20     //by default, blocks count in blocks downloading
-#define BLOCKS_SYNCHRONIZING_MAX_COUNT                  2048   //must be a power of 2, greater than 128, equal to SEEDHASH_EPOCH_BLOCKS
-
 #define CRYPTONOTE_MEMPOOL_TX_LIVETIME                    (86400*3) //seconds, three days
 #define CRYPTONOTE_MEMPOOL_TX_FROM_ALT_BLOCK_LIVETIME     604800 //seconds, one week
 
@@ -197,7 +191,6 @@
 #define P2P_DEFAULT_PING_CONNECTION_TIMEOUT             2000       //2 seconds
 #define P2P_DEFAULT_INVOKE_TIMEOUT                      60*2*1000  //2 minutes
 #define P2P_DEFAULT_HANDSHAKE_INVOKE_TIMEOUT            5000       //5 seconds
-#define P2P_DEFAULT_SYNC_SEARCH_CONNECTIONS_COUNT       2
 
 #define P2P_IP_BLOCKTIME                                (60*60*24)  //24 hour
 #define P2P_IP_FAILS_BEFORE_BLOCK                       10
@@ -356,61 +349,6 @@ namespace config
   constexpr size_t ARCHIVAL_SERVE_CREDIT_PRUNED_RECORD_BYTES = 2 + (2 + 38 * 32) + (2 + 18 * 32) + 3309;
   static_assert(ARCHIVAL_SERVE_CREDIT_PRUNED_RECORD_BYTES == 5107, "CR-D2 arithmetic + framing");
   constexpr size_t ARCHIVAL_MAX_HOLDINGS_SHARDS = 4096;
-  // Archival credit-wire attestation (ARCHIVAL_CREDIT_WIRE.md §3): the coinbase
-  // tx_extra carries per-record kept headers (p_id·s·E·kind), each
-  // ATTESTATION_HEADER_BYTES; this length matches
-  // shekyl-archival-retention::attestation_wire (ATTESTATION_HEADER_LEN = 49).
-  // MAX_ATTESTATION_RECORDS is the genesis-frozen consensus cap on the attestation
-  // carrier — the coinbase has no other tx_extra size check on the connect/validate
-  // path — bounding per-block admission cost (one hybrid-signature verify per pass
-  // record) and the coinbase extra size (256 × 49 B ≈ 12.5 KiB).
-  constexpr size_t ARCHIVAL_ATTESTATION_HEADER_BYTES = 49;
-  constexpr size_t ARCHIVAL_MAX_ATTESTATION_RECORDS = 256;
-  // Per-pass requester-random nonce, anchor height and delivery digest carried
-  // on the prunable witness alongside the countersignature
-  // (ARCHIVAL_SHARD_FETCH.md SF-D8; match attestation_wire::PASS_NONCE_LEN /
-  // PASS_ANCHOR_HEIGHT_LEN / PASS_DELIVERY_DIGEST_LEN). None is recomputable
-  // from chain terms -- the digest is over a response body that is not on
-  // chain -- so all three ride the wire; the kept header is unchanged. The
-  // anchor HASH is not carried: admission reads it from its own chain at
-  // anchor_height, which is what makes a fabricated hash fail.
-  constexpr size_t ARCHIVAL_ATTESTATION_PASS_NONCE_BYTES = 32;
-  constexpr size_t ARCHIVAL_ATTESTATION_PASS_ANCHOR_HEIGHT_BYTES = 8;
-  constexpr size_t ARCHIVAL_ATTESTATION_PASS_DELIVERY_DIGEST_BYTES = 32;
-  // Archival attestation-witness transport cap (ARCHIVAL_CREDIT_WIRE.md §3,
-  // credit-wire CW-2). The block_complete_entry carries the Rust canonical witness
-  // encoding (count ‖ count × (nonce ‖ anchor_height ‖ delivery_digest ‖ HybridSignature)) as an opaque blob, stored only
-  // in a prunable side table; the real structural bounds live in
-  // shekyl-archival-retention::attestation_wire (BlockAttestationWitness). This is
-  // an allocation guard, not a structural check: it bounds every deserializer that
-  // buffers the blob so a peer cannot force an unbounded RAM/disk write before the
-  // Rust decoder runs. Exact record-count/length validation is the Rust decoder's
-  // job (Phase 2 admission), never this guard.
-  //
-  // Written as the maximum itself — count(8) + MAX records × (nonce(32) +
-  // anchor_height(8) + delivery_digest(32) + one hybrid signature) = 885,000 —
-  // rather than a round number above it. (The leading r(32) is gone: RF-D3 deleted the producer's
-  // revealed randomness from the witness; SF-D8 then put a per-pass 32-byte
-  // requester nonce and 8-byte anchor height on each entry, and v3 the 32-byte
-  // digest of the delivered response, so the blob is framing plus
-  // (nonce, anchor, digest, signature) entries.) A hand-picked slack figure is
-  // free padding an attacker may send on every block for no consensus reason, and
-  // it silently stops tracking the real bound the moment either operand moves. The
-  // FFI gate asserts this equals Rust's own maximum
-  // (shekyl_archival_attestation_witness_max_bytes), so a divergence is loud.
-  constexpr size_t ARCHIVAL_ATTESTATION_WITNESS_MAX_BYTES =
-    8 + ARCHIVAL_MAX_ATTESTATION_RECORDS
-          * (ARCHIVAL_ATTESTATION_PASS_NONCE_BYTES + ARCHIVAL_ATTESTATION_PASS_ANCHOR_HEIGHT_BYTES
-             + ARCHIVAL_ATTESTATION_PASS_DELIVERY_DIGEST_BYTES + PQC_HYBRID_SINGLE_SIG_LEN);
-  // Transport-cap predicate shared by every codec that deserializes an opaque
-  // attestation-witness blob (the p2p block_complete_entry KV map, the bootstrap
-  // block_package). Enforced AT the codec, not at its callers: a call-site check
-  // only covers the ingress paths someone remembered, and the next one added
-  // silently gets no bound at all.
-  constexpr bool archival_attestation_witness_within_transport_cap(size_t n) noexcept
-  {
-    return n <= ARCHIVAL_ATTESTATION_WITNESS_MAX_BYTES;
-  }
   // Archival reward-emission vin transport cap (C-1; REWARD_EMISSION_VIN_PLAN.md
   // PR-E2 shim). The C++ side carries the Rust canonical encoding as an opaque
   // blob; the real structural bounds live in emission_wire.rs. This cap only

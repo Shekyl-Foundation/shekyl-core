@@ -84,11 +84,12 @@ SURFACES=(
   # The configuration snapshot, its field count and the test binaries' and
   # the importer's parse (DAEMON_CONFIG_CUTOVER.md §2.9).
   "daemon_snapshot:rust/shekyl-ffi/src/daemon_snapshot_ffi.rs"
-  # The chain-sync heuristics' two verdicts (DAEMON_CONFIG_CUTOVER.md §4.2).
-  "sync:rust/shekyl-ffi/src/sync_ffi.rs"
   "tx_extra_codec:rust/shekyl-ffi/src/tx_extra_codec_ffi.rs"
-  # The protocol handler's one entry into the ingest service (DRS-X PR 2).
-  "ingest:rust/shekyl-ffi/src/ingest_ffi.rs"
+  # Chain sync's published state for the shell (CS-5 §3). `dialer_ffi.rs`,
+  # whose C ABI CS-5 F4 also changed, is not gateable whole: its other
+  # exports pass the seam's structs, which the header names in snake case
+  # (`shekyl_seam_address`), so the generated declarations conflict.
+  "chain_sync:rust/shekyl-ffi/src/chain_sync_ffi.rs"
 )
 
 # The hand-written header with comment lines removed: rustdoc and header

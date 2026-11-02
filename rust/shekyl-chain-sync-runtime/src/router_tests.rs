@@ -9,7 +9,7 @@ use std::sync::{Arc, Mutex};
 
 use shekyl_levin::{
     invoke, notify, response, BucketHead, DefinedCommand, Flags, SyncCommand, COMMAND_HANDSHAKE,
-    COMMAND_TIMED_SYNC, HEADER_SIZE, NOTIFY_NEW_COMPACT_BLOCK,
+    COMMAND_TIMED_SYNC, HEADER_SIZE, NOTIFY_NEW_COMPACT_BLOCK, NOTIFY_REQUEST_COMPACT_MISSING_TX,
 };
 use shekyl_seam::{Endpoint, Post, SocketId, SyncPayload};
 use tokio::sync::mpsc;
@@ -180,9 +180,12 @@ fn attached_routes_sync_and_forwards_one_post_per_chunk() {
         id,
         endpoint: endpoint(),
     });
+    // Attached before the handshake: the handler's, not the owner's.
+    assert!(rx.try_recv().is_err(), "the owner heard of an attach");
+    router.post(Post::Opened { id, connector });
     assert_eq!(
-        rx.try_recv().expect("established"),
-        Routed::Established { id, connector }
+        rx.try_recv().expect("opened"),
+        Routed::Opened { id, connector }
     );
     let sync = SyncPayload {
         current_height: 5,
@@ -237,6 +240,12 @@ fn attached_routes_sync_and_forwards_one_post_per_chunk() {
         .collect();
     assert_eq!(delivers, vec![other_bucket(b"tx")]);
     assert!(matches!(forwarded[1], Post::HandshakeResult { .. }));
+    assert!(
+        !forwarded
+            .iter()
+            .any(|post| matches!(post, Post::Opened { .. })),
+        "the handler was posted the owner's open"
+    );
 }
 
 #[test]
@@ -366,11 +375,13 @@ fn a_partial_sync_bucket_is_handed_to_cpp_whole_when_the_owner_leaves() {
     assert_eq!(delivers, vec![bucket]);
 }
 
-/// The daemon's router before the cutover is pass-through: every post
-/// reaches the C++ handler unchanged, including chain sync's own commands
-/// and the messages the claim tap copies, and nothing reaches an owner.
+/// A router with no owner is pass-through: every post reaches the C++
+/// handler unchanged, including chain sync's own commands and the messages
+/// the claim tap copies. That is a bind the node left no owner for, such
+/// as a test's rebind; the daemon's router is attached
+/// (`shekyl-ffi`'s `a_bind_attaches_the_router_to_the_nodes_owner_and_sends_it_the_hub`).
 #[test]
-fn the_daemons_pass_through_router_changes_nothing_live() {
+fn a_router_with_no_owner_changes_nothing() {
     let (forward, seen) = recorder();
     let sink = Router::pass_through(forward).into_sink();
     let id = socket(11);
@@ -431,7 +442,7 @@ fn an_attached_router_taps_the_messages_that_carry_a_claim() {
         id,
         endpoint: endpoint(),
     });
-    let _established = rx.try_recv().expect("established");
+    assert!(rx.try_recv().is_err(), "the owner heard of an attach");
     let handshake = invoke(COMMAND_HANDSHAKE, b"handshake-payload");
     let request = invoke(COMMAND_TIMED_SYNC, b"request-payload");
     let reply = response(COMMAND_TIMED_SYNC, b"response-payload");
@@ -516,7 +527,7 @@ fn an_attached_router_hands_an_announcement_to_the_owner() {
         id,
         endpoint: endpoint(),
     });
-    let _established = rx.try_recv().expect("established");
+    assert!(rx.try_recv().is_err(), "the owner heard of an attach");
     let mut chunk = notify(NOTIFY_NEW_COMPACT_BLOCK, b"a block");
     chunk.extend_from_slice(&other_bucket(b"tx"));
     router.post(Post::Deliver {
@@ -537,6 +548,43 @@ fn an_attached_router_hands_an_announcement_to_the_owner() {
     );
 }
 
+/// An attached router keeps a request for an announced block's missing
+/// transactions (2009) for the owner, which serves it (CS-5 §6). Nothing
+/// of it reaches the C++ handler.
+#[test]
+fn an_attached_router_hands_a_missing_tx_request_to_the_owner() {
+    let (forward, seen) = recorder();
+    let (tx, mut rx) = mpsc::unbounded_channel();
+    let router = Router::attached(forward, tx);
+    let id = socket(22);
+    router.post(Post::Established {
+        id,
+        endpoint: endpoint(),
+    });
+    assert!(rx.try_recv().is_err(), "the owner heard of an attach");
+    let before = seen.lock().expect("unpoisoned").len();
+    router.post(Post::Deliver {
+        id,
+        connector: endpoint().connector(),
+        bytes: notify(NOTIFY_REQUEST_COMPACT_MISSING_TX, b"indices"),
+    });
+    assert_eq!(
+        rx.try_recv().expect("the request"),
+        Routed::MissingTxs {
+            id,
+            payload: b"indices".to_vec()
+        }
+    );
+    assert_eq!(rx.try_recv().expect("finished"), Routed::Finished { id });
+    let forwarded = seen.lock().expect("unpoisoned");
+    assert!(
+        !forwarded[before..]
+            .iter()
+            .any(|post| matches!(post, Post::Deliver { .. })),
+        "the C++ handler received the 2009"
+    );
+}
+
 /// A claim and a kept message in one chunk reach the owner in byte order.
 /// The claim is not saved for after the messages.
 #[test]
@@ -550,7 +598,7 @@ fn a_claim_that_precedes_a_kept_message_reaches_the_owner_first() {
         id,
         endpoint: endpoint(),
     });
-    let _established = rx.try_recv().expect("established");
+    assert!(rx.try_recv().is_err(), "the owner heard of an attach");
     let handshake = invoke(COMMAND_HANDSHAKE, b"claim");
     let headers = sync_bucket(SyncCommand::ResponseHeaders, b"headers");
     let mut chunk = handshake.clone();
@@ -604,7 +652,7 @@ fn an_empty_claim_payload_is_still_handed_to_the_owner() {
         id,
         endpoint: endpoint(),
     });
-    let _established = rx.try_recv().expect("established");
+    assert!(rx.try_recv().is_err(), "the owner heard of an attach");
     router.post(Post::Deliver {
         id,
         connector: endpoint().connector(),

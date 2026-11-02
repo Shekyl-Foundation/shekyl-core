@@ -89,11 +89,11 @@ TEST(rpc_facts_ffi_roundtrip, pod_sizes_are_the_documented_ones)
   // carry pointers, so a fill/check twin has nothing to compare and the
   // layout itself is what must agree with
   // `rust/shekyl-daemon-rpc/src/ffi.rs`.
-  static_assert(sizeof(shekyl_rpc_connection_facts) == 120, "connection facts changed size");
+  static_assert(sizeof(shekyl_rpc_connection_facts) == 112, "connection facts changed size");
   static_assert(sizeof(shekyl_rpc_connection_facts) ==
-      offsetof(shekyl_rpc_connection_facts, claims_known) +
-        sizeof(shekyl_rpc_connection_facts::claims_known),
-    "connection facts ends on claims_known");
+      offsetof(shekyl_rpc_connection_facts, reserved) +
+        sizeof(shekyl_rpc_connection_facts::reserved),
+    "connection facts ends on reserved");
   static_assert(offsetof(shekyl_rpc_connection_facts, address) == 0, "address offset");
   static_assert(offsetof(shekyl_rpc_connection_facts, address_len) == 8, "address_len offset");
   static_assert(offsetof(shekyl_rpc_connection_facts, host) == 16, "host offset");
@@ -106,26 +106,12 @@ TEST(rpc_facts_ffi_roundtrip, pod_sizes_are_the_documented_ones)
   static_assert(offsetof(shekyl_rpc_connection_facts, send_count) == 80, "send_count offset");
   static_assert(offsetof(shekyl_rpc_connection_facts, current_speed_down) == 88, "current_speed_down offset");
   static_assert(offsetof(shekyl_rpc_connection_facts, current_speed_up) == 96, "current_speed_up offset");
-  static_assert(offsetof(shekyl_rpc_connection_facts, height) == 104, "height offset");
-  static_assert(offsetof(shekyl_rpc_connection_facts, port) == 112, "port offset");
-  static_assert(offsetof(shekyl_rpc_connection_facts, state) == 114, "state offset");
-  static_assert(offsetof(shekyl_rpc_connection_facts, address_type) == 115, "address_type offset");
-  static_assert(offsetof(shekyl_rpc_connection_facts, incoming) == 116, "incoming offset");
-  static_assert(offsetof(shekyl_rpc_connection_facts, localhost) == 117, "localhost offset");
-  static_assert(offsetof(shekyl_rpc_connection_facts, local_ip) == 118, "local_ip offset");
-  static_assert(offsetof(shekyl_rpc_connection_facts, claims_known) == 119, "claims_known offset");
-
-  static_assert(sizeof(shekyl_rpc_sync_span_facts) == 72, "sync span facts changed size");
-  static_assert(offsetof(shekyl_rpc_sync_span_facts, remote_address) == 0, "remote_address offset");
-  static_assert(offsetof(shekyl_rpc_sync_span_facts, remote_address_len) == 8, "remote_address_len offset");
-  static_assert(offsetof(shekyl_rpc_sync_span_facts, start_block_height) == 16, "start_block_height offset");
-  static_assert(offsetof(shekyl_rpc_sync_span_facts, nblocks) == 24, "nblocks offset");
-  static_assert(offsetof(shekyl_rpc_sync_span_facts, size) == 32, "size offset");
-  static_assert(offsetof(shekyl_rpc_sync_span_facts, connection_id) == 40, "connection_id offset");
-  static_assert(offsetof(shekyl_rpc_sync_span_facts, rate) == 56, "rate offset");
-  static_assert(offsetof(shekyl_rpc_sync_span_facts, speed_fraction) == 60, "speed_fraction offset");
-  static_assert(offsetof(shekyl_rpc_sync_span_facts, filled) == 64, "filled offset");
-  static_assert(offsetof(shekyl_rpc_sync_span_facts, reserved) == 65, "reserved offset");
+  static_assert(offsetof(shekyl_rpc_connection_facts, port) == 104, "port offset");
+  static_assert(offsetof(shekyl_rpc_connection_facts, address_type) == 106, "address_type offset");
+  static_assert(offsetof(shekyl_rpc_connection_facts, incoming) == 107, "incoming offset");
+  static_assert(offsetof(shekyl_rpc_connection_facts, localhost) == 108, "localhost offset");
+  static_assert(offsetof(shekyl_rpc_connection_facts, local_ip) == 109, "local_ip offset");
+  static_assert(offsetof(shekyl_rpc_connection_facts, reserved) == 110, "reserved offset");
 
   // `shekyl_rpc_peer_facts` is `shekyl_ffi.h`'s since the listing moved to
   // Rust (2026-10-13): no `last_seen`, 24 bytes, pinned on three sides.

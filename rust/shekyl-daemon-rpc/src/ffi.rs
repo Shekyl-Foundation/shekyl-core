@@ -300,41 +300,15 @@ pub struct ConnectionFactsFfi {
     /// Bytes/s, raw — the clamp to an integer is this side's job.
     pub current_speed_down: f64,
     pub current_speed_up: f64,
-    /// The peer's claimed blockchain height.
-    pub height: u64,
     pub port: u16,
-    /// `cryptonote_connection_context::state`.
-    pub state: u8,
     /// epee type id: 1 ipv4, 2 ipv6, 4 tor, …
     pub address_type: u8,
     pub incoming: u8,
     pub localhost: u8,
     pub local_ip: u8,
-    /// 1 when `height` and `state` were read. 0 means those two are
-    /// unknown.
-    pub claims_known: u8,
-}
-
-/// Twin of `shekyl_rpc_sync_span_facts` (RK-5a). Pinned by layout.
-#[repr(C)]
-#[derive(Clone, Copy, Debug)]
-pub struct SyncSpanFactsFfi {
-    /// `network_address::str()` of the span's origin.
-    pub remote_address: *const c_char,
-    pub remote_address_len: usize,
-    pub start_block_height: u64,
-    pub nblocks: u64,
-    /// Bytes held for this span.
-    pub size: u64,
-    pub connection_id: [u8; 16],
-    /// Bytes/s.
-    pub rate: f32,
-    /// 0..1; the wire carries 100x this.
-    pub speed_fraction: f32,
-    /// Whether the span's blocks have arrived, as opposed to being requested
-    /// and still outstanding.
-    pub filled: u8,
-    pub reserved: [u8; 7],
+    /// The board's half only: the claim and the session's mode are chain
+    /// sync's view (CS-5 §7).
+    pub reserved: [u8; 2],
 }
 
 /// Twin of `shekyl_rpc_peer_facts` (RK-5a), now `shekyl-ffi`'s
@@ -429,18 +403,18 @@ const _: () = assert!(std::mem::offset_of!(InfoChainFactsFfi, reserved) == 157);
 const _: () = assert!(std::mem::size_of::<InfoStatusFactsFfi>() == 24);
 const _: () = assert!(std::mem::size_of::<InfoPeersFactsFfi>() == 32);
 
-// RK-5a layout pins. `ConnectionFactsFfi`, `SyncSpanFactsFfi` and
-// `PeerFactsFfi` carry pointers, so there is no fill/check twin to catch a
+// RK-5a layout pins. `ConnectionFactsFfi` and `PeerFactsFfi` carry
+// pointers, so there is no fill/check twin to catch a
 // disagreement — these asserts and their `static_assert` counterparts in
 // `tests/unit_tests/rpc_facts_ffi_roundtrip.cpp` are the whole pin.
 const _: () = assert!(std::mem::size_of::<NetStatsFactsFfi>() == 40);
 
-// `port` (u16) and the six trailing `u8`s fill the slot after `height`,
-// so the POD ends on `claims_known`. A tail pad would be a field it does
-// not have.
-const _: () = assert!(std::mem::size_of::<ConnectionFactsFfi>() == 120);
+// `port` (u16), the four flag bytes and `reserved` fill the slot after
+// `current_speed_up`, so the POD ends on `reserved`. A tail pad would be a
+// field it does not have.
+const _: () = assert!(std::mem::size_of::<ConnectionFactsFfi>() == 112);
 const _: () = assert!(
-    std::mem::offset_of!(ConnectionFactsFfi, claims_known) + std::mem::size_of::<u8>() == 120
+    std::mem::offset_of!(ConnectionFactsFfi, reserved) + std::mem::size_of::<[u8; 2]>() == 112
 );
 const _: () = assert!(std::mem::align_of::<ConnectionFactsFfi>() == 8);
 const _: () = assert!(std::mem::offset_of!(ConnectionFactsFfi, address) == 0);
@@ -455,27 +429,12 @@ const _: () = assert!(std::mem::offset_of!(ConnectionFactsFfi, recv_count) == 72
 const _: () = assert!(std::mem::offset_of!(ConnectionFactsFfi, send_count) == 80);
 const _: () = assert!(std::mem::offset_of!(ConnectionFactsFfi, current_speed_down) == 88);
 const _: () = assert!(std::mem::offset_of!(ConnectionFactsFfi, current_speed_up) == 96);
-const _: () = assert!(std::mem::offset_of!(ConnectionFactsFfi, height) == 104);
-const _: () = assert!(std::mem::offset_of!(ConnectionFactsFfi, port) == 112);
-const _: () = assert!(std::mem::offset_of!(ConnectionFactsFfi, state) == 114);
-const _: () = assert!(std::mem::offset_of!(ConnectionFactsFfi, address_type) == 115);
-const _: () = assert!(std::mem::offset_of!(ConnectionFactsFfi, incoming) == 116);
-const _: () = assert!(std::mem::offset_of!(ConnectionFactsFfi, localhost) == 117);
-const _: () = assert!(std::mem::offset_of!(ConnectionFactsFfi, local_ip) == 118);
-const _: () = assert!(std::mem::offset_of!(ConnectionFactsFfi, claims_known) == 119);
-
-const _: () = assert!(std::mem::size_of::<SyncSpanFactsFfi>() == 72);
-const _: () = assert!(std::mem::align_of::<SyncSpanFactsFfi>() == 8);
-const _: () = assert!(std::mem::offset_of!(SyncSpanFactsFfi, remote_address) == 0);
-const _: () = assert!(std::mem::offset_of!(SyncSpanFactsFfi, remote_address_len) == 8);
-const _: () = assert!(std::mem::offset_of!(SyncSpanFactsFfi, start_block_height) == 16);
-const _: () = assert!(std::mem::offset_of!(SyncSpanFactsFfi, nblocks) == 24);
-const _: () = assert!(std::mem::offset_of!(SyncSpanFactsFfi, size) == 32);
-const _: () = assert!(std::mem::offset_of!(SyncSpanFactsFfi, connection_id) == 40);
-const _: () = assert!(std::mem::offset_of!(SyncSpanFactsFfi, rate) == 56);
-const _: () = assert!(std::mem::offset_of!(SyncSpanFactsFfi, speed_fraction) == 60);
-const _: () = assert!(std::mem::offset_of!(SyncSpanFactsFfi, filled) == 64);
-const _: () = assert!(std::mem::offset_of!(SyncSpanFactsFfi, reserved) == 65);
+const _: () = assert!(std::mem::offset_of!(ConnectionFactsFfi, port) == 104);
+const _: () = assert!(std::mem::offset_of!(ConnectionFactsFfi, address_type) == 106);
+const _: () = assert!(std::mem::offset_of!(ConnectionFactsFfi, incoming) == 107);
+const _: () = assert!(std::mem::offset_of!(ConnectionFactsFfi, localhost) == 108);
+const _: () = assert!(std::mem::offset_of!(ConnectionFactsFfi, local_ip) == 109);
+const _: () = assert!(std::mem::offset_of!(ConnectionFactsFfi, reserved) == 110);
 
 // The twin is `shekyl-ffi`'s `ShekylRpcPeerFacts` and the C++
 // `shekyl_rpc_peer_facts` in `shekyl_ffi.h`, each pinned to 24 bytes.
@@ -501,15 +460,6 @@ extern "C" {
         out_owner: *mut *mut std::ffi::c_void,
     ) -> i32;
     pub fn shekyl_rpc_connections_free(owner: *mut std::ffi::c_void);
-    /// The block-download queue; release the owner with
-    /// `shekyl_rpc_sync_spans_free`.
-    pub fn shekyl_rpc_sync_spans(
-        h: *mut CoreRpcHandle,
-        out: *mut *const SyncSpanFactsFfi,
-        out_len: *mut usize,
-        out_owner: *mut *mut std::ffi::c_void,
-    ) -> i32;
-    pub fn shekyl_rpc_sync_spans_free(owner: *mut std::ffi::c_void);
     /// White then gray peerlist entries in one array, discriminated by
     /// `white`, from the Rust peer lists (`shekyl-ffi`); release the owner
     /// with `shekyl_rpc_peer_list_free`. No core handle.
@@ -614,18 +564,6 @@ mod unit_test_link_stubs {
     }
     #[no_mangle]
     pub extern "C" fn shekyl_rpc_connections_free(_owner: *mut std::ffi::c_void) {}
-    #[no_mangle]
-    pub extern "C" fn shekyl_rpc_sync_spans(
-        _h: *mut CoreRpcHandle,
-        _out_stripe: *mut u32,
-        _out: *mut *const SyncSpanFactsFfi,
-        _out_len: *mut usize,
-        _out_owner: *mut *mut std::ffi::c_void,
-    ) -> i32 {
-        SHEKYL_RPC_FACTS_ERR_NULL
-    }
-    #[no_mangle]
-    pub extern "C" fn shekyl_rpc_sync_spans_free(_owner: *mut std::ffi::c_void) {}
     #[no_mangle]
     pub extern "C" fn shekyl_rpc_peer_list(
         _public_only: u8,

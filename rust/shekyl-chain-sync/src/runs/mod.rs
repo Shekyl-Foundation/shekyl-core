@@ -22,7 +22,7 @@ use shekyl_types::{BlockCount, BlockHash, BlockHeight, PowHash, Timestamp};
 use shekyl_wire::PowBlob;
 
 use crate::branch::{BranchView, Pending};
-use crate::model::{header_deadline, CloseCause, Command, HashClass, Job, ProveItem, Proved, Sync};
+use crate::model::{CloseCause, Command, HashClass, Job, ProveItem, Proved, Sync};
 use crate::peer::{cache_for, Checked, HeaderRequest, Run};
 
 mod bodies;
@@ -52,6 +52,12 @@ where
     R: Fn(BlockHeight) -> RuleSet,
 {
     pub(crate) fn on_deadline(&mut self, session: K, request: u64) {
+        // The opening's bound: fixed from its first session, so it fires
+        // whether or not that session is still open.
+        if self.opening == (crate::model::Opening::Open { id: request }) {
+            self.opening = crate::model::Opening::Resolved;
+            return;
+        }
         let header = self
             .header_request
             .as_ref()
@@ -79,6 +85,11 @@ where
         // wait even when the run remains. A body span does not.
         if header || follow {
             self.release_dispute(session);
+            // A header request past its deadline has resolved, for the
+            // opening as an answer does.
+            if let Some(peer) = self.peers.get_mut(&session) {
+                peer.answered = true;
+            }
         }
         if let Some(peer) = self.peers.get_mut(&session) {
             if peer.span.as_ref().is_some_and(|span| span.id == request) {
@@ -96,9 +107,13 @@ where
         now: Instant,
         out: &mut Vec<Command<K>>,
     ) -> Result<(), H::Fault> {
-        if !self.peers.contains_key(&session) {
+        let Some(peer) = self.peers.get_mut(&session) else {
             return Ok(());
-        }
+        };
+        // Responded. For the opening the request has resolved once none of
+        // this response's headers waits for its proof: a refusal closes the
+        // session, and a verified heavier header makes the node `Behind`.
+        peer.responded = true;
         let Ok(response) = ResponseHeaders::decode(bytes) else {
             self.close(session, CloseCause::HeadersUndecodable, out);
             return Ok(());
@@ -132,18 +147,21 @@ where
             .filter(|req| {
                 req.session == session && req.points.iter().any(|(_, hash)| *hash == parent)
             })
-            .map(|req| req.points.clone());
+            .map(|req| (req.points.clone(), req.sent));
         let continuation = self
             .peers
             .get(&session)
             .and_then(|state| state.follow_up.as_ref())
             .filter(|req| req.points.iter().any(|(_, hash)| *hash == parent))
-            .map(|req| req.points.clone());
+            .map(|req| (req.points.clone(), req.sent));
         let from_continuation = continuation.is_some();
-        let Some(points) = continuation.or(frontier) else {
+        let Some((points, sent)) = continuation.or(frontier) else {
             self.close(session, CloseCause::HeadersForm, out);
             return Ok(());
         };
+        if let Some(state) = self.peers.get_mut(&session) {
+            state.rate = Some(crate::peer::rate(bytes.len(), sent, now));
+        }
         if from_continuation {
             if let Some(state) = self.peers.get_mut(&session) {
                 state.follow_up = None;
@@ -455,6 +473,11 @@ where
         let Some(session) = self.session_for_job(job.raw()) else {
             return Ok(());
         };
+        // A proof answered for this session's headers: its request has
+        // resolved for the opening (CS-Q2 step 8), whatever the results.
+        if let Some(peer) = self.peers.get_mut(&session) {
+            peer.answered = true;
+        }
         for result in results {
             match result {
                 Proved::Refused(refused) => {
@@ -640,26 +663,36 @@ where
         let Some((height, hash)) = tip else {
             return;
         };
+        self.follow_up(session, (height, hash), now, out);
+    }
+
+    /// This session's own header follow-up from one point: the run's next
+    /// locator, a relocate, or the ancestors of an announcement. It does
+    /// not take the extending slot.
+    pub(crate) fn follow_up(
+        &mut self,
+        session: K,
+        point: (BlockHeight, BlockHash),
+        now: Instant,
+        out: &mut Vec<Command<K>>,
+    ) {
+        if !self.requests() {
+            return;
+        }
+        let Some(state) = self.peers.get_mut(&session) else {
+            return;
+        };
         let id = self.next_id;
         self.next_id = self.next_id.saturating_add(1);
-        if let Some(state) = self.peers.get_mut(&session) {
-            state.follow_up = Some(HeaderRequest {
-                session,
-                id,
-                points: vec![(height, hash)],
-            });
-        }
-        let transit = self
-            .peers
-            .get(&session)
-            .map(|s| s.transit)
-            .unwrap_or_default();
+        let request = HeaderRequest::new(session, id, vec![point], now, state.transit);
+        let deadline = request.deadline;
+        state.follow_up = Some(request);
         out.push(Command::RequestHeaders {
             session,
             id,
-            deadline: header_deadline(now, transit),
+            deadline,
             request: shekyl_levin::RequestHeaders {
-                block_ids: vec![*hash.as_bytes()],
+                block_ids: vec![*point.1.as_bytes()],
             },
         });
     }
@@ -667,6 +700,9 @@ where
     pub(crate) fn release_session(&mut self, session: K) {
         self.release_dispute(session);
         self.peers.remove(&session);
+        if self.peers.is_empty() {
+            self.opening = crate::model::Opening::Idle;
+        }
         self.pending.remove(&session);
         if self
             .header_request
@@ -787,28 +823,7 @@ where
                     .and_then(|local| local.height)
             })
             .unwrap_or(BlockHeight::ZERO);
-        let id = self.next_id;
-        self.next_id = self.next_id.saturating_add(1);
-        if let Some(state) = self.peers.get_mut(&session) {
-            state.follow_up = Some(HeaderRequest {
-                session,
-                id,
-                points: vec![(height, at)],
-            });
-        }
-        let transit = self
-            .peers
-            .get(&session)
-            .map(|s| s.transit)
-            .unwrap_or_default();
-        out.push(Command::RequestHeaders {
-            session,
-            id,
-            deadline: header_deadline(now, transit),
-            request: shekyl_levin::RequestHeaders {
-                block_ids: vec![*at.as_bytes()],
-            },
-        });
+        self.follow_up(session, (height, at), now, out);
     }
 }
 

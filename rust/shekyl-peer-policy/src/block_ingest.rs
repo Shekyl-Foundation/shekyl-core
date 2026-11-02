@@ -28,8 +28,9 @@
 //! (non-reject arms) or the paired [`BlockIngest::write_reject_form`]
 //! family (reject arms) and never switches on them. The questions it is
 //! allowed to ask of this type are the predicates below. What P2P should
-//! *do* with the two slots is [`crate::BlockAnnounceAction`] /
-//! [`crate::BlockSyncAction`], not a C++ if-else over these predicates.
+//! *do* with the two slots was never a C++ if-else over these predicates.
+//! The C++ writers went with the handler's sync half (CS-5); chain sync
+//! maps the ingest entry's reply through [`crate::SyncReplyAction`].
 //! An unrecognised byte is [`Self::Unclassified`]: not added, not
 //! rejected, not missing-txs, not orphaned — and, because drop is a
 //! different slot, not a reason to sever.

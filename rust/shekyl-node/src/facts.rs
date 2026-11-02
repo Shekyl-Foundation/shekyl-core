@@ -17,7 +17,7 @@ use shekyl_chain_ingest::service::{
 };
 use shekyl_chain_ingest::{ProductionSubstrate, Rewound, TipChanged};
 use shekyl_chain_store::codec::FollowingDegraded;
-use shekyl_chain_sync::SyncState;
+use shekyl_chain_sync::{SessionMode, SyncState, SyncView};
 use shekyl_daemon_rpc::chain_facts::{
     BlockAt, BlockHashAt, BlockHeaderAt, BlockLookup, ChainFacts, ChainTip, DaemonIdentity,
     FactsFault, FeeEstimate,
@@ -36,8 +36,13 @@ use shekyl_daemon_rpc::read_facts::{
     PowSeed, ShardCoverage, SpentAt,
 };
 use shekyl_daemon_rpc::store_facts::{NodeFacts, StoreFacts, SyncFacts};
+use shekyl_daemon_rpc::sync_facts::{
+    BodySpanFacts, RequestTiming, SyncSessionFacts, SyncViewFacts, SyncViewRead,
+};
 use shekyl_ffi::seam_ffi::bans::{BanPath, BanSpan, BanTarget};
 use shekyl_mempool::Pool;
+use shekyl_rpc_types::{ChainSyncState, SyncMode};
+use shekyl_seam::SocketId;
 use shekyl_transport_layer::{BanLeft, Ipv4Subnet, ListedBan};
 use shekyl_types::{BlockHash, BlockHeight, PCanonicalId, TxHash};
 
@@ -84,6 +89,9 @@ pub(crate) struct Surroundings {
     /// The connector's `following_degraded` latch. `None` is clear.
     /// Chain sync raises it; the connector is the one writer.
     pub(crate) latch: tokio::sync::watch::Receiver<Option<FollowingDegraded>>,
+    /// Chain sync's view, as its owner publishes it after every event
+    /// (CS-5 §7): what `sync_info` renders.
+    pub(crate) view: tokio::sync::watch::Receiver<SyncView<SocketId>>,
     /// The service's retirement flag: a pool whose file has faulted is
     /// not read here, as the pool handle does not read it.
     pub(crate) health: PoolHealth,
@@ -115,6 +123,46 @@ impl NodeFacts for Surroundings {
             ),
             offline: self.offline,
             following_degraded: self.latch.borrow().is_some(),
+        })
+    }
+
+    /// The owner's view, read once, with each request's age and time to
+    /// its deadline taken at this read. A session is named by the
+    /// connection id the board and the C++ use for its socket.
+    fn sync_view(&self) -> Result<SyncViewFacts, FactsFault> {
+        let view = self.view.borrow().clone();
+        let now = std::time::Instant::now();
+        let timing = |sent: std::time::Instant, deadline: std::time::Instant| RequestTiming {
+            age_ms: millis(now.saturating_duration_since(sent)),
+            due_in_ms: millis(deadline.saturating_duration_since(now)),
+        };
+        Ok(SyncViewFacts {
+            state: chain_sync_state(view.state),
+            stalled: view.stalled,
+            target: view.target.to_raw(),
+            sessions: view
+                .sessions
+                .iter()
+                .map(|row| SyncSessionFacts {
+                    connection_id: connection_id(row.session),
+                    claimed_height: row.claim.map(|claim| claim.count.to_raw()),
+                    mode: sync_mode(row.mode),
+                    header_request: row
+                        .header_request
+                        .map(|request| timing(request.sent, request.deadline)),
+                    body_requests: row
+                        .body_requests
+                        .iter()
+                        .map(|span| BodySpanFacts {
+                            start_height: span.first.to_raw(),
+                            count: span.count.to_raw(),
+                            planned_bytes: span.planned_bytes,
+                            timing: timing(span.sent, span.deadline),
+                        })
+                        .collect(),
+                    rate: row.rate,
+                })
+                .collect(),
         })
     }
 
@@ -226,6 +274,42 @@ impl NodeFacts for Surroundings {
     }
 }
 
+/// The connection id the board and the C++ name a socket by: eight zero
+/// bytes, then the socket id (`seam_endpoint.h`'s `seam_connection_id`).
+fn connection_id(socket: SocketId) -> [u8; 16] {
+    let mut id = [0u8; 16];
+    id[8..].copy_from_slice(&socket.get().to_ne_bytes());
+    id
+}
+
+/// A duration in whole milliseconds, saturating.
+fn millis(duration: std::time::Duration) -> u64 {
+    u64::try_from(duration.as_millis()).unwrap_or(u64::MAX)
+}
+
+/// The wire's name for chain sync's state.
+const fn chain_sync_state(state: SyncState) -> ChainSyncState {
+    match state {
+        SyncState::NoView => ChainSyncState::NoView,
+        SyncState::Behind { .. } => ChainSyncState::Behind,
+        SyncState::Following { .. } => ChainSyncState::Following,
+        SyncState::Synced => ChainSyncState::Synced,
+    }
+}
+
+/// The wire's name for a session's mode, one to one.
+const fn sync_mode(mode: SessionMode) -> SyncMode {
+    match mode {
+        SessionMode::Idle => SyncMode::Idle,
+        SessionMode::Reachable => SyncMode::Reachable,
+        SessionMode::Slot => SyncMode::Slot,
+        SessionMode::Challenging => SyncMode::Challenging,
+        SessionMode::PastCap => SyncMode::PastCap,
+        SessionMode::EvidenceCandidate => SyncMode::EvidenceCandidate,
+        SessionMode::Evidence => SyncMode::Evidence,
+    }
+}
+
 pub(crate) fn unix_now() -> u64 {
     std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)
@@ -333,6 +417,12 @@ impl InfoFacts for ChainBridge {
 
     fn sessions(&self) -> Result<SessionCounts, FactsFault> {
         self.with(InfoFacts::sessions)
+    }
+}
+
+impl SyncViewRead for ChainBridge {
+    fn sync_view(&self) -> Result<SyncViewFacts, FactsFault> {
+        self.with(SyncViewRead::sync_view)
     }
 }
 
@@ -704,6 +794,57 @@ impl StopFacts for StopBridge {
 mod tests {
     use super::*;
 
+    /// The view's rows reach the RPC named by the connection id the board
+    /// and the C++ use (eight zero bytes, then the socket id), with the
+    /// mode and the state mapped one to one and each request's timing
+    /// read at the call.
+    #[test]
+    fn the_view_names_a_session_by_its_connection_id() {
+        let dir = tempfile::tempdir().expect("temp");
+        let (_sync_tx, sync) = tokio::sync::watch::channel(SyncState::Synced);
+        let (_latch_tx, latch) = tokio::sync::watch::channel(None);
+        let socket = SocketId::from_ffi(0x0102_0304_0506_0708).expect("a socket id");
+        let sent = std::time::Instant::now();
+        let view = SyncView {
+            state: SyncState::Synced,
+            stalled: false,
+            target: shekyl_types::ChainCount::from_raw(9),
+            sessions: vec![shekyl_chain_sync::SessionView {
+                session: socket,
+                claim: None,
+                mode: SessionMode::PastCap,
+                header_request: Some(shekyl_chain_sync::HeaderInFlight {
+                    sent,
+                    deadline: sent + std::time::Duration::from_secs(60),
+                }),
+                body_requests: Vec::new(),
+                transit: std::time::Duration::ZERO,
+                rate: Some(7),
+            }],
+        };
+        let surroundings = Surroundings {
+            pool: Arc::new(Mutex::new(None)),
+            data_dir: dir.path().to_path_buf(),
+            offline: false,
+            sync,
+            latch,
+            view: tokio::sync::watch::channel(view).1,
+            health: PoolHealth::unwired(),
+        };
+        let facts = surroundings.sync_view().expect("a view");
+        assert_eq!(facts.state, ChainSyncState::Synced);
+        assert_eq!(facts.target, 9);
+        let row = &facts.sessions[0];
+        let mut expected = [0u8; 16];
+        expected[8..].copy_from_slice(&0x0102_0304_0506_0708_u64.to_ne_bytes());
+        assert_eq!(row.connection_id, expected);
+        assert_eq!(row.mode, SyncMode::PastCap);
+        assert_eq!(row.claimed_height, None);
+        assert_eq!(row.rate, Some(7));
+        let timing = row.header_request.expect("a header request");
+        assert!(timing.due_in_ms > 0 && timing.due_in_ms <= 60_000);
+    }
+
     /// A closed sync watch reads `NoView`, as the follower reads it, never
     /// its last value (the review of #1165). Red edit: read the last value.
     #[test]
@@ -717,6 +858,7 @@ mod tests {
             offline: false,
             sync,
             latch,
+            view: tokio::sync::watch::channel(SyncView::empty()).1,
             health: PoolHealth::unwired(),
         };
         assert!(surroundings.sync().expect("open").synchronized);
@@ -745,6 +887,7 @@ mod tests {
             offline: false,
             sync,
             latch,
+            view: tokio::sync::watch::channel(SyncView::empty()).1,
             health: PoolHealth::unwired(),
         };
         assert!(!surroundings.sync().expect("open").following_degraded);
@@ -771,6 +914,7 @@ mod tests {
             offline: false,
             sync,
             latch,
+            view: tokio::sync::watch::channel(SyncView::empty()).1,
             health: PoolHealth::unwired(),
         };
         let none = surroundings.sync().expect("open");

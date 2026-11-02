@@ -192,8 +192,8 @@ spec = ["rust/shekyl-crypto-pq/src/signature.rs"]
 
 [[constant]]
 name = "archival_max_attestation_records"
-defined_in = "src/cryptonote_config.h"
-needle = "constexpr size_t ARCHIVAL_MAX_ATTESTATION_RECORDS = 256;"
+defined_in = "rust/shekyl-types/src/archival/mod.rs"
+needle = "pub const MAX_ATTESTATION_RECORDS: usize = 256;"
 measured_by = ["BA-T10"]
 status = "unmeasured"
 carrier = "BA-T10 (BA-G16). Justified in place as bounding per-block admission cost; no measurement of that cost exists."
@@ -605,6 +605,7 @@ stale_through = [
   { through = "b80d43d2fd", note = "The accept gate returns which bucket could not pay, and the socket table counts every accept refusal under its lock, before any handshake. An admitted connection's dial, handshake and gap do the same I/O. Not re-measured." },
   { through = "16698c94aa", note = "One linger task for the connector is cloned into every accept loop, in place of a task per loop. A refused accept still shuts its write side and reads until one flight arrives or the handshake span passes. An admitted connection's dial, handshake and gap do the same I/O. Not re-measured." },
   { through = "ab1fb2bc1a", note = "The in-memory loopback harness reserves its clearnet row (the ban, the ceilings, an id) and spends no accept-rate token. The listener's accept still passes the gate before a socket is reserved. An admitted connection's dial, handshake and gap do the same I/O. Not re-measured." },
+  { through = "82b33f4eda", note = "CS-5 retires 2003, 2004, 2006 and 2007: shekyl-clearnet's message-size class loses their four arms (sizes.rs), which a message of those ids no longer reaches because the ingress refuses it first. The dial, handshake and gap do the same I/O. Not re-measured." },
   { through = "30cdb22bf9", note = "The Tor supervisor's directory check (#1232): a new inbound cause, DescriptorNotFound, in link.rs beside the two the link already carries, set after a probe's check. No clearnet code path changes; dial, handshake, and gap I/O are unchanged. Not re-measured." },
 ]
 

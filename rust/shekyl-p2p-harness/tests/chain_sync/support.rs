@@ -40,6 +40,10 @@ pub(crate) const LIMIT: Duration = Duration::from_secs(900);
 /// Every close the owner logged: (node tag, session, cause).
 pub(crate) static CLOSES: Mutex<Vec<(String, u64, String)>> = Mutex::new(Vec::new());
 
+/// Every per-block profile the owner logged (CS-5 §8): (node tag, the
+/// profile's JSON).
+pub(crate) static PROFILES: Mutex<Vec<(String, String)>> = Mutex::new(Vec::new());
+
 struct Tag(String);
 
 #[derive(Default)]
@@ -48,6 +52,7 @@ struct Fields {
     message: String,
     session: Option<u64>,
     cause: Option<String>,
+    profile: Option<String>,
 }
 
 impl Visit for Fields {
@@ -67,6 +72,7 @@ impl Visit for Fields {
         match field.name() {
             "message" => self.message = format!("{value:?}"),
             "cause" => self.cause = Some(format!("{value:?}")),
+            "profile" => self.profile = Some(format!("{value:?}")),
             // The owner logs its `Session` by `Display`, the socket id.
             "session" => self.session = format!("{value:?}").parse().ok(),
             "tag" => self.tag = Some(format!("{value:?}").trim_matches('"').to_owned()),
@@ -92,7 +98,9 @@ where
     fn on_event(&self, event: &Event<'_>, ctx: Context<'_, S>) {
         let mut fields = Fields::default();
         event.record(&mut fields);
-        if !fields.message.contains("closes a session") {
+        let closes = fields.message.contains("closes a session");
+        let profiles = fields.message.contains("the phases so far");
+        if !closes && !profiles {
             return;
         }
         let tag = ctx.event_scope(event).and_then(|scope| {
@@ -100,6 +108,12 @@ where
                 .from_root()
                 .find_map(|span| span.extensions().get::<Tag>().map(|tag| tag.0.clone()))
         });
+        if profiles {
+            if let (Some(tag), Some(profile)) = (tag, fields.profile) {
+                PROFILES.lock().expect("profiles").push((tag, profile));
+            }
+            return;
+        }
         if let (Some(tag), Some(session), Some(cause)) = (tag, fields.session, fields.cause) {
             CLOSES.lock().expect("closes").push((tag, session, cause));
         }

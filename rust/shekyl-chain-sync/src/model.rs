@@ -12,7 +12,7 @@
 use std::collections::{BTreeMap, BTreeSet};
 use std::time::{Duration, Instant};
 
-use shekyl_chain_rules::{AtHeight, HeaderView, RuleSet, Trust};
+use shekyl_chain_rules::{AtHeight, HeaderView, RuleSet, Tip, Trust};
 use shekyl_difficulty::CumulativeDifficulty;
 use shekyl_draw_rng::{bounded_uniform, RelayRng};
 use shekyl_levin::{RequestHeaders, BODIES_RESPONSE_BYTES, HEADERS_RESPONSE_BYTES};
@@ -25,8 +25,9 @@ use crate::peer::{Dispute, HeaderRequest, Peer};
 use crate::branch::BranchView;
 use crate::claim::{self, PayloadRefused, PeerClaim};
 use crate::locator::{locator, locator_heights};
-use crate::state::SyncState;
+use crate::state::{Declaration, SyncState};
 use crate::tree::{HeaderTree, Star};
+use crate::view::{BodiesInFlight, HeaderInFlight, SessionMode, SessionView, SyncView};
 
 /// Bytes per second assumed for a header or body request's deadline.
 ///
@@ -74,6 +75,18 @@ enum HeaderSlot {
     FollowUp,
 }
 
+/// Whether the model asks peers for anything: the regtest `dev-sync` row.
+/// `Off` builds no header, body, complement or missing-transaction
+/// request. The model still serves, relays, publishes and takes what
+/// peers announce.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Requesting {
+    /// Requests are built (every network but a regtest lever).
+    On,
+    /// Nothing is requested.
+    Off,
+}
+
 /// The coordinator. It holds one peer machine per open session and the
 /// chain those peers are building. The long-run slot and the evidence
 /// check are modes of a peer, not fields beside the map.
@@ -102,6 +115,9 @@ pub struct Sync<K, R> {
     pub(crate) outstanding: crate::arrivals::Offered<K>,
     /// Bodies the entry accepted. The walk treats them as present.
     pub(crate) accepted: BTreeSet<BlockHash>,
+    /// Tips an entry reply already judged for relay: a connect, relayed or
+    /// not. The tip event judges every other new tip (CS-Q2 step 7).
+    pub(crate) judged: BTreeSet<BlockHash>,
     /// Who served a body, from the offer until the header leaves `T` or
     /// is refused. A promotion refusal closes that session.
     pub(crate) served: BTreeMap<BlockHash, K>,
@@ -120,6 +136,28 @@ pub struct Sync<K, R> {
     /// The posture `judge_header` is given. The fill's checkpoint does
     /// not read it: until slice 6 every posture is full.
     pub(crate) trust: Trust,
+    /// Whether requests are built.
+    pub(crate) requesting: Requesting,
+    /// The operator's declaration of the node's network (CS-Q2 step 8).
+    pub(crate) declaration: Declaration,
+    /// The opening: from a session opening while none was, until its
+    /// sessions have answered for their claims or the first session's
+    /// header deadline has passed.
+    pub(crate) opening: Opening,
+}
+
+/// The opening (CS-Q2 step 8, Rick 2026-11-01).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum Opening {
+    /// No session is open.
+    Idle,
+    /// Unresolved. `id` is the deadline [`Command::ArmOpening`] armed.
+    Open {
+        /// The opening deadline's id.
+        id: u64,
+    },
+    /// Resolved: it stays so until the last session closes.
+    Resolved,
 }
 
 impl<K, R> Sync<K, R>
@@ -147,6 +185,7 @@ where
             held: crate::arrivals::Held::new(),
             outstanding: crate::arrivals::Offered::new(),
             accepted: BTreeSet::new(),
+            judged: BTreeSet::new(),
             served: BTreeMap::new(),
             dispute: None,
             wall: Timestamp::from_raw(1_700_000_100),
@@ -155,7 +194,29 @@ where
             alarm: false,
             alarm_sent: false,
             trust,
+            requesting: Requesting::On,
+            declaration: Declaration::Open,
+            opening: Opening::Idle,
         }
+    }
+
+    /// The same model under the operator's `declaration` (CS-Q2 step 8).
+    #[must_use]
+    pub const fn with_declaration(mut self, declaration: Declaration) -> Self {
+        self.declaration = declaration;
+        self
+    }
+
+    /// The same model with requests `requesting` ([`Requesting`]).
+    #[must_use]
+    pub const fn with_requesting(mut self, requesting: Requesting) -> Self {
+        self.requesting = requesting;
+        self
+    }
+
+    /// Whether requests are built.
+    pub(crate) fn requests(&self) -> bool {
+        self.requesting == Requesting::On
     }
 
     /// CEN-C1's operand. Deadlines use the monotonic instant instead.
@@ -184,6 +245,7 @@ where
         out: &mut Vec<Command<K>>,
     ) -> Result<(), ClaimError<H::Fault>> {
         let claim = claim::admit(claim).map_err(ClaimError::Refused)?;
+        let before = self.state();
         if let Some(open) = self.peers.get_mut(&session) {
             let changed = open.claim != Some(claim);
             open.claim = Some(claim);
@@ -197,23 +259,40 @@ where
         self.plan(main, now, rng, out).map_err(ClaimError::View)?;
         // The tip a claim names can make the session a body source (CS-F8).
         self.plan_bodies(now, out);
+        // A claim that needs no answer can resolve the opening; it never
+        // grants a state otherwise.
+        self.settle_opening();
+        let after = self.state();
+        if after != before {
+            out.push(Command::Publish { state: after });
+        }
+        if after == SyncState::Synced && before != SyncState::Synced {
+            self.complement(rng, out);
+        }
         Ok(())
     }
 
-    /// The derived state. A claim's value is not an input.
+    /// The derived state (CS-Q2 step 8, Rick 2026-11-01). A claim's value
+    /// is not an input: a claim can only hold the opening `NoView`.
     #[must_use]
     pub fn state(&self) -> SyncState {
-        if self.peers.is_empty() {
-            return SyncState::NoView;
+        match self.local {
+            Some(local) => self.state_at(local),
+            None if self.peers.is_empty() => {
+                self.declaration.state_without_sessions(self.following())
+            }
+            None => SyncState::NoView,
         }
-        let Some(local) = self.local else {
-            return SyncState::NoView;
-        };
-        self.state_at(local)
     }
 
-    /// The state with `local` as the local tip.
+    /// The state with `local` as the local tip, in the ruled order: with no
+    /// session, the declaration; verified headers heavier than `local`,
+    /// `Behind`; an unresolved opening, `NoView`; otherwise `Following` or
+    /// `Synced`. No network type enters (rule 71).
     fn state_at(&self, local: Local) -> SyncState {
+        if self.peers.is_empty() {
+            return self.declaration.state_without_sessions(self.following());
+        }
         if self.star.work > local.work {
             return SyncState::Behind {
                 have: local.work,
@@ -221,12 +300,44 @@ where
                 target: self.star_count(),
             };
         }
-        if self.fill_frontier > Self::checkpoint() {
-            return SyncState::Following {
-                verified_to: self.fill_frontier,
-            };
+        if self.opening != Opening::Resolved {
+            return SyncState::NoView;
         }
-        SyncState::Synced
+        match self.following() {
+            Some(verified_to) => SyncState::Following { verified_to },
+            None => SyncState::Synced,
+        }
+    }
+
+    /// The fill's frontier while it is short of its checkpoint.
+    fn following(&self) -> Option<BlockHeight> {
+        (self.fill_frontier > Self::checkpoint()).then_some(self.fill_frontier)
+    }
+
+    /// Resolve the opening when every open session has answered for its
+    /// claim: its claim does not exceed `work(L)`, or a header request to
+    /// it has resolved. A session whose claim has not arrived has not
+    /// answered; the handshake carries the claim, so that wait is one post.
+    /// The first session's header deadline resolves it otherwise.
+    pub(crate) fn settle_opening(&mut self) {
+        if !matches!(self.opening, Opening::Open { .. }) {
+            return;
+        }
+        let Some(local) = self.local else {
+            return;
+        };
+        let answered = self.peers.values().all(|peer| {
+            let proving = peer
+                .run
+                .as_ref()
+                .is_some_and(|run| run.chain.proven < run.chain.checked.len());
+            peer.claim.is_some_and(|claim| {
+                claim.work <= local.work || peer.answered || (peer.responded && !proving)
+            })
+        });
+        if answered {
+            self.opening = Opening::Resolved;
+        }
     }
 
     /// Whether a block that connected at `height` with `work` is relayed
@@ -259,13 +370,129 @@ where
             height: Some(height),
             work,
         };
-        !beneath && !matches!(self.state_at(with_it), SyncState::Behind { .. })
+        !beneath
+            && matches!(
+                self.state_at(with_it),
+                SyncState::Synced | SyncState::Following { .. }
+            )
+    }
+
+    /// Whether a new tip relays from the tip event (CS-Q2 step 7). A tip
+    /// the entry's reply connected relays from that reply, which names its
+    /// supplier: it is in `judged` once the reply came, and in
+    /// `outstanding` while it is awaited. Any other new tip relays here
+    /// with no supplier: a block this node mined, and a switch's promoted
+    /// tip that no reply connected. It is judged against the tip before
+    /// this one, as the entry's reply is.
+    /// The first tip observed is the chain the node opened on, not a new
+    /// block, and relays nothing.
+    ///
+    /// # Errors
+    ///
+    /// The main view's own fault.
+    fn relays_tip<'id, H: HeaderView<'id>>(&self, main: &H, tip: Tip) -> Result<bool, H::Fault> {
+        let Some(prior) = self.local else {
+            return Ok(false);
+        };
+        if prior.hash == tip.hash
+            || self.judged.contains(&tip.hash)
+            || self.outstanding.contains(tip.hash)
+        {
+            return Ok(false);
+        }
+        let AtHeight::Recorded(record) = main.header_at(tip.height)? else {
+            return Ok(false);
+        };
+        Ok(record.hash == tip.hash
+            && self.relays(tip.hash, tip.height, record.cumulative_difficulty))
     }
 
     /// Whether the store's latch is set. It does not withhold [`SyncState::Synced`].
     #[must_use]
     pub const fn alarm(&self) -> bool {
         self.alarm
+    }
+
+    /// Whether sync is stalled (CS-5 F5): the node is `Behind`, and nothing
+    /// is moving toward `H*`. No header or body request is in flight, no
+    /// proof is running, and the entry holds and awaits nothing. Planning
+    /// ran at the end of the last event and issued nothing, so no
+    /// session's claim or frontier covers what is wanted.
+    ///
+    /// A stall is a scheduling fact beside the state, not a state: the
+    /// state stays `Behind`, which is what the miner and the relay read.
+    /// The entry's own refusals are not a stall: an unreadable store, and
+    /// seats not yet reported or spent, stop planning for the node's own
+    /// reason. A new claim or frontier clears it on its next event.
+    #[must_use]
+    pub fn stalled(&self) -> bool {
+        matches!(self.state(), SyncState::Behind { .. })
+            && !self.unreadable
+            && self.seats.is_some_and(|seats| seats > 0)
+            && self.header_request.is_none()
+            && self.held.is_empty()
+            && self.outstanding.is_empty()
+            && self.peers.values().all(|peer| {
+                peer.follow_up.is_none()
+                    && peer.span.is_none()
+                    && peer.announced.is_empty()
+                    && peer.run.as_ref().is_none_or(|run| run.proof().is_none())
+            })
+    }
+
+    /// The view (CS-5 §7): the state, the stall, the target and one row
+    /// per open session.
+    #[must_use]
+    pub fn view(&self) -> SyncView<K> {
+        let sessions = self
+            .peers
+            .iter()
+            .map(|(session, peer)| {
+                let header_request = self
+                    .header_request
+                    .as_ref()
+                    .filter(|request| request.session == *session)
+                    .or(peer.follow_up.as_ref())
+                    .map(|request| HeaderInFlight {
+                        sent: request.sent,
+                        deadline: request.deadline,
+                    });
+                let body_requests = peer
+                    .span
+                    .iter()
+                    .filter_map(|span| {
+                        let first = self.tree.connecting(*span.hashes.first()?)?;
+                        Some(BodiesInFlight {
+                            first,
+                            count: BlockCount::from_raw(
+                                u64::try_from(span.hashes.len()).unwrap_or(u64::MAX),
+                            ),
+                            planned_bytes: BODIES_RESPONSE_BYTES,
+                            sent: span.sent,
+                            deadline: span.deadline,
+                        })
+                    })
+                    .collect();
+                SessionView {
+                    session: *session,
+                    claim: peer.claim,
+                    mode: peer
+                        .run
+                        .as_ref()
+                        .map_or(SessionMode::Idle, crate::peer::Run::view_mode),
+                    header_request,
+                    body_requests,
+                    transit: peer.transit,
+                    rate: peer.rate,
+                }
+            })
+            .collect();
+        SyncView {
+            state: self.state(),
+            stalled: self.stalled(),
+            target: self.star_count(),
+            sessions,
+        }
     }
 
     /// `H*`: the hash and the work selection last chose.
@@ -450,6 +677,18 @@ where
         match event {
             Event::SessionOpened { session, transit } => {
                 let claim = self.pending.remove(&session);
+                if self.peers.is_empty() {
+                    // The opening starts, bounded by this session's header
+                    // deadline whether or not a request is ever sent.
+                    let id = self.next_id;
+                    self.next_id += 1;
+                    self.opening = Opening::Open { id };
+                    out.push(Command::ArmOpening {
+                        session,
+                        id,
+                        deadline: header_deadline(now, transit),
+                    });
+                }
                 self.peers.insert(session, Peer::open(transit, claim));
                 if self.local.is_none() {
                     self.observe(main, None)?;
@@ -457,9 +696,16 @@ where
             }
             Event::SessionClosed { session } => self.release_session(session),
             Event::Tip { tip } => {
+                let relay = self.relays_tip(main, tip)?;
                 self.observe(main, Some(tip.height))?;
                 self.tree.connected(main, tip.height)?;
                 self.prune_served();
+                if relay {
+                    out.push(Command::Relay {
+                        hash: tip.hash,
+                        from: None,
+                    });
+                }
             }
             Event::Latch { set } => self.alarm = set,
             Event::Fill { frontier } => self.fill_frontier = frontier,
@@ -467,7 +713,7 @@ where
             Event::Headers { session, bytes } => {
                 self.on_headers(main, session, &bytes, now, out)?
             }
-            Event::Bodies { session, bytes } => self.on_bodies(session, &bytes, out),
+            Event::Bodies { session, bytes } => self.on_bodies(session, &bytes, now, out),
             Event::Proven { job, results } => self.on_proven(main, job, &results, out)?,
             Event::Entry { tag, outcome } => self.on_entry(main, tag, outcome, now, out)?,
             Event::Room { seats } => self.on_room(seats, out),
@@ -475,6 +721,7 @@ where
                 self.on_announce(main, session, &body, now, out)?
             }
         }
+        self.settle_opening();
         let after = self.state();
         if after != before {
             out.push(Command::Publish { state: after });
@@ -553,6 +800,9 @@ where
     }
 
     fn complement(&self, rng: &mut impl RelayRng, out: &mut Vec<Command<K>>) {
+        if !self.requests() {
+            return;
+        }
         let peers: Vec<K> = self.peers.keys().copied().collect();
         let Some(session) = draw_one(rng, &peers) else {
             return;
@@ -641,6 +891,9 @@ where
         slot: HeaderSlot,
         out: &mut Vec<Command<K>>,
     ) -> Result<(), H::Fault> {
+        if !self.requests() {
+            return Ok(());
+        }
         let points = self.locator_points(main)?;
         let block_ids = locator(self.star_count(), |height| {
             Ok::<_, H::Fault>(
@@ -656,11 +909,8 @@ where
             .map(|peer| peer.transit)
             .unwrap_or_default();
         let id = self.next_id;
-        let request = HeaderRequest {
-            session,
-            id,
-            points,
-        };
+        let request = HeaderRequest::new(session, id, points, now, transit);
+        let deadline = request.deadline;
         let remembered = match slot {
             HeaderSlot::Extending => {
                 self.header_request = Some(request);
@@ -681,7 +931,7 @@ where
         out.push(Command::RequestHeaders {
             session,
             id,
-            deadline: header_deadline(now, transit),
+            deadline,
             request: RequestHeaders { block_ids },
         });
         Ok(())

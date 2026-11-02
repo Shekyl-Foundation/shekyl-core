@@ -135,9 +135,22 @@ fn mining_address(network: shekyl_address::Network) -> String {
 }
 /// A node opened on `network` that mines to [`mining_address`].
 fn open_mining(dir: &Path, network: &str, address: shekyl_address::Network) -> Node {
+    open_mining_with(dir, network, address, config_on)
+}
+/// [`open_mining`] on an open network (`Declaration::Open`): no view until
+/// chain sync's owner publishes one, which no in-process test starts.
+fn open_mining_open(dir: &Path, network: &str, address: shekyl_address::Network) -> Node {
+    open_mining_with(dir, network, address, config_open)
+}
+fn open_mining_with(
+    dir: &Path,
+    network: &str,
+    address: shekyl_address::Network,
+    config: fn(&Path, &str, &[&str]) -> DaemonConfig,
+) -> Node {
     std::fs::create_dir_all(dir).expect("dir");
     let address = mining_address(address);
-    let config = config_on(dir, network, &["--mine-address", &address]);
+    let config = config(dir, network, &["--mine-address", &address]);
     Node::open(OpenArgs {
         config: &config,
         version: "test".to_owned(),
@@ -191,19 +204,26 @@ fn dev_config(dir: &Path, extra: &[&str]) -> DaemonConfig {
     config_on(dir, "regtest", extra)
 }
 fn config_on(dir: &Path, network: &str, extra: &[&str]) -> DaemonConfig {
+    config_with(dir, network, &["--clearnet", "off"], extra)
+}
+/// A configuration on an open network: clearnet left on, no closed peer
+/// list (`Declaration::Open`). An in-process node binds nothing: the
+/// seam is the C++ remnant's, which these tests do not start.
+fn config_open(dir: &Path, network: &str, extra: &[&str]) -> DaemonConfig {
+    config_with(dir, network, &[], extra)
+}
+fn config_with(dir: &Path, network: &str, connectors: &[&str], extra: &[&str]) -> DaemonConfig {
     let log = dir.join("shekyld.log");
-    let mut args = vec![
-        "--network",
-        network,
-        "--clearnet",
-        "off",
+    let mut args = vec!["--network", network];
+    args.extend(connectors);
+    args.extend([
         "--tor",
         "off",
         "--data-dir",
         dir.to_str().expect("utf8"),
         "--log-file",
         log.to_str().expect("utf8"),
-    ];
+    ]);
     args.extend(extra);
     let cli = read_cli(&TABLE, args.into_iter().map(OsString::from)).expect("cli");
     load(

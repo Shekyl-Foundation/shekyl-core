@@ -280,8 +280,8 @@ typedef struct shekyl_rpc_tx_entry {
 // thin `extern "C"` adapter is the *only* thing that touches it, and it does
 // nothing but transcribe. Every derived quantity the retired C++ handlers
 // computed inline — idle times, live time, KiB/s averages, the state name,
-// peer-id and connection-id renderings, the ipv4-only `ip`/`port` strings,
-// the block-queue overview — is computed in Rust from the raw fields below,
+// peer-id and connection-id renderings, the ipv4-only `ip`/`port` strings —
+// is computed in Rust from the raw fields below,
 // where a unit test can reach it without a network.
 
 // Process start plus the global throttle counters.
@@ -331,18 +331,14 @@ typedef struct shekyl_rpc_connection_facts {
     // are the outputs of a rate estimator. The caller clamps.
     double       current_speed_down;
     double       current_speed_up;
-    uint64_t     height;               // the peer's claimed blockchain height
     uint16_t     port;                 // `network_address::port()`, 0 if none
-    uint8_t      state;                // cryptonote_connection_context::state
     uint8_t      address_type;         // epee type id: 1 ipv4, 2 ipv6, 4 tor…
     uint8_t      incoming;
     uint8_t      localhost;
     uint8_t      local_ip;
-    /// 1 when height and state were read on the strand. 0 means those two
-    /// are unknown: state 0 would otherwise read as "before handshake".
-    /// `height` is then JSON null. Last field: `port` and these six bytes
-    /// fill the slot after `height`, so the struct ends here.
-    uint8_t      claims_known;
+    /// The board's half only. The peer's claim and what chain sync is
+    /// doing with the session are the sync owner's view (CS-5 §7).
+    uint8_t      reserved[2];
 } shekyl_rpc_connection_facts;
 
 // Fills a C++-owned view of the live connections and the instant they were
@@ -350,37 +346,6 @@ typedef struct shekyl_rpc_connection_facts {
 int shekyl_rpc_connections(core_rpc_handle* h, uint64_t* out_now,
     const shekyl_rpc_connection_facts** out, size_t* out_len, void** out_owner);
 void shekyl_rpc_connections_free(void* owner);
-
-// One span in the block-download queue.
-//
-// `rate` and `speed_fraction` cross as floats and are rounded by the caller.
-// The C++ rounded with `(uint32_t)(x + 0.5f)`, which is undefined for a
-// negative or out-of-range value; the Rust rounding is total, and the ×100
-// that turns `speed_fraction` into the wire's percentage goes with it.
-typedef struct shekyl_rpc_sync_span_facts {
-    const char*  remote_address;       // `network_address::str()` of the origin
-    size_t       remote_address_len;
-    uint64_t     start_block_height;
-    uint64_t     nblocks;
-    uint64_t     size;                 // bytes held for this span
-    uint8_t      connection_id[16];    // raw uuid; hex is the caller's job
-    float        rate;                 // bytes/s
-    float        speed_fraction;       // 0..1; the wire carries 100x this
-    // Whether the span's blocks have **arrived**, as opposed to being
-    // requested and still outstanding. Exported rather than inferred from
-    // `size`: the overview rendering branches on exactly this bit, and
-    // "size == 0" is a different question that happens to agree today.
-    uint8_t      filled;
-    uint8_t      reserved[7];
-} shekyl_rpc_sync_span_facts;
-
-// The p2p facts `sync_info` needs that are not connections and not the chain
-// tip: the download queue. Release `*out_owner` with
-// `shekyl_rpc_sync_spans_free`.
-int shekyl_rpc_sync_spans(core_rpc_handle* h,
-    const shekyl_rpc_sync_span_facts** out, size_t* out_len, void** out_owner);
-void shekyl_rpc_sync_spans_free(void* owner);
-
 
 // ── RK-5b: the header remainder's two non-header facts ──────────────────────
 

@@ -1003,7 +1003,11 @@ fn render_peer_list_stats(
 #[deny(clippy::arithmetic_side_effects)]
 fn print_connections(src: &Source) -> Result<String, String> {
     let reply = native_json_rpc(src, "get_connections", &serde_json::json!({}), |core| {
-        crate::methods::get_connections(&crate::chain_facts::FfiP2pFacts::new(core.clone()))
+        let chain = open_chain()?;
+        crate::methods::get_connections(
+            &crate::chain_facts::FfiP2pFacts::new(core.clone()),
+            chain.as_sync_view(),
+        )
     })?;
     let shekyl_rpc_types::P2pReply::Running(reply) = reply else {
         return Ok(OFFLINE_LINE.to_owned());
@@ -1047,7 +1051,7 @@ fn print_connections(src: &Source) -> Result<String, String> {
                 "{}({})/{}({})",
                 c.recv_count, c.recv_idle_time, c.send_count, c.send_idle_time
             ),
-            c.state.as_str(),
+            c.state.map_or("-", shekyl_rpc_types::SyncMode::as_str),
             c.live_time,
             c.avg_download,
             c.current_download,
@@ -1175,120 +1179,68 @@ fn print_net_stats(src: &Source, now: u64) -> Result<String, String> {
     ))
 }
 
-/// `sync_info`.
+/// `sync_info`: chain sync's view (3.64).
 #[deny(clippy::arithmetic_side_effects)]
 fn sync_info(src: &Source) -> Result<String, String> {
     let reply = native_json_rpc(src, "sync_info", &serde_json::json!({}), |core| {
         let chain = open_chain()?;
         let p2p = crate::chain_facts::FfiP2pFacts::new(core.clone());
-        crate::methods::sync_info(chain.as_chain_facts(), &p2p)
+        crate::methods::sync_info(chain.as_chain_facts(), chain.as_sync_view(), &p2p)
     })?;
     let shekyl_rpc_types::P2pReply::Running(reply) = reply else {
         return Ok(OFFLINE_LINE.to_owned());
     };
     require_ok(&reply.status)?;
-    // No target, or one below our own height (we are ahead of what we were
-    // told to reach): the progress line uses our height, so the percentage
-    // cannot exceed 100 or divide by zero.
-    let target = reply
-        .target_height
-        .into_option()
-        .unwrap_or(reply.height)
-        .max(reply.height)
-        .max(1);
+    // A target below our own height (we are ahead of what we were told to
+    // reach) reads as our height, so the percentage cannot exceed 100 or
+    // divide by zero.
+    let target = reply.target_height.max(reply.height).max(1);
     #[expect(
         clippy::cast_precision_loss,
         reason = "a percentage for a human, from two heights"
     )]
     let progress = (reply.height as f64 / target as f64) * 100.0;
     let mut out = vec![format!(
-        "Height: {}, target: {target} ({}%)",
+        "Height: {}, target: {target} ({}%), {}{}",
         reply.height,
-        trimmed(progress, 4)
+        trimmed(progress, 4),
+        reply.state.as_str(),
+        if reply.stalled {
+            ", stalled: no peer serves what this node still needs"
+        } else {
+            ""
+        }
     )];
-    // **Every accumulation in this function saturates**, and the reason is one
-    // step upstream: `kib_per_second` clamps a finite but absurd rate to
-    // `u64::MAX` rather than invoking undefined behaviour, so a value near the
-    // ceiling is now *reachable* by design. Summing two of them overflows —
-    // which in a debug build is a panic unwinding through `extern "C"`, i.e.
-    // an abort of the daemon, and in release a wrapped number printed as a
-    // download rate. Every one of these operands is peer-influenced.
-    let current_download: u64 = reply
-        .peers
-        .iter()
-        .fold(0u64, |acc, p| acc.saturating_add(p.info.current_download));
-    out.push(format!("Downloading at {current_download} kB/s"));
     out.push(format!("{} peers", reply.peers.len()));
     out.push(
-        "Remote Host                        Peer_ID   State             Height  DL kB/s, Queued Blocks / MB"
+        "Remote Host               Mode                Claimed  Rate B/s  Headers  Bodies"
             .to_owned(),
     );
     for p in &reply.peers {
-        let (nblocks, size) = reply
-            .spans
+        // Every accumulation saturates: each count is peer-influenced.
+        let blocks = p
+            .body_requests
             .iter()
-            .filter(|s| s.connection_id == p.info.connection_id)
-            .fold((0u64, 0u64), |(n, b), s| {
-                (n.saturating_add(s.nblocks), b.saturating_add(s.size))
-            });
-        #[expect(
-            clippy::cast_precision_loss,
-            reason = "a size for a human, in megabytes"
-        )]
-        let megabytes = size as f64 / 1e6;
+            .fold(0u64, |acc, span| acc.saturating_add(span.count));
         out.push(format!(
-            "{:<24}  {:<16}  {}  {} kB/s, {nblocks} blocks / {} MB queued",
-            p.info.address,
-            p.info.state.as_str(),
-            p.info
-                .height
-                .map(|height| height.to_string())
-                .unwrap_or_else(|| "unknown".to_owned()),
-            p.info.current_download,
-            trimmed(megabytes, 6),
+            "{:<24}  {:<18}  {:>7}  {:>8}  {:<7}  {}",
+            p.address,
+            p.mode.as_str(),
+            p.claimed_height
+                .map_or_else(|| "-".to_owned(), |height| height.to_string()),
+            p.rate
+                .map_or_else(|| "-".to_owned(), |rate| rate.to_string()),
+            if p.header_request.is_some() {
+                "asked"
+            } else {
+                "-"
+            },
+            if p.body_requests.is_empty() {
+                "-".to_owned()
+            } else {
+                format!("{blocks} blocks in {} spans", p.body_requests.len())
+            },
         ));
-    }
-    let total: u64 = reply
-        .spans
-        .iter()
-        .fold(0u64, |acc, s| acc.saturating_add(s.size));
-    #[expect(
-        clippy::cast_precision_loss,
-        reason = "a size for a human, in megabytes"
-    )]
-    let total_mb = total as f64 / 1e6;
-    out.push(format!(
-        "{} spans, {} MB",
-        reply.spans.len(),
-        trimmed(total_mb, 6)
-    ));
-    out.push(reply.overview.clone());
-    for s in &reply.spans {
-        // Both halves saturate. `nblocks == 0` would make `start + nblocks - 1`
-        // wrap through the subtraction, and a span far up the chain would wrap
-        // through the addition; the C++ wrote it as one unchecked expression.
-        // `render_overview` already saturates the same addition, which is what
-        // makes this one an omission rather than a judgement.
-        let last = s
-            .start_block_height
-            .saturating_add(s.nblocks.saturating_sub(1));
-        let range = format!("{} - {last}", s.start_block_height);
-        if s.size == 0 {
-            out.push(format!(
-                "{:<24}  {} ({range})  -",
-                s.remote_address, s.nblocks
-            ));
-        } else {
-            let speed = f64::from(s.speed) / 100.0;
-            out.push(format!(
-                "{:<24}  {} ({range}, {} kB)  {} kB/s ({})",
-                s.remote_address,
-                s.nblocks,
-                s.size / 1000,
-                s.rate / 1000,
-                trimmed(speed, 2)
-            ));
-        }
     }
     Ok(out.join("\n"))
 }

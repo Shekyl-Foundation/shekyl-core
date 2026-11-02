@@ -256,7 +256,7 @@ fn generateblocks_on_a_node_that_is_not_synced_is_refused_at_once() {
     use shekyl_daemon_rpc::mining_methods::{codes, generateblocks};
     use shekyl_rpc_types::errors::ErrorClass;
     let dir = tempfile::tempdir().expect("temp");
-    let node = open_mining(dir.path(), "testnet", shekyl_address::Network::Testnet);
+    let node = open_mining_open(dir.path(), "testnet", shekyl_address::Network::Testnet);
     let mut posting = node.posting();
     wait_for_posting(
         &mut posting,
@@ -455,14 +455,15 @@ fn a_regtest_node_with_an_address_posts_its_template_with_no_sessions() {
         .is_ok_and(|tip| tip.synchronized));
     node.stop();
 }
-/// Off regtest, nothing says the node is synced before chain sync's
-/// cutover: it posts nothing and says why, and publishing `Synced` on
-/// the node's watch posts (DX-Q3, Q13). Red edit: post without reading
-/// the watch.
+/// On an open network the node opens `NoView` (its declaration's state at
+/// open), and no owner publishes here: no seam is bound, so the sync
+/// owner never receives its hub. The node posts nothing and says why, and
+/// publishing `Synced` on the node's watch posts (DX-Q3, Q13). Red edit:
+/// post without reading the watch.
 #[test]
-fn a_testnet_node_posts_nothing_until_chain_sync_says_synced() {
+fn a_node_on_an_open_network_posts_nothing_until_chain_sync_says_synced() {
     let dir = tempfile::tempdir().expect("temp");
-    let node = open_mining(dir.path(), "testnet", shekyl_address::Network::Testnet);
+    let node = open_mining_open(dir.path(), "testnet", shekyl_address::Network::Testnet);
     let mut posting = node.posting();
     wait_for_posting(
         &mut posting,
@@ -472,7 +473,7 @@ fn a_testnet_node_posts_nothing_until_chain_sync_says_synced() {
     let reason = node.mining().status().no_job.expect("a reason");
     assert_eq!(
         reason.to_string(),
-        "no template: not synced (no sync owner before chain sync's cutover)"
+        "no template: not synced (no view of the network yet)"
     );
     assert!(node
         .handles()

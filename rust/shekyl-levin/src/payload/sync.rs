@@ -76,7 +76,7 @@ const RESPONSE_HEADERS_OVERHEAD: u64 = (HEADERS_RESPONSE_BYTES / TWO_BYTE_LENGTH
     + RESPONSE_HEADERS_SECTION;
 
 /// Encoded cap of [`RequestHeaders`]. Derived from the locator count
-/// [`RequestChain`](super::RequestChain) already uses.
+/// the retired chain request (2006) used.
 pub const CAP_REQUEST_HEADERS: u64 = hash_list_cap(BLOCKS_IDS_SYNCHRONIZING_MAX_COUNT);
 
 /// Encoded cap of [`ResponseHeaders`]: the preimage budget plus the section.
@@ -319,7 +319,7 @@ fn within_count(field: &'static str, got: usize, max: u64) -> Result<(), Error> 
     Ok(())
 }
 
-/// `NOTIFY_REQUEST_HEADERS` (2011). The locator, as `RequestChain`'s
+/// `NOTIFY_REQUEST_HEADERS` (2011). The locator, as the retired chain request's (2006)
 /// `block_ids`. No prune flag: a header request has nothing to prune.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct RequestHeaders {

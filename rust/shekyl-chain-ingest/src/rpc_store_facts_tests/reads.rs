@@ -116,6 +116,9 @@ impl NodeFacts for ConnectingNode {
     fn sync(&self) -> Result<SyncFacts, FactsFault> {
         self.inner.sync()
     }
+    fn sync_view(&self) -> Result<shekyl_daemon_rpc::sync_facts::SyncViewFacts, FactsFault> {
+        self.inner.sync_view()
+    }
     fn pool_counts(
         &self,
         scope: PoolScope,

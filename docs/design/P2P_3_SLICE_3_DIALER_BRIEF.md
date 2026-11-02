@@ -60,6 +60,14 @@ until slice 4".*
 
 **UNFREEZE (Rick, 2026-10-19):** src/p2p/net_node.h — with the above: the `post_each` and `for_connection` declarations take a callback of the connection alone; the connection's `support_flags`, the zone config's `m_support_flags`, the 1007 handler's map entry and the two support-flags declarations are deleted.
 
+**UNFREEZE (Rick, 2026-11-01):** src/cryptonote_protocol/cryptonote_protocol_handler.inl — chain sync's cutover (CS-5 §9.1): the handler keeps RD's transaction routes. Its constructor takes the core and the endpoint and initialises those two members; `init` and `deinit` return true; `log_connections` loses its state column; the complement route answers a session past its handshake on the seam's flag (F3); the transaction route reads the shell's `is_synchronized` (§3); every drop is one plain `drop_connection(context)`, which closes and does nothing else (CS-Q5); `stop` stops the core alone.
+
+**UNFREEZE (Rick, 2026-11-01):** src/cryptonote_protocol/cryptonote_protocol_handler.h — with the above: the class derives from `i_cryptonote_protocol` alone, its constructor takes no offline flag, the invoke map routes 2002 and 2010, and `drop_connection` takes the context alone.
+
+**UNFREEZE (Rick, 2026-11-01):** src/p2p/net_node.inl — chain sync's cutover (CS-5 F4): the three handshake payloads come from one export, `shekyl_p2p_handshake_tip`, through the five-line `handshake_tip`; `on_outbound_handshake` no longer reads the result it is posted with.
+
+**UNFREEZE (Rick, 2026-11-01):** src/p2p/net_node.h — chain sync's cutover (CS-5 F3): `p2p_connection_context_t::session_established` reads the seam's handshake flag, where the base context's read the sync half's state; timed sync, the double-handshake refusal and epee's post-handshake packet limit read it.
+
 **UPDATE 2026-10-09 (Rick):** `COMMAND_HANDSHAKE` carries no address
 field on any connector (the handshake-address ruling below, which
 replaces "The address we announce"); `disclose_count` is the protocol

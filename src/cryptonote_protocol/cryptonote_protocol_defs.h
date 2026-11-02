@@ -95,14 +95,6 @@ namespace cryptonote
         }
       }
       KV_SERIALIZE_OPT(attestation_witness, blobdata{})
-      // Bound the opaque witness HERE, at the codec, so no ingress can bypass it —
-      // every p2p path that deserializes a block_complete_entry (compact-block
-      // announce, get_objects response, and any future one) is covered by construction. This
-      // mirrors txin_archival_reward_emission, which bounds its own blob inside
-      // BEGIN_SERIALIZE rather than trusting its callers. Refusing here also means
-      // the oversized blob never reaches m_block_queue's accounting.
-      if (!config::archival_attestation_witness_within_transport_cap(this_ref.attestation_witness.size()))
-        return false;
     END_KV_SERIALIZE_MAP()
 
     block_complete_entry(): pruned(false), block_weight(0) {}
@@ -129,45 +121,6 @@ namespace cryptonote
     };
     typedef epee::misc_utils::struct_init<request_t> request;
   };
-  /************************************************************************/
-  /*                                                                      */
-  /************************************************************************/
-  struct NOTIFY_REQUEST_GET_OBJECTS
-  {
-    const static int ID = BC_COMMANDS_POOL_BASE + 3;
-
-    struct request_t
-    {
-      std::vector<crypto::hash> blocks;
-      bool prune;
-
-      BEGIN_KV_SERIALIZE_MAP()
-        KV_SERIALIZE_CONTAINER_POD_AS_BLOB(blocks)
-        KV_SERIALIZE_OPT(prune, false)
-      END_KV_SERIALIZE_MAP()
-    };
-    typedef epee::misc_utils::struct_init<request_t> request;
-  };
-
-  struct NOTIFY_RESPONSE_GET_OBJECTS
-  {
-    const static int ID = BC_COMMANDS_POOL_BASE + 4;
-
-    struct request_t
-    {
-      std::vector<block_complete_entry>  blocks;
-      std::vector<crypto::hash>          missed_ids;
-      uint64_t                         current_blockchain_height;
-
-      BEGIN_KV_SERIALIZE_MAP()
-        KV_SERIALIZE(blocks)
-        KV_SERIALIZE_CONTAINER_POD_AS_BLOB(missed_ids)
-        KV_SERIALIZE(current_blockchain_height)
-      END_KV_SERIALIZE_MAP()
-    };
-    typedef epee::misc_utils::struct_init<request_t> request;
-  };
-
 
   struct CORE_SYNC_DATA
   {
@@ -189,95 +142,6 @@ namespace cryptonote
       KV_SERIALIZE_VAL_POD_AS_BLOB(top_id)
     END_KV_SERIALIZE_MAP()
   };
-
-  struct NOTIFY_REQUEST_CHAIN
-  {
-    const static int ID = BC_COMMANDS_POOL_BASE + 6;
-
-    struct request_t
-    {
-      std::list<crypto::hash> block_ids; /*IDs of the first 10 blocks are sequential, next goes with pow(2,n) offset, like 2, 4, 8, 16, 32, 64 and so on, and the last one is always genesis block */
-      bool prune;
-
-      BEGIN_KV_SERIALIZE_MAP()
-        KV_SERIALIZE_CONTAINER_POD_AS_BLOB(block_ids)
-        KV_SERIALIZE_OPT(prune, false)
-      END_KV_SERIALIZE_MAP()
-    };
-    typedef epee::misc_utils::struct_init<request_t> request;
-  };
-
-  struct NOTIFY_RESPONSE_CHAIN_ENTRY
-  {
-    const static int ID = BC_COMMANDS_POOL_BASE + 7;
-
-    struct request_t
-    {
-      uint64_t start_height;
-      uint64_t total_height;
-      uint64_t cumulative_difficulty;
-      uint64_t cumulative_difficulty_top64;
-      std::vector<crypto::hash> m_block_ids;
-      std::vector<uint64_t> m_block_weights;
-      cryptonote::blobdata first_block;
-
-      BEGIN_KV_SERIALIZE_MAP()
-        KV_SERIALIZE(start_height)
-        KV_SERIALIZE(total_height)
-        KV_SERIALIZE(cumulative_difficulty)
-        if (is_store)
-          KV_SERIALIZE(cumulative_difficulty_top64)
-        else
-          KV_SERIALIZE_OPT(cumulative_difficulty_top64, (uint64_t)0)
-        KV_SERIALIZE_CONTAINER_POD_AS_BLOB(m_block_ids)
-        KV_SERIALIZE_CONTAINER_POD_AS_BLOB(m_block_weights)
-        KV_SERIALIZE(first_block)
-      END_KV_SERIALIZE_MAP()
-    };
-    typedef epee::misc_utils::struct_init<request_t> request;
-  };
-  
-  /************************************************************************/
-  /*                                                                      */
-  /************************************************************************/
-  struct NOTIFY_NEW_COMPACT_BLOCK
-  {
-    const static int ID = BC_COMMANDS_POOL_BASE + 8;
-
-    struct request_t
-    {
-      block_complete_entry b;
-      uint64_t current_blockchain_height;
-
-      BEGIN_KV_SERIALIZE_MAP()
-        KV_SERIALIZE(b)
-        KV_SERIALIZE(current_blockchain_height)
-      END_KV_SERIALIZE_MAP()
-    };
-    typedef epee::misc_utils::struct_init<request_t> request;
-  };  
-
-  /************************************************************************/
-  /*                                                                      */
-  /************************************************************************/
-  struct NOTIFY_REQUEST_COMPACT_MISSING_TX
-  {
-    const static int ID = BC_COMMANDS_POOL_BASE + 9;
-
-    struct request_t
-    {
-      crypto::hash block_hash;
-      uint64_t current_blockchain_height;      
-      std::vector<uint64_t> missing_tx_indices;
-      
-      BEGIN_KV_SERIALIZE_MAP()
-        KV_SERIALIZE_VAL_POD_AS_BLOB(block_hash)
-        KV_SERIALIZE(current_blockchain_height)
-        KV_SERIALIZE_CONTAINER_POD_AS_BLOB(missing_tx_indices)
-      END_KV_SERIALIZE_MAP()
-    };
-    typedef epee::misc_utils::struct_init<request_t> request;
-  }; 
 
   /************************************************************************/
   /*                                                                      */

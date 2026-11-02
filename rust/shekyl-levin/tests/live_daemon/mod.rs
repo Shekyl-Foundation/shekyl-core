@@ -344,9 +344,12 @@ pub fn spawn_peer(
             node_data: BasicNodeData {
                 network_id: regtest_network_id(),
             },
+            // A claim that can be a chain: genesis alone, whose work is 1.
+            // Chain sync's owner closes a session whose claim has less work
+            // than blocks (`PayloadRefused::Work`).
             payload_data: CoreSyncData {
                 current_height: 1,
-                cumulative_difficulty: 0,
+                cumulative_difficulty: 1,
                 cumulative_difficulty_top64: 0,
                 top_id: [0u8; 32],
             },

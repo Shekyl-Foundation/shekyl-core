@@ -39,6 +39,8 @@ mod scaling_tests;
 mod scenarios;
 #[cfg(test)]
 mod select_tests;
+#[cfg(test)]
+mod stall_tests;
 
 mod arrivals;
 mod branch;
@@ -50,12 +52,14 @@ mod protocol;
 mod runs;
 mod state;
 mod tree;
+mod view;
 
 pub use claim::{PayloadRefused, PeerClaim};
 pub use locator::locator;
 pub use model::{
     BoundArrival, CachePlan, ClaimError, CloseCause, Command, Event, HashClass, Job, OfferedBody,
-    Outcome, ProveItem, Proved, Sync, BODY_REQUESTS_IN_FLIGHT, SYNC_RATE_FLOOR,
+    Outcome, ProveItem, Proved, Requesting, Sync, BODY_REQUESTS_IN_FLIGHT, SYNC_RATE_FLOOR,
 };
 pub use shekyl_chain_rules::HeaderView;
-pub use state::SyncState;
+pub use state::{Declaration, SyncState};
+pub use view::{BodiesInFlight, HeaderInFlight, SessionMode, SessionView, SyncView};

@@ -535,6 +535,8 @@ fn the_latch_does_not_withhold_synced() {
             &mut out,
         )
         .unwrap();
+        // No claim arrives: the opening resolves at its deadline.
+        crate::proof::resolve_opening(&mut sync, &view);
         assert_eq!(sync.state(), crate::SyncState::Synced);
         sync.handle(
             Event::Latch { set: true },

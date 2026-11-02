@@ -396,6 +396,54 @@ pub fn publish_chain_tip(tip: &shekyl_chain_ingest::ChainTip) {
     });
 }
 
+/// The node's tip as a handshake carries it: `CORE_SYNC_DATA`'s fields.
+#[repr(C)]
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct ShekylSyncPayload {
+    /// The block count.
+    pub current_height: u64,
+    /// The cumulative difficulty's low 64 bits.
+    pub cumulative_difficulty: u64,
+    /// Its high 64 bits.
+    pub cumulative_difficulty_top64: u64,
+    /// The top block's id.
+    pub top_id: [u8; 32],
+}
+
+/// The tip [`shekyl_p2p_handshake_tip`] found, written.
+pub const SHEKYL_HANDSHAKE_TIP_OK: i32 = 0;
+/// No tip has been published yet: the node has not opened.
+pub const SHEKYL_HANDSHAKE_TIP_NONE: i32 = 1;
+/// `out` is null.
+pub const SHEKYL_HANDSHAKE_TIP_NULL: i32 = -1;
+
+/// Write the node's tip into `out` (CS-5 F4): the one tip every handshake
+/// carries. The outbound dial reads it here already; the inbound
+/// handshake's reply and both sides of a timed sync read this export, so
+/// one node never reports two tips in the same second.
+///
+/// # Safety
+///
+/// `out` is null or points to a writable [`ShekylSyncPayload`].
+#[no_mangle]
+pub unsafe extern "C" fn shekyl_p2p_handshake_tip(out: *mut ShekylSyncPayload) -> i32 {
+    if out.is_null() {
+        return SHEKYL_HANDSHAKE_TIP_NULL;
+    }
+    let Some(tip) = *TIP.lock().expect("tip") else {
+        return SHEKYL_HANDSHAKE_TIP_NONE;
+    };
+    let payload = ShekylSyncPayload {
+        current_height: tip.current_height,
+        cumulative_difficulty: tip.cumulative_difficulty,
+        cumulative_difficulty_top64: tip.cumulative_difficulty_top64,
+        top_id: tip.top_id,
+    };
+    // SAFETY: the caller's contract: `out` is writable and not null.
+    unsafe { out.write(payload) };
+    SHEKYL_HANDSHAKE_TIP_OK
+}
+
 /// The dialer does not exist: the seam is not bound, so the remnant has
 /// not constructed `net_node` yet, or the zone host was shut down.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]

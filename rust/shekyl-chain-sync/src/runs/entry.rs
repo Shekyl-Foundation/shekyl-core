@@ -46,10 +46,11 @@ where
         match outcome {
             Outcome::Connected { height } => {
                 self.accepted.insert(hash);
+                self.judged.insert(hash);
                 if self.relays(hash, height, arrival.header.cumulative_difficulty()) {
                     out.push(Command::Relay {
                         hash,
-                        from: session,
+                        from: Some(session),
                     });
                 }
             }
@@ -92,11 +93,13 @@ where
                 }
             }
             Outcome::MissingBodies { indices } => {
-                out.push(Command::RequestMissingTxs {
-                    session,
-                    block: hash,
-                    indices,
-                });
+                if self.requests() {
+                    out.push(Command::RequestMissingTxs {
+                        session,
+                        block: hash,
+                        indices,
+                    });
+                }
             }
             Outcome::NoRoom => {
                 // The allowance that authorized the offer was already spent.
@@ -387,6 +390,7 @@ where
         let live = |hash: &BlockHash| self.tree.contains(*hash) && !self.tree.remembers(*hash);
         self.served.retain(|hash, _| live(hash));
         self.accepted.retain(live);
+        self.judged.retain(live);
     }
 
     fn judge_standalone<'id, H: HeaderView<'id>>(

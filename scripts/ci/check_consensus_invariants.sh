@@ -250,34 +250,35 @@ echo
 #    asserted present before its content is judged.
 # ----------------------------------------------------------------------
 echo "[5/5] sync orphan arm re-syncs without penalizing (C2-R1c-Q3b)"
-# The C++ span loop that carried this arm left with the chain. The
-# decision is BlockSyncAction in shekyl-peer-policy: orphan resync and
-# a severing drop are different variants, and drop_peer names only the
-# severing ones. Re-pointed here; the test sync_orphan_without_a_drop_is_resync
-# pins the same split.
-POLICY=rust/shekyl-peer-policy/src/block_peer.rs
+# The decision is chain sync's model since CS-5: the entry's `Unlinked`
+# reply (a body whose parent reaches nothing this node holds) re-locates
+# the supplier with a header request and closes nothing; a refused block
+# is the arm that closes. The test
+# an_unlinked_body_relocates_its_supplier_and_closes_nothing pins the
+# same split.
+ENTRY=rust/shekyl-chain-sync/src/runs/entry.rs
+ORPHAN_TEST=rust/shekyl-chain-sync/src/relay_tests.rs
 INL=src/cryptonote_protocol/cryptonote_protocol_handler.inl
-DROP_FN=$(awk '/pub const fn drop_peer/,/^    \}$/' "$POLICY")
-ORPH_FN=$(awk '/pub const fn orphan_resync/,/^    \}$/' "$POLICY")
-if [[ ! -f "$POLICY" || -z "$DROP_FN" || -z "$ORPH_FN" ]]; then
-  echo "      FAIL: could not extract drop_peer and orphan_resync from $POLICY"
+UNLINKED_ARM=$(awk '/Outcome::Unlinked \{ at \} => \{/,/^            \}$/' "$ENTRY")
+REFUSED_ARM=$(awk '/Outcome::Refused \{ verdict \} => \{/,/^            \}$/' "$ENTRY")
+if [[ ! -f "$ENTRY" || -z "$UNLINKED_ARM" || -z "$REFUSED_ARM" ]]; then
+  echo "      FAIL: could not extract the Unlinked and Refused arms from $ENTRY"
   echo "            -- the sync action moved; re-point this gate, do not delete it."
   FAIL=1
-elif printf '%s\n' "$DROP_FN" | grep -q 'OrphanResync'; then
-  echo "      FAIL: drop_peer names OrphanResync -- an orphan re-sync would sever."
+elif ! rg -q 'fn an_unlinked_body_relocates_its_supplier_and_closes_nothing' "$ORPHAN_TEST"; then
+  echo "      FAIL: $ORPHAN_TEST lost the test that pins the orphan split."
   FAIL=1
-elif ! printf '%s\n' "$DROP_FN" | grep -q 'Self::Drop'; then
-  echo "      FAIL: drop_peer no longer names Self::Drop -- the severing arm is gone."
+elif printf '%s\n' "$UNLINKED_ARM" | grep -q 'self.close('; then
+  echo "      FAIL: the Unlinked arm closes the session -- an orphan re-sync would sever."
   FAIL=1
-elif ! printf '%s\n' "$ORPH_FN" | grep -q 'OrphanResync'; then
-  echo "      FAIL: orphan_resync no longer names OrphanResync."
+elif ! printf '%s\n' "$UNLINKED_ARM" | grep -q 'self.locate('; then
+  echo "      FAIL: the Unlinked arm no longer re-locates the supplier."
   FAIL=1
-elif printf '%s\n' "$ORPH_FN" | grep -q 'Self::Drop'; then
-  echo "      FAIL: orphan_resync names a drop variant."
+elif ! printf '%s\n' "$REFUSED_ARM" | grep -q 'self.close('; then
+  echo "      FAIL: the Refused arm no longer closes -- the severing arm is gone."
   FAIL=1
 elif rg -n 'm_marked_as_orphaned' "$INL" >/dev/null; then
-  echo "      FAIL: $INL still names m_marked_as_orphaned -- the bool is gone;"
-  echo "            the sync path asks block_sync_orphan_resync (PWD-B7)."
+  echo "      FAIL: $INL names m_marked_as_orphaned -- orphans are chain sync's."
   FAIL=1
 else
   echo "      OK"
