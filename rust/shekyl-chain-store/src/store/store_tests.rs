@@ -598,37 +598,135 @@ fn an_existing_file_that_is_not_a_store_is_refused_untouched() {
 }
 
 /// The two shapes a power loss leaves before the engine has finished
-/// initializing the file: empty (a cut right after `create_new`) and a
-/// header with its magic unwritten (redb writes the magic last). Each is
-/// a creation nothing was committed to: the next open moves it aside,
-/// never deleting it, creates a fresh store, and reports where it went
-/// (`crate::creation`; PB-S2's first replay, 2026-11-01, found the second
-/// shape refusing a node's every later start). Red edit: drop the
-/// `set_aside_unfinished_init` arm from `with_horizons`.
+/// initializing the file: empty (a cut right after `create_new`) and the
+/// header the engine flushes before its magic (redb writes the magic
+/// last). Each is a creation nothing was committed to: the next open
+/// moves it aside, never deleting it, creates a fresh store, and reports
+/// where it went (`crate::creation`; PB-S2's first replay, 2026-11-01,
+/// found the second shape refusing a node's every later start). Red edit:
+/// drop the `set_aside_unfinished_init` arm from `open_at`.
 #[test]
 fn a_file_the_engine_never_finished_initializing_is_created_by_the_next_open() {
-    let mut header = vec![0u8; 1 << 20];
-    header[9..16].copy_from_slice(&[4, 0, 0, 0, 0x10, 0, 0]);
-    for (label, bytes) in [("empty-at-path", Vec::new()), ("magic-unwritten", header)] {
+    for (label, bytes) in [
+        ("empty-at-path", Vec::new()),
+        ("magic-unwritten", crate::creation::pre_magic_image()),
+    ] {
         let path = tmp(label);
         std::fs::write(&path, &bytes).expect("the unfinished file");
-        let store = ChainStore::with_apply_policy(&path, ApplyPolicy::Full, EPOCH)
+        let (store, cut) = open_at(&path, ApplyPolicy::Full, production_horizons())
             .unwrap_or_else(|e| panic!("{label}: created: {e:?}"));
-        let to = store
-            .set_aside()
-            .unwrap_or_else(|| panic!("{label}: set aside"))
-            .to_path_buf();
+        let Some(CutShort::Uninitialized { to }) = cut else {
+            panic!("{label}: {cut:?}");
+        };
         assert_eq!(
             std::fs::read(&to).expect("aside"),
             bytes,
             "{label}: kept aside"
         );
+        assert!(
+            crate::creation::creation_lock_path(&path).is_file(),
+            "{label}: the path lock stays"
+        );
         drop(store);
-        let store = ChainStore::with_apply_policy(&path, ApplyPolicy::Full, EPOCH)
+        let (_store, cut) = open_at(&path, ApplyPolicy::Full, production_horizons())
             .unwrap_or_else(|e| panic!("{label}: reopens: {e:?}"));
-        assert!(store.set_aside().is_none(), "{label}: an ordinary reopen");
-        drop(store);
+        assert!(cut.is_none(), "{label}: an ordinary reopen");
         cleanup(&path);
         drop(std::fs::remove_file(&to));
+    }
+}
+
+/// Two opens of one empty file finish it once. The creation lock holds
+/// the second until the first's store exists, so the second is
+/// `DatabaseAlreadyOpen` while that store lives, and a later open is
+/// ordinary. Exactly one aside file, holding the original bytes. Red
+/// edit: drop [`PathGuard`](crate::creation::PathGuard) from `open_at`.
+#[test]
+fn two_openers_of_one_unfinished_file_finish_it_once() {
+    use std::sync::{Arc, Barrier};
+    use std::thread;
+
+    let path = tmp("two-openers");
+    std::fs::write(&path, b"").expect("empty");
+    let go = Arc::new(Barrier::new(2));
+    let spawn = |path: std::path::PathBuf, go: Arc<Barrier>| {
+        thread::spawn(move || {
+            go.wait();
+            open_at(&path, ApplyPolicy::Full, production_horizons())
+        })
+    };
+    let left = spawn(path.clone(), Arc::clone(&go));
+    let right = spawn(path.clone(), go);
+    let results = [left.join().expect("left"), right.join().expect("right")];
+    let mut finished = 0;
+    let mut busy = 0;
+    let mut aside = None;
+    for result in results {
+        match result {
+            Ok((store, Some(CutShort::Uninitialized { to }))) => {
+                finished += 1;
+                aside = Some(to);
+                drop(store);
+            }
+            Err(StoreError::Engine(EngineError::Open(
+                redb::DatabaseError::DatabaseAlreadyOpen,
+            ))) => busy += 1,
+            other => panic!("unexpected: {other:?}"),
+        }
+    }
+    assert_eq!((finished, busy), (1, 1), "one finish, one live writer");
+    let to = aside.expect("the aside");
+    assert_eq!(
+        std::fs::read(&to).expect("aside"),
+        b"",
+        "the original empty file"
+    );
+    let (_store, cut) = open_at(&path, ApplyPolicy::Full, production_horizons()).expect("reopen");
+    assert!(cut.is_none(), "the file is a store now");
+    cleanup(&path);
+    drop(std::fs::remove_file(&to));
+}
+
+/// A zero-filled file of the initialization length, and a young store
+/// whose magic was cleared, are the two files a length bound would move
+/// aside. Both stay, byte for byte. Red edit: accept a clear magic slot
+/// at [`ENGINE_INIT_LEN`](crate::creation::ENGINE_INIT_LEN).
+#[test]
+fn a_file_that_only_looks_unfinished_is_refused_untouched() {
+    let zeroed = tmp("zeroed-init");
+    let zeros = vec![0u8; usize::try_from(crate::creation::ENGINE_INIT_LEN).unwrap()];
+    std::fs::write(&zeroed, &zeros).expect("zeros");
+
+    let cleared = tmp("magic-cleared");
+    {
+        let db = redb::Database::create(&cleared).expect("young store");
+        let txn = db.begin_write().expect("write");
+        {
+            let mut table = txn.open_table(PROBE).expect("table");
+            table.insert("k", 1u64).expect("row");
+        }
+        txn.commit().expect("commit");
+    }
+    let mut punched = std::fs::read(&cleared).expect("bytes");
+    assert_eq!(punched.len() as u64, crate::creation::ENGINE_INIT_LEN);
+    punched[..9].fill(0);
+    std::fs::write(&cleared, &punched).expect("cleared magic");
+
+    for (path, bytes) in [(&zeroed, zeros.as_slice()), (&cleared, punched.as_slice())] {
+        assert!(
+            matches!(
+                ChainStore::with_apply_policy(path, ApplyPolicy::Full, EPOCH),
+                Err(StoreError::Engine(EngineError::Open(_)))
+            ),
+            "{}",
+            path.display()
+        );
+        assert_eq!(
+            std::fs::read(path).expect("kept"),
+            bytes,
+            "{}",
+            path.display()
+        );
+        cleanup(path);
     }
 }

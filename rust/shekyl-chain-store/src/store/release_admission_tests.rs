@@ -35,6 +35,7 @@ fn record(path: &std::path::Path, blocks: usize) -> Vec<BlockHash> {
 
 fn released(path: &std::path::Path, anchors: &ReleaseAnchors) -> Result<ChainStore, StoreError> {
     ChainStore::with_release(path, ApplyPolicy::Full, production_horizons(), anchors)
+        .map(|(store, _cut)| store)
 }
 
 fn pin_of(anchors: &ReleaseAnchors) -> BlockHash {

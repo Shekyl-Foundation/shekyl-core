@@ -78,7 +78,7 @@ use shekyl_chain_ingest::{Chain, ChainRules, Metrics, ProductionSubstrate, Subst
 use shekyl_chain_rules::{AdmissionPolicy, FakechainSchedule, ReleaseAnchors, RuleSet};
 use shekyl_chain_store::apply_policy::ApplyPolicy;
 use shekyl_chain_store::pool::PoolOpen;
-use shekyl_chain_store::store::{ChainStore, Horizons, SnapshotView};
+use shekyl_chain_store::store::{ChainStore, CutShort, Horizons, SnapshotView};
 use shekyl_chain_sync::SyncState;
 use shekyl_daemon_config::sections::{DaemonConfig, Dev};
 use shekyl_daemon_rpc::handles::Handles;
@@ -780,14 +780,8 @@ fn open_chain(
 ) -> Result<ChainStore, OpenError> {
     use shekyl_chain_store::store::{StoreCannot, StoreError};
     match ChainStore::with_release(path, ApplyPolicy::Full, horizons, anchors) {
-        Ok(store) => {
-            if let Some(to) = store.set_aside() {
-                tracing::warn!(
-                    moved_to = %to.display(),
-                    "the chain file was a creation cut short before the engine finished it (a \
-                     power loss on an earlier start); it was moved aside and a fresh store created"
-                );
-            }
+        Ok((store, cut)) => {
+            log_chain_cut(cut);
             Ok(store)
         }
         Err(StoreError::Cannot(StoreCannot::SchemaVersionMismatch { found, expected })) => {
@@ -797,14 +791,29 @@ fn open_chain(
                 "the chain file is a layout this release does not speak; removing it and opening a fresh store"
             );
             std::fs::remove_file(path).map_err(OpenError::Wipe)?;
-            Ok(ChainStore::with_release(
-                path,
-                ApplyPolicy::Full,
-                horizons,
-                anchors,
-            )?)
+            let (store, cut) =
+                ChainStore::with_release(path, ApplyPolicy::Full, horizons, anchors)?;
+            log_chain_cut(cut);
+            Ok(store)
         }
         Err(error) => Err(error.into()),
+    }
+}
+
+/// The chain's half of the pool's creation log: a seal finished in place,
+/// or an initialization moved aside.
+fn log_chain_cut(cut: Option<CutShort>) {
+    match cut {
+        Some(CutShort::Unsealed) => tracing::info!(
+            "the chain file's creation was cut short (a power loss on an earlier start); \
+             it was finished empty"
+        ),
+        Some(CutShort::Uninitialized { to }) => tracing::warn!(
+            moved_to = %to.display(),
+            "the chain file was a creation cut short before the engine finished it (a power \
+             loss on an earlier start); it was moved aside and a fresh store created"
+        ),
+        None => {}
     }
 }
 
