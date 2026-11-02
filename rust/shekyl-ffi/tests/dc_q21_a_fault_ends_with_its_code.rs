@@ -47,7 +47,7 @@
 
 use std::path::Path;
 use std::process::{Command, Output, Stdio};
-use std::sync::{Arc, Mutex, Weak};
+use std::sync::{Arc, Mutex, PoisonError, Weak};
 use std::time::{Duration, Instant};
 
 use shekyl_ffi::platform::harden_process;
@@ -256,10 +256,15 @@ impl Drop for ScratchPolicy {
 }
 
 /// One policy shared by the tests that run concurrently in this binary;
-/// created by the first to ask, deleted by the last to finish.
+/// created by the first to ask, deleted by the last to finish. A refusal
+/// in `set` (no right to write `HKLM`, WER not reacting) panics with the
+/// lock held and poisons it; the slot is still a sound `Weak`, so the
+/// lock is recovered and every later test retries `set` and fails with
+/// the same reason, instead of a `PoisonError` that names none (Rick's
+/// third Windows run, 2026-11-02).
 fn policy() -> Arc<ScratchPolicy> {
     static SHARED: Mutex<Weak<ScratchPolicy>> = Mutex::new(Weak::new());
-    let mut slot = SHARED.lock().expect("the policy slot");
+    let mut slot = SHARED.lock().unwrap_or_else(PoisonError::into_inner);
     if let Some(live) = slot.upgrade() {
         return live;
     }
