@@ -57,10 +57,10 @@ private:
   std::unique_ptr<t_internals> mp_internals;
 };
 
-/// Requests the stop `Daemon::run` is waiting for and returns at once: it
-/// signals the running daemon directly, or, before `run` has registered,
-/// leaves the request for `run` to see. Called by the Rust signal owner
-/// through the entry's `stop`.
+/// Signals the daemon `run` has registered, and returns at once.
+/// A request that arrives before `run` registers is kept and signalled
+/// when `run` does. A second `run` while one holds the slot is refused.
+/// Called by the Rust signal owner through the entry's `stop`.
 void request_stop();
 
 } // namespace daemonize
