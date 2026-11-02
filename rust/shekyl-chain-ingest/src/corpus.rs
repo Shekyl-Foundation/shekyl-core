@@ -71,16 +71,16 @@
 //!
 //! # Verified, not declared (RD-F15)
 //!
-//! A pruned RPC source fails **silently**: `/get_blocks_by_height.bin`
-//! returns a block with fewer bodies than its header lists and no flag
-//! (`BlockEntry { block, txs }`; the handler drops `missed`). So the writer
-//! does not record what the source *said* about pruning — it parses the
-//! block and requires the bodies to match `block.transaction_hashes` in
-//! **count, order and hash** before a height is written; a shortfall is
-//! [`CorpusFault::IncompleteBodies`] naming the height. The reader
-//! re-derives the same check on every record it yields, so an artifact
-//! edited after writing is refused for the same reason. Completeness is a
-//! property the artifact demonstrates on read, never a byte it asserts.
+//! The writer does not record what the source *said* about its bodies —
+//! `/get_blocks_by_height.bin` names a discarded body per slot
+//! (`archived`, `PDM-Q10`), and the fetch refuses that before it reaches
+//! the writer — it parses the block and requires the bodies to match
+//! `block.transaction_hashes` in **count, order and hash** before a height
+//! is written; a shortfall is [`CorpusFault::IncompleteBodies`] naming the
+//! height. The reader re-derives the same check on every record it
+//! yields, so an artifact edited after writing is refused for the same
+//! reason. Completeness is a property the artifact demonstrates on read,
+//! never a byte it asserts.
 //!
 //! # What the corpus's `net` tag is, and is not
 //!

@@ -24,7 +24,7 @@ use shekyl_scanner::bench_fixtures::{
     build_typical_case_scannable_block, scannable_block_for_recipient,
 };
 use shekyl_wire::transaction::{BondPost, BondPostKind};
-use shekyl_wire::Holdings;
+use shekyl_wire::{BoundTx, Holdings};
 
 use crate::engine::pscan::persona_scanner::guaranteed_scanner_for_persona;
 
@@ -169,8 +169,7 @@ fn tampered_funding_block(p: &ArchivalPKeys) -> ScannableBlock {
     use shekyl_scanner::extra::Extra;
 
     let mut block = funding_block(p);
-    {
-        let tx = &mut block.transactions[0];
+    block.transactions[0].modify(|tx| {
         let extra = Extra::read(&mut tx.prefix.extra.as_slice()).expect("fixture extra");
         let (keys, _) = extra.keys().expect("fixture tx pubkey");
         let kem_cts: Vec<Vec<u8>> = extra
@@ -184,7 +183,7 @@ fn tampered_funding_block(p: &ArchivalPKeys) -> ScannableBlock {
         let mut tampered = Extra::for_hybrid_transfer(keys[0], kem_cts);
         tampered.push_pqc_leaf_entries(leaf_blob);
         tx.prefix.extra = tampered.serialize();
-    }
+    });
     block
 }
 
@@ -258,7 +257,7 @@ fn unspendable_warn_is_loud_but_names_no_persona_or_tx() {
         .iter()
         .map(hex::encode)
         .collect();
-    forbidden_hashes.extend(block.transactions.iter().map(|tx| hex::encode(tx.hash())));
+    forbidden_hashes.extend(block.transactions.iter().map(|tx| hex::encode(tx.txid())));
     let scanner = guaranteed_scanner_for_persona(&p).expect("scanner");
 
     let sink = SharedBuf::default();
@@ -399,13 +398,14 @@ fn bond_post_matches_only_known_canonical_ids() {
     // A foreign block (no outputs we own) carrying two bond-posts: ours + a
     // stranger's. Adding inputs to an existing tx keeps its Ct valid.
     let mut block = build_typical_case_scannable_block(1);
-    let tx = block.transactions.get_mut(0).expect("a non-miner tx");
-    tx.prefix
-        .inputs
-        .push(Input::BondPost(Box::new(bond_post_for(&mine))));
-    tx.prefix
-        .inputs
-        .push(Input::BondPost(Box::new(bond_post_for(&other))));
+    block.transactions[0].modify(|tx| {
+        tx.prefix
+            .inputs
+            .push(Input::BondPost(Box::new(bond_post_for(&mine))));
+        tx.prefix
+            .inputs
+            .push(Input::BondPost(Box::new(bond_post_for(&other))));
+    });
 
     let scanner = guaranteed_scanner_for_persona(&mine).expect("scanner");
     let known = BTreeMap::from([(canonical_id(&mine), 0)]);
@@ -453,12 +453,11 @@ fn extractor_carries_the_consensus_release_byte() {
 
     let mine = persona(0);
     let mut block = build_typical_case_scannable_block(1);
-    let tx = block.transactions.get_mut(0).expect("a non-miner tx");
     // A Release bond-post: the consensus Release byte on the wire as `Other(b)`
     // (genesis wire is JoinMarket-only, so this models the post-genesis form).
     let mut post = bond_post_for(&mine);
     post.kind = BondPostKind::Other(release_byte);
-    tx.prefix.inputs.push(Input::BondPost(Box::new(post)));
+    block.transactions[0].modify(|tx| tx.prefix.inputs.push(Input::BondPost(Box::new(post))));
 
     let scanner = guaranteed_scanner_for_persona(&mine).expect("scanner");
     let known = BTreeMap::from([(canonical_id(&mine), 0)]);
@@ -483,10 +482,11 @@ fn extractor_carries_the_consensus_release_byte() {
 fn dual_extracts_funding_and_bond_post_in_one_block() {
     let p = persona(0);
     let mut block = funding_block(&p);
-    block.transactions[0]
-        .prefix
-        .inputs
-        .push(Input::BondPost(Box::new(bond_post_for(&p))));
+    block.transactions[0].modify(|tx| {
+        tx.prefix
+            .inputs
+            .push(Input::BondPost(Box::new(bond_post_for(&p))))
+    });
 
     let scanner = guaranteed_scanner_for_persona(&p).expect("scanner");
     let known = BTreeMap::from([(canonical_id(&p), 0)]);
@@ -553,10 +553,11 @@ fn rejects_a_step_over_the_dq6_bound() {
 fn lineage_bond_post_change_for_own_bond_post_tx() {
     let p = persona(0);
     let mut block = funding_block(&p);
-    block.transactions[0]
-        .prefix
-        .inputs
-        .push(Input::BondPost(Box::new(bond_post_for(&p))));
+    block.transactions[0].modify(|tx| {
+        tx.prefix
+            .inputs
+            .push(Input::BondPost(Box::new(bond_post_for(&p))))
+    });
 
     let scanner = guaranteed_scanner_for_persona(&p).expect("scanner");
     let known = BTreeMap::from([(canonical_id(&p), 0)]);
@@ -603,10 +604,11 @@ fn lineage_fails_toward_forbidden_for_another_personas_bond_post() {
     let mine = persona(0);
     let other = persona(1);
     let mut block = funding_block(&mine);
-    block.transactions[0]
-        .prefix
-        .inputs
-        .push(Input::BondPost(Box::new(bond_post_for(&other))));
+    block.transactions[0].modify(|tx| {
+        tx.prefix
+            .inputs
+            .push(Input::BondPost(Box::new(bond_post_for(&other))))
+    });
 
     let scanner = guaranteed_scanner_for_persona(&mine).expect("scanner");
     let known = BTreeMap::from([(canonical_id(&mine), 0), (canonical_id(&other), 1)]);
@@ -645,10 +647,7 @@ fn lineage_fails_toward_forbidden_for_another_personas_bond_post() {
 fn lineage_emission_reward_for_own_emission_vin_tx() {
     let p = persona(0);
     let mut block = funding_block(&p);
-    block.transactions[0]
-        .prefix
-        .inputs
-        .push(emission_input_for(&p));
+    block.transactions[0].modify(|tx| tx.prefix.inputs.push(emission_input_for(&p)));
 
     let scanner = guaranteed_scanner_for_persona(&p).expect("scanner");
     let known = BTreeMap::from([(canonical_id(&p), 0)]);
@@ -674,10 +673,7 @@ fn lineage_fails_toward_forbidden_for_foreign_emission_vin() {
     let mine = persona(0);
     let stranger = persona(2);
     let mut block = funding_block(&mine);
-    block.transactions[0]
-        .prefix
-        .inputs
-        .push(emission_input_for(&stranger));
+    block.transactions[0].modify(|tx| tx.prefix.inputs.push(emission_input_for(&stranger)));
 
     let scanner = guaranteed_scanner_for_persona(&mine).expect("scanner");
     let known = BTreeMap::from([(canonical_id(&mine), 0)]);
@@ -708,10 +704,7 @@ fn lineage_fails_toward_forbidden_for_another_personas_emission_vin() {
     let mine = persona(0);
     let other = persona(1);
     let mut block = funding_block(&mine);
-    block.transactions[0]
-        .prefix
-        .inputs
-        .push(emission_input_for(&other));
+    block.transactions[0].modify(|tx| tx.prefix.inputs.push(emission_input_for(&other)));
 
     let scanner = guaranteed_scanner_for_persona(&mine).expect("scanner");
     let known = BTreeMap::from([(canonical_id(&mine), 0), (canonical_id(&other), 1)]);
@@ -746,12 +739,11 @@ fn lineage_fails_toward_forbidden_for_unparseable_emission_blob() {
 
     // Premise: the intact blob lifts to rung 1.
     let mut block = funding_block(&p);
-    block.transactions[0]
-        .prefix
-        .inputs
-        .push(Input::ArchivalRewardEmission {
+    block.transactions[0].modify(|tx| {
+        tx.prefix.inputs.push(Input::ArchivalRewardEmission {
             canonical_bytes: intact.clone(),
-        });
+        })
+    });
     let scanner = guaranteed_scanner_for_persona(&p).expect("scanner");
     let res = run_dual_extractor(
         vec![(0, scanner)],
@@ -773,12 +765,11 @@ fn lineage_fails_toward_forbidden_for_unparseable_emission_blob() {
     let mut truncated = intact;
     truncated.truncate(truncated.len() - 1);
     let mut block = funding_block(&p);
-    block.transactions[0]
-        .prefix
-        .inputs
-        .push(Input::ArchivalRewardEmission {
+    block.transactions[0].modify(|tx| {
+        tx.prefix.inputs.push(Input::ArchivalRewardEmission {
             canonical_bytes: truncated,
-        });
+        })
+    });
     let scanner = guaranteed_scanner_for_persona(&p).expect("scanner");
     let res = run_dual_extractor(
         vec![(0, scanner)],
@@ -806,12 +797,11 @@ fn lineage_fails_toward_forbidden_for_trailing_bytes_in_emission_blob() {
     let mut padded = emission_vin_for(&p).serialize().expect("serialize");
     padded.push(0x00);
     let mut block = funding_block(&p);
-    block.transactions[0]
-        .prefix
-        .inputs
-        .push(Input::ArchivalRewardEmission {
+    block.transactions[0].modify(|tx| {
+        tx.prefix.inputs.push(Input::ArchivalRewardEmission {
             canonical_bytes: padded,
-        });
+        })
+    });
 
     let scanner = guaranteed_scanner_for_persona(&p).expect("scanner");
     let known = BTreeMap::from([(canonical_id(&p), 0)]);
@@ -846,10 +836,11 @@ fn lineage_fails_toward_forbidden_for_emission_vin_in_a_different_tx() {
         .transactions
         .first()
         .expect("a non-miner tx")
-        .clone();
+        .clone()
+        .into_tx();
     emission_tx.prefix.inputs.push(emission_input_for(&p));
     let emission_tx_hash = emission_tx.hash();
-    block.transactions.push(emission_tx);
+    block.transactions.push(BoundTx::whole(emission_tx));
     block.block.transaction_hashes.push(emission_tx_hash);
 
     let scanner = guaranteed_scanner_for_persona(&p).expect("scanner");
@@ -885,11 +876,11 @@ fn emission_classifier_missing_tx_hash_yields_no_lift() {
     let p = persona(0);
     let known = BTreeMap::from([(canonical_id(&p), 0)]);
     let mut tx = funding_block(&p).transactions.remove(0);
-    tx.prefix.inputs.push(emission_input_for(&p));
+    tx.modify(|tx| tx.prefix.inputs.push(emission_input_for(&p)));
 
     // Premise: with its hash present, the tx classifies to our slot —
     // and the memoized second query agrees (the lazy path's cache arm).
-    let hash = tx.hash();
+    let hash = tx.txid();
     let txs = std::slice::from_ref(&tx);
     let hashes = [hash];
     let mut slots = OwnEmissionSlots::new(txs, &hashes, &known);
@@ -949,7 +940,7 @@ fn spendable_height_plain_transfer_is_the_shared_baseline() {
 fn spendable_height_coinbase_shaped_timelock_floors() {
     let p = persona(0);
     let mut block = funding_block(&p);
-    block.transactions[0].prefix.unlock_time = 20_001 + 60;
+    block.transactions[0].modify(|tx| tx.prefix.unlock_time = 20_001 + 60);
 
     let scanner = guaranteed_scanner_for_persona(&p).expect("scanner");
     let res = run_dual_extractor(
@@ -977,11 +968,12 @@ fn spendable_height_coinbase_shaped_timelock_floors() {
 fn lineage_and_spendable_height_round_trip_the_state_seam() {
     let p = persona(0);
     let mut block = funding_block(&p);
-    block.transactions[0].prefix.unlock_time = 20_001 + 60;
-    block.transactions[0]
-        .prefix
-        .inputs
-        .push(Input::BondPost(Box::new(bond_post_for(&p))));
+    block.transactions[0].modify(|tx| tx.prefix.unlock_time = 20_001 + 60);
+    block.transactions[0].modify(|tx| {
+        tx.prefix
+            .inputs
+            .push(Input::BondPost(Box::new(bond_post_for(&p))))
+    });
 
     let scanner = guaranteed_scanner_for_persona(&p).expect("scanner");
     let known = BTreeMap::from([(canonical_id(&p), 0)]);
@@ -1012,14 +1004,15 @@ fn arm_c_matches_watched_key_images_only() {
     let scanner = guaranteed_scanner_for_persona(&p).expect("scanner");
     let ki = [0xABu8; 32];
     let mut block = funding_block(&p);
-    block.transactions[0]
-        .prefix
-        .inputs
-        .push(shekyl_wire::transaction::Input::ToKey {
-            amount: 0,
-            key_offsets: Vec::new(),
-            key_image: ki,
-        });
+    block.transactions[0].modify(|tx| {
+        tx.prefix
+            .inputs
+            .push(shekyl_wire::transaction::Input::ToKey {
+                amount: 0,
+                key_offsets: Vec::new(),
+                key_image: ki,
+            })
+    });
     let gindex = shekyl_types::GlobalOutputIndex::from_raw(42);
     let mut watch = KeyImageWatchSet::new();
     watch.insert(ki, gindex);
@@ -1070,23 +1063,25 @@ fn trailing_key_images_collect_after_an_in_step_discovery() {
     // the first discovery's height).
     let ki_at_discovery = [0xABu8; 32];
     let mut discovery = funding_block(&p);
-    discovery.transactions[0]
-        .prefix
-        .inputs
-        .push(shekyl_wire::transaction::Input::ToKey {
-            amount: 0,
-            key_offsets: Vec::new(),
-            key_image: ki_at_discovery,
-        });
+    discovery.transactions[0].modify(|tx| {
+        tx.prefix
+            .inputs
+            .push(shekyl_wire::transaction::Input::ToKey {
+                amount: 0,
+                key_offsets: Vec::new(),
+                key_image: ki_at_discovery,
+            })
+    });
     let mut later = funding_block(&persona(9)); // not ours — filler carrier
-    later.transactions[0]
-        .prefix
-        .inputs
-        .push(shekyl_wire::transaction::Input::ToKey {
-            amount: 0,
-            key_offsets: Vec::new(),
-            key_image: ki,
-        });
+    later.transactions[0].modify(|tx| {
+        tx.prefix
+            .inputs
+            .push(shekyl_wire::transaction::Input::ToKey {
+                amount: 0,
+                key_offsets: Vec::new(),
+                key_image: ki,
+            })
+    });
     let out = run_dual_extractor(
         vec![(0, scanner)],
         &BTreeMap::new(),

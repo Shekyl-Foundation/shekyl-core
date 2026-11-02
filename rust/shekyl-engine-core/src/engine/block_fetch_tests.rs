@@ -17,10 +17,60 @@ use core::future::Future;
 use shekyl_rpc_types::HashHex;
 
 use shekyl_types::{
-    ArchivalLength, AttestationRoot, BlockHash, CurveTreeRoot, PrunableHash, TxHash,
+    ArchivalLength, AttestationRoot, BlockHash, CurveTreeRoot, PqcAuthHash, PrunableHash, TxHash,
 };
 use shekyl_wire::transaction::UNLOCK_TIME_BLOCK_SENTINEL;
-use shekyl_wire::{BlockHeader, Ct, CtBase, Input, Output, TxPrefix};
+use shekyl_wire::{BlockHeader, Ct, CtBase, Input, Output, SkeletonTx, Transaction, TxPrefix};
+
+/// A skeleton over `unprunable` with null operands: what the daemon serves
+/// for a spend whose prunable region and `pqc_auths` are both empty, which
+/// is most fixtures below. The shape tests exercise the bytes; the binding
+/// tests exercise the operands through `parse_tx_batch`.
+fn skeleton(unprunable: &[u8]) -> SkeletonTx {
+    SkeletonTx {
+        unprunable: unprunable.to_vec(),
+        prunable_hash: PrunableHash::from_bytes([0u8; 32]),
+        pqc_auth_hash: None,
+        archival_len: ArchivalLength::ZERO,
+    }
+}
+
+/// The skeleton the daemon serves for **any** body, with the body's own
+/// operands: the pruned segment plus the three values `txid_parts` measures
+/// on the discardable regions — the same construction the store's
+/// `skeleton_of` performs from its rows. Returns the body's txid beside it.
+fn served_skeleton(tx: &Transaction) -> (SkeletonTx, TxHash) {
+    let segments = tx.write_segments().expect("Vec write is infallible");
+    let parts = tx.txid_parts();
+    (
+        SkeletonTx {
+            unprunable: segments.pruned,
+            prunable_hash: parts.prunable_hash,
+            pqc_auth_hash: parts.pqc_auth_hash,
+            archival_len: parts.archival_len,
+        },
+        parts.hash,
+    )
+}
+
+/// Bind a skeleton to its own txid, so the shape gates downstream of the
+/// binding can be exercised; when the bytes do not even parse the binding
+/// is asked for the null id and refuses on the parse instead.
+fn bind_own(skeleton: &SkeletonTx) -> Result<BoundTx, RpcError> {
+    let own = skeleton.txid().unwrap_or(TxHash::from_bytes([0u8; 32]));
+    bind_skeleton(skeleton, own, "")
+}
+
+/// A `prune` reply carrying `txs`, otherwise conformant.
+fn reply(txs: Vec<TxEntry>) -> GetTransactionsResponse {
+    GetTransactionsResponse {
+        status: shekyl_rpc_types::RpcStatus("OK".to_owned()),
+        txs,
+        missed_tx: Vec::new(),
+        unavailable_tx: Vec::new(),
+        archived: Vec::new(),
+    }
+}
 
 /// A daemon that answers every route with one fixed document, so a test
 /// can hand the consumer a reply the wire permits but the contract does
@@ -45,8 +95,8 @@ impl Rpc for CannedDaemon {
 /// *and* a complete, plausible entry in one document. The body here is
 /// built to clear every check downstream of the status — the count
 /// matches, the entry's `tx_hash` equals the requested hash AND the body
-/// hashes to it (`parse_tx_batch` binds both), and the pruned blob is a
-/// transaction `parse_pruned_tx` accepts. So without the status check
+/// binds to it (`parse_tx_batch` checks both), and the pruned blob is a
+/// transaction `bind_skeleton` accepts. So without the status check
 /// this call **succeeds** and hands back a transaction the daemon declined
 /// to vouch for; that is the hazard, not a parse error arriving late.
 #[tokio::test]
@@ -58,7 +108,8 @@ async fn a_refusal_carrying_a_body_is_refused_not_parsed() {
     let tx = pruned_spend_tx(0);
     let prunable_digest = [0x5Au8; 32];
     let archival_len = 4_242u64;
-    let txid = tx.hash_with_supplied_prunable(
+    let txid = tx.hash_with_supplied_components(
+        None,
         PrunableHash::from_bytes(prunable_digest),
         ArchivalLength::from_raw(archival_len),
     );
@@ -70,11 +121,9 @@ async fn a_refusal_carrying_a_body_is_refused_not_parsed() {
             tx_hash: HashHex::from_bytes(txid.to_bytes()),
             as_hex: String::new(),
             pruned_as_hex: hex::encode(&body),
-            prunable_as_hex: String::new(),
             prunable_hash: HashHex::from_bytes(prunable_digest),
+            pqc_auth_hash: shekyl_rpc_types::Nullable::NULL,
             archival_len,
-            as_json: None,
-            pruned: false,
             double_spend_seen: false,
             location: shekyl_rpc_types::TxLocation::Mined {
                 block_height: 3,
@@ -85,12 +134,13 @@ async fn a_refusal_carrying_a_body_is_refused_not_parsed() {
         }],
         missed_tx: Vec::new(),
         unavailable_tx: Vec::new(),
+        archived: Vec::new(),
     };
     let rpc = CannedDaemon(std::sync::Arc::new(
         serde_json::to_vec(&reply).expect("wire type serializes"),
     ));
 
-    let err = fetch_transactions(&rpc, &[txid], TxBodyForm::Pruned)
+    let err = fetch_transactions(&rpc, &[txid])
         .await
         .expect_err("a refusal must not be accepted as transactions");
     let text = format!("{err}");
@@ -181,34 +231,34 @@ fn parse_block_blob_rejects_non_hex_and_garbage() {
 }
 
 #[test]
-fn parse_pruned_tx_round_trips_and_rejects_trailing() {
+fn bind_skeleton_round_trips_and_rejects_trailing() {
     // A pruned non-miner spend: ToKey (key-image) input, 2 outputs (the anti-deanon
     // minimum), prunable proof + pqc_auths dropped — round-trips through from_bytes.
     let tx = pruned_spend_tx(0);
     let mut bytes = Vec::new();
     tx.write(&mut bytes).expect("Vec write is infallible");
-    let hexed = hex::encode(&bytes);
-    let parsed = parse_pruned_tx(&hexed, "").expect("pruned tx round trips");
-    assert_eq!(parsed.prefix.outputs.len(), 2);
+    let bound = bind_own(&skeleton(&bytes)).expect("pruned tx round trips");
+    assert_eq!(bound.tx().prefix.outputs.len(), 2);
+    assert_eq!(bound.txid(), pruned_id(&tx));
 
     let mut trailing = bytes.clone();
     trailing.push(0xAB);
     assert!(matches!(
-        parse_pruned_tx(&hex::encode(&trailing), ""),
+        bind_own(&skeleton(&trailing)),
         Err(RpcError::InvalidNode(_))
     ));
 }
 
 #[test]
-fn parse_pruned_tx_rejects_non_hex() {
+fn decode_tx_hex_rejects_non_hex() {
     assert!(matches!(
-        parse_pruned_tx("zz", ""),
+        decode_tx_hex("zz", ""),
         Err(RpcError::InvalidNode(_))
     ));
 }
 
 #[test]
-fn parse_pruned_tx_rejects_coinbase_shaped() {
+fn bind_skeleton_rejects_coinbase_shaped() {
     // `get_transactions` returns only non-miner txs (the coinbase is embedded in
     // the block blob and parsed there). A coinbase served here — whether a clean
     // `[gen] + Null` coinbase or the non-canonical `gen + Fcmp` mix — must be
@@ -234,7 +284,7 @@ fn parse_pruned_tx_rejects_coinbase_shaped() {
     // A valid coinbase passes the context-free validator, then is_coinbase rejects it.
     assert!(real_coinbase.validate_context_free_pruned().is_ok());
     assert!(matches!(
-        parse_pruned_tx(&hex::encode(real_coinbase.serialize()), ""),
+        bind_own(&skeleton(&real_coinbase.serialize())),
         Err(RpcError::InvalidNode(_))
     ));
 
@@ -265,13 +315,13 @@ fn parse_pruned_tx_rejects_coinbase_shaped() {
     };
     assert!(gen_fcmp.validate_context_free_pruned().is_err());
     assert!(matches!(
-        parse_pruned_tx(&hex::encode(gen_fcmp.serialize()), ""),
+        bind_own(&skeleton(&gen_fcmp.serialize())),
         Err(RpcError::InvalidNode(_))
     ));
 }
 
 #[test]
-fn parse_pruned_tx_rejects_single_output_spend() {
+fn bind_skeleton_rejects_single_output_spend() {
     // A non-miner spend (key-image input) must have >= 2 outputs (anti-deanon,
     // GENESIS §10); a 1-output spend is non-canonical, so the untrusted-daemon
     // ingestion boundary rejects it rather than handing the scanner phantom state.
@@ -283,14 +333,14 @@ fn parse_pruned_tx_rejects_single_output_spend() {
         base.commitments.truncate(1);
     }
     assert!(matches!(
-        parse_pruned_tx(&hex::encode(tx.serialize()), ""),
+        bind_own(&skeleton(&tx.serialize())),
         Err(RpcError::InvalidNode(_))
     ));
 }
 
 /// A valid pruned non-miner spend: a `ToKey` key-image input, **2 outputs** (the
 /// anti-deanonymization minimum the ingestion validator enforces), with the prunable
-/// proof + pqc_auths dropped. The shared fixture for the `parse_pruned_tx` /
+/// proof + pqc_auths dropped. The shared fixture for the `bind_skeleton` /
 /// `parse_tx_batch` tests; `unlock_time` is varied for the block-height-only gate.
 fn pruned_spend_tx(unlock_time: u64) -> Transaction {
     Transaction {
@@ -329,7 +379,7 @@ fn pruned_spend_tx(unlock_time: u64) -> Transaction {
     }
 }
 
-/// Hex of a valid pruned non-miner tx that `parse_pruned_tx` accepts.
+/// Hex of a valid pruned non-miner tx that `bind_skeleton` accepts.
 ///
 /// Its hash is **not** irrelevant — `parse_tx_batch` binds the body to the
 /// requested txid, so a caller must label this body with [`pruned_id`]'s
@@ -344,14 +394,16 @@ fn pruned_tx_hex() -> String {
 /// `parse_tx_batch` now binds the body, so a fixture that invents a hash is
 /// staging the substitution it is supposed to reject.
 fn pruned_id(tx: &Transaction) -> TxHash {
-    tx.hash_with_supplied_prunable(PrunableHash::from_bytes([0u8; 32]), ArchivalLength::ZERO)
+    skeleton(&tx.serialize())
+        .txid()
+        .expect("the fixtures parse as skeletons")
 }
 
-/// A **full** (unpruned) non-miner spend: [`pruned_spend_tx`] with the
-/// prunable-coupled sections restored — one aggregated Bp+, one pseudo-out per
-/// `ToKey` input, one `pqc_auths` slot per input — so it passes the complete
-/// [`shekyl_wire::Transaction::validate`]. Proof bytes are zeroed placeholders:
-/// the context-free validator checks structure (counts/arities), not proof math.
+/// A **whole** non-miner spend: [`pruned_spend_tx`] with the discardable
+/// regions restored — one aggregated Bp+, one pseudo-out per `ToKey` input,
+/// one `pqc_auths` slot per input — so its txid is 4-part and its skeleton
+/// carries all three operands. Proof bytes are zeroed placeholders: the
+/// tests here read the body's shape and identity, not proof math.
 fn full_spend_tx() -> Transaction {
     use shekyl_wire::transaction::{PQC_HYBRID_SINGLE_KEY_LEN, PQC_HYBRID_SINGLE_SIG_LEN};
     use shekyl_wire::{BpPlus, PqcAuth, Prunable};
@@ -400,11 +452,9 @@ fn tx_entry_with(tx_hash: TxHash, as_hex: &str, pruned_as_hex: &str) -> TxEntry 
         tx_hash: HashHex::from_bytes(tx_hash.to_bytes()),
         as_hex: as_hex.to_owned(),
         pruned_as_hex: pruned_as_hex.to_owned(),
-        prunable_as_hex: String::new(),
         prunable_hash: HashHex::from_bytes([0u8; 32]),
+        pqc_auth_hash: shekyl_rpc_types::Nullable::NULL,
         archival_len: 0,
-        as_json: None,
-        pruned: false,
         double_spend_seen: false,
         location: shekyl_rpc_types::TxLocation::Mined {
             block_height: 1,
@@ -443,7 +493,7 @@ fn a_valid_body_under_the_requested_label_is_refused() {
         &hex::encode(asked_id),
         &hex::encode(substituted.serialize()),
     )];
-    let err = parse_tx_batch(&[asked_id], &txs, TxBodyForm::Pruned)
+    let err = parse_tx_batch(&[asked_id], &reply(txs))
         .expect_err("a body that is not the requested transaction must be refused");
     assert!(
         format!("{err}").contains("a label is not an identity"),
@@ -461,7 +511,7 @@ fn a_forged_prunable_digest_does_not_rescue_a_body() {
     let mut entry = tx_entry(&hex::encode(real_id), &hex::encode(tx.serialize()));
     entry.prunable_hash = HashHex::from_bytes([0x77; 32]); // not the fixtures' zero
 
-    let err = parse_tx_batch(&[real_id], &[entry], TxBodyForm::Pruned)
+    let err = parse_tx_batch(&[real_id], &reply(vec![entry]))
         .expect_err("a different digest yields a different identity");
     assert!(
         format!("{err}").contains("a label is not an identity"),
@@ -480,7 +530,7 @@ fn a_forged_archival_length_does_not_rescue_a_body() {
     let mut entry = tx_entry(&hex::encode(real_id), &hex::encode(tx.serialize()));
     entry.archival_len = 1; // not the fixtures' zero
 
-    let err = parse_tx_batch(&[real_id], &[entry], TxBodyForm::Pruned)
+    let err = parse_tx_batch(&[real_id], &reply(vec![entry]))
         .expect_err("a different length yields a different identity");
     assert!(
         format!("{err}").contains("a label is not an identity"),
@@ -500,8 +550,15 @@ fn parse_tx_batch_accepts_in_order() {
         tx_entry(&hex::encode(h0), &hex::encode(tx0.serialize())),
         tx_entry(&hex::encode(h1), &hex::encode(tx1.serialize())),
     ];
-    let out = parse_tx_batch(&[h0, h1], &txs, TxBodyForm::Pruned).expect("in-order batch parses");
+    let out = parse_tx_batch(&[h0, h1], &reply(txs)).expect("in-order batch parses");
     assert_eq!(out.len(), 2);
+    assert_eq!(
+        out.iter()
+            .map(shekyl_wire::BoundTx::txid)
+            .collect::<Vec<_>>(),
+        vec![h0, h1],
+        "each bound body carries the txid it was requested as"
+    );
 }
 
 #[test]
@@ -517,7 +574,7 @@ fn parse_tx_batch_rejects_reordered_hashes() {
         tx_entry(&hex::encode(h0), &blob),
     ];
     assert!(matches!(
-        parse_tx_batch(&[h0, h1], &txs, TxBodyForm::Pruned),
+        parse_tx_batch(&[h0, h1], &reply(txs)),
         Err(RpcError::InvalidNode(_))
     ));
 }
@@ -528,7 +585,7 @@ fn parse_tx_batch_rejects_count_mismatch() {
     let blob = pruned_tx_hex();
     let txs = vec![tx_entry(&hex::encode(h0), &blob)];
     assert!(matches!(
-        parse_tx_batch(&[h0, h1], &txs, TxBodyForm::Pruned),
+        parse_tx_batch(&[h0, h1], &reply(txs)),
         Err(RpcError::InvalidNode(_))
     ));
 }
@@ -545,8 +602,8 @@ fn a_reply_without_a_tx_hash_label_is_refused_at_the_boundary() {
     let doc = serde_json::json!({
         "status": "OK",
         "txs": [{
-            "as_hex": "", "pruned_as_hex": blob, "prunable_as_hex": "",
-            "prunable_hash": "00".repeat(32), "as_json": "",
+            "as_hex": "", "pruned_as_hex": blob,
+            "prunable_hash": "00".repeat(32), "pqc_auth_hash": null,
             "in_pool": false, "double_spend_seen": false,
             "block_height": 1, "confirmations": 1, "block_timestamp": 0
         }]
@@ -563,133 +620,143 @@ fn parse_tx_batch_rejects_missing_pruned_blob() {
     let h0 = TxHash::from_bytes([3u8; 32]);
     let txs = vec![tx_entry_with(h0, "", "")];
     assert!(matches!(
-        parse_tx_batch(&[h0], &txs, TxBodyForm::Pruned),
+        parse_tx_batch(&[h0], &reply(txs)),
         Err(RpcError::InvalidNode(_))
     ));
 }
 
 #[test]
 fn parse_tx_batch_empty_is_ok() {
-    let out = parse_tx_batch(&[], &[], TxBodyForm::Pruned).expect("empty batch parses");
+    let out = parse_tx_batch(&[], &reply(Vec::new())).expect("empty batch parses");
     assert!(out.is_empty());
 }
 
+/// **A whole body is not the pruned form** (`SB-Q2` item 10). A `prune`
+/// request is answered by the skeleton alone; a daemon that fills `as_hex`
+/// — even with the right transaction, bound to the right id — is refused,
+/// because the wallet must never have to parse `pqc_auths` bytes it did
+/// not ask for, and because the one pruned form is one shape.
 #[test]
-fn parse_tx_batch_full_form_reads_as_hex_with_pruned_fallback() {
-    // The full form's primary field is the non-split `as_hex`; when the
-    // daemon answers in the split form because the prunable section is
-    // empty, `pruned_as_hex` IS the full body, so it is the accepted
-    // fallback. (Our fixture's pruned form is a stripped spend, which the
-    // full validator rejects — so the fallback leg uses the full blob under
-    // the `pruned_as_hex` key, exactly the daemon's empty-prunable shape.)
-    // Both slots carry the same full body, so both carry its real hash —
-    // the leg under test is which FIELD the body arrives in, not identity.
+fn a_whole_body_in_as_hex_is_refused() {
     let full = full_spend_tx();
-    let full_hex = hex::encode(full.serialize());
-    let h = full.hash();
-    let txs = vec![
-        tx_entry_with(h, &full_hex, ""),
-        tx_entry_with(h, "", &full_hex),
-    ];
-    let out = parse_tx_batch(&[h, h], &txs, TxBodyForm::Full).expect("full batch parses");
-    assert_eq!(out.len(), 2);
+    let (skeleton, id) = served_skeleton(&full);
+    let mut entry = tx_entry_with(id, &hex::encode(full.serialize()), "");
+    entry.prunable_hash = HashHex::from_bytes(skeleton.prunable_hash.to_bytes());
+    entry.pqc_auth_hash = skeleton
+        .pqc_auth_hash
+        .map(|hash| HashHex::from_bytes(hash.to_bytes()))
+        .into();
+    entry.archival_len = skeleton.archival_len.to_raw();
+    let err = parse_tx_batch(&[id], &reply(vec![entry]))
+        .expect_err("a whole body answers no prune request");
     assert!(
-        out.iter()
-            .all(|tx| matches!(&tx.ct, Ct::Fcmp { prunable, .. } if prunable.is_some())),
-        "full-form bodies carry their prunable section"
+        format!("{err}").contains("whole body"),
+        "the refusal names the form, not a parse failure: {err}"
     );
 }
 
+/// **An archived slot is not the pruned form's answer.** Every transaction
+/// has a skeleton, so `archived` can only appear in a reply to a full-form
+/// request; a `prune` reply carrying one is refused as a whole, before any
+/// body is read.
 #[test]
-fn parse_full_tx_rejects_a_prunable_stripped_spend_naming_the_pruned_daemon() {
-    // The fallback tripwire: a daemon answering a full-body request with
-    // a storage-pruned spend (key-image inputs, prunable dropped) is
-    // rejected at the ingestion boundary — it cannot survive to a bogus
-    // null-prunable hash downstream. And because this exact shape is
-    // what a storage-pruned daemon (a supported mode) serves for every
-    // historical spend, the refusal must NAME that cause and its remedy
-    // (rule 82) — a generic "invalid transaction" would tell the
-    // operator their trusted node is corrupt, with no path out.
-    let stripped_hex = pruned_tx_hex();
-    match parse_full_tx(&stripped_hex, "") {
-        Err(RpcError::InvalidNode(msg)) => {
-            assert!(
-                msg.contains("storage-pruned") && msg.contains("UNPRUNED"),
-                "the refusal must name the pruned-daemon cause and remedy: {msg}"
-            );
-        }
-        other => panic!("expected a cause-naming InvalidNode, got {other:?}"),
-    }
-    // The same blob is fine on the pruned path — the split is the form, not
-    // the tx.
-    parse_pruned_tx(&stripped_hex, "").expect("pruned form accepts the stripped spend");
-
-    // A body that is malformed BEYOND the missing prunable section (a
-    // single-output spend violates the anti-deanon minimum) keeps the
-    // generic verdict — the pruned-daemon message must not blanket
-    // genuinely invalid bodies.
-    let mut malformed = pruned_spend_tx(0);
-    malformed.prefix.outputs.truncate(1);
-    if let Ct::Fcmp { base, .. } = &mut malformed.ct {
-        base.enc_amounts.truncate(1);
-        base.enc_labels.truncate(1);
-        base.commitments.truncate(1);
-    }
-    match parse_full_tx(&hex::encode(malformed.serialize()), "") {
-        Err(RpcError::InvalidNode(msg)) => {
-            assert!(
-                !msg.contains("storage-pruned"),
-                "a malformed body must not draw the pruned-daemon verdict: {msg}"
-            );
-        }
-        other => panic!("expected generic InvalidNode, got {other:?}"),
-    }
+fn an_archived_slot_in_a_prune_reply_is_refused() {
+    let tx = pruned_spend_tx(0);
+    let id = pruned_id(&tx);
+    let mut document = reply(vec![tx_entry(
+        &hex::encode(id),
+        &hex::encode(tx.serialize()),
+    )]);
+    document.archived = vec![shekyl_rpc_types::ArchivedTx {
+        tx_hash: HashHex::from_bytes([9u8; 32]),
+        shard: 3,
+    }];
+    let err = parse_tx_batch(&[id], &document).expect_err("an archived slot is refused");
+    assert!(
+        format!("{err}").contains("archived"),
+        "the refusal names the slot: {err}"
+    );
 }
 
+/// **Arity downgrade** (`SB-Q2` falsifier vi). A spend whose body carries
+/// `pqc_auths` hashes 4-part; served as a skeleton with `pqc_auth_hash:
+/// null` it hashes 3-part, another identity, and does not bind. The
+/// skeleton with its third operand present binds — and binds to the
+/// body's own `hash()`, so the two hash paths agree on one transaction.
 #[test]
-fn parse_tx_batch_full_form_requires_a_body_field() {
-    let h0 = TxHash::from_bytes([3u8; 32]);
-    let txs = vec![tx_entry_with(h0, "", "")];
-    assert!(matches!(
-        parse_tx_batch(&[h0], &txs, TxBodyForm::Full),
-        Err(RpcError::InvalidNode(_))
-    ));
+fn a_carrying_skeleton_served_without_its_third_operand_does_not_bind() {
+    let full = full_spend_tx();
+    let (skeleton, id) = served_skeleton(&full);
+    assert_eq!(id, full.hash(), "the skeleton's txid is the body's");
+    assert!(
+        skeleton.pqc_auth_hash.is_some(),
+        "the fixture hashes 4-part"
+    );
+    bind_skeleton(&skeleton, id, "").expect("the complete skeleton binds");
+
+    let downgraded = SkeletonTx {
+        pqc_auth_hash: None,
+        ..skeleton
+    };
+    let err = bind_skeleton(&downgraded, id, "")
+        .expect_err("a third operand the prefix needs and was not given is refused");
+    assert!(
+        format!("{err}").contains("does not bind"),
+        "refused by the binding, not a parse failure: {err}"
+    );
 }
 
+/// The reverse: a `pqc_auth_hash` for a prefix that carries none is
+/// refused outright (`SkeletonTx::parse`), ahead of the mixer that would
+/// otherwise silently drop it and hash the body 3-part. The prefix here is
+/// an FCMP++ body whose first input is `gen` — the one non-null shape the
+/// mixer reads as 3-part (a null body is refused earlier, as no skeleton).
 #[test]
-fn parse_tx_batch_empty_is_ok_full_form_too() {
-    let out = parse_tx_batch(&[], &[], TxBodyForm::Full).expect("empty batch parses");
-    assert!(out.is_empty());
+fn a_third_operand_for_a_prefix_that_carries_none_is_refused() {
+    let mut gen_first = pruned_spend_tx(0);
+    gen_first.prefix.inputs.insert(0, Input::Gen(7));
+    let (served, id) = served_skeleton(&gen_first);
+    assert!(
+        served.pqc_auth_hash.is_none(),
+        "a gen-first prefix hashes 3-part"
+    );
+    let upgraded = SkeletonTx {
+        pqc_auth_hash: Some(PqcAuthHash::from_bytes([0x33; 32])),
+        ..served
+    };
+    let err = bind_skeleton(&upgraded, id, "")
+        .expect_err("a third operand the prefix cannot carry is refused");
+    assert!(
+        format!("{err}").contains("carries none"),
+        "refused by the arity check, not the shape gate: {err}"
+    );
 }
 
 /// Hex of a valid pruned non-miner spend with the given `unlock_time` — for the
 /// block-height-only ingestion gate tests.
-fn pruned_tx_hex_with_unlock_time(unlock_time: u64) -> String {
-    hex::encode(pruned_spend_tx(unlock_time).serialize())
+fn pruned_skeleton_with_unlock_time(unlock_time: u64) -> SkeletonTx {
+    skeleton(&pruned_spend_tx(unlock_time).serialize())
 }
 
 #[test]
-fn parse_pruned_tx_rejects_timestamp_form_unlock_time() {
+fn bind_skeleton_rejects_timestamp_form_unlock_time() {
     // A structurally valid pruned tx whose `unlock_time` is the timestamp
     // form is non-canonical (consensus rejects it — GENESIS §9 creation
     // cut); ingestion must refuse it so the scanner never sees it.
-    let bad = pruned_tx_hex_with_unlock_time(UNLOCK_TIME_BLOCK_SENTINEL);
-    assert!(matches!(
-        parse_pruned_tx(&bad, ""),
-        Err(RpcError::InvalidNode(_))
-    ));
+    let bad = pruned_skeleton_with_unlock_time(UNLOCK_TIME_BLOCK_SENTINEL);
+    assert!(matches!(bind_own(&bad), Err(RpcError::InvalidNode(_))));
     // The largest block-form value still parses.
-    let ok = pruned_tx_hex_with_unlock_time(UNLOCK_TIME_BLOCK_SENTINEL - 1);
-    assert!(parse_pruned_tx(&ok, "").is_ok());
+    let ok = pruned_skeleton_with_unlock_time(UNLOCK_TIME_BLOCK_SENTINEL - 1);
+    assert!(bind_own(&ok).is_ok());
 }
 
 #[test]
-fn parse_pruned_tx_rejects_oversized_hex_before_decode() {
+fn decode_tx_hex_rejects_oversized_hex_before_decode() {
     // DoS pre-bound: a hex string longer than `2 * MAX_TX_SIZE` is rejected
     // by length before `hex::decode` allocates. All-hex chars of even
     // length, so only the length gate (not a decode error) can fire.
     let oversized = "0".repeat(MAX_TX_SIZE * 2 + 2);
-    assert!(parse_pruned_tx(&oversized, "").is_err());
+    assert!(decode_tx_hex(&oversized, "").is_err());
 }
 
 #[test]
