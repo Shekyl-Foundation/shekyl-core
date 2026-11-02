@@ -17,9 +17,12 @@ use super::{outcome_of, outcome_of_refusal, ServeRequest, Serving};
 use shekyl_chain_sync::{Outcome, SyncState};
 
 /// A refused offer reaches the model as the outcome its refusal names. A
-/// dry bucket is `Throttled`, never `NoRoom`: no seat report follows a
-/// refusal that did not move the room, so a body held for one would be
-/// held for good (2026-11-02, a node `behind` with every offer throttled).
+/// dry bucket is `Throttled`, never `NoRoom`: the model takes the seat back
+/// and asks for the body (2026-11-02, a node `behind` with every offer
+/// throttled, each frozen as `NoRoom`). A bound span takes no token since
+/// the same day (`shekyl_chain_ingest::service::BoundArrival`), and the
+/// owner forgets its sampled room after any `NoRoom`, so a seat report
+/// follows every refusal that waits for one ([`super::Owner::offer`]).
 #[test]
 fn every_door_refusal_has_an_outcome() {
     let cases = [

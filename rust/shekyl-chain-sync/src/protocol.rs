@@ -397,7 +397,11 @@ pub enum Outcome {
     },
     /// Want the block again. The service cancelled or stopped.
     Again,
-    /// The door had no room.
+    /// The door had no room. The model holds the body and spends nothing
+    /// until the next [`Event::Room`], which the owner owes after every
+    /// `NoRoom` whether or not the door's count moved (2026-11-02: a count
+    /// the owner thought unchanged was never re-reported, and a node sat
+    /// `behind` for good with its seats frozen).
     NoRoom,
     /// The entry could not read the store that bounds an arrival. The
     /// body is not held and not asked for again. The peer did not fail.

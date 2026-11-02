@@ -527,8 +527,21 @@ ingest deciding forks.**
      lack).
    - `NoRoom`: the entry refused before acceptance. Sync keeps the span
      within its byte budget and offers it again when the entry reports
-     room. It is never a fault of the peer. It arises only from the race
-     between asking for room and offering.
+     room, and the owner reports room after every `NoRoom` whether or
+     not the door's count moved. It is never a fault of the peer. The
+     door seats a bound span as solicited however each body reached the
+     owner (since 2026-11-02; `BoundArrival` in `shekyl-chain-ingest`),
+     so a span within the room the door reported is seated, and
+     `NoRoom` arises only from the race between asking for room and
+     offering. *Premise refuted, 2026-11-02, by #1237's three-miner
+     rehearsal: the brief said the race was the only source while the
+     door still seated a bound announcement as unsolicited (Rick,
+     2026-10-25), so a span of more announced bodies than the
+     unsolicited share was `NoRoom` in an empty window, the owner's
+     room sample read the count it had last reported and sent no
+     `Room`, and a node that had learned its peers' chain from
+     announcements sat `behind` for good with its seats frozen at
+     zero.*
    - `Held` and the switch outcomes are ingest's. Sync reads the new
      `L`. The owner translates `Reply::Switched` before the model sees
      it: `Connected { height }` when the arrival is main's new tip, and
@@ -1903,10 +1916,11 @@ it decided beyond the rows above:
   `seat_wait_ns_*`: a span counts as waiting from the door's first
   `NoRoom` refusal to the offer it admitted; a `Throttled` refusal is
   the session's bucket, not the door's room, so the model takes the
-  seat back and asks for the body, which takes no token — until
-  2026-11-02 the owner reported it as `NoRoom`, and a node `behind` with
-  every unsolicited offer throttled held its bodies for a seat report
-  that never came), all as
+  seat back and asks for the body — until 2026-11-02 the owner reported
+  it as `NoRoom`, and a node `behind` with every unsolicited offer
+  throttled held its bodies for a seat report that never came; since
+  the same day a bound span takes no token and is seated as solicited,
+  so the door answers no bound offer `Throttled`), all as
   totals; and the owner logs each response (`a sync response`: its kind,
   bytes, blocks and request-to-response time) and each seated span (`a
   body span seated`: its blocks and wait) at `debug`. `SYNC_RATE_FLOOR`

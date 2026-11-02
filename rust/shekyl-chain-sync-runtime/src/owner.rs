@@ -1198,7 +1198,6 @@ where
                 EntryArrival {
                     tag: ArrivalTag(tag),
                     session: SessionId(session.socket().get()),
-                    solicited,
                     judged: header,
                     block: body.block,
                     bodies: body.txs,
@@ -1276,6 +1275,15 @@ where
                         // The wait is timed from the first refusal: a
                         // body refused again keeps its first.
                         self.seat_waiting.entry(tag).or_insert((now, session));
+                        // `NoRoom` froze the model's seats at zero until a
+                        // `Room`. The sample below is suppressed while the
+                        // door's count is the one last reported, and a
+                        // refusal need not have moved it (a span the door
+                        // would not seat at any count: seen 2026-11-02, a
+                        // node `behind` for good with its seats frozen), so
+                        // the count is forgotten here and the next sample
+                        // is always a `Room`.
+                        self.seats = None;
                     }
                     tracing::debug!(
                         %session,
@@ -1325,14 +1333,16 @@ fn framed(command: u32, message: &impl PortableMap) -> Result<Vec<u8>, String> {
 /// promoted tip that is some other block has no supplier this offer can
 /// name; the model relays it from the tip event.
 /// The outcome the model is told when the door refuses an offer of
-/// `bytes`. No room waits for a seat (`Event::Room`). An unreadable store
-/// does not: the service stops on that read, and a later seat report must
-/// not offer the body again. A dry bucket is the session's, not the
-/// door's: the room did not move, so no seat report follows, and a body
-/// held for one would be held for good (seen 2026-11-02: a node `behind`
-/// with its target advancing, every offer refused `Throttled` and frozen
-/// as `NoRoom`). The model takes the seat back and asks for the body,
-/// which takes no token. A body larger than the door's bound invalidates
+/// `bytes`. No room waits for a seat (`Event::Room`), which the caller
+/// always sends after it ([`Owner::offer`]). An unreadable store does not:
+/// the service stops on that read, and a later seat report must not offer
+/// the body again. A dry bucket is the session's, not the door's: the model
+/// takes the seat back and asks for the body. A bound span is seated as
+/// solicited since 2026-11-02 and takes no token, so the door no longer
+/// answers one `Throttled`; the arm maps the refusal the door's contract
+/// still names (seen 2026-11-02, before that change: a node `behind` with
+/// its target advancing, every offer refused `Throttled` and frozen as
+/// `NoRoom`). A body larger than the door's bound invalidates
 /// its header when this node asked for it, never when it was announced; a
 /// body within the bound that the door still called oversize is offered
 /// again.
