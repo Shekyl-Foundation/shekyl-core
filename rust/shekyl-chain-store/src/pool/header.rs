@@ -47,7 +47,7 @@ pub const POOL_VERSION_KEY: &str = "pool_schema_version";
 
 /// How [`PoolStore::create`](super::PoolStore::create) arrived at an open
 /// file.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[derive(Clone, Debug, PartialEq, Eq)]
 pub enum PoolOpen {
     /// No file existed; one was created and sealed at [`POOL_SCHEMA_VERSION`].
     Created,
@@ -58,6 +58,14 @@ pub enum PoolOpen {
     /// power loss between the engine's first commit and the seal's) was
     /// **sealed in place**. Nothing was in it to lose.
     Finished,
+    /// A file the engine never finished initializing (empty, or no longer
+    /// than an initialization writes with its magic unwritten) was **moved
+    /// aside** to `to`, never deleted, and a fresh one created and sealed.
+    /// The caller's log line names `to`, for an operator to inspect.
+    SetAside {
+        /// Where the unfinished file went.
+        to: std::path::PathBuf,
+    },
     /// A sealed file at another version was **recreated** (`SPL-Q8`): the
     /// old file was removed and a fresh one sealed. `from` is the version
     /// the old file carried — the caller's one log line names it.
@@ -94,14 +102,17 @@ pub(super) fn open_or_create(path: &Path) -> Result<(Database, PoolOpen), StoreE
                 Ok(db) => db,
                 Err(e) if open_is_foreign(&e) => {
                     // A cut before the engine finished initializing: empty,
-                    // or the magic unwritten (`crate::creation`). Claimed
-                    // and emptied, it is sealed as a fresh file would be.
-                    return match crate::creation::take_unfinished_init(path).map_err(io_open)? {
-                        Some(file) => {
-                            seal_fresh(&builder, file, path).map(|db| (db, PoolOpen::Finished))
-                        }
-                        None => Err(StoreCannot::PoolFileForeign.into()),
+                    // or no longer than an initialization writes with its
+                    // magic unwritten (`crate::creation`). Moved aside,
+                    // never deleted, and a fresh file sealed at the path.
+                    let Some(to) =
+                        crate::creation::set_aside_unfinished_init(path).map_err(io_open)?
+                    else {
+                        return Err(StoreCannot::PoolFileForeign.into());
                     };
+                    let file = create_new(path).map_err(io_open)?;
+                    return seal_fresh(&builder, file, path)
+                        .map(|db| (db, PoolOpen::SetAside { to }));
                 }
                 Err(e) => return Err(EngineError::Open(e).into()),
             };

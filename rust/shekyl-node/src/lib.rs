@@ -780,7 +780,16 @@ fn open_chain(
 ) -> Result<ChainStore, OpenError> {
     use shekyl_chain_store::store::{StoreCannot, StoreError};
     match ChainStore::with_release(path, ApplyPolicy::Full, horizons, anchors) {
-        Ok(store) => Ok(store),
+        Ok(store) => {
+            if let Some(to) = store.set_aside() {
+                tracing::warn!(
+                    moved_to = %to.display(),
+                    "the chain file was a creation cut short before the engine finished it (a \
+                     power loss on an earlier start); it was moved aside and a fresh store created"
+                );
+            }
+            Ok(store)
+        }
         Err(StoreError::Cannot(StoreCannot::SchemaVersionMismatch { found, expected })) => {
             tracing::warn!(
                 %found,
@@ -847,6 +856,11 @@ fn open_pool(
         PoolOpen::Finished => tracing::info!(
             "the pool file's creation was cut short (a power loss on an earlier start); \
              it was finished empty"
+        ),
+        PoolOpen::SetAside { to } => tracing::warn!(
+            moved_to = %to.display(),
+            "the pool file was a creation cut short before the engine finished it (a power \
+             loss on an earlier start); it was moved aside and a fresh pool created"
         ),
         PoolOpen::Created | PoolOpen::Opened => {}
     }

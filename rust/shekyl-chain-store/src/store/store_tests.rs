@@ -600,24 +600,35 @@ fn an_existing_file_that_is_not_a_store_is_refused_untouched() {
 /// The two shapes a power loss leaves before the engine has finished
 /// initializing the file: empty (a cut right after `create_new`) and a
 /// header with its magic unwritten (redb writes the magic last). Each is
-/// a creation nothing was committed to, and the next open finishes it
+/// a creation nothing was committed to: the next open moves it aside,
+/// never deleting it, creates a fresh store, and reports where it went
 /// (`crate::creation`; PB-S2's first replay, 2026-11-01, found the second
 /// shape refusing a node's every later start). Red edit: drop the
-/// `take_unfinished_init` arm from `with_horizons`.
+/// `set_aside_unfinished_init` arm from `with_horizons`.
 #[test]
 fn a_file_the_engine_never_finished_initializing_is_created_by_the_next_open() {
-    let empty = tmp("empty-at-path");
-    std::fs::write(&empty, b"").expect("empty file");
-    let unwritten = tmp("magic-unwritten");
     let mut header = vec![0u8; 1 << 20];
     header[9..16].copy_from_slice(&[4, 0, 0, 0, 0x10, 0, 0]);
-    std::fs::write(&unwritten, &header).expect("a header without its magic");
-    for path in [&empty, &unwritten] {
-        let store = ChainStore::with_apply_policy(path, ApplyPolicy::Full, EPOCH)
-            .unwrap_or_else(|e| panic!("{}: finished: {e:?}", path.display()));
+    for (label, bytes) in [("empty-at-path", Vec::new()), ("magic-unwritten", header)] {
+        let path = tmp(label);
+        std::fs::write(&path, &bytes).expect("the unfinished file");
+        let store = ChainStore::with_apply_policy(&path, ApplyPolicy::Full, EPOCH)
+            .unwrap_or_else(|e| panic!("{label}: created: {e:?}"));
+        let to = store
+            .set_aside()
+            .unwrap_or_else(|| panic!("{label}: set aside"))
+            .to_path_buf();
+        assert_eq!(
+            std::fs::read(&to).expect("aside"),
+            bytes,
+            "{label}: kept aside"
+        );
         drop(store);
-        ChainStore::with_apply_policy(path, ApplyPolicy::Full, EPOCH)
-            .unwrap_or_else(|e| panic!("{}: reopens: {e:?}", path.display()));
-        cleanup(path);
+        let store = ChainStore::with_apply_policy(&path, ApplyPolicy::Full, EPOCH)
+            .unwrap_or_else(|e| panic!("{label}: reopens: {e:?}"));
+        assert!(store.set_aside().is_none(), "{label}: an ordinary reopen");
+        drop(store);
+        cleanup(&path);
+        drop(std::fs::remove_file(&to));
     }
 }
