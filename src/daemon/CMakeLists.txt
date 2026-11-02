@@ -112,35 +112,15 @@ cmake_language(DEFER DIRECTORY "${CMAKE_SOURCE_DIR}"
 #
 # nm selection: cross builds emit non-host object formats (the depends
 # Cross-Mac builds link Mach-O on a Linux host), which the host GNU nm
-# rejects with "file format not recognized" — a false 0-count. Prefer
-# the toolchain's own nm (CMAKE_NM; for depends Darwin this is the
-# cctools <triple>-nm), fall back to PATH nm, and try candidates until
-# one can actually parse the binary. A parse failure across all
-# candidates fails the build loudly — the gate never silently skips, and
-# a configure that finds no nm at all stops here (rule 47).
+# rejects with "file format not recognized" — a false 0-count. The
+# candidates come from `shekyl_nm_candidates` (cmake/BuildRust.cmake):
+# the toolchain's own nm first (CMAKE_NM; for depends Darwin this is the
+# cctools <triple>-nm), then PATH nm; the command tries them until one
+# can actually parse the binary. A parse failure across all candidates
+# fails the build loudly — the gate never silently skips, and a configure
+# that finds no nm at all stops in that function (rule 47).
 function(shekyl_shekyld_single_dispatcher_gate)
-  # Resolve each candidate through find_program so bare tool names
-  # (a user-set CMAKE_NM=llvm-nm, or a name-only _CMAKE_TOOLCHAIN_PREFIX
-  # from a non-depends toolchain) are looked up on PATH instead of being
-  # dropped by an absolute-path-only existence check. The depends Darwin
-  # toolchain sets an absolute-path prefix, which find_program also
-  # accepts verbatim.
-  set(_shekyl_nm_candidates)
-  foreach(_cand IN ITEMS "${CMAKE_NM}" "${_CMAKE_TOOLCHAIN_PREFIX}nm" "nm")
-    if(_cand STREQUAL "")
-      continue()
-    endif()
-    unset(_shekyl_nm_resolved CACHE)
-    find_program(_shekyl_nm_resolved NAMES "${_cand}")
-    if(_shekyl_nm_resolved)
-      list(APPEND _shekyl_nm_candidates "${_shekyl_nm_resolved}")
-    endif()
-  endforeach()
-  unset(_shekyl_nm_resolved CACHE)
-  list(REMOVE_DUPLICATES _shekyl_nm_candidates)
-  if(NOT _shekyl_nm_candidates)
-    message(FATAL_ERROR "shekyld single-dispatcher gate: no nm tool found")
-  endif()
+  shekyl_nm_candidates(_shekyl_nm_candidates)
   add_custom_command(TARGET cargo-build_shekyld POST_BUILD
     COMMAND sh -c "bin=\"$0\"; for nm_tool in \"$@\"; do if syms=$(\"$nm_tool\" \"$bin\" 2>/dev/null); then count=$(printf '%s\\n' \"$syms\" | grep GLOBAL_DISPATCH | grep -cv '[$]got' || true); if [ \"$count\" -ne 1 ]; then echo \"shekyld single-dispatcher gate FAILED ($nm_tool): $count tracing GLOBAL_DISPATCH definitions (expected 1)\" >&2; exit 1; fi; exit 0; fi; done; echo \"shekyld single-dispatcher gate FAILED: no nm tool could parse $bin (tried: $*)\" >&2; exit 1" "${SHEKYLD_STAGED_BINARY}" ${_shekyl_nm_candidates}
     VERBATIM

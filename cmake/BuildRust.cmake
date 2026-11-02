@@ -499,15 +499,51 @@ endif()
 # the `shekyl_*` exports. link.exe and ld64 resolve a cycle on their own;
 # GNU ld walks archives once in order. Two measures for ld: the C++
 # closure is one `--start-group … --end-group`, so the archives resolve
-# among themselves whatever their order; and `--undefined-glob=shekyl_*`
-# makes ld extract every member defining a `shekyl_*` symbol as it scans
-# the rlibs, before the C++ archives ask for them. Every C-visible export
-# of the Rust side is `shekyl_*` (scripts/ci/check_ffi_signatures.sh), so
-# the glob is exact; a C++ `shekyl_remnant_*` matches too, harmlessly.
+# among themselves whatever their order; and a response file of
+# `--undefined=<symbol>`, one per `shekyl_*` symbol the closure's archives
+# leave undefined, makes ld extract the member defining each as it scans
+# the rlibs, before the C++ archives ask for them. The list is read off
+# the built archives with nm (cmake/RustLinkUndefined.cmake) just before
+# cargo links, so it is exactly what the C++ side calls and follows it
+# without a hand-kept table; `--undefined` on a name nothing defines is
+# not an error, so a C++-defined `shekyl_remnant_*` in the list is
+# harmless. lld's `--undefined-glob=shekyl_*` would say the same in one
+# flag, but GNU ld (Linux and FreeBSD with binutils, MinGW) does not have
+# it (DC-F29). Every C-visible export of the Rust side is `shekyl_*`
+# (scripts/ci/check_ffi_signatures.sh), so the prefix is exact.
 #
 # Call it with `cmake_language(DEFER DIRECTORY ${CMAKE_SOURCE_DIR} CALL …)`
 # from the directory that defines <cxx_target>, so it runs after every
 # subdirectory has defined the targets the closure names.
+set(_SHEKYL_BUILDRUST_DIR "${CMAKE_CURRENT_LIST_DIR}")
+
+# The nm tools a build step may try, in order: the toolchain's own
+# (CMAKE_NM; a cross build's objects are in the target's format, which
+# the host nm may reject), then the toolchain-prefixed name, then PATH
+# nm. Each is resolved through find_program so a bare name is looked up
+# rather than dropped. A configure that finds none stops (rule 47): both
+# consumers — the single-dispatcher gate (src/daemon/CMakeLists.txt) and
+# the GNU ld response file above — would otherwise skip silently.
+function(shekyl_nm_candidates out_var)
+    set(_candidates)
+    foreach(_cand IN ITEMS "${CMAKE_NM}" "${_CMAKE_TOOLCHAIN_PREFIX}nm" "nm")
+        if(_cand STREQUAL "")
+            continue()
+        endif()
+        unset(_shekyl_nm_resolved CACHE)
+        find_program(_shekyl_nm_resolved NAMES "${_cand}")
+        if(_shekyl_nm_resolved)
+            list(APPEND _candidates "${_shekyl_nm_resolved}")
+        endif()
+    endforeach()
+    unset(_shekyl_nm_resolved CACHE)
+    list(REMOVE_DUPLICATES _candidates)
+    if(NOT _candidates)
+        message(FATAL_ERROR "shekyl_nm_candidates: no nm tool found")
+    endif()
+    set("${out_var}" "${_candidates}" PARENT_SCOPE)
+endfunction()
+
 function(shekyl_rust_link_cxx_closure rust_target cxx_target)
     if(NOT TARGET "${rust_target}")
         message(FATAL_ERROR "shekyl_rust_link_cxx_closure: no Rust target ${rust_target}")
@@ -606,8 +642,25 @@ function(shekyl_rust_link_cxx_closure rust_target cxx_target)
         set(_gnu_ld ON)
     endif()
     if(_gnu_ld)
+        shekyl_nm_candidates(_nm_tools)
+        list(JOIN _nm_tools "|" _nm_joined)
+        set(_archives "")
+        foreach(_target IN LISTS _cmake_targets)
+            list(APPEND _archives "$<TARGET_LINKER_FILE:${_target}>")
+        endforeach()
+        list(JOIN _archives "|" _archives_joined)
+        set(_rsp "${CMAKE_BINARY_DIR}/${rust_target}-undefined.rsp")
+        add_custom_command(OUTPUT "${_rsp}"
+            COMMAND "${CMAKE_COMMAND}"
+                "-DNM=${_nm_joined}" "-DARCHIVES=${_archives_joined}" "-DPREFIX=shekyl_" "-DOUT=${_rsp}"
+                -P "${_SHEKYL_BUILDRUST_DIR}/RustLinkUndefined.cmake"
+            DEPENDS ${_archives} "${_SHEKYL_BUILDRUST_DIR}/RustLinkUndefined.cmake"
+            COMMENT "Listing the shekyl_* symbols ${cxx_target}'s closure needs from ${rust_target}'s rlibs"
+            VERBATIM)
+        add_custom_target("${rust_target}-undefined" DEPENDS "${_rsp}")
+        add_dependencies("cargo-prebuild_${rust_target}" "${rust_target}-undefined")
         list(PREPEND _args "-Clink-arg=-Wl,--start-group")
-        list(APPEND _args "-Clink-arg=-Wl,--end-group" "-Clink-arg=-Wl,--undefined-glob=shekyl_*")
+        list(APPEND _args "-Clink-arg=-Wl,--end-group" "-Clink-arg=-Wl,@${_rsp}")
     endif()
 
     corrosion_add_target_local_rustflags("${rust_target}" ${_args})
