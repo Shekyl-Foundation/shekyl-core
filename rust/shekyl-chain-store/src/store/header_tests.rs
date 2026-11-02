@@ -25,6 +25,9 @@ use crate::codec::{
     PropertyCellBytes, Raw, SchemaVersion, SchemaVersionCell, TotalBurnedCell, SCHEMA_VERSION,
 };
 use crate::family_set::FamilySet;
+use crate::redb_recovery::{
+    bytes_and_mtime, mark_recovery_required, read_only_open_is_repair_aborted,
+};
 use crate::schema::PROPERTIES;
 
 const SLASH: &[ArchivalFamily] = &[ArchivalFamily::SlashLog];
@@ -368,10 +371,12 @@ fn a_file_with_no_version_cell_is_refused_not_read_as_v1() {
     let path = tmp("absent-cell");
     seeded(&path, ApplyPolicy::Full);
     raw_put(&path, "schema_version", None);
+    let before = bytes_and_mtime(&path);
     assert!(matches!(
         ChainStore::create(&path, EPOCH),
         Err(StoreError::Cannot(StoreCannot::SchemaVersionAbsent))
     ));
+    assert_eq!(bytes_and_mtime(&path), before, "refused unwritten");
     assert!(matches!(
         ChainStore::open_read_only(&path, production_horizons()),
         Err(StoreError::Cannot(StoreCannot::SchemaVersionAbsent))
@@ -386,10 +391,14 @@ fn a_file_with_no_version_cell_is_refused_not_read_as_v1() {
         txn.open_table(PROBE).expect("some other table");
         txn.commit().expect("c");
     }
+    let before = bytes_and_mtime(&foreign);
     assert!(matches!(
         ChainStore::create(&foreign, EPOCH),
         Err(StoreError::Cannot(StoreCannot::SchemaVersionAbsent))
     ));
+    // Judged on a read-only open: a writable one would have written the
+    // engine's allocator state into the file as it closed.
+    assert_eq!(bytes_and_mtime(&foreign), before, "refused unwritten");
     assert!(matches!(
         ChainStore::open_read_only(&foreign, production_horizons()),
         Err(StoreError::Cannot(StoreCannot::SchemaVersionAbsent))
@@ -399,6 +408,35 @@ fn a_file_with_no_version_cell_is_refused_not_read_as_v1() {
         "refusing must not seal a foreign file"
     );
     cleanup(&foreign);
+}
+
+/// A cleanly shut-down file with redb's recovery bit set is `RepairAborted`
+/// from the read-only door, and the writable open returns the probe row.
+///
+/// Mapping that error to a hard refusal fails this test. The read-only
+/// door is the precondition: a writable open that never saw `RepairAborted`
+/// is not this path. Shortening the file does not construct it.
+#[test]
+fn a_recovery_bit_reopens_the_probe_row() {
+    let path = tmp("repair");
+    seeded(&path, ApplyPolicy::Full);
+    mark_recovery_required(&path);
+    assert!(
+        read_only_open_is_repair_aborted(&path),
+        "the bit is the repair arm"
+    );
+    assert!(
+        matches!(
+            ChainStore::open_read_only(&path, production_horizons()),
+            Err(StoreError::Engine(EngineError::Open(
+                redb::DatabaseError::RepairAborted
+            )))
+        ),
+        "the read-only door returns the engine's repair arm"
+    );
+    let store = ChainStore::create(&path, EPOCH).expect("repair");
+    assert_eq!(super::store_tests::probe_val(&store, "k"), Some(1));
+    cleanup(&path);
 }
 
 #[test]

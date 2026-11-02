@@ -112,14 +112,21 @@ pub struct Arrival {
 /// 3 and 6; CS2-Q1). The service forms it with `form_judged`, which consumes
 /// the proof and does not hash, so it takes no hasher permit and pins no
 /// seed.
+///
+/// It is seated as a solicited arrival however the body reached the owner.
+/// The owner admits an announcement itself (one unproved announce per
+/// session, proved under the hasher's unsolicited class) and offers only
+/// bodies on `H*`'s path within the room [`Door::room`] reported, so the
+/// door's unsolicited share and bucket have nothing left to decide for it:
+/// until 2026-11-02 they did decide, and a span of more announced bodies
+/// than the share was `NoRoom` in an empty window (the sync owner's
+/// `Event::Room` docs).
 #[derive(Clone, Debug)]
 pub struct BoundArrival {
     /// The caller's name for it.
     pub tag: ArrivalTag,
     /// The session that served the body.
     pub session: SessionId,
-    /// Whether this node asked for the body. An announcement is not.
-    pub solicited: bool,
     /// The header the sync owner's proof accepted.
     pub judged: shekyl_chain_rules::HeaderJudged,
     /// The block blob.
@@ -144,7 +151,7 @@ impl BoundArrival {
             tag: self.tag,
             origin: Origin::Peer {
                 session: self.session,
-                solicited: self.solicited,
+                solicited: true,
             },
             block_len: self.block.len(),
             body_lens: self.bodies.iter().map(Vec::len).collect(),

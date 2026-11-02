@@ -33,7 +33,7 @@ use shekyl_wire::{BlockBody, PowBlob, SkeletonTx, TxBody};
 
 use crate::harness::UnitWork;
 use crate::model::{CloseCause, Event, Outcome, Proved, Sync};
-use crate::proof::{drive, fixed, headers_of, open_claim, prove_item, serialized};
+use crate::proof::{drive, fixed, headers_of, headers_stating, open_claim, prove_item, serialized};
 use crate::{Command, PeerClaim};
 
 pub(crate) struct NoDraw;
@@ -184,12 +184,14 @@ fn a_spend_chain_skeleton_is_bound_and_wanted_in_full_from_another_session() {
             },
         );
     }
+    assert_eq!(sync.selected().hash, spend_hash);
+    let star_work = sync.selected().work.to_raw();
     drive(
         &mut sync,
         &parent,
         Event::Headers {
             session: 2,
-            bytes: headers_of(candidates[spend].block.pow_blob()),
+            bytes: headers_stating(candidates[spend].block.pow_blob(), star_work),
         },
     );
     let out = drive(&mut sync, &parent, Event::Room { seats: 1 });
@@ -365,12 +367,14 @@ fn parted(defer: bool) {
                 },
             );
         }
+        assert_eq!(sync.selected().hash, second_hash);
+        let star_work = sync.selected().work.to_raw();
         drive(
             &mut sync,
             &view,
             Event::Headers {
                 session: 2,
-                bytes: headers_of(second_pow),
+                bytes: headers_stating(second_pow, star_work),
             },
         );
         let out = drive(&mut sync, &view, Event::Room { seats: 2 });

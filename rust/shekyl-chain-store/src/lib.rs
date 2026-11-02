@@ -100,6 +100,9 @@ pub mod provenance;
 pub mod schema;
 pub mod store;
 
+#[cfg(test)]
+mod redb_recovery;
+
 pub use ids::{
     AmountIndex, ChunkIndex, LayerChunk, OutputSlot, OutputStorageId, TreeLayer, TxStorageId,
 };
