@@ -20,6 +20,10 @@ use shekyl_transport_layer::{
 
 /// The latest instants, in byte-stamp milliseconds, at which the dialer saw
 /// one connector's link work (§3.3's closed list).
+///
+/// Each writer moves its instant only forward. Attempt tasks finish in the
+/// order they end, not the order their streams opened, and a closed session
+/// does not erase a byte that already arrived.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub struct Observations {
     /// An attempt on the connector reached an open stream.
@@ -31,6 +35,18 @@ pub struct Observations {
 }
 
 impl Observations {
+    /// A stream opened at `at_ms`. An earlier open does not replace a
+    /// later one.
+    pub fn note_stream(&mut self, at_ms: u64) {
+        self.stream_opened_ms = self.stream_opened_ms.max(Some(at_ms));
+    }
+
+    /// A session received a byte at `at_ms`. `None` keeps the instant
+    /// already stored.
+    pub fn note_session(&mut self, at_ms: Option<u64>) {
+        self.session_received_ms = self.session_received_ms.max(at_ms);
+    }
+
     /// The latest sign of life the connector's declaration counts. A
     /// stream that opened counts only where the connector says it does.
     #[must_use]
@@ -355,6 +371,20 @@ mod tests {
                 "{connector:?}: proof only where the destination is authenticated"
             );
         }
+    }
+
+    /// A sign of life only moves forward. The edit that makes this red is
+    /// storing the open time of whichever attempt finished last.
+    #[test]
+    fn a_sign_of_life_only_moves_forward() {
+        let mut observed = Observations::default();
+        observed.note_stream(2_000);
+        observed.note_stream(1_000);
+        assert_eq!(observed.stream_opened_ms, Some(2_000));
+        observed.note_session(Some(50));
+        observed.note_session(None);
+        observed.note_session(Some(300));
+        assert_eq!(observed.session_received_ms, Some(300));
     }
 
     /// Each connector's corroboration is its own declaration: a stream that

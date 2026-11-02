@@ -101,8 +101,9 @@ impl Dialer {
                 .map(|row| received(row.id().get()))
                 .filter(|&ms| ms > 0)
                 .max();
-            let observed = &mut shared.evidence[connector.index()].observed;
-            observed.session_received_ms = observed.session_received_ms.max(latest);
+            shared.evidence[connector.index()]
+                .observed
+                .note_session(latest);
             Self::note_life(shared, connector, now);
         }
     }
@@ -119,7 +120,9 @@ impl Dialer {
         now: Tick,
     ) {
         if attempt_stream(outcome) == AttemptStream::Opened {
-            shared.evidence[connector.index()].observed.stream_opened_ms = Some(at_ms);
+            shared.evidence[connector.index()]
+                .observed
+                .note_stream(at_ms);
             Self::note_life(shared, connector, now);
         }
     }
