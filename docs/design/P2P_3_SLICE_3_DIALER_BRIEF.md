@@ -217,8 +217,8 @@ dial costs that one draw. A wake whose timer was armed before the fall
 runs once and draws nothing. Tests: `shekyl-dialer/tests/readiness.rs`.
 
 **A failed test cools its draw; only a proving one drops it (Rick,
-2026-10-24; the gray lifecycle).** A `DialFailed` or `PeerlistRefused`
-draw whose cause proves no misbehaviour stays gray and cools: two
+2026-10-24; the gray lifecycle).** A `DialFailed` draw whose failure
+proves no misbehaviour stays gray and cools: two
 minutes, doubling per consecutive failed test, capped at an hour, each
 with U(0, 50%) jitter; a cooling address is not drawable, and a
 completed handshake clears the count. A cause that proves misbehaviour
@@ -546,8 +546,7 @@ score. The automatic ban, and `add_host_fail`, were deleted
 
 ```rust
 enum DialOutcome {
-    DialFailed { address: NetworkAddress, cause: CloseCause, reply: u16 },
-    PeerlistRefused { address: NetworkAddress, cause: CloseCause },
+    DialFailed { address: NetworkAddress, failure: DialFailure },
     PayloadRefused { address: NetworkAddress },
     Confirmed { address: NetworkAddress },
     SessionAccepted { address: NetworkAddress },
@@ -556,8 +555,8 @@ enum DialOutcome {
 
 | Variant | When the dialer emits it | List (`apply`) | Failed-test count (the cooldown ladder; *records-was* the failed-address memory, deleted 2026-10-24) |
 | --- | --- | --- | --- |
-| `DialFailed` | The channel never reached a well-formed response, or `network_id` is not ours (`net_node.inl:1370`). It carries the `DialFailure` the connector stamped (#1235); the test's last attempt reports, after any retries | The judge's verdict (#1235): a counted failure cools an outstanding gray draw, proof drops it, and an excused one holds its rung. A white address is known-working (2026-10-26): a counted failure moves it to gray and cools it at the first rung, proof drops it, and an excused one leaves it white. *Records-was: dropped whatever the cause (Rick, 2026-10-16); to 2026-10-26, a white address stayed white* | Counted, and the address cools for `cooldown_nanos(count)`, unless the cause proves misbehaviour. A `network_id` mismatch is `LevinHandshakeRejected`, stamped proving on Tor and nothing on clearnet. *Records-was: the memory, Tor only (R2), written where `implicates_address` held; before that on every connector* |
-| `PeerlistRefused` | `handle_remote_peerlist` refuses (`net_node.inl:1377`). Same close as `LevinHandshakeRejected`, and the variant carries that cause (2026-10-24) | Same as `DialFailed`: on Tor the cause is stamped proving and the address is dropped; on clearnet it cools. *Records-was: dropped whatever the cause (Rick, 2026-10-16)* | Same as `DialFailed` |
+| `DialFailed` | The channel never reached a well-formed response, `network_id` is not ours (`net_node.inl:1370`), or the peer's list was refused (`net_node.inl:1377`). It carries the `DialFailure` the layer that observed it stamped (#1235); the test's last attempt reports, after any retries. A refused list is [`DialFailure::refused_by_peer`] | The judge's verdict (#1235): a counted failure cools an outstanding gray draw, proof drops it, and an excused one holds its rung. A white address is known-working (2026-10-26): a counted failure moves it to gray and cools it at the first rung, proof drops it, and an excused one leaves it white. *Records-was: dropped whatever the cause (Rick, 2026-10-16); to 2026-10-26, a white address stayed white* | Counted, and the address cools for `cooldown_nanos(count)`, unless the failure proves misbehaviour. A `network_id` mismatch and a refused list are `LevinHandshakeRejected`, stamped proving on Tor and nothing on clearnet. *Records-was: the memory, Tor only (R2), written where `implicates_address` held; before that on every connector* |
+| *`PeerlistRefused` — DELETED (2026-11-02, #1235; no crate symbol)* | *Records-was: a refused list, its own variant carrying `LevinHandshakeRejected`.* Absorbed into `DialFailed`. The variant, its `apply` arm and the reach arm that ignored `Reached` are gone. | — | — |
 | `PayloadRefused` | A kept session closed with `CloseKind::SessionRefused`: the payload owner declined a delivery after `SessionAccepted` (*records-was:* the strand refused the sync payload before white was written) | White is unchanged. An outstanding draw that was never confirmed returns to drawable gray | Not counted. The peer answered |
 | *`HarvestDone` — DELETED (Rick, 2026-10-11; no crate symbol)* | *Records-was: a harvest handshake completed, the session closed, no `adopt`.* Absorbed into `Confirmed`: a confirm-and-close dial learns the peer's sample as a harvest did and writes white. The variant, its `address()` arm, its `apply` arm and its test are gone. *Records-was: left for PR-3 as "more than one line"* | — | — |
 | `Confirmed` | Aim `Confirm`. Rust's handshake checks passed. The owner closed the unadopted channel. No adopt, no post, no row (*records-was:* the strand accepted and the owner closed in that turn) | An outstanding gray draw moves to white and `last_observed` is set. No session remains. Anything else writes nothing | Cleared for that address |
@@ -802,8 +801,10 @@ dial that keeps a session is
 
 A confirm whose handshake checks pass is `Confirmed`, whether reached
 under (c) with the pool thin or with every `Keep` slot full. The
-channel is closed in Rust, unadopted. One that fails is `DialFailed`
-or `PeerlistRefused`, with the connector's cause.
+channel is closed in Rust, unadopted. One that fails is `DialFailed`,
+carrying the failure the layer that observed it stamped. *Records-was:
+`PeerlistRefused` was a second variant for a refused list (deleted
+2026-11-02, #1235).*
 *Records-was: a completed harvest was `HarvestDone`, deleted 2026-10-11.
 Records-was (until 2026-10-16): the strand accepted the payload and the
 owner closed in that turn.*

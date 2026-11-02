@@ -166,9 +166,7 @@ impl Dialer {
         rng: &mut R,
     ) {
         let failure = match outcome {
-            DialOutcome::DialFailed(_, failure) | DialOutcome::PeerlistRefused(_, failure) => {
-                *failure
-            }
+            DialOutcome::DialFailed(_, failure) => *failure,
             DialOutcome::SessionAccepted(_)
             | DialOutcome::Confirmed(_)
             | DialOutcome::PayloadRefused(_) => {

@@ -67,14 +67,16 @@ pub enum DialOutcome {
     /// keeps its clock: the session did not stay. Anything else leaves the
     /// lists unchanged.
     Confirmed(NetworkAddress),
-    /// The channel never reached a well-formed response, or the peer is on
-    /// another network. The failure is the judge's input, as the layer that
-    /// observed it stamped it (`DIALER_OUTAGE_EVIDENCE.md` §2.2); what it
-    /// does to the address is the judge's verdict, which the lists perform.
+    /// The attempt failed. The channel never reached a well-formed response,
+    /// the peer is on another network, or the peer's list was refused.
+    /// The failure is the judge's input, as the layer that observed it
+    /// stamped it (`DIALER_OUTAGE_EVIDENCE.md` §2.2); what it does to the
+    /// address is the judge's verdict, which the lists perform. A refused
+    /// list is this variant: it carries the Levin layer's
+    /// [`DialFailure::refused_by_peer`], and the lists have no second arm
+    /// for it.
+    /// *`PeerlistRefused` — DELETED (2026-11-02, #1235).*
     DialFailed(NetworkAddress, DialFailure),
-    /// The peer's list was refused: the Levin layer's refusal. As
-    /// `DialFailed` for the lists.
-    PeerlistRefused(NetworkAddress, DialFailure),
     /// A payload was refused. No promotion and no demotion. An outstanding
     /// draw returns to drawable gray.
     PayloadRefused(NetworkAddress),
@@ -88,7 +90,6 @@ impl DialOutcome {
             Self::SessionAccepted(a)
             | Self::Confirmed(a)
             | Self::DialFailed(a, _)
-            | Self::PeerlistRefused(a, _)
             | Self::PayloadRefused(a) => a,
         }
     }

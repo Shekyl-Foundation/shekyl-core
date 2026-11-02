@@ -442,7 +442,7 @@ fn a_failed_test_cools_the_draw_a_proving_one_drops_it_and_a_refused_payload_lea
     let tor = shekyl_peerlist::ConnectorId::Tor;
     let clearnet = shekyl_peerlist::ConnectorId::Clearnet;
     type Make = fn(NetworkAddress) -> DialOutcome;
-    let cases: [(NetworkAddress, Make, After); 6] = [
+    let cases: [(NetworkAddress, Make, After); 5] = [
         // A connection problem on clearnet.
         (
             v4(7),
@@ -468,20 +468,6 @@ fn a_failed_test_cools_the_draw_a_proving_one_drops_it_and_a_refused_payload_lea
             },
             After::Cooling,
         ),
-        // A refused list on clearnet: the same, no proof.
-        (
-            v4(7),
-            |a| {
-                DialOutcome::PeerlistRefused(
-                    a,
-                    DialFailure::refused_by_peer(
-                        shekyl_peerlist::ConnectorId::Clearnet,
-                        Reached::StreamOpened,
-                    ),
-                )
-            },
-            After::Cooling,
-        ),
         // A Tor proxy reply is the proxy's word, never proof: `0xF1` as
         // Tor's table stamps it, the destination's and final.
         (
@@ -494,11 +480,11 @@ fn a_failed_test_cools_the_draw_a_proving_one_drops_it_and_a_refused_payload_lea
             },
             After::Cooling,
         ),
-        // A refused list on Tor: the onion is the peer's key, so proven.
+        // A refusal where the destination is authenticated: proven, so dropped.
         (
             onion(7),
             |a| {
-                DialOutcome::PeerlistRefused(
+                DialOutcome::DialFailed(
                     a,
                     DialFailure::refused_by_peer(
                         shekyl_peerlist::ConnectorId::Tor,
@@ -522,11 +508,7 @@ fn a_failed_test_cools_the_draw_a_proving_one_drops_it_and_a_refused_payload_lea
         let outcome = make(peer.clone());
         // The dialer's verdict: proof of misbehaviour drops, the rest count.
         let verdict = match &outcome {
-            DialOutcome::DialFailed(_, failure) | DialOutcome::PeerlistRefused(_, failure)
-                if failure.proves_misbehaviour() =>
-            {
-                Verdict::Drop
-            }
+            DialOutcome::DialFailed(_, failure) if failure.proves_misbehaviour() => Verdict::Drop,
             _ => Verdict::Counted,
         };
         list.apply(&outcome, at_hours(0), verdict, &mut rng);
@@ -612,7 +594,7 @@ fn a_failed_white_test_moves_it_to_gray_unless_it_is_excused() {
 
     let hidden = onion(10);
     let (mut list, mut rng) = white_one(10, &hidden);
-    let proven = DialOutcome::PeerlistRefused(
+    let proven = DialOutcome::DialFailed(
         hidden.clone(),
         DialFailure::refused_by_peer(shekyl_peerlist::ConnectorId::Tor, Reached::StreamOpened),
     );

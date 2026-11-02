@@ -179,11 +179,8 @@ impl Dialer {
         );
         if admitted.is_err() {
             // A list the lists refuse (D3, D-S1, the foreign-connector rule,
-            // R4) is the peer's doing: the same stamp as a rejection.
-            return Attempt::Done(DialOutcome::PeerlistRefused(
-                address.clone(),
-                refused_by_peer(connector).failure(),
-            ));
+            // R4) is the peer's doing: the same failure as a rejection.
+            return Attempt::Done(failed_outcome(address.clone(), refused_by_peer(connector)));
         }
 
         if aim == DialAim::Confirm {

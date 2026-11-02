@@ -548,7 +548,7 @@ impl Peerlist {
             // The gray lifecycle (Rick, 2026-10-24): an address leaves the
             // lists only on authenticated proof of misbehaviour, never for
             // a connection problem; the judge says which (`Verdict`).
-            DialOutcome::DialFailed(address, _) | DialOutcome::PeerlistRefused(address, _) => {
+            DialOutcome::DialFailed(address, _) => {
                 let profile = dial_profile(connector);
                 match verdict {
                     Verdict::Drop => {

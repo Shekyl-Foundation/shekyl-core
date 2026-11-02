@@ -39,9 +39,7 @@ pub(crate) fn attempt_stream(outcome: &DialOutcome) -> AttemptStream {
             AttemptStream::Opened
         }
         DialOutcome::DialFailed(_, _) => AttemptStream::Unopened,
-        DialOutcome::PeerlistRefused(..)
-        | DialOutcome::Confirmed(_)
-        | DialOutcome::SessionAccepted(_) => AttemptStream::Opened,
+        DialOutcome::Confirmed(_) | DialOutcome::SessionAccepted(_) => AttemptStream::Opened,
     }
 }
 
@@ -80,12 +78,12 @@ mod tests {
             AttemptStream::Opened
         );
         assert_eq!(
-            attempt_stream(&DialOutcome::PeerlistRefused(
-                address.clone(),
-                DialFailure::refused_by_peer(ConnectorId::Clearnet, opened)
-            )),
+            attempt_stream(&failed(DialFailure::refused_by_peer(
+                ConnectorId::Clearnet,
+                opened
+            ))),
             AttemptStream::Opened,
-            "a refused list was a peer we reached"
+            "a refusal after the stream opened reached a peer"
         );
         assert_eq!(
             attempt_stream(&failed(DialFailure::uncertain(Retry::Again, opened))),

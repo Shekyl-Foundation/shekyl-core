@@ -126,7 +126,7 @@ fn only_session_accepted_leaves_a_kept_session_and_every_outcome_ends_the_attemp
         (DialOutcome::Confirmed, 0),
         (
             (|a| {
-                DialOutcome::PeerlistRefused(
+                DialOutcome::DialFailed(
                     a,
                     shekyl_transport_layer::DialFailure::refused_by_peer(
                         shekyl_peerlist::ConnectorId::Clearnet,
