@@ -30,6 +30,8 @@ mod long_run;
 #[cfg(test)]
 mod offer_tests;
 #[cfg(test)]
+mod page_overlap_tests;
+#[cfg(test)]
 mod proof;
 #[cfg(test)]
 mod relay_tests;

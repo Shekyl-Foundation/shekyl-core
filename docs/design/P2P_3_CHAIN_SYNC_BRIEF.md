@@ -268,6 +268,18 @@ ingest deciding forks.**
      locator hash it holds. The first preimage's parent is that hash.
    - The first header's parent must be in the store (main or alt) or in
      `T`. If not, the response is a protocol violation.
+   - **Amended 2026-11-02 (#1237, the CS-5 §10 rehearsal):** the
+     locator is sparse below its dense prefix, so a page routinely opens
+     with headers the node already holds: on main between the locator
+     point and the fork, then in `T`. Those are the page's *held
+     prefix*; the new headers follow it and are judged above its last
+     header, which is where the branch view starts. A held header after
+     a new one is a chain rejoining what it left, a form the peer cannot
+     have: `HeadersForm`. Before the amendment a main-held header counted
+     as new and the `T`-held stretch was dropped from the page, so the
+     first new header was judged above the wrong parent and CEN-A2
+     refused it on every page; three miners at target 1 never converged
+     (`page_overlap_tests`).
 3. **Verify headers: cheap checks per response, then the work test on
    the run, then PoW.**
    - **Cheap checks, on each response as it arrives, at almost no
