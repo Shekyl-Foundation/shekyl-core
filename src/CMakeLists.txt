@@ -49,6 +49,9 @@ function (enable_stack_trace target)
   if(STACK_TRACE)
     set_property(TARGET ${target}
       APPEND PROPERTY COMPILE_DEFINITIONS "STACK_TRACE")
+    # The hook's object (common/stack_trace.cpp) reaches only the
+    # executables that ask for it; see src/common/CMakeLists.txt.
+    target_link_libraries(${target} PRIVATE stack_trace)
     if (STATIC AND NOT MSVC)
       set_property(TARGET "${target}"
         APPEND PROPERTY LINK_FLAGS "-Wl,--wrap=__cxa_throw")

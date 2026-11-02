@@ -51,7 +51,6 @@ GROUPS = [
             # importer's and core_tests' (daemon_snapshot_ffi.rs, §2.9).
             "ShekylStringList": "ShekylStringList",
             "ShekylClientEndpoint": "ShekylClientEndpoint",
-            "ShekylMineAddress": "ShekylMineAddress",
             "ShekylDaemonSnapshot": "ShekylDaemonSnapshot",
             "ShekylBuffer": "ShekylBuffer",
             "ShekylPqcKeypair": "ShekylPqcKeypair",
@@ -108,21 +107,6 @@ GROUPS = [
             "InfoPeersFactsFfi": "shekyl_rpc_info_peers_facts",
             "PeerFactsFfi": "shekyl_rpc_peer_facts",
             "SeamSessionCountsFfi": "shekyl_seam_session_counts_t",
-        },
-    },
-    {
-        # The daemon's Rust main() hands the C++ remnant its entry. The
-        # configuration snapshot the remnant reads is shekyl-ffi's
-        # (daemon_snapshot_ffi.rs), paired in the entry above.
-        "crate": "rust/shekyl-daemon/src/lib.rs",
-        "namespace": "rust_daemon",
-        # `run` and `stop` are `Option<RunFn>` and `Option<StopFn>`.
-        "item_types": ["structs", "enums", "typedefs"],
-        "headers": ["src/shekyl/shekyl_ffi.h"],
-        "bounds": [],
-        "exclude": [],
-        "pairs": {
-            "ShekylDaemonEntry": "ShekylDaemonEntry",
         },
     },
 ]

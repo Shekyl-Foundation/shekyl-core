@@ -72,9 +72,9 @@ SURFACES=(
   "relay:rust/shekyl-ffi/src/relay_zone_ffi/mod.rs"
   "rpc_peerlist:rust/shekyl-ffi/src/rpc_peerlist_ffi.rs"
   "close_cause:rust/shekyl-ffi/src/close_cause_ffi.rs"
-  # The daemon's entry types and the snapshot field-count export
-  # (DAEMON_CONFIG_CUTOVER.md §2.9); the C++ reads the snapshot these define.
-  "daemon_entry:rust/shekyl-daemon/src/entry.rs"
+  # The one stop request the console's `exit` and the RPC's `stop_daemon`
+  # make (DAEMON_CONFIG_CUTOVER.md §2.2 step 9).
+  "daemon_stop:rust/shekyl-daemon/src/stop.rs"
   # The one RPC start and its stop (DAEMON_CONFIG_CUTOVER.md §2.3).
   "daemon_rpc:rust/shekyl-daemon-rpc/src/ffi_exports.rs"
   # The notify runner's three pushes (DAEMON_CONFIG_CUTOVER.md §2.10).

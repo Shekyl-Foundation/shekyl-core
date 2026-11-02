@@ -174,17 +174,17 @@ pub(crate) fn owner_refusal(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use std::ffi::{CStr, OsString};
+    use std::ffi::OsString;
     use std::path::Path;
     use std::sync::atomic::{AtomicUsize, Ordering};
 
     use shekyl_daemon_config::{load, Platform};
     use shekyl_options::read_cli;
 
-    use crate::entry::ShekylDaemonEntry;
+    use crate::remnant::Remnant;
     use crate::{EXIT_FAILED, EXIT_REFUSED};
 
-    /// Runs the check tests give the entry: a start that reaches the
+    /// Runs the check tests give the sequence: a start that reaches the
     /// remnant is the failure. The count is this module's; the start
     /// tests' run counter is a different one.
     static FORBIDDEN_RUNS: AtomicUsize = AtomicUsize::new(0);
@@ -196,18 +196,13 @@ mod tests {
         99
     }
 
-    const RELEASE: &CStr = c"Test";
-    const VERSION: &CStr = c"3.1.0-test";
+    extern "C" fn no_stop() {}
 
-    /// An entry whose `run` must never be reached.
-    fn checking_entry() -> ShekylDaemonEntry {
-        ShekylDaemonEntry {
-            release_name: RELEASE.as_ptr(),
-            version_full: VERSION.as_ptr(),
-            is_release: false,
-            protocol_version: 3,
-            run: Some(forbidden_run),
-            stop: None,
+    /// A remnant whose `run` must never be reached.
+    fn checking_remnant() -> Remnant {
+        Remnant {
+            run: forbidden_run,
+            stop: no_stop,
         }
     }
 
@@ -255,7 +250,7 @@ mod tests {
         let data = d.path().join("deep").join("data");
         let log = d.path().join("logs").join("shekyld.log");
         let a = offline_regtest(&data, &log);
-        assert_eq!(crate::run::main(&checking_entry(), &a, &host(d.path())), 0);
+        assert_eq!(crate::run::main(checking_remnant(), &a, &host(d.path())), 0);
         assert!(
             !d.path().join("deep").exists(),
             "no data directory was created"
@@ -273,7 +268,7 @@ mod tests {
         let held = Lock::take(&data).unwrap();
         marker::check_or_write(&held, shekyl_daemon_config::Network::Regtest, [3u8; 16]).unwrap();
         let before = std::fs::read(data.join("shekyld.network")).unwrap();
-        assert_eq!(crate::run::main(&checking_entry(), &a, &host(d.path())), 0);
+        assert_eq!(crate::run::main(checking_remnant(), &a, &host(d.path())), 0);
         assert_eq!(std::fs::read(data.join("shekyld.network")).unwrap(), before);
         assert!(!log.exists());
         drop(held);
@@ -291,7 +286,7 @@ mod tests {
         std::fs::write(data.join("shekyld.network"), &other).unwrap();
         let a = offline_regtest(&data, &log);
         assert_eq!(
-            crate::run::main(&checking_entry(), &a, &host(d.path())),
+            crate::run::main(checking_remnant(), &a, &host(d.path())),
             EXIT_REFUSED
         );
         assert_eq!(
@@ -317,7 +312,10 @@ mod tests {
             platform: host(d.path()).platform,
             network_id_of: |_| None,
         };
-        assert_eq!(crate::run::main(&checking_entry(), &a, &no_id), EXIT_FAILED);
+        assert_eq!(
+            crate::run::main(checking_remnant(), &a, &no_id),
+            EXIT_FAILED
+        );
         assert!(!data.exists());
     }
 
@@ -327,7 +325,7 @@ mod tests {
     fn config_verify_in_client_mode_stops_after_the_load() {
         let d = tempfile::tempdir().unwrap();
         let status = crate::run::main(
-            &checking_entry(),
+            checking_remnant(),
             &args(&[
                 "--config-verify",
                 "--rpc-admin-listen",
@@ -362,7 +360,7 @@ mod tests {
         assert_eq!(ds[0].option.as_deref(), Some("dev-pow-seed-epoch-blocks"));
         assert_eq!(ds[0].get("value"), Some("3"));
         assert_eq!(
-            crate::run::main(&checking_entry(), &a, &host(d.path())),
+            crate::run::main(checking_remnant(), &a, &host(d.path())),
             EXIT_REFUSED
         );
         assert!(!data.exists());
@@ -422,7 +420,7 @@ mod tests {
         );
         assert!(err.iter().any(|line| line.starts_with("shekyld: posture:")));
         assert!(err.iter().any(|line| line.contains("warning: managed Tor")));
-        assert_eq!(crate::run::main(&checking_entry(), &a, &host(d.path())), 0);
+        assert_eq!(crate::run::main(checking_remnant(), &a, &host(d.path())), 0);
         assert!(!data.exists());
     }
 }

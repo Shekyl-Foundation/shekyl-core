@@ -8,8 +8,9 @@
 //
 // A shim reads; it decides nothing. Every POD here has a #[repr(C)] twin in
 // rust/shekyl-daemon-rpc/src/ffi.rs whose layout is pinned both directions by
-// tests/unit_tests/rpc_facts_ffi_roundtrip.cpp. Daemon-only: linked through
-// the daemon image (shekyl-ffi + shekyl-daemon-rpc), never libshekyl_ffi.a.
+// tests/unit_tests/rpc_facts_ffi_roundtrip.cpp. Daemon-only: the exports are
+// rust/shekyl-daemon-rpc's, which shekyl-ffi re-exports (DC-F26), so the
+// Rust shekyld and the C++ unit_tests both reach them.
 
 #pragma once
 
@@ -36,7 +37,7 @@ typedef struct shekyl_rpc_chain_tip_facts {
     uint8_t  top_hash[32];
     uint64_t target_height;     // raw core target; the handlers do not rewrite it when synchronized
     uint8_t  synchronized;
-    uint8_t  release_build;     // SHEKYL_VERSION_IS_RELEASE
+    uint8_t  release_build;     // shekyl_version::IS_RELEASE, supplied by the Rust node (DC-Q20)
     uint8_t  reserved[6];
 } shekyl_rpc_chain_tip_facts;
 
@@ -408,7 +409,7 @@ typedef struct shekyl_rpc_info_chain_facts {
     uint8_t  busy_syncing;
     uint8_t  offline;
     uint8_t  following_degraded;
-    uint8_t  protocol_version;         // SHEKYL_PROTOCOL_VERSION, a C++ constant
+    uint8_t  protocol_version;         // shekyl_version::PROTOCOL_VERSION, a Rust constant (DC-Q20)
     uint8_t  reserved[3];
 } shekyl_rpc_info_chain_facts;
 
@@ -433,10 +434,9 @@ typedef struct shekyl_rpc_info_status_facts {
     uint64_t alt_blocks_count;
 } shekyl_rpc_info_status_facts;
 
-// The build's version string (SHEKYL_VERSION_FULL) is written to
-// `version_buf`, not NUL-terminated, with its length in `*version_len`. It
-// exists only in C++, and it is a Status field, so it rides this export. A
-// buffer too small for it is ERR_INTERNAL, never a truncated version.
+// The build's version string is not a fact this header carries: it is
+// `shekyl_version::VERSION_FULL`, a Rust constant the node supplies in its
+// identity (DC-Q20).
 
 // Peers facts, read only for a caller who is shown Peers.
 typedef struct shekyl_rpc_info_peers_facts {

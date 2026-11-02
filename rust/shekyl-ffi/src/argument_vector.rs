@@ -5,21 +5,15 @@
 
 //! The daemon's argument vector (`DAEMON_CONFIG_CUTOVER.md` §2.2, IG-Q2).
 //!
-//! One value, two sources, and the constructor the Rust process entry will
-//! use when DC-Q13 moves `shekyld`'s `main` into Rust:
+//! One value, two sources. `shekyld`'s process entry is Rust's own
+//! (DC-Q19), so the daemon's vector is `std::env::args_os`, collected in
+//! `rust/shekyld/src/main.rs` and handed to `shekyl_daemon::main` as a
+//! slice; nothing here is on that path. This type is the snapshot export's:
 //!
-//! - [`ArgumentVector::from_process_entry`] is what C `main` calls today.
-//!   On Unix the pointers are the vector: this image is a staticlib, and
-//!   `std::env::args_os` is empty unless `lang_start` ran. On Windows the
-//!   vector is `GetCommandLineW`; a C `main` argv there is the active code
-//!   page, so the pointers are not read.
 //! - [`ArgumentVector::from_narrow_argv`] is the snapshot export's source.
-//!   The caller handed over the strings. Unix keeps each argument's bytes.
-//!   Windows decodes the active code page.
-//! - [`ArgumentVector::from_os_strings`] is the safe constructor. The Rust
-//!   process entry collects `std::env::args_os` here, and the Windows
-//!   process source does that now, because `GetCommandLineW` does not need
-//!   `lang_start`.
+//!   The caller (a C++ test binary, the importer) handed over the strings.
+//!   Unix keeps each argument's bytes. Windows decodes the active code page.
+//! - [`ArgumentVector::from_os_strings`] is the safe constructor behind it.
 //!
 //! The count is the length. A null slot is not a shorter vector: every
 //! constructor yields a program name and every argument, or [`None`].
@@ -36,31 +30,6 @@ pub struct ArgumentVector {
 }
 
 impl ArgumentVector {
-    /// The arguments `main` passed, or [`None`] when they cannot be read.
-    ///
-    /// On Unix, [`from_narrow_argv`](Self::from_narrow_argv)'s contract.
-    /// On Windows the pointers are not read: the vector is
-    /// `GetCommandLineW` through `std::env::args_os`, and an empty result
-    /// is [`None`].
-    ///
-    /// # Safety
-    ///
-    /// On Unix, when `argc >= 1` and `argv` is non-null, `argv` addresses
-    /// `argc` pointers and each one is non-null and NUL-terminated for
-    /// this call. On Windows `argc` and `argv` are not dereferenced.
-    pub unsafe fn from_process_entry(argc: c_int, argv: *const *const c_char) -> Option<Self> {
-        #[cfg(windows)]
-        {
-            let _ = (argc, argv);
-            Self::from_os_strings(std::env::args_os().collect())
-        }
-        #[cfg(not(windows))]
-        {
-            // SAFETY: the caller's contract.
-            unsafe { Self::from_narrow_argv(argc, argv) }
-        }
-    }
-
     /// A caller-supplied narrow argument list, program first.
     ///
     /// Unix keeps each argument's bytes, so a non-UTF-8 argument reaches
@@ -96,10 +65,7 @@ impl ArgumentVector {
 
     /// An argument vector the caller already holds.
     ///
-    /// [`None`] when `args` is empty. Windows [`Self::from_process_entry`]
-    /// collects `std::env::args_os` here, which is `GetCommandLineW`. The
-    /// Rust process entry will do the same on every platform; that entry
-    /// is the FOLLOWUPS row under DC-Q13.
+    /// [`None`] when `args` is empty.
     pub(crate) fn from_os_strings(args: Vec<OsString>) -> Option<Self> {
         if args.is_empty() {
             None
@@ -247,7 +213,7 @@ mod tests {
         let program = CString::new("shekyld").unwrap();
         let bad = CString::new(vec![b'-', b'-', 0xff]).unwrap();
         let ptrs = [program.as_ptr(), bad.as_ptr()];
-        let got = unsafe { ArgumentVector::from_process_entry(2, ptrs.as_ptr()) }.unwrap();
+        let got = unsafe { ArgumentVector::from_narrow_argv(2, ptrs.as_ptr()) }.unwrap();
         assert_eq!(got.as_slice()[1].as_bytes(), &[b'-', b'-', 0xff]);
     }
 }

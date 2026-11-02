@@ -38,7 +38,12 @@ if (IOS)
     INCLUDE(CmakeLists_IOS.txt)
 endif()
 
-cmake_minimum_required(VERSION 3.5)
+# 3.22: what Corrosion (external/corrosion, the bridge that links the C++
+# remnant into the Rust daemon binary; DAEMON_CONFIG_CUTOVER.md DC-Q23)
+# requires. Raising the floor from 3.5 also moves every policy up to
+# 3.22's NEW behaviour; cmake/MsvcStaticRuntime.cmake already handles
+# CMP0091 either way.
+cmake_minimum_required(VERSION 3.22)
 message(STATUS "CMake version ${CMAKE_VERSION}")
 
 # CMake 4.x compatibility
@@ -357,7 +362,7 @@ function(forbid_undefined_symbols)
     file(MAKE_DIRECTORY "${TEST_PROJECT}")
     file(WRITE "${TEST_PROJECT}/CMakeLists.txt"
       [=[
-cmake_minimum_required(VERSION 3.5)
+cmake_minimum_required(VERSION 3.22)
 project(test)
 option(EXPECT_SUCCESS "" ON)
 file(WRITE "${CMAKE_SOURCE_DIR}/incorrect_source.cpp" "void undefined_symbol(); void symbol() { undefined_symbol(); }")
@@ -929,7 +934,11 @@ include_directories(${LIBUNWIND_INCLUDE})
 link_directories(${LIBUNWIND_LIBRARY_DIRS})
 
 if(MSVC)
-  add_definitions("/bigobj /MP /FS /W3 /GS- /D_CRT_SECURE_NO_WARNINGS /wd4996 /wd4345 /D_WIN32_WINNT=0x0600 /DWIN32_LEAN_AND_MEAN /DNOMINMAX /DGTEST_HAS_TR1_TUPLE=0 /FIinline_c.h /D__SSE4_1__ /Zc:preprocessor")
+  # No `/GS-`: the compiler's stack-buffer security checks stay on in every
+  # C++ object the Rust `shekyld` links (DAEMON_CONFIG_CUTOVER.md DC-Q21,
+  # §3.8 of the Rust-binary PR). The flag was inherited; nothing measured
+  # a need for it.
+  add_definitions("/bigobj /MP /FS /W3 /D_CRT_SECURE_NO_WARNINGS /wd4996 /wd4345 /D_WIN32_WINNT=0x0600 /DWIN32_LEAN_AND_MEAN /DNOMINMAX /DGTEST_HAS_TR1_TUPLE=0 /FIinline_c.h /D__SSE4_1__ /Zc:preprocessor")
   set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} /FIiso646.h")
   # set(CMAKE_C_FLAGS "${CMAKE_C_FLAGS} /Dinline=__inline")
   set(CMAKE_EXE_LINKER_FLAGS "${CMAKE_EXE_LINKER_FLAGS} /STACK:10485760")

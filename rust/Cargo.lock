@@ -4134,6 +4134,7 @@ dependencies = [
  "shekyl-shard-visual",
  "shekyl-types",
  "shekyl-units",
+ "shekyl-version",
  "shekyl-wallet-rpc",
  "shekyl-win-sec",
  "tempfile",
@@ -4293,6 +4294,7 @@ dependencies = [
  "shekyl-timing-engine",
  "shekyl-tor-control-client",
  "shekyl-tor-control-daemon",
+ "shekyl-version",
  "tempfile",
  "tokio",
  "tracing",
@@ -4312,18 +4314,6 @@ dependencies = [
  "shekyl-win-sec",
  "tempfile",
  "toml 0.8.23",
-]
-
-[[package]]
-name = "shekyl-daemon-image"
-version = "3.1.0"
-dependencies = [
- "shekyl-archival-fetch-sched",
- "shekyl-chain-ingest",
- "shekyl-daemon",
- "shekyl-daemon-rpc",
- "shekyl-ffi",
- "shekyl-types",
 ]
 
 [[package]]
@@ -4677,6 +4667,7 @@ dependencies = [
  "shekyl-curve-primitives",
  "shekyl-curve-tree",
  "shekyl-daemon-config",
+ "shekyl-daemon-rpc",
  "shekyl-dialer",
  "shekyl-difficulty",
  "shekyl-draw-rng",
@@ -5604,6 +5595,10 @@ dependencies = [
 ]
 
 [[package]]
+name = "shekyl-version"
+version = "3.1.0"
+
+[[package]]
 name = "shekyl-wallet-contract"
 version = "3.1.0"
 dependencies = [
@@ -5649,6 +5644,7 @@ dependencies = [
  "shekyl-scanner",
  "shekyl-types",
  "shekyl-units",
+ "shekyl-version",
  "shekyl-wallet-contract",
  "shekyl-win-sec",
  "subtle",
@@ -5719,6 +5715,20 @@ dependencies = [
  "shekyl-wire",
  "tempfile",
  "tokio",
+]
+
+[[package]]
+name = "shekyld"
+version = "3.1.0"
+dependencies = [
+ "shekyl-archival-fetch-sched",
+ "shekyl-chain-ingest",
+ "shekyl-clearnet",
+ "shekyl-daemon",
+ "shekyl-daemon-rpc",
+ "shekyl-ffi",
+ "shekyl-transport-layer",
+ "shekyl-types",
 ]
 
 [[package]]

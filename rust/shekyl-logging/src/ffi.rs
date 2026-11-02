@@ -403,18 +403,22 @@ pub unsafe extern "C" fn shekyl_log_flush(within_ms: u32) -> i32 {
 /// The 2026-06-10/2026-06-11 amendments (single-image contract)
 /// supersede the mechanism: there is nothing to forward *between*,
 /// because every binary links exactly one Rust image — this crate is
-/// compiled into `libshekyl_ffi.a` (wallet side) or
-/// `libshekyl_daemon_image.a` (daemon), so the one shared
+/// compiled into `libshekyl_ffi.a` for the C++ binaries and into the
+/// `shekyld` binary's own dependency graph (DC-Q19), so the one shared
 /// `tracing-core` dispatcher is common to the `shekyl_log_init_*`
 /// subscriber and every `tracing::*` macro in the image's crate graph.
 ///
 /// This function is the runtime half of that contract: it pins the
-/// call-ordering invariant (init first) and gives the C++ caller a
-/// typed success/already/not-initialized signal. The link-time half —
+/// call-ordering invariant (init first) and gives the caller a typed
+/// success/already/not-initialized signal. The link-time half —
 /// "exactly one `tracing-core` dispatcher in the binary" — cannot be
 /// observed from inside any single Rust image and is enforced by the
-/// post-link `nm` gate on the `daemon` target (one
-/// `GLOBAL_DISPATCH` symbol; see `src/daemon/CMakeLists.txt`).
+/// post-link `nm` gate on the staged `shekyld` (one `GLOBAL_DISPATCH`
+/// symbol; see `src/daemon/CMakeLists.txt`).
+///
+/// The daemon calls [`install_tracing_forwarder`] directly from Rust,
+/// right after `init` (`shekyl-daemon`'s `run`, DC-Q22); this export is
+/// the same pin for a C caller.
 ///
 /// Idempotent: a second call after a successful first returns
 /// [`SHEKYL_LOG_ERR_ALREADY_INSTALLED`]. Calling before a successful
@@ -427,21 +431,64 @@ pub unsafe extern "C" fn shekyl_log_flush(within_ms: u32) -> i32 {
 /// No pointer parameters, so no pointer-validity obligations.
 #[no_mangle]
 pub unsafe extern "C" fn shekyl_log_install_tracing_forwarder() -> i32 {
+    match install_tracing_forwarder() {
+        Ok(()) => SHEKYL_LOG_OK,
+        Err(ForwarderError::NotInitialized) => {
+            set_last_error(
+                "shekyl_log_install_tracing_forwarder: no successful \
+                 shekyl_log_init_* call preceded this install",
+            );
+            SHEKYL_LOG_ERR_NOT_INITIALIZED
+        }
+        Err(ForwarderError::AlreadyInstalled) => {
+            set_last_error(
+                "shekyl_log_install_tracing_forwarder: forwarder already \
+                 installed in this process",
+            );
+            SHEKYL_LOG_ERR_ALREADY_INSTALLED
+        }
+    }
+}
+
+/// Why [`install_tracing_forwarder`] did not pin the forwarder.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ForwarderError {
+    /// No successful `init` preceded the call; the one-shot is not
+    /// consumed, so the caller may retry after init.
+    NotInitialized,
+    /// A successful call already pinned the forwarder in this process.
+    AlreadyInstalled,
+}
+
+impl std::fmt::Display for ForwarderError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(match self {
+            Self::NotInitialized => "no successful logging init preceded the forwarder install",
+            Self::AlreadyInstalled => "the forwarder is already installed in this process",
+        })
+    }
+}
+
+impl std::error::Error for ForwarderError {}
+
+/// The forwarder pin as safe Rust: the daemon's `run` calls this right
+/// after [`crate::init`] succeeds, so C++ `MCLOG`-family calls made from
+/// the remnant have a subscriber behind them from the first one. See
+/// [`shekyl_log_install_tracing_forwarder`] for what the pin is and is
+/// not.
+///
+/// # Errors
+///
+/// [`ForwarderError::NotInitialized`] before a successful init;
+/// [`ForwarderError::AlreadyInstalled`] on a repeat call.
+pub fn install_tracing_forwarder() -> Result<(), ForwarderError> {
     if !subscriber_installed() {
-        set_last_error(
-            "shekyl_log_install_tracing_forwarder: no successful \
-             shekyl_log_init_* call preceded this install",
-        );
-        return SHEKYL_LOG_ERR_NOT_INITIALIZED;
+        return Err(ForwarderError::NotInitialized);
     }
     if FORWARDER_INSTALLED.swap(true, Ordering::SeqCst) {
-        set_last_error(
-            "shekyl_log_install_tracing_forwarder: forwarder already \
-             installed in this process",
-        );
-        return SHEKYL_LOG_ERR_ALREADY_INSTALLED;
+        return Err(ForwarderError::AlreadyInstalled);
     }
-    SHEKYL_LOG_OK
+    Ok(())
 }
 
 // -----------------------------------------------------------------

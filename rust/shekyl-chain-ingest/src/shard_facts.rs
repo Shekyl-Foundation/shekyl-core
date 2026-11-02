@@ -8,7 +8,7 @@
 //! rows: the `SHT-Q2` fold, per-transaction `txid_parts`, and tip bond
 //! holdings. They are the scheduler's production [`ShardFacts`] and
 //! [`HolderSource`], read by both of the scheduler's daemon callers: the
-//! shard view (`shekyl-daemon-image`'s `shard_view`, which maps a view onto
+//! shard view (the `shekyld` crate's `shard_view`, which maps a view onto
 //! the RPC) and the bundle producer's challenge reads (`SO-D12` increment
 //! 4c), which the node composes. Here, behind the `producer` feature,
 //! because this crate is where the node's store and the scheduler meet; the

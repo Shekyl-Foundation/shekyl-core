@@ -76,7 +76,7 @@ shekyl-tx-builder = { path = "../shekyl-tx-builder" }
 # Curve-tree client, exposed as a *replica* (`curve_tree_replica_ffi.rs`) so
 # the C++ test generator can fill block headers with real curve-tree roots
 # instead of a placeholder -- the retirement of CEN-B5's FAKECHAIN skip
-# (census R9). Brings `redb` into the daemon image ahead of the daemon redb
+# (census R9). Brings `redb` into the daemon's image ahead of the daemon redb
 # store (DRS), which needs it anyway; ruled by Rick 2026-09-05 over a
 # C++-LMDB generator oracle that the store rewrite would have deleted.
 shekyl-curve-tree = { path = "../shekyl-curve-tree" }
@@ -95,6 +95,16 @@ shekyl-wire = { path = "../shekyl-wire" }
 # silently dropped. See V3_WALLET_DECISION_LOG.md (single-image contract)
 # and the nm gate in src/daemon/CMakeLists.txt.
 shekyl-logging = { path = "../shekyl-logging" }
+# The same contract, for the daemon RPC server's exports. shekyld is a
+# Rust binary (DAEMON_CONFIG_CUTOVER.md DC-Q19) and gets this crate as an
+# rlib; `libshekyl_ffi.a` is now the one Rust archive every C++ binary
+# links, and `unit_tests` (daemon_rpc_client.cpp, over
+# `shekyl_daemon_ctl_*`) is a C++ binary that calls into it. The
+# 2026-06-11 ruling's rule — a crate a C++ binary needs joins that
+# binary's image — puts it here; `rust/shekyl-daemon-image`, the archive
+# that used to carry it beside this crate for the C++ shekyld, is retired
+# with that C++ executable (DC-Q19, DC-F26).
+shekyl-daemon-rpc = { path = "../shekyl-daemon-rpc" }
 # Dandelion++ embargo / propagation-timeout (`dandelionpp_ffi.rs`, RP-4).
 # Stem-map exports retired at RP-3a. The FFI owns the CSPRNG (`OsRng`); the
 # measurement crate stays deterministic.
@@ -198,6 +208,10 @@ harness = false
 # The known-folder roots for the daemon configuration (IG-13).
 shekyl-win-sec = { path = "../shekyl-win-sec" }
 # The snapshot export's narrow argv is the active code page. `windows-sys`
-# 0.61 is already in the lock through shekyl-win-sec; this names the one
-# module `argument_vector` calls (`MultiByteToWideChar`, `CP_ACP`).
-windows-sys = { version = "0.61", features = ["Win32_Globalization"] }
+# 0.61 is already in the lock through shekyl-win-sec; this names the two
+# modules this crate calls: `argument_vector`'s (`MultiByteToWideChar`,
+# `CP_ACP`) and `platform::harden_process`'s (`SetErrorMode`, DC-Q21).
+windows-sys = { version = "0.61", features = [
+  "Win32_Globalization",
+  "Win32_System_Diagnostics_Debug",
+] }

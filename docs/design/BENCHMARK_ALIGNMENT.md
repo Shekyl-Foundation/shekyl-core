@@ -315,7 +315,7 @@ capture counts as a gap until a tracked T3 run reproduces it.
 | **BA-G13** | Transfer build end to end, on the floor | Send latency; [`FCMP_PLUS_PLUS.md`](../FCMP_PLUS_PLUS.md) states "~2-5 seconds" with no source | `sign_transaction` and the proof inside it (`rust/shekyl-tx-builder/src/sign.rs:57`, `:171`) | One floor figure, 6.05 s to prove a 2-input spend, a by-product of BA-I98. Nothing tracks it |
 | **BA-G14** | GUI wallet: startup to usable, sync-progress overhead, send flow, shard render | User-facing latency; no budget is stated for any of them | `gui:src-tauri/src/lifecycle.rs:153` (`open_wallet`), `gui:src-tauri/src/wallet_care.rs:42` (`refresh`), `gui:src-tauri/src/send.rs:265` and `:297` (`build_pending_tx`, `submit_pending_tx`), `gui:src-tauri/src/shard_coverage.rs:74` (`get_shard_render`) | Nothing measured (BA-I104) |
 | **BA-G15** | Wallet scan rate on the floor at the shipping configuration | The FA-6 budgets (BA-I17) | `rust/shekyl-scanner/src/scan.rs:670` | BA-I72: one capture, June 2026, non-shipping flags, outcome `fail`. The quick-sync scenario is quoted only in [`PERFORMANCE_BASELINE.md`](../PERFORMANCE_BASELINE.md) |
-| **BA-G16** | Per-block admission cost of attestation records | `ARCHIVAL_MAX_ATTESTATION_RECORDS = 256` (`src/cryptonote_config.h:444`), justified in place as bounding that cost | The coinbase admission path | No measurement found |
+| **BA-G16** | Per-block admission cost of attestation records | `MAX_ATTESTATION_RECORDS = 256` (`rust/shekyl-archival-retention/src/attestation_wire.rs:38`; the C++ `ARCHIVAL_MAX_ATTESTATION_RECORDS` left `cryptonote_config.h` with CS-5), justified in place as bounding that cost | The coinbase admission path | No measurement found |
 
 ## 4. Constants justified by a cost or a latency
 
@@ -330,7 +330,7 @@ moving; at the pin only the first row has one.
 | `block_weight_full_reward_zone_bytes = 300 000` | `config/consensus_constants.json:17` | Zone-point block verifies in 7.23 s | as above | No | BA-G4, BA-T10 |
 | `FCMP_MAX_INPUTS_PER_TX = 8` | `src/cryptonote_config.h:316` | "bounds proof generation time and tx size"; derivation owed | floor and x86 dev, 2026-09-24, n = 1 | No | `docs/FOLLOWUPS.md:141`, BA-T10 |
 | Maximum tree depth 24 | `rust/shekyl-fcmp/src/lib.rs:50` | Proving cost and proof size | Nothing past depth 7 | No | BA-G4 |
-| `ARCHIVAL_MAX_ATTESTATION_RECORDS = 256` | `src/cryptonote_config.h:444` | Per-block admission cost | Not measured | No | BA-G16 |
+| `MAX_ATTESTATION_RECORDS = 256` | `rust/shekyl-archival-retention/src/attestation_wire.rs:38` | Per-block admission cost | Not measured | No | BA-G16 |
 | IBD floor, redb ≤ 1.25× LMDB | `scripts/bench/drs_artifact.py:29` | Slower IBD means fewer full nodes | x86 dev, LMDB arm only | No | BA-G6, BA-T13 |
 | Read shape for the weight window | ruled in [`CHAIN_RULES_SLICE_7.md`](../completed/CHAIN_RULES_SLICE_7.md) | ≤ 5 % of zone-point verify; measured 0.5 % | floor, 2026-09-27, n = 1 | No | None needed: about ten times headroom, and the denominator is BA-G4's |
 | Slash-scan placement | ruled in [`DRS_E4_ARCHIVAL_WRITER.md`](../completed/DRS_E4_ARCHIVAL_WRITER.md) | About 10 ms once per epoch | x86 dev only | No | BA-T12 |

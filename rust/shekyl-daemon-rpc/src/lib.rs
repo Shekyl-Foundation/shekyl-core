@@ -33,11 +33,10 @@
 //! owns HTTP, dispatch, restricted-mode, and every method the KV cutover has
 //! moved.
 
-// This crate's `tracing::*` events reach the C++-installed subscriber
-// because the daemon links exactly one Rust image
-// (`rust/shekyl-daemon-image`, which combines this crate with
-// `shekyl-ffi`'s logging surface into one archive with one
-// `tracing-core` dispatcher). See V3_WALLET_DECISION_LOG.md
+// This crate's `tracing::*` events reach the installed subscriber
+// because the daemon is exactly one Rust image: the `shekyld` binary
+// crate links this crate through `shekyl-ffi`, beside `shekyl-ffi`'s
+// logging surface, with one `tracing-core` dispatcher. See V3_WALLET_DECISION_LOG.md
 // (single-image contract, 2026-06-11 amendment).
 
 pub mod authority;

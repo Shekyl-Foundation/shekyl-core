@@ -364,7 +364,8 @@ pub struct InfoChainFactsFfi {
     pub busy_syncing: u8,
     pub offline: u8,
     pub following_degraded: u8,
-    /// `SHEKYL_PROTOCOL_VERSION`, which only C++ defines.
+    /// `shekyl_version::PROTOCOL_VERSION`, a Rust constant (DC-Q20); the
+    /// node supplies it in its identity.
     pub protocol_version: u8,
     pub reserved: [u8; 3],
 }

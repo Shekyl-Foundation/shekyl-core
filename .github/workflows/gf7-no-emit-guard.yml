@@ -20,8 +20,9 @@
 #   layer 3 (feature containment): the `gf7-hooks` feature is non-default
 #     and must never resolve on the normal/build edges of any crate except
 #     the sim. The release lane never enables it — `cmake/BuildRust.cmake`
-#     builds `-p shekyl-ffi` / `-p shekyl-daemon-image` with no
-#     `--features` — and this check catches *transitive* enablement (a
+#     builds `-p shekyl-ffi` and the `shekyld`, `shekyl-cli` and
+#     `shekyl-wallet-rpc` binaries with no `--features` — and this check
+#     catches *transitive* enablement (a
 #     manifest anywhere adding `shekyl-standoff` or `shekyl-engine-core`
 #     with the feature on). Dev edges are deliberately out of scope:
 #     test lanes may enable the feature (`cargo test --features

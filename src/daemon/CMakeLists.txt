@@ -27,26 +27,45 @@
 # STRICT LIABILITY, OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF
 # THE USE OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 
-set(daemon_sources
+# shekyld is a Rust binary (rust/shekyld; DAEMON_CONFIG_CUTOVER.md DC-Q19).
+# What this directory builds is the C++ that remains behind its two entry
+# points, `shekyl_remnant_run` and `shekyl_remnant_stop` (daemon.h): the
+# console, the RPC command executor and `Daemon`. It is a static library,
+# and cmake/BuildRust.cmake's `shekyl_rust_link_cxx_closure` hands this
+# library and everything it links to the Rust binary's link (DC-Q23).
+#
+# Not `shekyl_add_executable`: there is no C++ executable here, so none
+# of what that helper attaches — `STACK_TRACE` and its `--wrap=__cxa_throw`
+# among them (DC-Q22: the Rust side owns the process's signals and its
+# panic hook; a C++ crash handler would be a second owner, DC-F17).
+set(shekyld_remnant_sources
   command_parser_executor.cpp
   command_server.cpp
   daemon.cpp
-  main.cpp
   rpc_command_executor.cpp
 )
 
-set(daemon_headers)
+set(shekyld_remnant_headers)
 
-monero_find_all_headers(daemon_private_headers "${CMAKE_CURRENT_SOURCE_DIR}")
+monero_find_all_headers(shekyld_remnant_private_headers "${CMAKE_CURRENT_SOURCE_DIR}")
 
-monero_private_headers(daemon
-  ${daemon_private_headers})
-shekyl_add_executable(daemon
-  ${daemon_sources}
-  ${daemon_headers}
-  ${daemon_private_headers})
-target_link_libraries(daemon
-  PRIVATE
+monero_private_headers(shekyld_remnant
+  ${shekyld_remnant_private_headers})
+monero_add_library(shekyld_remnant
+  ${shekyld_remnant_sources}
+  ${shekyld_remnant_headers}
+  ${shekyld_remnant_private_headers})
+# PUBLIC: this library is never linked by a C++ target, and the closure
+# walk reads LINK_LIBRARIES and INTERFACE_LINK_LIBRARIES alike; PUBLIC
+# records each item once, in one place.
+#
+# `${SHEKYL_FFI_LINK_LIBS}` is here for the platform tail its consumers
+# need (libm, pthread, the Windows socket and crypto libraries); the walk
+# drops the `shekyl_ffi` archive at its head, the Rust side being the
+# rlibs already in the link. `${EXTRA_LIBRARIES}` is what
+# `shekyl_add_executable` would have added to the executable.
+target_link_libraries(shekyld_remnant
+  PUBLIC
     rpc
     cryptonote_core
     cncrypto
@@ -56,13 +75,7 @@ target_link_libraries(daemon
     serialization
     ${EPEE_READLINE}
     version
-    # Resolves to libshekyl_daemon_image.a (not libshekyl_ffi.a) because
-    # of the SHEKYL_RUST_IMAGE_DAEMON property set below — the daemon's
-    # single Rust image carrying the FFI surface, the logging C ABI, and
-    # the daemon RPC server with one tracing dispatcher. See the
-    # per-binary image-selection comment in cmake/BuildRust.cmake.
     ${SHEKYL_FFI_LINK_LIBS}
-    rpc
     ${Boost_CHRONO_LIBRARY}
     ${Boost_FILESYSTEM_LIBRARY}
     ${Boost_REGEX_LIBRARY}
@@ -70,30 +83,32 @@ target_link_libraries(daemon
     ${CMAKE_THREAD_LIBS_INIT}
     ${GNU_READLINE_LIBRARY}
     ${EXTRA_LIBRARIES})
-set_property(TARGET daemon
-  PROPERTY
-    OUTPUT_NAME "shekyld")
 
-# Select the daemon's Rust image: every occurrence of the Rust archive in
-# this target's link closure (including the copies inherited transitively
-# from cryptonote_core / cryptonote_basic) resolves to
-# libshekyl_daemon_image.a instead of libshekyl_ffi.a. See the
-# per-binary image-selection generator expression in cmake/BuildRust.cmake.
-set_property(TARGET daemon PROPERTY SHEKYL_RUST_IMAGE_DAEMON ON)
-if(TARGET shekyl_daemon_image_rust)
-  # Generator-expression-resolved link items do not carry the imported
-  # target's build-order dependency; add the edge to the cargo build
-  # explicitly so the archive exists before the daemon links.
-  add_dependencies(daemon shekyl_daemon_image_rust)
-endif()
+# The walk runs when the top-level directory finishes configuring: every
+# target the closure names exists by then, whatever the subdirectory
+# order. `cmake_language(DEFER)` is CMake 3.19+; the root requires 3.22.
+cmake_language(DEFER DIRECTORY "${CMAKE_SOURCE_DIR}"
+  CALL shekyl_rust_link_cxx_closure shekyld shekyld_remnant)
 
 # Single-tracing-dispatcher gate: the binary must contain exactly one
-# tracing-core GLOBAL_DISPATCH definition. Two copies means the daemon
-# linked a second Rust archive (e.g. libshekyl_ffi.a alongside
-# libshekyl_daemon_image.a) — the split-image regression in which one
-# image's tracing events are silently dropped
-# (V3_WALLET_DECISION_LOG.md 2026-06-10). nm runs pre-strip, so the
+# tracing-core GLOBAL_DISPATCH definition. Two copies means the link took
+# a second copy of the Rust side — `libshekyl_ffi.a` from a C++ archive's
+# interface beside the rlibs cargo linked — the split-image regression in
+# which one image's tracing events are silently dropped
+# (V3_WALLET_DECISION_LOG.md 2026-06-10). The closure walk drops that
+# archive; this gate is what says it did. nm runs pre-strip, so the
 # symbol is visible in both debug and release link products.
+#
+# The command hangs off `cargo-build_shekyld`, Corrosion's build target
+# for the binary: a POST_BUILD step there runs after Corrosion's own
+# copy of the binary into `RUNTIME_OUTPUT_DIRECTORY`, the file
+# `SHEKYLD_STAGED_BINARY` (cmake/BuildRust.cmake) names. (`shekyld`
+# itself is an IMPORTED target and takes no build steps; naming it
+# through `$<TARGET_FILE>` here would close a dependency cycle, which is
+# why the path is spelled out.) That target belongs to the top-level
+# directory, where cmake/BuildRust.cmake is included, and
+# `add_custom_command(TARGET)` must be called from the target's own
+# directory — hence a function, called deferred in that directory.
 #
 # nm selection: cross builds emit non-host object formats (the depends
 # Cross-Mac builds link Mach-O on a Linux host), which the host GNU nm
@@ -101,8 +116,9 @@ endif()
 # the toolchain's own nm (CMAKE_NM; for depends Darwin this is the
 # cctools <triple>-nm), fall back to PATH nm, and try candidates until
 # one can actually parse the binary. A parse failure across all
-# candidates fails the build loudly — the gate never silently skips.
-if(UNIX)
+# candidates fails the build loudly — the gate never silently skips, and
+# a configure that finds no nm at all stops here (rule 47).
+function(shekyl_shekyld_single_dispatcher_gate)
   # Resolve each candidate through find_program so bare tool names
   # (a user-set CMAKE_NM=llvm-nm, or a name-only _CMAKE_TOOLCHAIN_PREFIX
   # from a non-depends toolchain) are looked up on PATH instead of being
@@ -122,12 +138,19 @@ if(UNIX)
   endforeach()
   unset(_shekyl_nm_resolved CACHE)
   list(REMOVE_DUPLICATES _shekyl_nm_candidates)
-  if(_shekyl_nm_candidates)
-    add_custom_command(TARGET daemon POST_BUILD
-      COMMAND sh -c "bin=\"$0\"; for nm_tool in \"$@\"; do if syms=$(\"$nm_tool\" \"$bin\" 2>/dev/null); then count=$(printf '%s\\n' \"$syms\" | grep GLOBAL_DISPATCH | grep -cv '[$]got' || true); if [ \"$count\" -ne 1 ]; then echo \"shekyld single-dispatcher gate FAILED ($nm_tool): $count tracing GLOBAL_DISPATCH definitions (expected 1)\" >&2; exit 1; fi; exit 0; fi; done; echo \"shekyld single-dispatcher gate FAILED: no nm tool could parse $bin (tried: $*)\" >&2; exit 1" "$<TARGET_FILE:daemon>" ${_shekyl_nm_candidates}
-      VERBATIM
-      COMMENT "Asserting single tracing GLOBAL_DISPATCH in shekyld")
+  if(NOT _shekyl_nm_candidates)
+    message(FATAL_ERROR "shekyld single-dispatcher gate: no nm tool found")
   endif()
+  add_custom_command(TARGET cargo-build_shekyld POST_BUILD
+    COMMAND sh -c "bin=\"$0\"; for nm_tool in \"$@\"; do if syms=$(\"$nm_tool\" \"$bin\" 2>/dev/null); then count=$(printf '%s\\n' \"$syms\" | grep GLOBAL_DISPATCH | grep -cv '[$]got' || true); if [ \"$count\" -ne 1 ]; then echo \"shekyld single-dispatcher gate FAILED ($nm_tool): $count tracing GLOBAL_DISPATCH definitions (expected 1)\" >&2; exit 1; fi; exit 0; fi; done; echo \"shekyld single-dispatcher gate FAILED: no nm tool could parse $bin (tried: $*)\" >&2; exit 1" "${SHEKYLD_STAGED_BINARY}" ${_shekyl_nm_candidates}
+    VERBATIM
+    COMMENT "Asserting single tracing GLOBAL_DISPATCH in shekyld")
+endfunction()
+if(UNIX)
+  cmake_language(DEFER DIRECTORY "${CMAKE_SOURCE_DIR}"
+    CALL shekyl_shekyld_single_dispatcher_gate)
 endif()
 
-install(TARGETS daemon DESTINATION bin)
+# The binary, from where Corrosion staged it. `install(TARGETS)` does not
+# take an IMPORTED target; the wallet binaries install the same way.
+install(PROGRAMS "$<TARGET_FILE:shekyld>" DESTINATION bin)

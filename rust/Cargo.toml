@@ -181,10 +181,11 @@ members = [
     # (docs/design/ARCHIVAL_BOND_CONSTRUCTION.md §7)
     "shekyl-archival-bond-builder",
 
-    # Link-image crate: the daemon's single Rust archive (shekyl-ffi +
-    # shekyl-daemon-rpc → one tracing-core dispatcher). No logic; see
-    # its crate docs and src/daemon/CMakeLists.txt's nm gate.
-    "shekyl-daemon-image",
+    # The daemon binary (DAEMON_CONFIG_CUTOVER.md DC-Q19): a Rust `main`
+    # over `shekyl-daemon`'s sequence, linking the C++ remnant's archives
+    # through CMake (Corrosion). One Rust dependency graph, so one
+    # tracing-core dispatcher; the staged binary's nm gate asserts it.
+    "shekyld",
     "shekyl-encoding",
     "shekyl-address",
     "shekyl-difficulty",
@@ -249,6 +250,11 @@ members = [
     # Foundational state-shaped domain newtypes — heights, indices, hashes,
     # timestamps (docs/design/RAW_TYPE_NEWTYPE_MIGRATION.md PR 0)
     "shekyl-types",
+
+    # The build identity (version, release flag, release name) read from the
+    # environment cmake/Version.cmake sets, and the protocol version
+    # (DAEMON_CONFIG_CUTOVER.md DC-Q20). A leaf: no dependencies.
+    "shekyl-version",
 
     # First-party crates relocated out of the vendored shekyl-oxide tree in the
     # un-vendor slice-2 Track B (docs/design/SHEKYL_OXIDE_UNVENDOR.md §6 B2): the
@@ -363,8 +369,8 @@ members = [
     "shekyl-p-loopback",
 
     # Daemon-only operator scheduler of `shekyl-p-fetch` (SF-D1). Linked
-    # from `shekyl-daemon-image` only — never from `shekyl-ffi` or an RPC
-    # crate (`check_p_fetch_dep_cut.py`).
+    # from the `shekyld` binary crate only — never from `shekyl-ffi` or an
+    # RPC crate (`check_p_fetch_dep_cut.py`).
     "shekyl-archival-fetch-sched",
 
     # The serve-credit bundle producer (SO-D12 increment 4c): the witness
@@ -436,8 +442,8 @@ members = [
     "shekyl-daemon-config",
 
     # The daemon's Rust main() and its one signal owner (DAEMON_CONFIG_CUTOVER.md
-    # §2.2); the C++ remnant is a run/stop pair it drives. Exported through
-    # shekyl-daemon-image.
+    # §2.2); the C++ remnant is a run/stop pair it drives. Called by the
+    # `shekyld` binary crate (DC-Q19).
     "shekyl-daemon",
 
     # The daemon's one Node (DRS_X_STORE_FLIP.md DX-Q6, N1): the store, the

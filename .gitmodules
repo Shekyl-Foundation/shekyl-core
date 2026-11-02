@@ -11,3 +11,6 @@
 [submodule "external/randomx-v2"]
 	path = external/randomx-v2
 	url = https://github.com/Shekyl-Foundation/RandomX
+[submodule "external/corrosion"]
+	path = external/corrosion
+	url = https://github.com/corrosion-rs/corrosion

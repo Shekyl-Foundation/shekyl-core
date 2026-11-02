@@ -1156,7 +1156,7 @@ jobs:
           ccache --max-size=150M
           ccache --set-config=compression=true
           cmake -S . -B build -D ARCH="default" -D BUILD_TESTS=ON -D CMAKE_BUILD_TYPE=Release -D BUILD_RANDOMX_V2_MINER_LIB=ON
-          cmake --build build --target daemon randomx-v2-full-parity randomx-v2-miner-kat
+          cmake --build build --target cargo-build_shekyld randomx-v2-full-parity randomx-v2-miner-kat
       - name: symbol isolation on linked daemon (nm)
         run: scripts/ci/check_randomx_symbol_isolation.sh build/bin/shekyld
       - name: generate parity corpus

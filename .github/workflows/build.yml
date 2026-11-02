@@ -246,6 +246,17 @@ jobs:
         run: |
           ${{env.CCACHE_SETTINGS}}
           make -j${{env.MAKE_JOB_COUNT}}
+      # The Mach-O half of the hardening gate (MH_PIE, no executable stack,
+      # no LC_RPATH) on the three staged Rust binaries; otool is Xcode's.
+      # The Makefile's build directory carries the OS and the branch name
+      # (`build/Darwin/<branch>/release`), so the staged directory is found,
+      # and the gate itself fails on a path that is not a file.
+      - name: binary hardening on the staged binaries (otool)
+        run: |
+          staged=$(find build -type f -name shekyld -path '*/release/bin/*' -print -quit)
+          if [ -z "$staged" ]; then echo "no staged shekyld under build/" >&2; exit 1; fi
+          bindir=$(dirname "$staged")
+          scripts/ci/check_binary_hardening.sh "$bindir/shekyld" "$bindir/shekyl-cli" "$bindir/shekyl-wallet-rpc"
 
   # Windows MSYS2 and Arch Linux moved to `.github/workflows/weekly-os.yml`.
   # PR Windows coverage is the MSVC daemon job below (the only runner that
@@ -351,6 +362,15 @@ jobs:
         if: matrix.pack_ctest && needs.changes.outputs.docs_only != 'true'
         shell: bash
         run: scripts/ci/check_randomx_symbol_isolation.sh build/bin/shekyld
+      # The hardening the link flags claim, read off the staged ELF binaries
+      # (PIE, non-executable stack, full RELRO, no run path). shekyld is a
+      # Rust binary linking the C++ remnant (DAEMON_CONFIG_CUTOVER.md DC-Q19,
+      # DC-Q21); the flags reach it through Corrosion, not CMAKE_EXE_LINKER_FLAGS,
+      # so the result is what is asserted. readelf is binutils.
+      - name: binary hardening on the staged binaries (readelf)
+        if: needs.changes.outputs.docs_only != 'true'
+        shell: bash
+        run: scripts/ci/check_binary_hardening.sh build/bin/shekyld build/bin/shekyl-cli build/bin/shekyl-wallet-rpc
       - name: live-daemon gates
         if: matrix.pack_ctest && needs.changes.outputs.docs_only != 'true'
         # `shell: bash` like the CTest-artifact step below, and for the same
@@ -752,6 +772,14 @@ jobs:
         # with the C++ chain.
         run: |
           pwsh -NoProfile -File scripts/ci/msvc_static_crt.ps1 -Stage link
+      # The PE half of the hardening gate on the linked daemon: PE32+ and
+      # DllCharacteristics with DYNAMIC_BASE, HIGH_ENTROPY_VA and NX_COMPAT
+      # (DAEMON_CONFIG_CUTOVER.md DC-Q21). The runner image's LLVM supplies
+      # llvm-readobj; the script also reads dumpbin's shape inside a
+      # developer shell. `/GS` leaves no header mark and is not read here.
+      - name: binary hardening on the linked daemon (PE headers)
+        shell: bash
+        run: scripts/ci/check_binary_hardening.sh build/bin/Release/shekyld.exe
       - name: smoke-test daemon boot and stop
         shell: pwsh
         # The daemon's runtime gate on Windows: boot the built shekyld.exe

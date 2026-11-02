@@ -33,8 +33,9 @@ pub const ATTESTATION_ROOT_CUSTOMIZATION: &[u8] = b"shekyl/archival-attestation-
 /// Canonical kept-header length: `p_id(32) + shard_id(8) + settlement_epoch(8) + kind(1)`.
 pub const ATTESTATION_HEADER_LEN: usize = 32 + 8 + 8 + 1;
 
-/// Genesis-frozen consensus cap on attestation records per block. Equals C++
-/// `config::ARCHIVAL_MAX_ATTESTATION_RECORDS`.
+/// Genesis-frozen consensus cap on attestation records per block. The one
+/// definition: the C++ `config::ARCHIVAL_MAX_ATTESTATION_RECORDS` it once
+/// mirrored left `cryptonote_config.h` with CS-5.
 pub const MAX_ATTESTATION_RECORDS: usize = 256;
 
 /// Fixed framing prefix of a canonical **non-empty** witness: `count_le(8)`,

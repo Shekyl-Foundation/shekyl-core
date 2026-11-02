@@ -263,14 +263,17 @@ source, drop the grader) makes `shekyl-chain-store` the daemon's live store,
 and with it: a shard-range read over the cumulative archival length (the
 `SHT-Q2` boundary function `shard_of` applied to a prefix sum the store
 indexes), the block span for a tx-id range, and `bond_records` joined to
-serving endpoints. The composition root is `shekyl-daemon-image` — the one
-crate that reaches both the scheduler and the RPC (`check_p_fetch_dep_cut.py`
-holds the RPC crates out of the fetch client) — which then implements
+serving endpoints. The composition root is the `shekyld` binary crate
+(`rust/shekyld`; `shekyl-daemon-image` until the Rust binary, #1254,
+2026-11-01, `DAEMON_CONFIG_CUTOVER.md` DC-Q19) — the one crate that reaches
+both the scheduler and the RPC (`check_p_fetch_dep_cut.py` holds the RPC
+crates out of the fetch client) — which then implements
 `ShardViewFacts` over `ViewDesk` and passes it in `ServerConfig::shard_view`.
 
 **Falsifier (rule 22).** `rg -n 'impl ShardViewFacts for' rust/` returns an
 implementor other than `SkeletonAbsent` and the test-local scripts, in
-`rust/shekyl-daemon-image/`, whose `ShardFacts`/`HolderSource` are backed by
+`rust/shekyld/` (`shard_view.rs`, moved there intact from
+`rust/shekyl-daemon-image/`), whose `ShardFacts`/`HolderSource` are backed by
 `shekyl-chain-store` rows. Until that line exists the block stands; when it
 exists `SkeletonAbsent` becomes the default nothing production selects, and
 this ruling is re-read rather than inherited.
@@ -342,7 +345,7 @@ branch.
 | 2a | fetch Sub-PR 2 client: tx-range frame, streaming per-tx `ContentVerify`, range-derived response ceiling, `ServedFrameHeader` / `recompute_segment_r_k` out of the client path | `SF-` (FOLLOWUPS row) | — |
 | 2b | the scheduler: `shekyl-archival-fetch-sched` as a real `fetch()` scheduler (holder draw `SF-D10`, `MAX_INFLIGHT = 8`, `SF-D6` outcomes), the view caller folding `SV-D1`/`SV-D4`, the `SV-D5` cache | this round | 2a |
 | 2c | the serve read: `StoreShardProvider` over a `BodyStoreReader` streams the tx-range frame. The writer is `StakeEngine`'s (`WSS-Q1`(a)). Fill (`WSS-Q4`) is not written, so an empty store answers 404 until fill. Erase (`WSS-Q8`) runs when the pin-release gate clears a shard. The reader still decrypts (`WSS-Q13` is not met) | the wallet lane (`WSS-`) | fill `WSS-Q4`, erase `WSS-Q8` |
-| 3 | `request_archival_shard` natively in `shekyl-daemon-rpc`; C++ deleted (`SV-D3`); `close_height` on the wire — **landed 2026-10-08** over the `SkeletonAbsent` facts; the `ViewDesk` adapter in `shekyl-daemon-image` is `SV-D9`'s | this round | 2b |
+| 3 | `request_archival_shard` natively in `shekyl-daemon-rpc`; C++ deleted (`SV-D3`); `close_height` on the wire — **landed 2026-10-08** over the `SkeletonAbsent` facts; the `ViewDesk` adapter in the daemon's composition root (`shekyl-daemon-image`, now `rust/shekyld`) is `SV-D9`'s | this round | 2b |
 | 4 | wallet RPC method (contract registry), CLI and GUI local render, shekyl-web server PNG route — **landed 2026-10-09**: `get_shard_view` SPECIFIED (`wallet_rpc.yaml` 0.11.0; codes `-29534` `SHARD_STILL_OPEN`, `-29535` `SHARD_UNAVAILABLE`, `-29536` `SHARD_VIEW_NOT_OFFERED` with `data.cause` `restricted` \| `skeleton_absent`), the daemon call and refusal mapping once in `shekyl-wallet-contract::shard_view::fetch_shard_view`, served by `shekyl-wallet-rpc`; CLI `shard fetch <id> [--png <path>] [--size <n>]`; GUI `get_shard_view` contract adapter drawing locally; `shekyl-shard-render` (`shekyl-shard-visual`, feature `cli`) for shekyl-web, whose `/api/shards/{id}/view[/png]` routes call the site daemon's unrestricted listener; the `ArchivalShardSource` stub deleted | this round | 3 |
 
 **What a viewer shows today.** Every shipped daemon answers `SV-D9`'s

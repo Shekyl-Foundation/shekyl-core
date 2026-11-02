@@ -41,10 +41,6 @@ set(common_sources
   timings.cc
   combinator.cpp)
 
-if (STACK_TRACE)
-  list(APPEND common_sources stack_trace.cpp)
-endif()
-
 if (BACKCOMPAT)
   list(APPEND common_sources compat/glibc_compat.cpp)
 endif()
@@ -64,7 +60,6 @@ monero_add_library(common
 target_link_libraries(common
   PUBLIC
     cncrypto
-    ${LIBUNWIND_LIBRARIES}
     ${Boost_DATE_TIME_LIBRARY}
     ${Boost_FILESYSTEM_LIBRARY}
     ${Boost_SYSTEM_LIBRARY}
@@ -75,6 +70,22 @@ target_link_libraries(common
     ${OPENSSL_LIBRARIES}
     ${Boost_PROGRAM_OPTIONS_LIBRARY}
     ${EXTRA_LIBRARIES})
+
+# The `__cxa_throw` hook is its own library, linked only by
+# `enable_stack_trace` (src/CMakeLists.txt) and the unit test of the hook.
+# It was a member of `common`, and in a non-STATIC build its object
+# *defines* `__cxa_throw`, so any binary that linked `common` resolved every
+# C++ throw to the hook before libstdc++ was searched — `shekyld` included,
+# whose remnant never asked for it (DAEMON_CONFIG_CUTOVER.md DC-Q22,
+# DC-F27): each throw in the daemon wrote a `[stacktrace]` dump straight to
+# stderr, past the Rust log sink. A C++ executable opts in through
+# `enable_stack_trace`; a library member reaches whoever links the library.
+if (STACK_TRACE)
+  monero_add_library(stack_trace stack_trace.cpp)
+  target_link_libraries(stack_trace
+    PUBLIC
+      ${LIBUNWIND_LIBRARIES})
+endif()
 
 #monero_install_headers(common
 #  ${common_headers})

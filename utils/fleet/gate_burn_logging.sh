@@ -26,12 +26,14 @@
 # canary would prove the same thing while spending a candidate slot and
 # perturbing the measurement, so it is not used.
 #
-# NOTE the log is the launcher's captured STDOUT, not the `log-file=` path in
-# the generated config: `--log-file` is inert on this daemon. `tools::on_startup`
-# (src/common/util.cpp:793) installs the stderr sink before
-# src/daemon/main.cpp:333 can install the file sink, the install-once Rust
-# subscriber returns ALREADY_INIT, and mlog.cpp classifies that as expected and
-# discards it without printing. Fix pending; until it lands, stdout IS the log.
+# NOTE the log this gate reads is the launcher's captured STDOUT (LOG_GLOB),
+# not the daemon's `log-file`. Records-was (to the daemon-configuration
+# cutover, #1088, and the Rust binary, #1254): on the C++ daemon `--log-file`
+# was inert, because `tools::on_startup` installed the stderr sink before
+# `main.cpp` could install the file sink and the install-once Rust subscriber
+# returned ALREADY_INIT. Rust owns the log file now (DAEMON_CONFIG_CUTOVER.md
+# §2.2) and the daemon no longer calls `on_startup` (DC-Q22); this gate keeps
+# reading the stdout capture the launcher writes.
 # ---------------------------------------------------------------------------
 #
 # Usage: gate_burn_logging.sh <inventory-file> <instances-per-host>

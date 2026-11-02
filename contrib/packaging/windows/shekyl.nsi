@@ -64,6 +64,14 @@ Section "Shekyl Core (required)" SecCore
   WriteRegDWORD HKLM "Software\Microsoft\Windows\CurrentVersion\Uninstall\Shekyl" \
     "NoRepair" 1
 
+  ; Windows Error Reporting collects a memory dump of a faulting process
+  ; and offers to send it. The daemon disables its own core dumps in
+  ; process (DAEMON_CONFIG_CUTOVER.md DC-Q21); WER is a per-machine
+  ; setting, so the exclusion is written here, where the installer already
+  ; holds the machine. This is the value WerAddExcludedApplication writes.
+  WriteRegDWORD HKLM "SOFTWARE\Microsoft\Windows\Windows Error Reporting\ExcludedApplications" \
+    "shekyld.exe" 1
+
   WriteUninstaller "$INSTDIR\uninstall.exe"
 SectionEnd
 
@@ -111,6 +119,7 @@ Section "Uninstall"
     WriteRegExpandStr HKLM "SYSTEM\CurrentControlSet\Control\Session Manager\Environment" "Path" "$0"
   PathCleanDone:
 
+  DeleteRegValue HKLM "SOFTWARE\Microsoft\Windows\Windows Error Reporting\ExcludedApplications" "shekyld.exe"
   DeleteRegKey HKLM "Software\Microsoft\Windows\CurrentVersion\Uninstall\Shekyl"
   DeleteRegKey HKLM "Software\Shekyl"
 SectionEnd

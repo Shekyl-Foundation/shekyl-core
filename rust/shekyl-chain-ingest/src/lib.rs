@@ -35,7 +35,7 @@
 //! - [`trace`] — the LMDB-only facts and one digest checkpoint at the
 //!   covered tip (RD-F18), with typed [`trace::Borrowed`] / [`trace::Expected`]
 //!   doors. This is the harvest artifact `shekyl-ffi` compiles; the pipeline
-//!   stages sit behind the `pipeline` feature so the daemon image does not
+//!   stages sit behind the `pipeline` feature so the daemon binary does not
 //!   pull the replay driver to write a trace.
 //! - [`substrate`] — the production [`Substrate`](shekyl_chain_rules::Substrate):
 //!   RandomX verification through `shekyl-pow-randomx`'s cache path and the

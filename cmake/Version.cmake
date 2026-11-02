@@ -30,11 +30,21 @@
 # Update this before branching a new major/minor release series.
 set(SHEKYL_VERSION_DEFAULT "3.1.0")
 
+# This file is the one home of the build identity (DAEMON_CONFIG_CUTOVER.md
+# DC-Q20): the version, its tag, whether the build is a release, and the
+# release name. `src/version.cpp.in` reads them for the C++ `version`
+# library; `cmake/BuildRust.cmake` passes SHEKYL_VERSION_FULL,
+# SHEKYL_RELEASE_NAME and SHEKYL_VERSION_IS_RELEASE to every cargo-built
+# binary, where `rust/shekyl-version` reads them. Neither side spells a
+# value of its own.
+set(SHEKYL_RELEASE_NAME "Shekyl NG" CACHE STRING "The release name" FORCE)
+
 function (write_version tag)
   set(VERSIONTAG "${tag}" CACHE STRING "The tag portion of the Shekyl software version" FORCE)
-  # One spelling. version.cpp.in and the wallet cargo invocation both
-  # read this; neither concatenates the version and the tag itself.
+  # One spelling. version.cpp.in and the cargo invocations both read
+  # this; neither concatenates the version and the tag itself.
   set(SHEKYL_VERSION_FULL "${SHEKYL_VERSION}-${tag}" CACHE STRING "Shekyl version and tag, hyphenated" FORCE)
+  set(SHEKYL_VERSION_IS_RELEASE "${VERSION_IS_RELEASE}" CACHE STRING "true for a tarball or tagged build" FORCE)
   configure_file("${CMAKE_CURRENT_LIST_DIR}/../src/version.cpp.in" "${CMAKE_BINARY_DIR}/version.cpp")
 endfunction ()
 

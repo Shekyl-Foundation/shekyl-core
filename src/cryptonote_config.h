@@ -195,12 +195,8 @@
 #define P2P_IP_BLOCKTIME                                (60*60*24)  //24 hour
 #define P2P_IP_FAILS_BEFORE_BLOCK                       10
 
-
-// Shekyl protocol version. Single integer, independent of software version.
-// See docs/VERSIONING.md for the full scheme.
-//   3 = FCMP++ curve tree, hybrid PQC (Ed25519+ML-DSA-65, X25519+ML-KEM-768)
-//   4 = lattice-only threshold sigs (future, pending NIST standardization)
-#define SHEKYL_PROTOCOL_VERSION                 3
+// The protocol version is `shekyl_version::PROTOCOL_VERSION`, a Rust
+// constant (DAEMON_CONFIG_CUTOVER.md DC-Q20); no C++ reads it.
 
 #define CRYPTONOTE_NAME                         "shekyl"
 #define CRYPTONOTE_BLOCKCHAINDATA_FILENAME      "data.mdb"

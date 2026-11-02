@@ -8,15 +8,14 @@
 /// This header is the C ABI between C++ and Rust. Most functions are
 /// exported from `rust/shekyl-ffi` (`libshekyl_ffi.a`). Daemon-only
 /// symbols (`shekyl_daemon_rpc_*`, `shekyl_daemon_ctl_*`) are exported
-/// from `rust/shekyl-daemon-rpc` and reach C++ through the daemon image
-/// (`libshekyl_daemon_image.a`; see `cmake/BuildRust.cmake`).
+/// from `rust/shekyl-daemon-rpc`, which `shekyl-ffi` re-exports (DC-F26).
 ///
 /// ## Linking
 ///
-/// Wallet/tool binaries link `libshekyl_ffi.a`. `shekyld` and daemon
-/// unit tests link `libshekyl_daemon_image.a` (shekyl-ffi +
-/// shekyl-daemon-rpc, one `tracing-core` dispatcher). Never link both
-/// archives on one line.
+/// Every C++ binary links `libshekyl_ffi.a`, the one Rust archive.
+/// `shekyld` is a Rust binary (DC-Q19): its cargo graph links
+/// `shekyl-ffi` and its C++ remnant links back into it, one image with
+/// one `tracing-core` dispatcher (see `cmake/BuildRust.cmake`).
 ///
 /// ## Memory model
 ///
@@ -3043,20 +3042,21 @@ std::uint64_t shekyl_recv_mark_ms(std::uint64_t recv_ms, std::uint64_t started_m
 /// (`shekyl_dialer_note_network` does, from the network the daemon chose).
 int shekyl_network_id(std::uint8_t nettype, std::uint8_t* out);
 
-/// The daemon's entry (DAEMON_CONFIG_CUTOVER.md §2.2, DC-Q13; defined in
-/// `rust/shekyl-daemon/src/entry.rs`, carried by the daemon image). C++
-/// `main()` fills a `ShekylDaemonEntry` and calls `shekyl_daemon_main` with
-/// its own `argc` and `argv`; Rust owns the process from there and calls
-/// `run` with the snapshot of the values whose reader is still C++. The
-/// snapshot's structures, its field
-/// count and `shekyl_daemon_snapshot_parse` / `_free` are defined in
+/// The daemon's snapshot (DAEMON_CONFIG_CUTOVER.md §2.2, §2.9; DC-Q13,
+/// DC-Q19). `shekyld` is a Rust binary: Rust owns the process from its own
+/// `main` and calls the remnant's `shekyl_remnant_run` (declared in
+/// `daemon/daemon.h`, the one import in that direction) with the snapshot of
+/// the values whose reader is still C++. The snapshot's structures, its
+/// field count and `shekyl_daemon_snapshot_parse` / `_free` are defined in
 /// `rust/shekyl-ffi/src/daemon_snapshot_ffi.rs` and carried by every Rust
 /// image, so a binary that only constructs core from a snapshot (the
-/// importer, core_tests) links no daemon image (§2.9). The structures below
-/// are the Rust `#[repr(C)]` definitions member for member;
-/// `SHEKYL_DAEMON_SNAPSHOT_FIELDS` is asserted against
-/// `shekyl_daemon_snapshot_field_count()` at run.
-#define SHEKYL_DAEMON_SNAPSHOT_FIELDS 10u
+/// importer, core_tests) carries nothing of the daemon (§2.9). The
+/// structures below are the Rust `#[repr(C)]` definitions member for
+/// member; `SHEKYL_DAEMON_SNAPSHOT_FIELDS` is asserted against
+/// `shekyl_daemon_snapshot_field_count()` at run, and
+/// `scripts/ci/check_snapshot_readers.py` holds every member to a C++
+/// reader under `src/`.
+#define SHEKYL_DAEMON_SNAPSHOT_FIELDS 6u
 
 /// A list of NUL-terminated strings.
 struct ShekylStringList {
@@ -3075,48 +3075,14 @@ struct ShekylClientEndpoint {
 static_assert(sizeof(ShekylClientEndpoint) == 8,
     "the console endpoint is four octets, a port and a flag");
 
-/// A mining address the configuration already decoded. `text` is display
-/// only and is never parsed. `ml_kem` is the encapsulation key; the miner
-/// derives the X25519 prefix from `view`. The pointers live as long as the
-/// snapshot's owned data. One member of the snapshot.
-struct ShekylMineAddress {
-  const char* text;
-  uint8_t spend[32];
-  uint8_t view[32];
-  const uint8_t* ml_kem;
-  size_t ml_kem_len;
-};
-
 /// The values whose reader is still C++ (§2.9), filled once by Rust.
 struct ShekylDaemonSnapshot {
   const char* data_dir;
   uint8_t network;
   bool offline;
-  uint64_t fixed_difficulty;
-  uint64_t txpool_weight_max;
-  const ShekylMineAddress* mine_address;
-  uint32_t mine_threads;
   bool console;
   ShekylStringList command;
   ShekylClientEndpoint client_endpoint;
-};
-
-/// The remnant's `run`: `noexcept`, returns the exit status. The snapshot is
-/// the whole of what the remnant reads; it parses nothing.
-typedef int (*ShekylDaemonRunFn)(const ShekylDaemonSnapshot* snapshot);
-/// The remnant's `stop`: requests the stop `run` waits for; `noexcept`.
-typedef void (*ShekylDaemonStopFn)(void);
-
-/// What `main()` hands the Rust entry.
-struct ShekylDaemonEntry {
-  const char* release_name;
-  const char* version_full;
-  /// `SHEKYL_VERSION_IS_RELEASE`. Beside the version string: the release
-  /// workflow sets both from `version.cpp.in` (FLIP-Q3).
-  bool is_release;
-  uint32_t protocol_version;
-  ShekylDaemonRunFn run;
-  ShekylDaemonStopFn stop;
 };
 
 /// The snapshot's field count, from the Rust definition.
@@ -3125,18 +3091,9 @@ uint32_t shekyl_daemon_snapshot_field_count();
 /// and the RPC's `stop_daemon`. Returns at once; the remnant never stops
 /// itself.
 void shekyl_daemon_request_stop(void);
-/// Runs the daemon and returns its exit status: 2 a configuration refusal,
-/// 1 a runtime failure, `run`'s status otherwise; a panic aborts.
-/// On Unix, `argc` and `argv` are the argument vector: this image is a
-/// staticlib, and `std::env::args_os` is empty unless Rust's process entry
-/// ran. Each of the `argc` pointers is a non-null string. A null `argv`,
-/// `argc < 1`, or a null slot returns 1 and does not start. On Windows the
-/// argument vector is `GetCommandLineW`; `argc` and `argv` are not read,
-/// because a C `main` argv is the active code page.
-int32_t shekyl_daemon_main(const ShekylDaemonEntry* entry, int argc, const char* const* argv);
 /// A snapshot for a C++ test binary or the importer, from an argument list
 /// (the program first) through the one real parse: no lock, no marker, no
-/// logging. In the ordinary library, not the daemon image. 0 and
+/// logging. 0 and
 /// `*out` set; 2 with the refusal on standard error; 1 when the vector
 /// cannot be read (a null argument, `argc < 1`, a null slot, or a byte the
 /// platform encoding cannot represent). Released with

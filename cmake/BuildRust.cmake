@@ -1,9 +1,12 @@
 # Copyright (c) 2025-2026, The Shekyl Foundation
 # BuildRust.cmake -- Integrate Cargo workspace into CMake build
 #
-# Adds a custom target that builds the Rust workspace under rust/ and
-# produces a static library (libshekyl_ffi.a) that C++ targets can link against.
-# Supports native builds and cross-compilation (detected via CMAKE_SYSTEM_NAME).
+# Three cargo products: the static library `libshekyl_ffi.a` that the C++
+# wallet-side targets and the unit tests link; the wallet binaries
+# `shekyl-cli` and `shekyl-wallet-rpc`; and the daemon `shekyld`, a Rust
+# binary whose link pulls in the C++ remnant's archives through Corrosion
+# (DAEMON_CONFIG_CUTOVER.md DC-Q19, DC-Q23). Supports native builds and
+# cross-compilation (detected via CMAKE_SYSTEM_NAME).
 
 find_program(CARGO_EXECUTABLE cargo HINTS "$ENV{HOME}/.cargo/bin")
 
@@ -263,11 +266,13 @@ endif()
 # `include_str!` / `include_bytes!` targets that live outside `rust/`
 # (e.g. test vectors under `docs/`, `config/*.json`) are not tracked here.
 # Those are test/doc inputs that affect test binaries and rustdoc, not the
-# linked production archives this file builds (shekyl-ffi,
-# shekyl-daemon-image), whose `include_*!` uses are confined to
-# `#[cfg(test)]`. A tracked change still triggers a cargo run, and cargo's own
-# fingerprinting then re-checks the full input set and decides whether to
-# rewrite each archive (so a no-op change does not force a C++ relink).
+# linked production archive this file builds (shekyl-ffi), whose
+# `include_*!` uses are confined to `#[cfg(test)]`. A tracked change still
+# triggers a cargo run, and cargo's own fingerprinting then re-checks the
+# full input set and decides whether to rewrite the archive (so a no-op
+# change does not force a C++ relink). The daemon binary is not in this
+# list's reach: Corrosion's build target runs cargo on every build and
+# cargo's fingerprint decides.
 #
 # `CONFIGURE_DEPENDS` makes the generator re-glob at build time, so newly added
 # source files are picked up without a manual re-configure. The `/target/`
@@ -315,101 +320,311 @@ set_target_properties(shekyl_ffi PROPERTIES
 )
 add_dependencies(shekyl_ffi shekyl_rust)
 
-# ── shekyl-daemon-image (shekyl-ffi + shekyl-daemon-rpc — the daemon image) ──
+# ── The Rust archive's platform tail, for every C++ consumer ─────────────────
 #
-# The daemon needs the wallet-side FFI surface *plus* the Axum RPC server.
-# Linking those as two archives would embed two `tracing-core` dispatchers,
-# so `rust/shekyl-daemon-image` builds both crates into one staticlib with a
-# unified Cargo graph (one dispatcher; see that crate's docs).
-
-# The measurement build only (Rick, 2026-10-14, extended for step 7): the
-# Tor gap deadline lifted to 120 s, and the clearnet message-size tap.
-# Never on in a release build; scripts/ci/check_measurement_spans.py fails
-# any release path that sets it. Clearnet's feature is empty — it does not
-# enable the transport-layer feature — and both names sit on this one line.
-option(SHEKYL_MEASUREMENT_SPANS "Measurement build only: lift the Tor gap to 120 s and record Levin message sizes" OFF)
-set(_measurement_features "")
-set(_daemon_image_dir "${RUST_BUILD_DIR}")
-if(SHEKYL_MEASUREMENT_SPANS)
-    # Its own cargo target directory, inside this build directory. In the
-    # shared rust/target, the measurement archive would be the file another
-    # build directory of the same checkout links: its sources are older than
-    # the archive, so the generator never runs cargo to rebuild it without
-    # the feature, and a release daemon keeps the 120 s gap. Selecting the
-    # crate as well lets the command line name its feature; cargo unifies it
-    # into the daemon image's graph. Clearnet is already in that graph, so
-    # naming its feature is enough.
-    set(_measurement_target_dir "${CMAKE_BINARY_DIR}/cargo-measurement")
-    set(_measurement_features -p shekyl-transport-layer --features shekyl-transport-layer/measurement-spans,shekyl-clearnet/measurement-spans --target-dir ${_measurement_target_dir})
-    string(REPLACE "${RUST_SOURCE_DIR}/target" "${_measurement_target_dir}" _daemon_image_dir "${RUST_BUILD_DIR}")
-    message(WARNING "SHEKYL_MEASUREMENT_SPANS is ON: this daemon is a measurement build, not a release")
-endif()
-
-if(CMAKE_SYSTEM_NAME STREQUAL "Windows" AND NOT MSVC)
-    set(SHEKYL_DAEMON_IMAGE_LIBRARY "${_daemon_image_dir}/libshekyl_daemon_image.a")
-elseif(MSVC)
-    set(SHEKYL_DAEMON_IMAGE_LIBRARY "${_daemon_image_dir}/shekyl_daemon_image.lib")
-else()
-    set(SHEKYL_DAEMON_IMAGE_LIBRARY "${_daemon_image_dir}/libshekyl_daemon_image.a")
-endif()
-
-add_custom_command(
-    OUTPUT ${SHEKYL_DAEMON_IMAGE_LIBRARY}
-    COMMAND ${CMAKE_COMMAND} -E env ${_rust_env_clear}
-        ${CARGO_EXECUTABLE} build --locked ${RUST_BUILD_FLAG} ${RUST_TARGET_FLAG}
-        -p shekyl-daemon-image ${_measurement_features}
-    WORKING_DIRECTORY ${RUST_SOURCE_DIR}
-    DEPENDS ${_shekyl_rust_deps}
-    COMMENT "${_rust_comment} (shekyl-daemon-image: shekyl-ffi + shekyl-daemon-rpc)"
-    VERBATIM
-)
-
-add_custom_target(shekyl_daemon_image_rust ALL DEPENDS ${SHEKYL_DAEMON_IMAGE_LIBRARY})
-
-add_library(shekyl_daemon_image STATIC IMPORTED GLOBAL)
-set_target_properties(shekyl_daemon_image PROPERTIES
-    IMPORTED_LOCATION ${SHEKYL_DAEMON_IMAGE_LIBRARY}
-)
-add_dependencies(shekyl_daemon_image shekyl_daemon_image_rust)
-
-# ── Per-binary Rust image selection ──────────────────────────────────────────
+# `SHEKYL_FFI_LINK_LIBS` propagates transitively through the static
+# libraries (cryptonote_basic / cryptonote_core list it), so every C++
+# binary that links them gets the one Rust archive plus the system
+# libraries its code needs. The daemon is no longer one of those binaries:
+# `shekyld` is a Rust binary (below) whose link already carries the same
+# crates as rlibs, and the closure walk that hands it the C++ archives
+# drops `shekyl_ffi` from the list. A second copy of those symbols beside
+# the rlibs would be the split tracing dispatcher the post-link nm gate in
+# src/daemon/CMakeLists.txt exists to refuse.
 #
-# Single-Rust-image contract: every binary links exactly ONE Rust archive.
-# Wallet-side binaries link `shekyl_ffi`; the daemon links
-# `shekyl_daemon_image` (the superset). Never both — identical strong
-# `shekyl_*` symbols in two archives would let the linker mix members from
-# both images and split the tracing dispatcher again.
-#
-# `SHEKYL_FFI_LINK_LIBS` propagates transitively through static libraries
-# (cryptonote_basic / cryptonote_core list it in target_link_libraries), so
-# the daemon inherits the Rust archive regardless of its own link line. The
-# generator expression below performs the per-binary dispatch at
-# link-line-generation time: `$<TARGET_PROPERTY:SHEKYL_RUST_IMAGE_DAEMON>`
-# with no target argument evaluates against the *head* target of the link
-# (the final binary), so a target that sets that property — only the daemon
-# — resolves every occurrence of the Rust archive in its link closure to
-# `shekyl_daemon_image`, and everything else resolves to `shekyl_ffi`.
-# The post-link nm gate in src/daemon/CMakeLists.txt asserts the result
-# (exactly one GLOBAL_DISPATCH definition in shekyld).
-#
-# The platform tail (pthread/dl, Security/CoreFoundation,
-# ws2_32/userenv/bcrypt/ntdll) stays at the end of the list to preserve the
+# The platform tail stays at the end of the list to preserve the
 # left-to-right link-order semantics GNU ld applies to static archives.
-set(_shekyl_rust_image "$<IF:$<BOOL:$<TARGET_PROPERTY:SHEKYL_RUST_IMAGE_DAEMON>>,shekyl_daemon_image,shekyl_ffi>")
-
 if(UNIX AND NOT APPLE)
-    # `m` (libm): the Rust archives contain `f64` math the compiler lowers to
+    # `m` (libm): the Rust archive contains `f64` math the compiler lowers to
     # libm calls (e.g. `log10` in shekyl-relay-privacy, reachable from the
     # relay FFI exports' link closure). C++ binaries usually inherit libm
     # through libstdc++, but plain-C consumers (tests/crypto) do not — the
     # dependency belongs here, on the archive that owns it, not on each
     # consumer's link line.
-    set(SHEKYL_FFI_LINK_LIBS "${_shekyl_rust_image};m;pthread;dl" CACHE INTERNAL "Rust FFI linker flags for C++ targets" FORCE)
+    set(SHEKYL_FFI_LINK_LIBS "shekyl_ffi;m;pthread;dl" CACHE INTERNAL "Rust FFI linker flags for C++ targets" FORCE)
 elseif(APPLE)
-    set(SHEKYL_FFI_LINK_LIBS "${_shekyl_rust_image};-framework Security;-framework CoreFoundation" CACHE INTERNAL "Rust FFI linker flags for C++ targets" FORCE)
+    set(SHEKYL_FFI_LINK_LIBS "shekyl_ffi;-framework Security;-framework CoreFoundation" CACHE INTERNAL "Rust FFI linker flags for C++ targets" FORCE)
 else()
-    set(SHEKYL_FFI_LINK_LIBS "${_shekyl_rust_image};ws2_32;userenv;bcrypt;ntdll" CACHE INTERNAL "Rust FFI linker flags for C++ targets" FORCE)
+    set(SHEKYL_FFI_LINK_LIBS "shekyl_ffi;ws2_32;userenv;bcrypt;ntdll" CACHE INTERNAL "Rust FFI linker flags for C++ targets" FORCE)
 endif()
+
+# ── shekyld: a Rust binary (DC-Q19), linked through Corrosion (DC-Q23) ───────
+#
+# The daemon's process entry is Rust's `main` (rust/shekyld/src/main.rs);
+# the C++ that remains — the console, the RPC command executor, and
+# `Daemon` behind `shekyl_remnant_run` / `shekyl_remnant_stop` — is the
+# static library `shekyld_remnant` (src/daemon/CMakeLists.txt). cargo
+# produces the binary; rustc's link takes that archive and everything it
+# depends on as linker arguments. Corrosion (external/corrosion, vendored
+# and pinned, `add_subdirectory` only: gitian and depends build offline,
+# so no FetchContent) is the bridge: it imports the crate as a CMake
+# executable target named `shekyld`, runs `cargo rustc` under its own
+# target directory inside this build directory, and copies the binary to
+# `RUNTIME_OUTPUT_DIRECTORY`. Ruled temporary (DC-Q23): it goes when the
+# last C++ archive does.
+#
+# Corrosion does not follow a library's dependencies. The closure walk
+# that turns `shekyld_remnant`'s LINK_LIBRARIES into linker arguments is
+# `shekyl_rust_link_cxx_closure` below, run at the end of configure, once
+# every target it names exists.
+#
+# Flags reach rustc only through `corrosion_add_target_local_rustflags`,
+# never `corrosion_add_target_rustflags`: the latter sets RUSTFLAGS, which
+# replaces rust/.cargo/config.toml's `+crt-static` for the MSVC targets.
+# scripts/ci/check_rt_p4_standing.py reads this file; a `-C` here is a
+# `link-arg=`.
+
+# The toolchain is rust/rust-toolchain.toml's. FindRust would otherwise
+# resolve the rustup proxy to whichever toolchain is the default where
+# CMake runs and hand cargo that concrete `rustc`, bypassing the pin. Left
+# unresolved, Corrosion runs the proxies with the workspace as the working
+# directory, which is what every other cargo invocation in this file does.
+set(Rust_RESOLVE_RUSTUP_TOOLCHAINS OFF CACHE BOOL
+    "Shekyl: cargo and rustc are rustup's proxies, so rust/rust-toolchain.toml selects the toolchain" FORCE)
+if(RUST_TARGET_TRIPLE)
+    set(Rust_CARGO_TARGET "${RUST_TARGET_TRIPLE}")
+endif()
+add_subdirectory("${CMAKE_SOURCE_DIR}/external/corrosion" "${CMAKE_BINARY_DIR}/external/corrosion")
+
+# `RUST_PROFILE` names cargo's output directory (`debug`), Corrosion names
+# the profile (`dev`). One choice, spelled for each.
+if(RUST_PROFILE STREQUAL "release")
+    set(_shekyld_cargo_profile "release")
+else()
+    set(_shekyld_cargo_profile "dev")
+endif()
+
+corrosion_import_crate(
+    MANIFEST_PATH "${RUST_SOURCE_DIR}/Cargo.toml"
+    CRATES shekyld
+    LOCKED
+    PROFILE "${_shekyld_cargo_profile}"
+)
+
+# The same environment the other cargo invocations get, except what
+# Corrosion owns: the target directory (it passes `--target-dir`) and the
+# linker (it selects the C++ driver when a linked library's language is
+# CXX, which `shekyld_remnant`'s is). The cross link arguments that the
+# other invocations carry as `CARGO_TARGET_<T>_RUSTFLAGS` are local
+# rustflags here, below. `SHEKYL_CMAKE_LINK` tells rust/shekyld/build.rs
+# this is the build that links; a bare `cargo build -p shekyld` warns
+# instead. The build identity (DC-Q20) is the one the wallet binaries get.
+set(_shekyld_env ${_rust_env_clear})
+list(FILTER _shekyld_env EXCLUDE REGEX "^CARGO_TARGET_")
+list(APPEND _shekyld_env
+    "SHEKYL_CMAKE_LINK=1"
+    "SHEKYL_VERSION_FULL=${SHEKYL_VERSION_FULL}"
+    "SHEKYL_RELEASE_NAME=${SHEKYL_RELEASE_NAME}"
+    "SHEKYL_VERSION_IS_RELEASE=${SHEKYL_VERSION_IS_RELEASE}"
+)
+corrosion_set_env_vars(shekyld ${_shekyld_env})
+
+if(_rust_link_args)
+    separate_arguments(_shekyld_cross_link_flags NATIVE_COMMAND "${_rust_link_args}")
+    corrosion_add_target_local_rustflags(shekyld ${_shekyld_cross_link_flags})
+endif()
+
+# The executable link flags the C++ executables get from
+# CMAKE_EXE_LINKER_FLAGS: the hardening set, the static-runtime set, and
+# the strip. Not the MSVC `/STACK` and not MinGW's `--stack`: those sized
+# the C++ main thread, and the remnant now runs on a thread
+# shekyl-daemon spawns with an explicit stack (run.rs, §3.5). rustc's own
+# defaults already produce PIE, full RELRO and BIND_NOW on the ELF
+# targets; passing the C++ set as well keeps one list of record, and
+# scripts/ci/check_binary_hardening.sh asserts the result on the binary.
+if(NOT MSVC)
+    separate_arguments(_shekyld_exe_link_flags NATIVE_COMMAND "${LD_SECURITY_FLAGS} ${STATIC_FLAGS}")
+    foreach(_flag IN LISTS _shekyld_exe_link_flags)
+        corrosion_add_target_local_rustflags(shekyld "-Clink-arg=${_flag}")
+    endforeach()
+    if(STRIP_TARGETS)
+        corrosion_add_target_local_rustflags(shekyld "-Clink-arg=-s")
+    endif()
+endif()
+
+# The measurement build only (Rick, 2026-10-14, extended for step 7): the
+# Tor gap deadline lifted to 120 s, and the clearnet message-size tap.
+# Never on in a release build; scripts/ci/check_measurement_spans.py fails
+# any release path that sets it. Clearnet's feature is empty — it does not
+# enable the transport-layer feature — and both names sit on this one
+# line. Corrosion builds under this build directory's own cargo target
+# directory, so the measurement binary can never be the file another
+# build directory of the same checkout links.
+option(SHEKYL_MEASUREMENT_SPANS "Measurement build only: lift the Tor gap to 120 s and record Levin message sizes" OFF)
+if(SHEKYL_MEASUREMENT_SPANS)
+    corrosion_set_features(shekyld FEATURES shekyl-transport-layer/measurement-spans shekyl-clearnet/measurement-spans)
+    message(WARNING "SHEKYL_MEASUREMENT_SPANS is ON: this daemon is a measurement build, not a release")
+endif()
+
+# Where the C++ executables land (src/CMakeLists.txt); Corrosion appends
+# the configuration directory on a multi-config generator the way CMake
+# does for its own executables.
+set_target_properties(shekyld PROPERTIES RUNTIME_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}/bin")
+# The staged binary's path, for build steps that read it (the nm gate in
+# src/daemon/CMakeLists.txt). Those steps hang off `cargo-build_shekyld`,
+# and `$<TARGET_FILE:shekyld>` there would make that target depend on
+# `shekyld`, which depends on `cargo-build_shekyld`: a cycle CMake
+# refuses. A spelled-out path carries no target dependency.
+if(CMAKE_CONFIGURATION_TYPES)
+    set(SHEKYLD_STAGED_BINARY "${CMAKE_BINARY_DIR}/bin/$<CONFIG>/shekyld${CMAKE_EXECUTABLE_SUFFIX}")
+else()
+    set(SHEKYLD_STAGED_BINARY "${CMAKE_BINARY_DIR}/bin/shekyld${CMAKE_EXECUTABLE_SUFFIX}")
+endif()
+
+# shekyl_rust_link_cxx_closure(<rust_target> <cxx_target>)
+#
+# Hands the Rust binary <rust_target> the link closure of the C++ static
+# library <cxx_target>: the library itself, every library it links,
+# recursively, and the flags among them. Corrosion's
+# `corrosion_link_libraries` takes one library and follows nothing, so a
+# walk is needed; this is it. Each item of LINK_LIBRARIES and
+# INTERFACE_LINK_LIBRARIES is classified, and anything that fits no class
+# stops configure by name. The post-link nm gate is the backstop for what
+# a wrong classification would let through, not the check.
+#
+# Classes:
+#   - a first-party or imported target: its link file, recursed into
+#     (an INTERFACE library has no file: recursed only);
+#   - `shekyl_ffi`: dropped — its symbols are the rlibs already in the
+#     link, and a second copy splits the tracing dispatcher;
+#   - `$<LINK_ONLY:x>`: x (CMake's spelling of a static library's PRIVATE
+#     dependency in its interface);
+#   - an absolute path: itself;
+#   - a flag (`-framework Security`, `-pthread`): itself, split on spaces;
+#   - a plain name: `-l<name>` (`<name>.lib` on MSVC).
+#
+# Every argument is a `-C link-arg`, so it lands after rustc's own
+# objects and rlibs. The two sides reference each other (DC-F20): the
+# Rust side calls `core_rpc_ffi_*` and `shekyl_rpc_*`, the C++ side calls
+# the `shekyl_*` exports. link.exe and ld64 resolve a cycle on their own;
+# GNU ld walks archives once in order. Two measures for ld: the C++
+# closure is one `--start-group … --end-group`, so the archives resolve
+# among themselves whatever their order; and `--undefined-glob=shekyl_*`
+# makes ld extract every member defining a `shekyl_*` symbol as it scans
+# the rlibs, before the C++ archives ask for them. Every C-visible export
+# of the Rust side is `shekyl_*` (scripts/ci/check_ffi_signatures.sh), so
+# the glob is exact; a C++ `shekyl_remnant_*` matches too, harmlessly.
+#
+# Call it with `cmake_language(DEFER DIRECTORY ${CMAKE_SOURCE_DIR} CALL …)`
+# from the directory that defines <cxx_target>, so it runs after every
+# subdirectory has defined the targets the closure names.
+function(shekyl_rust_link_cxx_closure rust_target cxx_target)
+    if(NOT TARGET "${rust_target}")
+        message(FATAL_ERROR "shekyl_rust_link_cxx_closure: no Rust target ${rust_target}")
+    endif()
+    if(NOT TARGET "${cxx_target}")
+        message(FATAL_ERROR "shekyl_rust_link_cxx_closure: no C++ target ${cxx_target}")
+    endif()
+
+    set(_pending "${cxx_target}")
+    set(_seen "")
+    set(_args "")
+    set(_cmake_targets "")
+    while(_pending)
+        list(POP_FRONT _pending _item)
+        if("${_item}" STREQUAL "")
+            continue()
+        endif()
+        # `$<LINK_ONLY:x>` → x; any other generator expression has no
+        # classification here.
+        if(_item MATCHES "^\\$<LINK_ONLY:(.*)>$")
+            set(_item "${CMAKE_MATCH_1}")
+        elseif(_item MATCHES "\\$<")
+            message(FATAL_ERROR
+                "shekyl_rust_link_cxx_closure: generator expression in ${cxx_target}'s closure "
+                "cannot be classified: ${_item}")
+        endif()
+        if("${_item}" IN_LIST _seen)
+            continue()
+        endif()
+        list(APPEND _seen "${_item}")
+
+        if("${_item}" STREQUAL "shekyl_ffi")
+            continue()
+        elseif(TARGET "${_item}")
+            get_target_property(_aliased "${_item}" ALIASED_TARGET)
+            if(_aliased)
+                list(APPEND _pending "${_aliased}")
+                continue()
+            endif()
+            get_target_property(_type "${_item}" TYPE)
+            get_target_property(_imported "${_item}" IMPORTED)
+            if(_type STREQUAL "INTERFACE_LIBRARY")
+                # headers and flags only; its interface may name libraries
+            elseif(_type STREQUAL "STATIC_LIBRARY" OR _type STREQUAL "SHARED_LIBRARY"
+                    OR _type STREQUAL "UNKNOWN_LIBRARY" OR _type STREQUAL "MODULE_LIBRARY")
+                list(APPEND _args "-Clink-arg=$<TARGET_LINKER_FILE:${_item}>")
+                if(NOT _imported)
+                    list(APPEND _cmake_targets "${_item}")
+                endif()
+            elseif(_type STREQUAL "OBJECT_LIBRARY")
+                message(FATAL_ERROR
+                    "shekyl_rust_link_cxx_closure: ${_item} is an OBJECT library; its objects "
+                    "would need listing one by one, which this walk does not do")
+            else()
+                message(FATAL_ERROR
+                    "shekyl_rust_link_cxx_closure: ${_item} is a ${_type}, not a library")
+            endif()
+            foreach(_prop IN ITEMS LINK_LIBRARIES INTERFACE_LINK_LIBRARIES)
+                if(_imported AND _prop STREQUAL "LINK_LIBRARIES")
+                    continue()
+                endif()
+                get_target_property(_deps "${_item}" "${_prop}")
+                if(_deps)
+                    list(APPEND _pending ${_deps})
+                endif()
+            endforeach()
+        elseif(IS_ABSOLUTE "${_item}")
+            list(APPEND _args "-Clink-arg=${_item}")
+        elseif(_item MATCHES "^-")
+            separate_arguments(_words NATIVE_COMMAND "${_item}")
+            foreach(_word IN LISTS _words)
+                list(APPEND _args "-Clink-arg=${_word}")
+            endforeach()
+        elseif(_item MATCHES "^[A-Za-z0-9_.+-]+$")
+            if(MSVC)
+                list(APPEND _args "-Clink-arg=${_item}.lib")
+            else()
+                list(APPEND _args "-Clink-arg=-l${_item}")
+            endif()
+        else()
+            message(FATAL_ERROR
+                "shekyl_rust_link_cxx_closure: item in ${cxx_target}'s closure cannot be "
+                "classified: ${_item}")
+        endif()
+    endwhile()
+
+    if(NOT _args)
+        message(FATAL_ERROR "shekyl_rust_link_cxx_closure: ${cxx_target}'s closure is empty")
+    endif()
+
+    # GNU ld: Linux and FreeBSD with the GNU toolchain, and MinGW. lld,
+    # ld64 and link.exe accept or need neither; `--start-group` is a
+    # no-op to lld, an error to ld64.
+    set(_gnu_ld OFF)
+    if(CMAKE_SYSTEM_NAME MATCHES "^(Linux|FreeBSD)$" OR (CMAKE_SYSTEM_NAME STREQUAL "Windows" AND NOT MSVC))
+        set(_gnu_ld ON)
+    endif()
+    if(_gnu_ld)
+        list(PREPEND _args "-Clink-arg=-Wl,--start-group")
+        list(APPEND _args "-Clink-arg=-Wl,--end-group" "-Clink-arg=-Wl,--undefined-glob=shekyl_*")
+    endif()
+
+    corrosion_add_target_local_rustflags("${rust_target}" ${_args})
+    # The language decides the linker driver Corrosion selects (the C++
+    # one for CXX). `corrosion_link_libraries` would record it from the
+    # one library it is given; the walk records it from the root.
+    get_target_property(_lang "${cxx_target}" LINKER_LANGUAGE)
+    if(NOT _lang)
+        set(_lang CXX)
+    endif()
+    set_property(TARGET "_cargo-build_${rust_target}" APPEND PROPERTY CARGO_DEPS_LINKER_LANGUAGES "${_lang}")
+    # Every first-party archive exists before cargo links.
+    add_dependencies("cargo-prebuild_${rust_target}" ${_cmake_targets})
+
+    list(LENGTH _args _count)
+    message(STATUS "${rust_target} links ${cxx_target}'s closure: ${_count} linker arguments")
+endfunction()
 
 # ── Rust user-facing binaries (shekyl-cli, shekyl-wallet-rpc) ────────────────
 #
@@ -475,16 +690,20 @@ if(NOT CMAKE_SYSTEM_NAME STREQUAL "Windows" AND NOT IOS)
             "${_shekyl_rust_bin_dir}/${_bin}${CMAKE_EXECUTABLE_SUFFIX}")
     endforeach()
 
-    # The binaries print the daemon's version string (`SHEKYL_VERSION_FULL`,
-    # spelled once in cmake/Version.cmake), not the crate's `3.1.0`. This
-    # target runs on every build. Cargo fingerprints `option_env!` and
-    # compiles only when the string or a source changed. An OUTPUT rule
-    # would not: a later bare `cargo build` of these packages writes
-    # `-unknown` binaries over the same paths, newer than every DEPENDS
-    # file, and the next CMake build would skip cargo and stage those.
+    # The binaries print the build identity (`SHEKYL_VERSION_FULL`,
+    # `SHEKYL_RELEASE_NAME`, `SHEKYL_VERSION_IS_RELEASE`, spelled once in
+    # cmake/Version.cmake and read by `rust/shekyl-version`; DC-Q20), not
+    # the crate's `3.1.0`. This target runs on every build. Cargo
+    # fingerprints `option_env!` and compiles only when a value or a source
+    # changed. An OUTPUT rule would not: a later bare `cargo build` of these
+    # packages writes `-unknown` binaries over the same paths, newer than
+    # every DEPENDS file, and the next CMake build would skip cargo and
+    # stage those.
     add_custom_target(shekyl_rust_bins ALL
         COMMAND ${CMAKE_COMMAND} -E env ${_rust_env_clear}
             "SHEKYL_VERSION_FULL=${SHEKYL_VERSION_FULL}"
+            "SHEKYL_RELEASE_NAME=${SHEKYL_RELEASE_NAME}"
+            "SHEKYL_VERSION_IS_RELEASE=${SHEKYL_VERSION_IS_RELEASE}"
             ${CARGO_EXECUTABLE} build --locked ${RUST_BUILD_FLAG} ${RUST_TARGET_FLAG}
             ${_shekyl_rust_bin_pkg_args}
         WORKING_DIRECTORY ${RUST_SOURCE_DIR}
