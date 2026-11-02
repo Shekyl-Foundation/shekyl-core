@@ -303,8 +303,8 @@ pub const fn dial_profile(connector: ConnectorId) -> DialProfile {
             wake: WAKE,
             // A clearnet path is per destination: an on-path party can pass
             // one session and drop the rest, and an inbound peer chose this
-            // node. Whether a stream that opened counts on clearnet waits on
-            // Rick's ruling; until then it does not.
+            // node. A stream that opened says nothing about another path
+            // (`OE-D5`): corroboration is a byte on an outbound session.
             judging: FailureJudging {
                 corroboration: Corroboration {
                     stream_opens: StreamOpens::Ignore,
