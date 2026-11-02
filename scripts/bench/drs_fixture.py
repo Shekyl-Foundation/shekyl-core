@@ -78,6 +78,9 @@ def valid_artifact(engine="lmdb", **over):
             "verify_exercised": {"pow": True, "fcmp_pp": False},
             "seed_height": 200, "peers_used": 1,
         },
+        "probe": {"window_s": 100.0, "samples": 100, "median_ms": 1.2,
+                  "p99_ms": 9.0, "max_ms": 40.0, "stall_ms": 1500.0, "stalls": 0,
+                  "stalled_s": 0.0, "first_stall_t": None},
         "measures": [
             {"name": "ibd_wall_time_s", "axis": "wall_time", "unit": "s",
              "value": 100.0, "scenario": "ibd_coinbase_only"},

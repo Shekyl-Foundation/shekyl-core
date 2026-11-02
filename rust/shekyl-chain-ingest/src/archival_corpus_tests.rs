@@ -11,7 +11,7 @@
 //! first run: height, slot, kind, and the facts the 4.J rows judge (the hint
 //! recomputes; the credit's epoch against the join's; the claim's epochs).
 //! The positive witnesses are a list: a rule that refuses one of these blocks
-//! has refused a named input. The four chains with no archival input are the
+//! has refused a named input. The five chains with no archival input are the
 //! empty list, so a capture that grows one fails the table.
 
 use std::path::Path;
@@ -190,44 +190,42 @@ fn enumerate(dir: &Path) -> (Vec<(PCanonicalId, Archival)>, SettlementSchedule) 
     (found, schedule)
 }
 
-/// What the corpus carries, read off the two chains on 2026-10-04 and
-/// held. **Both directions:** every chain in the corpus is here, the four
-/// with no archival input as the empty list, so a capture that grows one
-/// fails this table rather than slipping past it.
+/// What the corpus carries, read off the Rust daemon's `bond-post`
+/// capture at the E2 re-baseline (2026-11-01) and held. **Both
+/// directions:** every chain in the corpus is here, the five with no
+/// archival input as the empty list, so a capture that grows one fails
+/// this table rather than slipping past it.
 ///
-/// The facts the 4.J rows will judge, as the corpus has them today:
+/// The facts the 4.J rows judge, as the corpus has them:
 ///
-/// - **J11** — both posts' hints recompute from their `hybrid_public_key`.
-/// - **J14** — both joins carry `credit == bonded_total == one floor`:
-///   the complete tree's floor and a one-shard compact set's are the same
-///   number (`bond_floor_of`), so the corpus does **not** distinguish a
-///   per-shard floor from a flat one; a rule that gets the multiplier
-///   wrong passes the corpus. The driver's two-shard join and its
-///   one-floor negative (`scenario_archival_tests`) are the witnesses
-///   that do.
-/// - **J5** — the one credit is the injector's, at epoch `E_join + 1`,
-///   written while epoch 0 was still open (tip 115 of a 512-block epoch):
-///   a credit *for* an epoch that has not begun. It is a record, not a
-///   vin, so J4–J6 never read it; its epoch arithmetic is the injector's
-///   contract (`Inject`'s law), not 4.J's.
-/// - **J19/J20** — the one claim names the credited epoch and no other,
-///   two epochs after the join, by the join's persona.
-/// - **No serve-credit vin and no Release or Reinstate** anywhere in the
-///   corpus: J4–J6, J13, J18 have no corpus-positive witness, which is why
-///   (b)–(d) build theirs on the driver.
+/// - **J11** — the post's hint recomputes from its `hybrid_public_key`.
+/// - **J14** — the join carries `credit == bonded_total == one floor` on
+///   the complete tree. The corpus has no compact join, so it does **not**
+///   distinguish a per-shard floor from a flat one; the driver's two-shard
+///   join and its one-floor negative (`scenario_archival_tests`) are the
+///   witnesses that do.
+/// - **No serve-credit vin, no credit, no claim, and no Release or
+///   Reinstate** anywhere in the corpus: J4–J6, J13, J18–J20 have no
+///   corpus-positive witness, which is why (b)–(d) build theirs on the
+///   driver. `emission-claim`, the chain that crosses an epoch, is read
+///   only below its retired keyless join at 98
+///   (`vectors_tests/retired_keyless_join.rs`), and every archival input
+///   it carries sits at or above that block.
 fn expected(shape: &str) -> Vec<Archival> {
     match shape {
-        // *Was* (until 2026-10-12): `bond-post` carried one JoinMarket at 98
-        // (complete tree, one floor), and `emission-claim` a compact
-        // JoinMarket at 98, an injected credit at tip 115 and a claim at
-        // 1025. Both joins are keyless (`post_kind` 0), which no longer
-        // parses, and every archival input these chains carry sits at or
-        // above that block — so none can be read from them any more
-        // (`vectors_tests/retired_keyless_join.rs`, `RETIRED_KEYLESS_JOINS`). The JoinMarket, the
-        // credit and the Release are witnessed on driven chains
-        // (`scenario_archival_tests`, `scenario_join_tests`).
-        "bond-post" | "emission-claim" | "limit-full" | "median-full" | "spend-1in-2out"
-        | "spend-depth3" => Vec::new(),
+        "bond-post" => vec![Archival::Post {
+            height: BlockHeight::from_raw(98),
+            slot: 0,
+            kind: "JoinMarket",
+            hint_recomputes: true,
+            holdings: WireHoldings::CompleteTree,
+            bonded_total: 750_000_000,
+            credit: 750_000_000,
+            debit: 0,
+        }],
+        "emission-claim" | "limit-full" | "median-full" | "spend-1in-2out" | "spend-depth3" => {
+            Vec::new()
+        }
         other => panic!("a chain this table does not know: {other}"),
     }
 }
