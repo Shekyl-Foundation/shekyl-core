@@ -63,16 +63,18 @@ LINK = ("CMakeLists.txt", "*/CMakeLists.txt", "cmake/*", "src/shekyl/*.h")
 # A mention in a comment is not a declaration; comments are stripped first.
 EXPORT_ATTR = re.compile(r"#\[\s*(?:no_mangle|unsafe\s*\(\s*no_mangle\s*\))\s*\]")
 # The attribute block an export attribute sits in: every `#[...]` line
-# immediately above it. A block carrying `#[cfg(test)]` is a test's stub of
-# a symbol C++ supplies in the shipped link, not an export the depends legs
-# build (`shekyl_shell_relay_local` in shekyl-node and shekyl-daemon).
+# immediately above it. A block carrying `#[cfg(test)]` would be a test's
+# stub of a symbol C++ supplies in the shipped link, not an export the
+# depends legs build. None remains (DC-F43: a library takes a C++ function
+# as a pointer and defines no stand-in); the rule stays so one that returns
+# is read as what it is.
 ATTR_LINE = re.compile(r"^\s*#\[.*\]\s*$")
 CFG_TEST = re.compile(r"#\[\s*cfg\s*\(\s*test\s*\)\s*\]")
 # Crates whose src/ declares an export today. The census reads the tree;
 # this set is what `--selftest` pins, so a comment that starts matching, or
 # a real export that appears, fails here instead of drifting.
 EXPORT_CRATES = frozenset(
-    {"shekyl-daemon", "shekyl-daemon-rpc", "shekyl-ffi", "shekyl-logging"}
+    {"shekyl-daemon", "shekyl-daemon-ctl", "shekyl-daemon-rpc", "shekyl-ffi", "shekyl-logging"}
 )
 
 
