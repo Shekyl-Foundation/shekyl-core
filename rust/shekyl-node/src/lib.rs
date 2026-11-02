@@ -534,7 +534,10 @@ impl Node {
             "Node::stop waits, and must not run inside a tokio runtime"
         );
         // The miner first: its workers hash on the board this stop withdraws,
-        // and a handle may keep mining control alive past the node.
+        // and a handle may keep mining control alive past the node. The
+        // close does not wait for the hashes they are in; they hold no store
+        // handle, and what they finish now is dropped before it becomes a
+        // block. Their join is the last thing this stop does.
         self.mining.close();
         // The process doors hold the store (`Door::admission`); leave them
         // up and `chain.db` stays exclusive after this node has stopped.
@@ -573,6 +576,9 @@ impl Node {
             .lock()
             .unwrap_or_else(PoisonError::into_inner) = None;
         runtime.shutdown(RUNTIME_SHUTDOWN);
+        // The store has closed with the service and the slots: only now
+        // wait for the stopped miner's last hashes.
+        self.mining.join_drained();
     }
 
     /// The hasher budget the facts hash under. The lock test holds every

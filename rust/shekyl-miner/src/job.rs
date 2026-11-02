@@ -182,21 +182,41 @@ impl JobBoard {
             && self.solved.load(Ordering::Acquire) != generation.0
     }
 
-    /// Claim `generation`'s solution. `true` for the first claimant only,
-    /// and only while that generation is still the posted one.
+    /// Claim `generation`'s solution and hand it on with `deliver`, unless
+    /// the miner has stopped or the generation is superseded or solved.
     ///
-    /// The check and the record share the lock [`publish`](Self::publish)
-    /// holds. A worker that has already passed [`searching`](Self::searching)
-    /// cannot record a generation a newer posting has withdrawn: `current`
-    /// moves only under this lock. `solved` stays an atomic so `searching`
-    /// does not take it.
-    pub(crate) fn claim(&self, generation: Generation) -> bool {
+    /// Everything happens under the lock [`publish`](Self::publish) and
+    /// [`stop`](Self::stop) hold, `deliver` included. A worker that has
+    /// already passed [`searching`](Self::searching) cannot record a
+    /// generation a newer posting has withdrawn: `current` moves only under
+    /// this lock. And a block cannot leave after a stop has returned: the
+    /// stop sets its flag under this lock, so either the claim saw the flag
+    /// and delivers nothing, or the delivery finished before the stop could
+    /// take the lock. `deliver` must not take this lock. `solved` stays an
+    /// atomic so `searching` does not take it.
+    pub(crate) fn claim_and_deliver(
+        &self,
+        generation: Generation,
+        stop: &AtomicBool,
+        deliver: impl FnOnce() -> bool,
+    ) -> Claim {
         let _state = self.lock();
-        self.current.load(Ordering::Acquire) == generation.0
+        if stop.load(Ordering::Acquire) {
+            return Claim::Stopped;
+        }
+        let first = self.current.load(Ordering::Acquire) == generation.0
             && self
                 .solved
                 .fetch_max(generation.0, Ordering::AcqRel)
-                .lt(&generation.0)
+                .lt(&generation.0);
+        if !first {
+            return Claim::Superseded;
+        }
+        if deliver() {
+            Claim::Delivered
+        } else {
+            Claim::InboxClosed
+        }
     }
 
     /// The posted job newer than `seen`, waiting for one; `None` once
@@ -228,5 +248,119 @@ impl JobBoard {
     }
 }
 
+/// What [`JobBoard::claim_and_deliver`] did with a solution.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum Claim {
+    /// Claimed and handed on.
+    Delivered,
+    /// Claimed, and the inbox refused it: nothing will connect the block.
+    InboxClosed,
+    /// The miner had stopped: dropped before it was claimed.
+    Stopped,
+    /// A newer posting, or another worker's solution, came first.
+    Superseded,
+}
+
 /// The generation before any posting: a worker starts having seen it.
 pub(crate) const NONE_SEEN: Generation = Generation(0);
+
+#[cfg(test)]
+mod tests {
+    use std::sync::atomic::AtomicBool;
+    use std::sync::mpsc;
+    use std::sync::Arc;
+    use std::time::Duration;
+
+    use super::*;
+
+    /// A stop that has returned lets nothing through: the claim reads the
+    /// flag under the lock the stop set it under. Red edit: drop the
+    /// flag check from `claim_and_deliver`.
+    #[test]
+    fn a_claim_after_the_stop_delivers_nothing() {
+        let board = JobBoard::new();
+        let generation = board.withdraw();
+        let stop = AtomicBool::new(false);
+        board.stop(&stop);
+        let claimed = board.claim_and_deliver(generation, &stop, || {
+            panic!("a stopped miner delivered a block")
+        });
+        assert_eq!(claimed, Claim::Stopped);
+    }
+
+    /// A worker between its claim and its hand-off holds the board's lock,
+    /// so a stop cannot return in between: the delivery under way finishes
+    /// first, and the next claim sees the stop. Red edit: release the lock
+    /// before `deliver` (a check-then-deliver across it), and the stop
+    /// returns while the worker is still handing its block on.
+    #[test]
+    fn a_stop_waits_out_a_delivery_already_under_way() {
+        let board = Arc::new(JobBoard::new());
+        let first = board.withdraw();
+        let stop = Arc::new(AtomicBool::new(false));
+        let (entered_tx, entered) = mpsc::channel();
+        let (release, release_rx) = mpsc::channel::<()>();
+        let worker = {
+            let board = Arc::clone(&board);
+            let stop = Arc::clone(&stop);
+            std::thread::spawn(move || {
+                board.claim_and_deliver(first, &stop, || {
+                    entered_tx.send(()).expect("the test waits");
+                    release_rx.recv().expect("the test releases");
+                    true
+                })
+            })
+        };
+        entered.recv().expect("the worker reached its hand-off");
+        let (stopped_tx, stopped) = mpsc::channel();
+        let stopper = {
+            let board = Arc::clone(&board);
+            let stop = Arc::clone(&stop);
+            std::thread::spawn(move || {
+                board.stop(&stop);
+                stopped_tx.send(()).expect("the test waits");
+            })
+        };
+        assert!(
+            stopped.recv_timeout(Duration::from_millis(200)).is_err(),
+            "the stop returned while a claimed block was still being handed on"
+        );
+        release.send(()).expect("the worker waits");
+        assert_eq!(worker.join().expect("the worker"), Claim::Delivered);
+        stopped
+            .recv_timeout(Duration::from_secs(10))
+            .expect("the stop returns once the hand-off is done");
+        stopper.join().expect("the stopper");
+        let next = board.withdraw();
+        assert_eq!(
+            board.claim_and_deliver(next, &stop, || panic!("delivered after the stop")),
+            Claim::Stopped
+        );
+    }
+
+    /// A superseded generation, and a solved one, are not claimed.
+    #[test]
+    fn a_superseded_or_solved_generation_is_not_claimed() {
+        let board = JobBoard::new();
+        let stop = AtomicBool::new(false);
+        let old = board.withdraw();
+        let current = board.withdraw();
+        assert_eq!(
+            board.claim_and_deliver(old, &stop, || panic!("a superseded job delivered")),
+            Claim::Superseded
+        );
+        assert_eq!(
+            board.claim_and_deliver(current, &stop, || true),
+            Claim::Delivered
+        );
+        assert_eq!(
+            board.claim_and_deliver(current, &stop, || panic!("a second solution delivered")),
+            Claim::Superseded
+        );
+        let closed = board.withdraw();
+        assert_eq!(
+            board.claim_and_deliver(closed, &stop, || false),
+            Claim::InboxClosed
+        );
+    }
+}
