@@ -85,6 +85,28 @@ fn each_member_is_seated_at_its_c_slots_and_nowhere_else() {
             }
         }
         assert!(!seated.contains_key(&COMPACT), "a pair holder is no member");
+        // Many members, so the span bound is met by hundreds of slots and
+        // not only the two trees'.
+        let many = DrawableEpoch::new(
+            epoch,
+            width,
+            Vec::<(PCanonicalId, &ReceiptSignPk)>::new(),
+            [],
+        )
+        .and_then(|d| {
+            d.with_support((0x80u8..0xA0).map(|b| (PCanonicalId::from_bytes([b; 32]), &keys()[0])))
+        })
+        .expect("thirty-two members");
+        let mut seats_of_many = 0usize;
+        for relative in 0..seb {
+            let seats = scheduled_seats(&many, BlockHeight::from_raw(open + relative), schedule);
+            assert!(
+                seats.is_empty() || relative < span,
+                "a seat at {relative} would close its window after the epoch"
+            );
+            seats_of_many += seats.len();
+        }
+        assert_eq!(seats_of_many, 32 * SUPPORT_DRAWS_PER_EPOCH as usize);
         for tree in [TREE_A, TREE_B] {
             let mut expected: Vec<u64> = (0..SUPPORT_DRAWS_PER_EPOCH)
                 .map(|i| support_slot(&tree, i, seb, window).expect("a slot"))

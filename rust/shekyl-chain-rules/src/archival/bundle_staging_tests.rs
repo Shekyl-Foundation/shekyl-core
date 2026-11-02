@@ -114,13 +114,16 @@ fn the_bundle_rows_are_pending_until_the_cutover() {
 ///   `BundleView` for these tests — `cfg(test)` or the `harness` feature,
 ///   never on the production surface.
 /// - `archival/bundle.rs`, `archival/bundle_targets.rs`,
-///   `archival/bundle_admission.rs`, `archival/bundle_records.rs` and
-///   `archival/bundle_section.rs`: the module under test. The targets
-///   file is exempt only while it still holds `draw_targets`, the
-///   admission file only while it still holds `judge_bundles`, the section
-///   file only while it still holds the section checker, and the record
-///   file only while it still holds the shared pass check; the test
-///   asserts each, so deleting a file or emptying it is red.
+///   `archival/bundle_admission.rs`, `archival/bundle_records.rs`,
+///   `archival/bundle_section.rs` and `archival/support_carry.rs`: the
+///   module under test. The targets file is exempt only while it still
+///   holds `draw_targets`, the admission file only while it still holds
+///   `judge_bundles`, the section file only while it still holds the
+///   section checker, the record file only while it still holds the
+///   shared pass check, and the carry file only while it still holds
+///   `seats_with_carry` (`SO-D12` S2: the carry joins the transition with
+///   admission); the test asserts each, so deleting a file or emptying it
+///   is red.
 /// - `census.rs`: the registry's comment on the nine `pending` rows names
 ///   the functions as the rows' refusals. It is held to a narrower check
 ///   instead: no `implemented`, `enforced_at` or `by_construction` entry
@@ -154,6 +157,8 @@ fn nothing_on_the_connect_path_calls_the_bundle_verifier() {
         "BundleView",
         "judge_bundles",
         "draw_targets",
+        "seats_with_carry",
+        "SupportCarry",
     ];
 
     // Rule 47: the connect path's files, by name, each with the identifier
@@ -204,6 +209,12 @@ fn nothing_on_the_connect_path_calls_the_bundle_verifier() {
     assert!(
         targets_text.contains("pub fn draw_targets"),
         "archival/bundle_targets.rs no longer holds the draw derivation"
+    );
+    let carry = src.join("archival").join("support_carry.rs");
+    let carry_text = std::fs::read_to_string(&carry).expect("archival/support_carry.rs");
+    assert!(
+        carry_text.contains("pub fn seats_with_carry"),
+        "archival/support_carry.rs no longer holds the support carry"
     );
     let admission = src.join("archival").join("bundle_admission.rs");
     let admission_text = std::fs::read_to_string(&admission).expect("archival/bundle_admission.rs");
@@ -260,6 +271,7 @@ fn connect_path_sources(src: &Path) -> Vec<PathBuf> {
         src.join("archival").join("bundle_admission.rs"),
         src.join("archival").join("bundle_records.rs"),
         src.join("archival").join("bundle_section.rs"),
+        src.join("archival").join("support_carry.rs"),
     ];
     let exempt_dir = src.join("harness");
     let mut files = Vec::new();

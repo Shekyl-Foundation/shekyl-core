@@ -52,6 +52,13 @@ impl SupportUnissued {
         self.0
     }
 
+    /// One carried draw re-seated: the tree is owed one fewer. Zero stays
+    /// zero.
+    #[must_use]
+    pub const fn reseated(self) -> Self {
+        Self(self.0.saturating_sub(1))
+    }
+
     /// One scheduled block the producer did not file. The cap is `c`;
     /// there is no multiple.
     #[must_use]

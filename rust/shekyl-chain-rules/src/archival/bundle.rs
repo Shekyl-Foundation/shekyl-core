@@ -298,6 +298,13 @@ pub use bundle_section::{
     SectionRefused, SectionStanding,
 };
 
+/// The support stream's carry (`SO-D12` S2): STAGED with the rest of this
+/// module, and on the connect path with admission at the switch.
+#[path = "support_carry.rs"]
+mod support_carry;
+
+pub use support_carry::{seats_with_carry, SupportCarry, WindowClosed};
+
 /// `epoch`'s drawable epoch, if the view holds the one filed for it. A
 /// value filed under another epoch is not this epoch's `D`, and the
 /// caller treats it as absent.
