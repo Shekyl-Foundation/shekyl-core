@@ -539,3 +539,56 @@ fn an_interrupted_recreate_leaves_a_pool_that_opens() {
     assert!(!discard(&path).exists());
     drop(std::fs::remove_file(&path));
 }
+
+/// What a power loss between the engine's first commit and the seal leaves
+/// behind: a valid redb file with no table at all, which PB-S2's first
+/// replay (2026-11-01) found refused as foreign. The next open seals it in
+/// place, and the one after opens it. Red edit: drop the
+/// `creation_interrupted` branch from `open_or_create`, and the open
+/// refuses with `PoolFileForeign`.
+#[test]
+fn a_creation_cut_off_before_its_seal_is_finished_by_the_next_open() {
+    let path = tmp("interrupted-create");
+    {
+        let file = std::fs::OpenOptions::new()
+            .read(true)
+            .write(true)
+            .create_new(true)
+            .open(&path)
+            .unwrap();
+        drop(redb::Builder::new().create_file(file).unwrap());
+    }
+    let (store, how) = PoolStore::create(&path).expect("the creation is finished");
+    assert_eq!(how, PoolOpen::Finished);
+    drop(store);
+    let (_store, how) = PoolStore::create(&path).expect("reopens");
+    assert_eq!(how, PoolOpen::Opened);
+    drop(std::fs::remove_file(&path));
+}
+
+/// The two shapes a power loss leaves before the engine has finished
+/// initializing the pool file: empty, and a header with its magic
+/// unwritten. Each is moved aside, never deleted, and a fresh pool created
+/// at the path (`crate::creation`); the next open is an ordinary one. Red
+/// edit: drop the `set_aside_unfinished_init` arm from `open_or_create`,
+/// and both are refused as `PoolFileForeign`.
+#[test]
+fn a_file_the_engine_never_finished_initializing_is_created_by_the_next_open() {
+    let mut header = vec![0u8; 1 << 20];
+    header[9..16].copy_from_slice(&[4, 0, 0, 0, 0x10, 0, 0]);
+    for (label, bytes) in [("empty-at-path", Vec::new()), ("magic-unwritten", header)] {
+        let path = tmp(label);
+        std::fs::write(&path, &bytes).unwrap();
+        let (store, how) =
+            PoolStore::create(&path).unwrap_or_else(|e| panic!("{label}: created: {e:?}"));
+        let PoolOpen::SetAside { to } = how else {
+            panic!("{label}: {how:?}");
+        };
+        assert_eq!(std::fs::read(&to).unwrap(), bytes, "{label}: kept aside");
+        drop(store);
+        let (_store, how) = PoolStore::create(&path).unwrap();
+        assert_eq!(how, PoolOpen::Opened, "{label}");
+        drop(std::fs::remove_file(&path));
+        drop(std::fs::remove_file(&to));
+    }
+}

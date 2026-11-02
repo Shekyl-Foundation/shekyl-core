@@ -579,22 +579,56 @@ fn open_read_only_refuses_a_store_that_does_not_exist() {
 
 #[test]
 fn an_existing_file_that_is_not_a_store_is_refused_untouched() {
-    // The reopen arm must never initialize: an empty file at the path --
-    // left by another process, or the shape a path removed between
-    // `create_new`'s AlreadyExists and the open would take under an
-    // open-or-create -- is refused as-is. Were the arm `create`, redb would
-    // turn it into a headerless database, `verify` would refuse that, and
-    // the file would stay behind for every later open to refuse.
+    // A file at the path with bytes that are not a store, and not a
+    // creation the engine started (its magic slot is written), is refused
+    // as-is and never initialized.
     let path = tmp("not-a-store");
-    std::fs::write(&path, b"").expect("empty file");
+    let bytes: &[u8] = b"this is not a redb file, and it is somebody's";
+    std::fs::write(&path, bytes).expect("foreign file");
     assert!(matches!(
         ChainStore::with_apply_policy(&path, ApplyPolicy::Full, EPOCH),
         Err(StoreError::Engine(EngineError::Open(_)))
     ));
     assert_eq!(
-        std::fs::metadata(&path).expect("still present").len(),
-        0,
-        "the reopen arm initialized a file it did not create"
+        std::fs::read(&path).expect("still present"),
+        bytes,
+        "the reopen arm touched a file that is not a creation of its own"
     );
     cleanup(&path);
+}
+
+/// The two shapes a power loss leaves before the engine has finished
+/// initializing the file: empty (a cut right after `create_new`) and a
+/// header with its magic unwritten (redb writes the magic last). Each is
+/// a creation nothing was committed to: the next open moves it aside,
+/// never deleting it, creates a fresh store, and reports where it went
+/// (`crate::creation`; PB-S2's first replay, 2026-11-01, found the second
+/// shape refusing a node's every later start). Red edit: drop the
+/// `set_aside_unfinished_init` arm from `with_horizons`.
+#[test]
+fn a_file_the_engine_never_finished_initializing_is_created_by_the_next_open() {
+    let mut header = vec![0u8; 1 << 20];
+    header[9..16].copy_from_slice(&[4, 0, 0, 0, 0x10, 0, 0]);
+    for (label, bytes) in [("empty-at-path", Vec::new()), ("magic-unwritten", header)] {
+        let path = tmp(label);
+        std::fs::write(&path, &bytes).expect("the unfinished file");
+        let store = ChainStore::with_apply_policy(&path, ApplyPolicy::Full, EPOCH)
+            .unwrap_or_else(|e| panic!("{label}: created: {e:?}"));
+        let to = store
+            .set_aside()
+            .unwrap_or_else(|| panic!("{label}: set aside"))
+            .to_path_buf();
+        assert_eq!(
+            std::fs::read(&to).expect("aside"),
+            bytes,
+            "{label}: kept aside"
+        );
+        drop(store);
+        let store = ChainStore::with_apply_policy(&path, ApplyPolicy::Full, EPOCH)
+            .unwrap_or_else(|e| panic!("{label}: reopens: {e:?}"));
+        assert!(store.set_aside().is_none(), "{label}: an ordinary reopen");
+        drop(store);
+        cleanup(&path);
+        drop(std::fs::remove_file(&to));
+    }
 }

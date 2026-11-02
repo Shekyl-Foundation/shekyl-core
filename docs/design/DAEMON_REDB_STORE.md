@@ -2487,9 +2487,25 @@ not change with its address:
 - (a) is `store/header.rs`: `seal` writes `schema_version` (and the
   `apply_policy` provenance cell — §7.1.1's sufficiency control, specified in
   [`ARCHIVAL_FORCING_CORPUS.md`](ARCHIVAL_FORCING_CORPUS.md) §"ApplyPolicy")
-  in a fresh file's **first** transaction, before any batch; `verify` runs on every writable and read-only
-  open and returns `SchemaVersionAbsent` / `SchemaVersionMismatch { found,
-  expected }` / `CellCorrupt` — never a default. The key bytes are pinned by a
+  in a fresh file's **first** transaction, before any batch. Creation is three
+  durable steps (`create_new`, the engine's initialization, the seal), and a
+  power loss between any two leaves a file nothing was committed to: empty, a
+  header whose magic is unwritten (redb writes it last; pinned flush by flush
+  against the engine in `Cargo.lock`) within the length an initialization
+  writes, or a valid database with **no table at all**. A writable open
+  **finishes the creation** in each case (`crate::creation`): it seals the
+  empty database in place under the engine's exclusive lock, or moves the
+  uninitialized file aside as `<name>.unfinished-<unix seconds>` (never
+  deleting it; the node logs where) and creates a fresh store. A file longer
+  than an initialization, whatever its first bytes, is not one the node can
+  prove it made and stays refused, byte for byte. A read-only open cannot seal
+  and still refuses. Found by
+  PB-S2's power-loss replay (2026-11-01, one capture of a first start, a sync
+  and a switch: 9 of 58 rebuilt points, then 2 of 166, would not start
+  again, all before the first acknowledgement; the pool file the same way). `verify` runs on every other writable and read-only open and returns
+  `SchemaVersionAbsent` / `SchemaVersionMismatch { found, expected }` /
+  `CellCorrupt` — never a default: a file with any table and no seal is not
+  one this binary wrote. The key bytes are pinned by a
   test on `codec::SchemaVersionCell::KEY`.
 - (b) is `codec::Canonical`: one fixed-width, strict encoding per stored value
   type, used both to store and to digest. Types are `u8`, `u64` (LE, matching

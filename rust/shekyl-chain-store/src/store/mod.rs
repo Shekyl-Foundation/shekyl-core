@@ -81,7 +81,9 @@
 //! # The header is checked before anything else (increment 2)
 //!
 //! A fresh file is **sealed** in its first transaction with the layout
-//! version and the creating session's provenance; an existing file has
+//! version and the creating session's provenance (the engine's own empty
+//! commit precedes it, so a file with no table at all is a creation that
+//! stopped before its seal, and a writable open finishes it); an existing file has
 //! both read back — in a read transaction, so a stale file is never
 //! stamped current in passing — before any table is opened. A file with no
 //! version cell is not one this binary wrote and is refused
@@ -151,7 +153,7 @@ pub use undo::{RawRows, Restorable};
 pub use view::BatchView;
 pub use write::{invariant_of, WriteBatch};
 
-use std::path::Path;
+use std::path::{Path, PathBuf};
 
 use redb::{Database, Durability, ReadOnlyDatabase, ReadableDatabase, WriteTransaction};
 use shekyl_chain_rules::{AtHeight, ReleaseAnchors};
@@ -198,6 +200,8 @@ pub struct ChainStore {
     /// retention this session runs (DRS-E1 S-PRUNE, `store/prune.rs`).
     horizons: Horizons,
     shared: Shared,
+    /// An unfinished creation this open moved aside (`crate::creation`).
+    set_aside: Option<PathBuf>,
 }
 
 enum Backend {
@@ -288,13 +292,16 @@ impl ChainStore {
     /// checked before the path is touched; [`EngineError::Open`] if the file
     /// cannot be created or opened, including an existing file that is not
     /// a redb database (refused unread and unwritten, never initialized);
-    /// on an existing database, [`StoreCannot::SchemaVersionAbsent`],
+    /// on an existing database that holds any table,
+    /// [`StoreCannot::SchemaVersionAbsent`],
     /// [`StoreCannot::SchemaVersionMismatch`],
     /// [`StoreCannot::SettlementEpochMismatch`] or
     /// [`StoreInvariant::CellCorrupt`] if its header is not one this binary
     /// can vouch for. A fresh file the engine refuses to take, or that
     /// cannot be sealed, is removed again, so a failed create does not
-    /// leave a headerless file the next open refuses.
+    /// leave a headerless file the next open refuses; and an existing file
+    /// with no table at all, a creation a power loss cut off before its
+    /// seal, is sealed in place.
     pub fn with_horizons(
         path: impl AsRef<Path>,
         apply_policy: ApplyPolicy,
@@ -324,39 +331,71 @@ impl ChainStore {
         let mut builder = redb::Builder::new();
         builder.set_cache_size(CACHE_SIZE);
         let path = path.as_ref();
-        let (db, provenance) = match std::fs::OpenOptions::new()
-            .read(true)
-            .write(true)
-            .create_new(true)
-            .open(path)
-        {
-            Ok(file) => match create_sealed(&builder, file, apply_policy, epoch) {
-                Ok(fresh) => fresh,
-                Err(e) => {
-                    // The path exists only because `create_new` just made
-                    // it. Whatever refused after that -- the engine taking
-                    // the file or the seal -- must not leave it behind for
-                    // the next open to refuse as an existing store with no
-                    // header. `create_sealed` has dropped its `Database` by
-                    // the time we get here, so the file is unlocked.
-                    drop(std::fs::remove_file(path));
-                    return Err(e);
-                }
-            },
-            Err(e) if e.kind() == std::io::ErrorKind::AlreadyExists => {
-                let db = builder.open(path).map_err(EngineError::Open)?;
-                let provenance =
-                    header::verify(&db.begin_read().map_err(EngineError::BeginRead)?, epoch)?;
+        let (db, provenance) = match create_fresh(&builder, path, apply_policy, epoch) {
+            Ok(Some(fresh)) => fresh,
+            Ok(None) => {
+                let db = match builder.open(path) {
+                    Ok(db) => db,
+                    Err(refused) => {
+                        // A cut before the engine finished initializing:
+                        // the file is empty, or no longer than an
+                        // initialization writes with its magic unwritten
+                        // (`crate::creation`). It is moved aside, never
+                        // deleted, and a fresh store is created at the path.
+                        let Some(aside) = crate::creation::set_aside_unfinished_init(path)
+                            .map_err(|e| {
+                                EngineError::Open(redb::DatabaseError::Storage(e.into()))
+                            })?
+                        else {
+                            return Err(EngineError::Open(refused).into());
+                        };
+                        let (db, provenance) = create_fresh(&builder, path, apply_policy, epoch)?
+                            .ok_or_else(|| {
+                            EngineError::Open(redb::DatabaseError::Storage(
+                                std::io::Error::from(std::io::ErrorKind::AlreadyExists).into(),
+                            ))
+                        })?;
+                        return Ok(Self {
+                            backend: Backend::Writable(db),
+                            apply_policy,
+                            horizons,
+                            shared: Shared::new(provenance),
+                            set_aside: Some(aside),
+                        });
+                    }
+                };
+                // `create_file` commits an empty database before the seal's
+                // transaction commits, so a power loss between the two
+                // leaves a valid file with no table at all (PB-S2's first
+                // replay, `DAEMON_REDB_STORE.md` §3.6.3). Nothing in it can
+                // be lost, and this open holds the engine's exclusive lock,
+                // so the creation is finished here: sealed in place, as
+                // `create_sealed` would have. A file with any table and no
+                // seal is still refused by `verify`.
+                let provenance = if crate::creation::no_table(&db)? {
+                    seal_new(&db, apply_policy, epoch)?
+                } else {
+                    header::verify(&db.begin_read().map_err(EngineError::BeginRead)?, epoch)?
+                };
                 (db, provenance)
             }
-            Err(e) => return Err(EngineError::Open(redb::DatabaseError::Storage(e.into())).into()),
+            Err(e) => return Err(e),
         };
         Ok(Self {
             backend: Backend::Writable(db),
             apply_policy,
             horizons,
             shared: Shared::new(provenance),
+            set_aside: None,
         })
+    }
+
+    /// Where this open moved an unfinished creation it found at the path
+    /// (`crate::creation`), for the caller to report. `None` when it found
+    /// none.
+    #[must_use]
+    pub fn set_aside(&self) -> Option<&Path> {
+        self.set_aside.as_deref()
     }
 
     /// The settlement-epoch schedule this file is pinned to — equal to the
@@ -439,6 +478,7 @@ impl ChainStore {
             apply_policy: ApplyPolicy::Full,
             horizons,
             shared: Shared::new(provenance),
+            set_aside: None,
         })
     }
 
@@ -692,6 +732,38 @@ fn arm_write(db: &Database) -> Result<WriteTransaction, StoreError> {
     Ok(txn)
 }
 
+/// Claim `path` with `create_new` and create a sealed store in it. `None`
+/// when the path already exists. A file this made and the engine or the
+/// seal then refused is removed again, so a failed create does not leave a
+/// headerless file the next open refuses.
+fn create_fresh(
+    builder: &redb::Builder,
+    path: &Path,
+    policy: ApplyPolicy,
+    epoch: SettlementEpochBlocks,
+) -> Result<Option<(Database, Provenance)>, StoreError> {
+    let file = match std::fs::OpenOptions::new()
+        .read(true)
+        .write(true)
+        .create_new(true)
+        .open(path)
+    {
+        Ok(file) => file,
+        Err(e) if e.kind() == std::io::ErrorKind::AlreadyExists => return Ok(None),
+        Err(e) => return Err(EngineError::Open(redb::DatabaseError::Storage(e.into())).into()),
+    };
+    match create_sealed(builder, file, policy, epoch) {
+        Ok(fresh) => Ok(Some(fresh)),
+        Err(e) => {
+            // The path exists only because `create_new` just made it.
+            // `create_sealed` has dropped its `Database`, so the file is
+            // unlocked.
+            drop(std::fs::remove_file(path));
+            Err(e)
+        }
+    }
+}
+
 /// Hand a just-created, still-empty file to the engine and seal its header
 /// in the first transaction, under the same durability every batch
 /// commits with.
@@ -707,10 +779,21 @@ fn create_sealed(
     epoch: SettlementEpochBlocks,
 ) -> Result<(Database, Provenance), StoreError> {
     let db = builder.create_file(file).map_err(EngineError::Open)?;
-    let txn = arm_write(&db)?;
+    let provenance = seal_new(&db, policy, epoch)?;
+    Ok((db, provenance))
+}
+
+/// Seal a database that has no table yet: the header, in one transaction,
+/// under the durability every batch commits with.
+fn seal_new(
+    db: &Database,
+    policy: ApplyPolicy,
+    epoch: SettlementEpochBlocks,
+) -> Result<Provenance, StoreError> {
+    let txn = arm_write(db)?;
     let provenance = header::seal(&txn, policy, epoch)?;
     txn.commit().map_err(EngineError::Commit)?;
-    Ok((db, provenance))
+    Ok(provenance)
 }
 
 #[cfg(test)]

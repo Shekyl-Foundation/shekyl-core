@@ -47,13 +47,25 @@ pub const POOL_VERSION_KEY: &str = "pool_schema_version";
 
 /// How [`PoolStore::create`](super::PoolStore::create) arrived at an open
 /// file.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[derive(Clone, Debug, PartialEq, Eq)]
 pub enum PoolOpen {
     /// No file existed; one was created and sealed at [`POOL_SCHEMA_VERSION`].
     Created,
     /// A sealed file at the current version, over its sealed tables, was
     /// opened.
     Opened,
+    /// A file whose creation stopped before its seal (no table at all: a
+    /// power loss between the engine's first commit and the seal's) was
+    /// **sealed in place**. Nothing was in it to lose.
+    Finished,
+    /// A file the engine never finished initializing (empty, or no longer
+    /// than an initialization writes with its magic unwritten) was **moved
+    /// aside** to `to`, never deleted, and a fresh one created and sealed.
+    /// The caller's log line names `to`, for an operator to inspect.
+    SetAside {
+        /// Where the unfinished file went.
+        to: std::path::PathBuf,
+    },
     /// A sealed file at another version was **recreated** (`SPL-Q8`): the
     /// old file was removed and a fresh one sealed. `from` is the version
     /// the old file carried — the caller's one log line names it.
@@ -88,9 +100,30 @@ pub(super) fn open_or_create(path: &Path) -> Result<(Database, PoolOpen), StoreE
         Err(e) if e.kind() == std::io::ErrorKind::AlreadyExists => {
             let db = match builder.open(path) {
                 Ok(db) => db,
-                Err(e) if open_is_foreign(&e) => return Err(StoreCannot::PoolFileForeign.into()),
+                Err(e) if open_is_foreign(&e) => {
+                    // A cut before the engine finished initializing: empty,
+                    // or no longer than an initialization writes with its
+                    // magic unwritten (`crate::creation`). Moved aside,
+                    // never deleted, and a fresh file sealed at the path.
+                    let Some(to) =
+                        crate::creation::set_aside_unfinished_init(path).map_err(io_open)?
+                    else {
+                        return Err(StoreCannot::PoolFileForeign.into());
+                    };
+                    let file = create_new(path).map_err(io_open)?;
+                    return seal_fresh(&builder, file, path)
+                        .map(|db| (db, PoolOpen::SetAside { to }));
+                }
                 Err(e) => return Err(EngineError::Open(e).into()),
             };
+            // `create_file` commits an empty database before the seal does;
+            // a power loss between them leaves a file with no table at all.
+            // This open holds the engine's exclusive lock, so it finishes
+            // the creation in place. Any table without a seal is refused.
+            if crate::creation::no_table(&db)? {
+                seal(&db)?;
+                return Ok((db, PoolOpen::Finished));
+            }
             match read_header(&db)? {
                 Header::Current => Ok((db, PoolOpen::Opened)),
                 Header::Other(from) => {
@@ -194,25 +227,32 @@ fn seal_fresh(
 ) -> Result<Database, StoreError> {
     let sealed = (|| {
         let db = builder.create_file(file).map_err(EngineError::Open)?;
-        let txn = arm_write(&db)?;
-        {
-            let mut header = txn.open_table(POOL_HEADER).map_err(EngineError::Table)?;
-            header
-                .insert(
-                    POOL_VERSION_KEY,
-                    Raw::<PropertyCellBytes>::new(&POOL_SCHEMA_VERSION.encode()),
-                )
-                .map_err(EngineError::Storage)?;
-            txn.open_table(POOL_META).map_err(EngineError::Table)?;
-            txn.open_table(POOL_BLOB).map_err(EngineError::Table)?;
-        }
-        txn.commit().map_err(EngineError::Commit)?;
+        seal(&db)?;
         Ok::<_, StoreError>(db)
     })();
     if sealed.is_err() {
         drop(std::fs::remove_file(path));
     }
     sealed
+}
+
+/// Seal a database that has no table yet: the header cell and both
+/// tables, in one transaction.
+fn seal(db: &Database) -> Result<(), StoreError> {
+    let txn = arm_write(db)?;
+    {
+        let mut header = txn.open_table(POOL_HEADER).map_err(EngineError::Table)?;
+        header
+            .insert(
+                POOL_VERSION_KEY,
+                Raw::<PropertyCellBytes>::new(&POOL_SCHEMA_VERSION.encode()),
+            )
+            .map_err(EngineError::Storage)?;
+        txn.open_table(POOL_META).map_err(EngineError::Table)?;
+        txn.open_table(POOL_BLOB).map_err(EngineError::Table)?;
+    }
+    txn.commit().map_err(EngineError::Commit)?;
+    Ok(())
 }
 
 /// Read the header of an existing file, and — at the current version —
