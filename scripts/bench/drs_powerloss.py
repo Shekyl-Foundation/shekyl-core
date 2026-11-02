@@ -156,11 +156,28 @@ def acked_at(acks, point):
     return last["chain"], last["height"]
 
 
+def subsample_points(text):
+    """`--max-points`: a subsample keeps the first replay point and the last."""
+    try:
+        count = int(text)
+    except ValueError as error:
+        raise argparse.ArgumentTypeError("max-points is not an integer") from error
+    if count < 2:
+        raise argparse.ArgumentTypeError(
+            "a subsample keeps the first point and the last, so it names at least two")
+    return count
+
+
 def checkpoints(boundaries, total, between, max_points):
-    """The entries to rebuild the device at: every flush and FUA boundary,
-    `between` evenly spaced points inside each gap, and the log's end, in
-    order. With `max_points`, an even subsample that always keeps the first
-    and last; the artifact records the coverage."""
+    """The entries to rebuild the device at, and whether that list is a subsample.
+
+    Every flush and FUA boundary, `between` evenly spaced points inside each
+    gap, and the log's end, in order. `max_points` is an even subsample that
+    always keeps the first and the last, so it is at least two; one point
+    would have to drop an end. The flag is true only when points were
+    dropped. A between-point can leave a subsample longer than the boundary
+    set, which a comparison against that set would call complete.
+    """
     points = set(boundary for boundary in boundaries if 0 < boundary <= total)
     edges = sorted(points | {0, total})
     for lo, hi in zip(edges, edges[1:]):
@@ -170,10 +187,15 @@ def checkpoints(boundaries, total, between, max_points):
                 points.add(point)
     points.add(total)
     ordered = sorted(point for point in points if point > 0)
-    if max_points and len(ordered) > max_points:
-        stride = (len(ordered) - 1) / (max_points - 1)
-        ordered = sorted({ordered[round(i * stride)] for i in range(max_points)})
-    return ordered
+    if max_points is None:
+        return ordered, False
+    if max_points < 2:
+        raise ValueError(
+            "a subsample keeps the first point and the last, so it names at least two")
+    if len(ordered) <= max_points:
+        return ordered, False
+    stride = (len(ordered) - 1) / (max_points - 1)
+    return sorted({ordered[round(i * stride)] for i in range(max_points)}), True
 
 
 def boundaries_of(replay_log, log_dev, total):
@@ -367,8 +389,8 @@ class Powerloss:
             total = int(sh(args.replay_log, "--log", log_dev, "--num-entries",
                            capture=True).strip())
             bounds = boundaries_of(args.replay_log, log_dev, total)
-            points = [point for point in checkpoints(bounds, total, args.between, args.max_points)
-                      if point >= mkfs_entries]
+            ordered, subsampled = checkpoints(bounds, total, args.between, args.max_points)
+            points = [point for point in ordered if point >= mkfs_entries]
             replayed = 0
             results = []
             for point_at in points:
@@ -404,7 +426,7 @@ class Powerloss:
             acknowledgements=len(acks),
             mkfs_entries=mkfs_entries,
             points=results,
-            sampled=bool(args.max_points) and len(points) < len(bounds),
+            sampled=subsampled,
         )
         with open(args.out, "w", encoding="utf-8") as fh:
             json.dump(artifact, fh, indent=2, sort_keys=True)
@@ -449,10 +471,28 @@ def _selftest():
     check("the point after that flush sees it", acked_at(rows, 41), ("main", 1))
     check("a later entry wins numerically", acked_at(rows, 100), ("main", 2))
     check("a fork acknowledgement", acked_at(rows, 500), ("fork", 3))
-    pts = checkpoints({100, 50}, 200, 1, None)
+    pts, sampled = checkpoints({100, 50}, 200, 1, None)
     check("boundaries, midpoints and the end", pts, [25, 50, 75, 100, 150, 200])
-    check("a subsample keeps both ends",
-          checkpoints(set(range(1, 101)), 100, 0, 5)[::4], [1, 100])
+    check("the full list is not a subsample", sampled, False)
+    kept, sampled = checkpoints(set(range(1, 101)), 100, 0, 5)
+    check("a subsample keeps both ends", [kept[0], kept[-1]], [1, 100])
+    check("and records that it subsampled", sampled, True)
+    short, sampled = checkpoints({100, 50}, 200, 1, 4)
+    check("a subsample can stay longer than the boundary set", len(short) > 2, True)
+    check("and is still a subsample", sampled, True)
+    try:
+        checkpoints({1, 2}, 2, 0, 1)
+        one_point = False
+    except ValueError:
+        one_point = True
+    check("one point cannot keep both ends", one_point, True)
+    check("the flag refuses one point before a run", subsample_points("2"), 2)
+    try:
+        subsample_points("1")
+        refused = False
+    except argparse.ArgumentTypeError:
+        refused = True
+    check("one point is not a max-points value", refused, True)
     ok = {"acked": 5, "store": True, "reopened_tip": 5, "chain": "main",
           "digest": "a" * 64, "expected_digest": "a" * 64}
     fresh = dict(ok, acked=None, store=False, reopened_tip=0)
@@ -496,7 +536,7 @@ def main(argv=None):
     replay = sub.choices["replay"]
     replay.add_argument("--between", type=int, default=1,
                         help="points replayed inside each gap between boundaries")
-    replay.add_argument("--max-points", type=int, default=None)
+    replay.add_argument("--max-points", type=subsample_points, default=None)
     replay.add_argument("--disk-class", choices=A.ALLOWED_DISK_CLASSES, default=None)
     replay.add_argument("--out", required=True)
     args = ap.parse_args(argv)
