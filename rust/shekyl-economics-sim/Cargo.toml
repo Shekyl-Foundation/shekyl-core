@@ -22,7 +22,7 @@ shekyl-archival-retention = { path = "../shekyl-archival-retention" }
 # ESR-4, ESR-6).
 shekyl-chain-rules = { path = "../shekyl-chain-rules" }
 # The producer's fill rule (`Fill`): how many transactions a block takes at
-# the effective median, the comparison `fill_block_template` makes, called
+# the effective median, the comparison the node's template makes, called
 # rather than restated (ECONOMICS_SIM_PRODUCTION_REBASE.md ESR-6).
 shekyl-block-template = { path = "../shekyl-block-template" }
 shekyl-wire = { path = "../shekyl-wire" }

@@ -163,8 +163,9 @@ namespace cryptonote
     bool request_missing_objects(cryptonote_connection_context& context, bool check_having_blocks, bool force_next_span = false);
     bool on_connection_synchronized();
     bool should_download_next_span(cryptonote_connection_context& context, bool standby);
-    void drop_connection(cryptonote_connection_context &context, bool add_fail, bool flush_all_spans);
-    void drop_connection_with_score(cryptonote_connection_context &context, unsigned int score, bool flush_all_spans);
+    /// Close the session and flush its queued spans when `flush_all_spans`.
+    /// A drop does not ban the host and does not charge a score.
+    void drop_connection(cryptonote_connection_context &context, bool flush_all_spans);
     void drop_connection(const boost::uuids::uuid&);
     void drop_connections(const epee::net_utils::network_address address);
     bool kick_idle_peers();

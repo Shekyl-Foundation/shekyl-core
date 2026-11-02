@@ -25,10 +25,37 @@
 //! documents the daemon cannot produce. [`TxLocation`] is that branch as a
 //! type, so the unrepresentable stays unrepresentable and `in_pool` is
 //! derived rather than stored beside the fields it selects.
+//!
+//! # Two body forms, one skeleton
+//!
+//! A transaction's body is served in one of two forms, chosen by the
+//! request's `prune` switch (`IG-Q55`; `DRS_SB_BELOW_HORIZON.md` `SB-Q2`):
+//!
+//! - **pruned** (`prune: true`): `pruned_as_hex` is the **pruned segment
+//!   only** — the prefix and the `Ct` base — and `as_hex` is empty. With the
+//!   three txid operands every entry carries (`prunable_hash`,
+//!   `pqc_auth_hash`, `archival_len`) that is the **skeleton**: what every
+//!   node keeps of every transaction at every horizon, and what
+//!   `SkeletonTx::txid` binds to the requested id.
+//! - **full** (`prune: false`): `as_hex` is the whole serialization and
+//!   `pruned_as_hex` is empty. Below the archival horizon the daemon has
+//!   discarded the body's archival good, so a full body it cannot answer is
+//!   reported as an [`ArchivedTx`] in [`GetTransactionsResponse::archived`]
+//!   — the id and the shard an archiver serves it from — and the id is
+//!   absent from `txs` (`PDM-Q10`). A transaction that carries no archival
+//!   good (a coinbase) has nothing to discard, so its full body is always
+//!   answered.
+//!
+//! The former `split` form, `prunable_as_hex`, the `pruned` flag and the
+//! epee JSON rendering (`decode_as_json` / `as_json`) are gone: `IG-Q55`
+//! ruled them out, and once the pruned form is the skeleton there is no
+//! second body the split could carry. The `_v4` vectors are the shape
+//! without them; `_v3` stays beside them so the deletion is checkable.
 
 use serde::{Deserialize, Serialize};
 
 use crate::hash::HashHex;
+use crate::nullable::Nullable;
 
 /// Params of `GET|POST /get_transactions` (alias `/gettransactions`).
 ///
@@ -48,14 +75,11 @@ pub struct GetTransactionsRequest {
     /// *sends* exactly as it binds replies it serves.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub txs_hashes: Vec<String>,
-    #[serde(default)]
-    pub decode_as_json: bool,
-    /// `KV_SERIALIZE_OPT(prune, false)` — omitted at its default.
+    /// `KV_SERIALIZE_OPT(prune, false)` — omitted at its default. Set, every
+    /// entry's body is the skeleton (module docs); clear, it is the whole
+    /// serialization, and a body this node has discarded is `archived`.
     #[serde(default, skip_serializing_if = "is_false")]
     pub prune: bool,
-    /// `KV_SERIALIZE_OPT(split, false)` — omitted at its default.
-    #[serde(default, skip_serializing_if = "is_false")]
-    pub split: bool,
 }
 
 /// Where a transaction was found, and the members that travel with each
@@ -100,36 +124,40 @@ impl TxLocation {
 
 /// One entry of [`GetTransactionsResponse::txs`].
 ///
-/// `as_hex` / `pruned_as_hex` / `prunable_as_hex` / `as_json` are plain
-/// `KV_SERIALIZE` members, so they are emitted even when empty; which of them
-/// the daemon fills is the `(split, prune, decode_as_json)` matrix and is
-/// content, not shape. `as_json` is epee's rendering of the transaction,
-/// produced in C++ and passed through untouched (RK-D11); it duplicates the
-/// hex members and retires with `get_block`'s `json` in RK-W.
+/// `as_hex` and `pruned_as_hex` are plain `KV_SERIALIZE` members, so both are
+/// emitted and exactly one is filled: `as_hex` in the full form,
+/// `pruned_as_hex` in the pruned form (module docs). The three txid
+/// operands are present in both forms, so a client can bind either body to
+/// the id it asked for.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 #[serde(try_from = "RawTxEntry", into = "RawTxEntry")]
 pub struct TxEntry {
     pub tx_hash: HashHex,
+    /// The whole serialization — pruned segment, `pqc_auths` and prunable
+    /// region. Empty under `prune`.
     pub as_hex: String,
+    /// The pruned segment **only** — never with `pqc_auths` appended; the
+    /// `pqc_auths` region is archival good and travels with the prunable
+    /// one. Empty in the full form.
     pub pruned_as_hex: String,
-    pub prunable_as_hex: String,
+    /// The digest of the prunable region, as the store recorded it at
+    /// ingest (`txs_prunable_hash`); the txid's second operand.
     pub prunable_hash: HashHex,
+    /// The digest of the `pqc_auths` region (`txs_pqc_auth_hash`); the
+    /// txid's third operand. `null` for a 3-part txid — a transaction with
+    /// no `pqc_auths` region, which is the coinbase. Required and nullable
+    /// (RK-D23): a client that read an absent member as "3-part" would bind
+    /// a 4-part body under the wrong arity, so absence is refused.
+    pub pqc_auth_hash: Nullable<HashHex>,
     /// The transaction's **archival length** in bytes: its prunable region
-    /// plus its `pqc_auths` segment, measured by the daemon from the segments
-    /// it holds (`SHT-Q2`). The txid binds it, so a client that rebuilds an
-    /// identity from a pruned body supplies this beside `prunable_hash`, and
-    /// a wrong value yields a txid the block does not list. Zero for a
-    /// coinbase. Always present: a reply that omitted it would leave a
-    /// pruned body's identity unverifiable.
+    /// plus its `pqc_auths` segment, as the store recorded it at ingest
+    /// (`txs_archival_len`, `SHT-Q2`). The txid binds it, so a client that
+    /// rebuilds an identity from a pruned body supplies this beside the two
+    /// digests, and a wrong value yields a txid the block does not list.
+    /// Zero for a coinbase. Always present: a reply that omitted it would
+    /// leave a pruned body's identity unverifiable.
     pub archival_len: u64,
-    /// The epee JSON rendering, present only where a daemon rendered it
-    /// (`decode_as_json` on the C++-backed server). It retires with RK-W
-    /// (RW-Q4); absent is withheld, never an empty rendering (RK-D23).
-    pub as_json: Option<String>,
-    /// `KV_SERIALIZE_OPT(pruned, false)` — omitted at its default. True when
-    /// the daemon holds no prunable data for the transaction.
-    pub pruned: bool,
     pub double_spend_seen: bool,
     /// Chain or pool, and the members that come with it. `in_pool` on the
     /// wire is [`TxLocation::in_pool`].
@@ -148,13 +176,9 @@ struct RawTxEntry {
     tx_hash: HashHex,
     as_hex: String,
     pruned_as_hex: String,
-    prunable_as_hex: String,
     prunable_hash: HashHex,
+    pqc_auth_hash: Nullable<HashHex>,
     archival_len: u64,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    as_json: Option<String>,
-    #[serde(default, skip_serializing_if = "is_false")]
-    pruned: bool,
     in_pool: bool,
     double_spend_seen: bool,
     // The chain arm.
@@ -242,11 +266,9 @@ impl TryFrom<RawTxEntry> for TxEntry {
             tx_hash: raw.tx_hash,
             as_hex: raw.as_hex,
             pruned_as_hex: raw.pruned_as_hex,
-            prunable_as_hex: raw.prunable_as_hex,
             prunable_hash: raw.prunable_hash,
+            pqc_auth_hash: raw.pqc_auth_hash,
             archival_len: raw.archival_len,
-            as_json: raw.as_json,
-            pruned: raw.pruned,
             double_spend_seen: raw.double_spend_seen,
             location,
         })
@@ -260,11 +282,9 @@ impl From<TxEntry> for RawTxEntry {
             tx_hash: e.tx_hash,
             as_hex: e.as_hex,
             pruned_as_hex: e.pruned_as_hex,
-            prunable_as_hex: e.prunable_as_hex,
             prunable_hash: e.prunable_hash,
+            pqc_auth_hash: e.pqc_auth_hash,
             archival_len: e.archival_len,
-            as_json: e.as_json,
-            pruned: e.pruned,
             in_pool,
             double_spend_seen: e.double_spend_seen,
             block_height: None,
@@ -298,6 +318,21 @@ impl From<TxEntry> for RawTxEntry {
     }
 }
 
+/// A mined transaction whose **full** body this node no longer holds: its
+/// archival good was discarded with its shard at the archival horizon
+/// (`PDM-Q9`), so the full form is answered as this state rather than as an
+/// entry (`PDM-Q10`; `SB-Q2`). The shard is `shekyl_types::shard_of` over
+/// the cumulative archival length before the transaction — the partition an
+/// archiver serves it from. Under `prune` nothing is ever archived: the
+/// skeleton is held at every horizon.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct ArchivedTx {
+    pub tx_hash: HashHex,
+    /// The archival shard the transaction belongs to.
+    pub shard: u64,
+}
+
 /// Response of `GET|POST /get_transactions` (alias `/gettransactions`).
 ///
 /// Every sequence here is dropped from the document when empty — epee omits
@@ -310,6 +345,9 @@ impl From<TxEntry> for RawTxEntry {
 /// not exist. The `_v2` oracle vectors are the shape without them, captured
 /// from the edited C++ struct rather than written by hand, and `_v1` stays
 /// beside them so the deletion itself is checkable.
+///
+/// Each requested id lands in exactly one of `txs`, `missed_tx`,
+/// `unavailable_tx` or `archived`.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct GetTransactionsResponse {
@@ -319,6 +357,11 @@ pub struct GetTransactionsResponse {
     /// Hashes the daemon could find neither on the chain nor in the pool.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub missed_tx: Vec<HashHex>,
+    /// Mined transactions asked in the full form whose archival good this
+    /// node has discarded ([`ArchivedTx`]). Never populated under `prune`.
+    /// Omitted when empty, as the two lists beside it are.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub archived: Vec<ArchivedTx>,
     /// Hashes not on the chain, asked while the node's pool is retired (its
     /// file faulted; the node holds no pool until it restarts). Whether the
     /// pool holds them has no answer, so they are neither entries nor
@@ -423,20 +466,20 @@ fn is_false(v: &bool) -> bool {
 #[cfg(test)]
 mod tests {
     use super::{
-        GetTransactionsResponse, KeyImageStatus, KeyImageStatusError, TxEntry, TxLocation,
+        ArchivedTx, GetTransactionsResponse, KeyImageStatus, KeyImageStatusError, TxEntry,
+        TxLocation,
     };
     use crate::hash::HashHex;
+    use crate::nullable::Nullable;
 
     fn entry(location: TxLocation) -> TxEntry {
         TxEntry {
             tx_hash: HashHex::from_bytes([1u8; 32]),
             as_hex: "00".to_owned(),
             pruned_as_hex: String::new(),
-            prunable_as_hex: String::new(),
             prunable_hash: HashHex::from_bytes([2u8; 32]),
+            pqc_auth_hash: Nullable::value(HashHex::from_bytes([4u8; 32])),
             archival_len: 42,
-            as_json: None,
-            pruned: false,
             double_spend_seen: false,
             location,
         }
@@ -525,9 +568,10 @@ mod tests {
     #[test]
     fn a_selected_arm_with_a_missing_member_is_refused() {
         let doc = r#"{"tx_hash":"0101010101010101010101010101010101010101010101010101010101010101",
-            "as_hex":"00","pruned_as_hex":"","prunable_as_hex":"",
+            "as_hex":"00","pruned_as_hex":"",
             "prunable_hash":"0202020202020202020202020202020202020202020202020202020202020202",
-            "archival_len":42,"as_json":"","in_pool":false,"double_spend_seen":false,
+            "pqc_auth_hash":null,
+            "archival_len":42,"in_pool":false,"double_spend_seen":false,
             "confirmations":2,"block_timestamp":99}"#;
         let err = serde_json::from_str::<TxEntry>(doc).expect_err("block_height is missing");
         assert!(
@@ -560,15 +604,69 @@ mod tests {
         );
     }
 
+    /// `pqc_auth_hash` is the txid's third operand and its **arity**: `null`
+    /// is a 3-part identity, a digest a 4-part one. The member is required
+    /// (RK-D23) — a reply without it is refused, not read as 3-part — and a
+    /// `null` round-trips as `None`, not as an absent member.
+    #[test]
+    fn pqc_auth_hash_is_required_and_nullable() {
+        let with = serde_json::to_string(&entry(mined())).expect("serialize");
+        let digest = "\"pqc_auth_hash\":\"0404040404040404040404040404040404040404040404040404040404040404\",";
+        assert!(with.contains(digest), "{with}");
+        let without = with.replace(digest, "");
+        assert_ne!(with, without, "the member was removed from the document");
+        let err = serde_json::from_str::<TxEntry>(&without).expect_err("pqc_auth_hash is missing");
+        assert!(
+            err.to_string().contains("pqc_auth_hash"),
+            "the refusal names the member: {err}"
+        );
+
+        let three_part = TxEntry {
+            pqc_auth_hash: Nullable::NULL,
+            ..entry(mined())
+        };
+        let doc = serde_json::to_string(&three_part).expect("serialize");
+        assert!(doc.contains("\"pqc_auth_hash\":null,"), "{doc}");
+        let back: TxEntry = serde_json::from_str(&doc).expect("null is a value");
+        assert_eq!(back, three_part);
+    }
+
+    /// An archived transaction is its own list, never an entry with an
+    /// empty body: a reader that only looks at `txs` sees the id absent,
+    /// and one that looks for it finds the shard.
+    #[test]
+    fn archived_is_a_side_list_beside_missed() {
+        let res = GetTransactionsResponse {
+            status: crate::chain::RpcStatus::ok(),
+            txs: Vec::new(),
+            missed_tx: Vec::new(),
+            archived: vec![ArchivedTx {
+                tx_hash: HashHex::from_bytes([7u8; 32]),
+                shard: 3,
+            }],
+            unavailable_tx: Vec::new(),
+        };
+        let doc = serde_json::to_string(&res).expect("serialize");
+        assert_eq!(
+            doc,
+            "{\"status\":\"OK\",\"archived\":[{\"tx_hash\":\
+             \"0707070707070707070707070707070707070707070707070707070707070707\",\
+             \"shard\":3}]}"
+        );
+        let back: GetTransactionsResponse = serde_json::from_str(&doc).expect("round trip");
+        assert_eq!(back, res);
+    }
+
     /// A document carrying both groups is read by `in_pool`, and the members
     /// of the arm it did not select are ignored rather than refused — the
     /// same additive-evolution rule the crate applies to unknown fields.
     #[test]
     fn in_pool_decides_when_both_groups_are_present() {
         let doc = r#"{"tx_hash":"0101010101010101010101010101010101010101010101010101010101010101",
-            "as_hex":"00","pruned_as_hex":"","prunable_as_hex":"",
+            "as_hex":"00","pruned_as_hex":"",
             "prunable_hash":"0202020202020202020202020202020202020202020202020202020202020202",
-            "archival_len":42,"as_json":"","in_pool":true,"double_spend_seen":false,
+            "pqc_auth_hash":"0404040404040404040404040404040404040404040404040404040404040404",
+            "archival_len":42,"in_pool":true,"double_spend_seen":false,
             "block_height":5,"confirmations":2,"block_timestamp":99,"output_indices":[3],
             "relayed":true,"received_timestamp":77}"#;
         let e: TxEntry = serde_json::from_str(doc).expect("in_pool selects the pool arm");
@@ -585,6 +683,7 @@ mod tests {
             status: crate::chain::RpcStatus::ok(),
             txs: Vec::new(),
             missed_tx: Vec::new(),
+            archived: Vec::new(),
             unavailable_tx: Vec::new(),
         };
         let v: serde_json::Value = serde_json::to_value(&res).expect("serialize");

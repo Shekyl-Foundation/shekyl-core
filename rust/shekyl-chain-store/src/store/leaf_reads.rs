@@ -147,7 +147,7 @@ pub(super) fn outputs_at<T: ReadTables>(
             // recorded (SI-3's other direction); its absence is a hole.
             return Err(absent("tx_indices"));
         };
-        let tx = Transaction::read(&mut record.pruned.as_bytes())
+        let tx = Transaction::read(&mut record.pruned.wire_bytes())
             .map_err(|_| pruned_invalid("pruned segment does not decode"))?;
         // Bind the body to the identity the block names: the skeleton plus
         // the recorded component digests and archival length must hash back

@@ -168,40 +168,53 @@ pub struct ShardCoverage {
     pub shards: Vec<ShardCoverageIn>,
 }
 
-/// One block of `get_blocks_by_height.bin`: its bytes and its listed
-/// transactions' whole bytes, in list order.
+/// One listed transaction of a block: its hash as the block lists it, and
+/// its body as the store holds it. The skeleton is always present. Good the
+/// record carries is held or discarded with its shard; a record that
+/// carries none has neither.
 #[derive(Clone, Debug, PartialEq, Eq)]
-pub struct BlockBlobs {
+pub struct ListedTx {
+    pub hash: TxHash,
+    pub body: crate::core::TxBody,
+}
+
+/// One block of `get_blocks_by_height.bin`: its bytes and its listed
+/// transactions, in list order. The projection chooses each body's form
+/// from the request (`SB-Q2`); a discarded good is a slot state there,
+/// never a reason this read fails.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct BlockRead {
     /// The block, serialized.
     pub block: Vec<u8>,
-    /// Each listed transaction, serialized whole.
-    pub txs: Vec<Vec<u8>>,
+    /// Each listed transaction.
+    pub txs: Vec<ListedTx>,
 }
 
 /// What [`ChainReadFacts::blocks_by_height`] read: the blocks up to the
-/// first height it could not answer, and that height.
+/// first height above the tip, and that height.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct BlocksAt {
     /// The blocks read, in request order.
-    pub blocks: Vec<BlockBlobs>,
-    /// The first height above the tip, or whose listed bodies this node
-    /// no longer holds whole; `None` when every height was read.
+    pub blocks: Vec<BlockRead>,
+    /// The first height above the tip; `None` when every height was read.
+    /// Nothing else fails a height: a body this node discarded is carried
+    /// as its slot's state (`PDM-Q10`).
     pub failed: Option<BlockHeight>,
 }
 
 /// What [`ChainReadFacts::transactions`] gathered for `get_transactions`:
 /// one slot per id asked, and the chain height confirmations count from,
-/// both read off one snapshot.
+/// both read off one snapshot. A body this node has discarded is a slot
+/// like any other — [`crate::core::ArchivalGood::Discarded`] when it carries
+/// good, [`crate::core::ArchivalGood::CarriesNone`] when it does not — and
+/// the projection decides, per the request's form, whether a discarded good
+/// is an entry or an `archived` state (`PDM-Q10`).
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct TransactionsAt {
     /// One slot per id, in request order.
     pub slots: Vec<crate::core::TxSlot>,
     /// The chain's height: the tip's plus one.
     pub chain_height: u64,
-    /// The first id whose body this node has pruned — its prunable region
-    /// and `pqc_auths` go together — so the wire cannot recompose it; the
-    /// slots stop before it.
-    pub pruned_here: Option<TxHash>,
 }
 
 /// Where a key image is spent.
@@ -218,8 +231,8 @@ pub enum SpentAt {
 /// The chain reads behind the store flip's eight native read methods
 /// (module docs). Every method reads one committed snapshot.
 pub trait ChainReadFacts: Send + Sync {
-    /// The blocks at `heights`, each with its listed transactions whole
-    /// (`get_blocks_by_height.bin`).
+    /// The blocks at `heights`, each with its listed transactions as the
+    /// store holds them (`get_blocks_by_height.bin`).
     ///
     /// # Errors
     ///

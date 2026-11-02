@@ -2652,14 +2652,12 @@ void shekyl_block_ingest_reject_with_drop(uint8_t* outcome, uint8_t* drop, uint8
 uint8_t shekyl_block_announce_action(uint8_t outcome, uint8_t drop, bool handle_ok);
 bool shekyl_block_announce_re_request_txs(uint8_t action);
 bool shekyl_block_announce_drop(uint8_t action);
-bool shekyl_block_announce_heavier_score(uint8_t action);
 bool shekyl_block_announce_our_failure(uint8_t action);
 bool shekyl_block_announce_relay(uint8_t action);
 bool shekyl_block_announce_request_history(uint8_t action);
 
 uint8_t shekyl_block_sync_action(uint8_t outcome, uint8_t drop);
 bool shekyl_block_sync_drop(uint8_t action);
-bool shekyl_block_sync_heavier_score(uint8_t action);
 bool shekyl_block_sync_orphan_resync(uint8_t action);
 
 // ---------------------------------------------------------------------------
@@ -3219,7 +3217,7 @@ int shekyl_network_id(std::uint8_t nettype, std::uint8_t* out);
 /// are the Rust `#[repr(C)]` definitions member for member;
 /// `SHEKYL_DAEMON_SNAPSHOT_FIELDS` is asserted against
 /// `shekyl_daemon_snapshot_field_count()` at run.
-#define SHEKYL_DAEMON_SNAPSHOT_FIELDS 11u
+#define SHEKYL_DAEMON_SNAPSHOT_FIELDS 10u
 
 /// A list of NUL-terminated strings.
 struct ShekylStringList {
@@ -3256,7 +3254,6 @@ struct ShekylDaemonSnapshot {
   uint8_t network;
   bool offline;
   uint64_t fixed_difficulty;
-  uint64_t txpool_weight_max;
   bool sync;
   const ShekylMineAddress* mine_address;
   uint32_t mine_threads;
