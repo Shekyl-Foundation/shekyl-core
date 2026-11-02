@@ -1,6 +1,6 @@
 # One judge of failed dials; each connector declares how its failures are judged
 
-**Status: RULED (Round 0 closed 2026-10-31; `OE-D10` ruled 2026-11-01).** Every decision is ruled (§0) and nothing in the mapping is open. The code is #1235 (§8). The brief is [`DIALER_OUTAGE_EVIDENCE_BRIEF.md`](DIALER_OUTAGE_EVIDENCE_BRIEF.md). This record states the design as ruled; the rounds that reached it are in git (revision 1 `4a570f834`, revision 2 `2f85829ef`, revision 3 `12737f3fbe`).
+**Status: RULED (Round 0 closed 2026-10-31; `OE-D10` ruled 2026-11-01).** Every decision is ruled (§0) and nothing in the mapping is open. The code is #1235 (§8), all seven steps built there as of 2026-11-02, not yet on dev. The brief is [`DIALER_OUTAGE_EVIDENCE_BRIEF.md`](DIALER_OUTAGE_EVIDENCE_BRIEF.md). This record states the design as ruled; the rounds that reached it are in git (revision 1 `4a570f834`, revision 2 `2f85829ef`, revision 3 `12737f3fbe`).
 
 **Read at:** `dev` `f608d01604`; every anchor in §1 holds there.
 **Reviews:** the Tor lane reviewed Tor's mapping (§3.2) against tor 0.4.9.14 and derived `OE-D10` (§6); Rick's reviewer covered clearnet's mapping (§3.1).
