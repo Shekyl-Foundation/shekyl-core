@@ -713,19 +713,20 @@ records the new count.
 
 **Configuration the six calls leave to the side.**
 
-- `block_host`, `unblock_host`, and `get_blocked_hosts` call the Rust
-  ban list. A ban closes the sockets the list returns. It does not
-  walk the Levin registry. RPC speaks in durations: `setbans` takes
+- The ban list is Rust's, written through `shekyl_ban_*` (the RPC's
+  `set_bans`, the ban file); the C++ ban calls (`block_host`,
+  `unblock_host`, `get_blocked_hosts` and the rest) were deleted with the
+  automatic ban (2026-11-01). A ban closes the sockets the list returns.
+  It does not walk the Levin registry. RPC speaks in durations: `setbans` takes
   seconds, and `getbans` returns seconds remaining. At cutover the
   conversion is `now + duration` onto the monotonic clock, and the
   remaining time is computed back from it. No `time_t` crosses the
   boundary. A duration that does not fit a `Tick` is refused by
   `setbans`. `--ban-list` is a different kind: those entries are
   permanent, with no deadline, and `getbans` reports them as
-  permanent rather than as a number of seconds. The
-  session layer is the second writer, through the same duration: ban
-  this host for this long. A transport close does not write the list
-  and does not call `add_host_fail`.
+  permanent rather than as a number of seconds. No other layer writes
+  the list: the session layer's automatic ban was deleted (2026-11-01),
+  so no peer can make a ban. A transport close does not write the list.
 - Socket admission reserves inside `accept_clearnet`
   (`admission.rs:273-283`) and `accept_tor` (`:310-312`): the ceiling
   check and the mint hold one table lock. `socket_count` is the
@@ -890,17 +891,17 @@ LV-3 (D14).
 **Each layer owns its own admission.** The transport layer owns socket
 admission: may this socket exist? That is the ban list and the inbound
 ceiling, enforced in Rust at accept and before dialing. The ceiling
-comes from `shekyl-peer-policy`. The ban list has two writers, both
-in durations (corrected 2026-09-28): the operator, through RPC, and
-the session layer, through one call that bans a host for a duration.
-The session layer judges misbehaviour. The transport layer enforces
-the ban. It does not score a host, and a transport close does not
-call `add_host_fail`. The session layer (Levin framing and the p2p
-protocol) owns session admission: may this peer have a session? That
-is `network_id`, the self-detection nonce, and
-PWD-B3's per-command caps, in `handle_handshake`, plus the judgment
-that issues the ban call. Neither layer reads the other's state to
-decide. No wall-clock time crosses that call.
+comes from `shekyl-peer-policy`. The ban list has one writer
+(corrected 2026-11-01, #1250): the operator, through RPC `set_bans`
+and the ban file. A peer cannot make a ban. The transport layer
+enforces the list at accept and before dialing. It does not score a
+host, and a transport close does not write the list. The session
+layer (Levin framing and the p2p protocol) owns session admission:
+may this peer have a session? That is `network_id`, the
+self-detection nonce, and PWD-B3's per-command caps, in
+`handle_handshake`. Misbehaviour closes that session. It does not
+ban the host. Neither layer reads the other's state to decide. No
+wall-clock time crosses the boundary.
 
 **Decoupling rule.** Levin framing, the p2p protocol, and the cryptonote
 protocol run over the transport contract and nothing else. The transport
@@ -985,8 +986,8 @@ and the mechanism does not. "Refuse" means it does not survive.
 
 | Duty | Read at this pin | Disposition |
 | --- | --- | --- |
-| Accept loop, connection filter, connection limit | Filter type `i_connection_filter` in `abstract_tcp_server2.h`; admission walk `net_node.inl:231` | **Enforce socket admission at accept, in Rust, with no C++ call.** The ceiling comes from `shekyl-peer-policy`. Ban entries come from the operator and from the session layer's ban call. The transport layer does not own those values and does not score. It does not call into C++ admission. |
-| Ban list | `block_host` at `net_node.inl:256`. The registry sweep that drops live connections is `foreach_connection` at `:302`. RPC callers: `core_rpc_server.cpp:193`, `:997` (`get_blocked_hosts`), `:1101`, `:1103`. Discovery's pre-dial check is `is_remote_host_allowed` at `net_node.inl:1902`. Automatic scoring is `add_host_fail` at `net_node.inl:413` | **Move the list to Rust**, keyed on the observed host, carrying IPv4 subnets and expiry. Two writers, both in durations (corrected 2026-09-28): the operator's RPC (`block_host`, `unblock_host`, `get_blocked_hosts`) and the session layer's call to ban a host for a duration. A ban closes existing sockets to that host directly. It does not sweep the Levin registry. Discovery's pre-dial check reads the same list. A transport close does not write the list. |
+| Accept loop, connection filter, connection limit | Filter type `i_connection_filter` in `abstract_tcp_server2.h`; admission walk `net_node.inl:231` | **Enforce socket admission at accept, in Rust, with no C++ call.** The ceiling comes from `shekyl-peer-policy`. Ban entries come from the operator. The transport layer does not own those values and does not score. It does not call into C++ admission. |
+| Ban list | *Records-was, deleted 2026-11-01 (#1250):* `block_host` at `net_node.inl:256`, the registry sweep `foreach_connection` at `:302`, RPC callers `core_rpc_server.cpp:193`, `:997`, `:1101`, `:1103`, `is_remote_host_allowed` at `net_node.inl:1902`, and `add_host_fail` at `net_node.inl:413`. The list is `BanList` in `shekyl-transport-layer`. | **The list is Rust's**, keyed on the observed host, carrying IPv4 subnets and expiry. One writer (corrected 2026-11-01, #1250): the operator, through RPC `set_bans` and the ban file. A peer cannot make a ban. A ban closes existing sockets to that host directly. It does not sweep the Levin registry. Discovery's pre-dial check reads the same list. A transport close does not write the list. |
 | Outbound dial | `P2P_DEFAULT_CONNECTION_TIMEOUT` = 5 s (`cryptonote_config.h:189`); remote new-connection timer = 10 s (`abstract_tcp_server2.inl:61`) | Carry the dial. Re-derive both clocks (D9). They are not one number. |
 | SOCKS dial clock | A SOCKS dial is the proxy handshake, then the overlay circuit build and rendezvous. `src/net/socks*` has its own timeout | **A proxied clearnet dial uses the Tor dial clock (120 s): the worst measured SOCKS path, pending its own D9 distribution.** The three clearnet legs had no proxy, and a Tor-exit dial is 3–6 s. It does not inherit the timeout from `src/net/socks`. |
 | SOCKS dial; `add_connection` | `net_node.inl:3618`; `src/net/socks*` (1,241 lines) | Carry in Rust through `shekyl-socks`. `shekyl-p-fetch` and `shekyl-rpc-transport` call it with `Isolation::Principal`. `shekyl-p-transport` still enables `ureq/socks-proxy` (`socks` 0.3.4). Moving that HTTP client is a FOLLOWUPS row. |
@@ -1123,14 +1124,12 @@ type deleted, and the pipe branch deleted.
   cause. On a simultaneous close, the first recorded cause wins.
   A transport cause (`PrefixMismatch`, `RecordRejected`,
   `TransportTimeout`, `SendQueueFull`, and every other transport
-  close) does not ban the host and does not call `add_host_fail`.
-  Scoring is the session layer's judgment, issued as its own ban
-  call, not by this close.
-- **The ban list has two writers (corrected 2026-09-28).** The
-  operator writes through RPC. The session layer writes through one
-  call, ban this host for this long, after it has judged
-  misbehaviour. Both pass a duration. The transport layer enforces
-  the entry at accept and before dialing.
+  close) does not ban the host. The session layer closes its own
+  session. It does not write the list.
+- **The ban list has one writer (corrected 2026-11-01, #1250).** The
+  operator writes through RPC `set_bans` and the ban file. A peer
+  cannot make a ban. The transport layer enforces the entry at
+  accept and before dialing.
 - **FFI (rule 40).** Every call names its direction and who owns the
   buffer. A callback context is not a raw `this`.
 

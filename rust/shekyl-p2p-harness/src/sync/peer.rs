@@ -184,12 +184,7 @@ impl ServingPeer {
             .tx_record(txid)
             .expect("a read")
             .expect("a listed transaction is held");
-        SkeletonTx {
-            unprunable: record.pruned.clone().into_wire_bytes(),
-            prunable_hash: record.prunable_hash,
-            pqc_auth_hash: record.pqc_auth_hash,
-            archival_len: record.archival_len,
-        }
+        record.skeleton_of()
     }
 }
 
