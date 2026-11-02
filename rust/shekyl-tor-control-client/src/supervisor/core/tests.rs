@@ -24,13 +24,15 @@ fn policy() -> Policy {
         fresh_directory_after: 3,
         quiet_after: Duration::from_secs(20),
         probe_after_min: Duration::from_secs(15),
-        probe_after_max: Duration::from_secs(60),
-        probe_within: Duration::from_secs(60),
-        round_wait: Duration::from_secs(60),
+        probe_after_max: super::PROBE_AFTER_MAX,
+        probe_within: super::PROBE_WITHIN,
+        round_wait: super::ROUND_WAIT,
         round_stuck_after: Duration::from_secs(300),
         jump_stall_after: Duration::from_secs(300),
         clock_evidence_within: Duration::from_secs(60),
-        descriptor_lifetime: Duration::from_secs(3 * 60 * 60),
+        descriptor_lifetime: super::DESCRIPTOR_LIFETIME,
+        clock_behind_after: super::CLOCK_BEHIND_AFTER,
+        republish_after: super::REPUBLISH_AFTER,
     }
 }
 
@@ -986,6 +988,7 @@ fn an_exhausted_pin_holds_the_origin_while_health_stays_true() {
     assert_eq!(core.status().own_tx, OwnTx::Held);
 }
 
+mod clock;
 mod clock_evidence;
 mod clock_jump;
 mod directories;
