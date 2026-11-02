@@ -535,9 +535,11 @@ impl Node {
         );
         // The miner first: its workers hash on the board this stop withdraws,
         // and a handle may keep mining control alive past the node. The
-        // close does not wait for the hashes they are in; they hold no store
-        // handle, and what they finish now is dropped before it becomes a
-        // block. Their join is the last thing this stop does.
+        // close parks them without the join gate, so it returns before the
+        // hash; they hold no store handle, and what they finish now is
+        // dropped before it becomes a block. The join takes that gate and
+        // is the last thing this stop does, so a stop already inside the
+        // gate finishes before it.
         self.mining.close();
         // The process doors hold the store (`Door::admission`); leave them
         // up and `chain.db` stays exclusive after this node has stopped.

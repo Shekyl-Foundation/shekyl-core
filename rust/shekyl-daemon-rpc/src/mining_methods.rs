@@ -360,8 +360,9 @@ pub async fn submit_block(
 }
 
 /// Stops, on drop, a miner `generateblocks` started: a caller that goes
-/// away mid-wait leaves no miner running. The stop joins the workers, so
-/// on a runtime it runs on a blocking thread.
+/// away mid-wait leaves no miner running. The stop can wait out one
+/// earlier hash on the join gate, so on a runtime it runs on a blocking
+/// thread, and the wait is detached: the gate, not this caller, joins.
 struct StartedMiner(Option<MiningHandle>);
 
 impl StartedMiner {
