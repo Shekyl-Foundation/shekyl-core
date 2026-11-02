@@ -1844,10 +1844,22 @@ it decided beyond the rows above:
   the connector's apply 5–7 ms, the body transit under 0.2 ms. The sync
   path has nothing left to tune at that cost: the hash is one per block
   by ruling, and it already runs on every core. The cost per hash is the
-  verifier's, not chain sync's, and it is the RandomX lane's question
-  (Rick, 2026-11-01): dataset mode costs about 2 GiB against the performance
-  budget's memory ceiling (`DAEMON_REDB_STORE.md` §1.3a), and a faster
-  verifier per core is option (a) of `RANDOMX_V2_MINING_ASYMMETRY.md`.
+  verifier's, not chain sync's.
+- **Open: the catch-up proof-of-work cost** (Rick, 2026-11-01). No lever
+  is chosen, in chain sync or on the DRS line. Proof of work alone is
+  about 16 minutes for PB-D2's 5,040 blocks on the qualified host
+  (5,040 × 0.76 s ÷ 3.9) against its 15-minute reference, and transaction
+  verification at design load, not yet measured, comes on top. The owner
+  is the RandomX v2 asymmetry program (`RANDOMX_V2_MINING_ASYMMETRY.md`):
+  dataset mode for verification is its option (a), a faster verifier per
+  core moves that decision's floor, and catch-up cost is one of its
+  inputs. The decision carries PB-R1 (`DAEMON_REDB_STORE.md` §1.3a.4):
+  dataset mode on a non-mining node breaks the 2 GiB ceiling, so taking
+  it needs a change under its §1.3a.1 rule 6, or a mode keyed to the
+  host's RAM, which is two verification paths and a switch that depends
+  on the host. Trigger: PB-D2's first design-load run with its
+  proof-of-work share (§1.3a.6), which needs #1245's adversarial-block
+  builder.
 - **The per-block profile is one sink.** The node's measurement sink
   (`shekyl-chain-ingest`'s `Metrics`, schema `shekyl_e2_metrics_v3`),
   which the substrate already hashes into, also takes the entry's
