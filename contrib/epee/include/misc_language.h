@@ -37,8 +37,6 @@ namespace epee
 
 namespace misc_utils
 {
-  bool sleep_no_w(long ms);
-
   template <typename T>
   T get_mid(const T &a, const T &b)
   {

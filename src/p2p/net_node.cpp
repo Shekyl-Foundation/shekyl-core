@@ -45,20 +45,8 @@
 #include "cryptonote_protocol/cryptonote_protocol_defs.h"
 #include "net_node.h"
 #include "net/net_utils_base.h"
-#include "net/socks.h"
 #include "net/parse.h"
 #include "net/tor_address.h"
 #include "p2p/p2p_protocol_defs.h"
 #include "string_tools.h"
 #include "string_tools_lexical.h"
-
-namespace nodetool
-{
-    // PWD-E7 (P2P_2_ENDPOINT_ROUND.md): the durable-address warning is stated
-    // wherever this flag is documented, because the failure mode is quiet --
-    // this flag is not a custody preference; taking it is opting into a
-    // durable address. The default posture (no flag) is an ephemeral per-boot
-    // onion the daemon publishes itself; see arg_no_ephemeral_tor below.
-
-
-}
