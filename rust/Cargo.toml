@@ -628,8 +628,10 @@ serde_json = "1"
 # daemon. From 4.2.0 a recovery rebuilds the layout from the file length and
 # the immutable region geometry instead (`header.rs` `finalize`). Verified at
 # source: the file format is unchanged across 4.1-4.4 (the 4.3 key
-# separators and the 4.4 niches change no existing table's encoding; niches
-# are declared by no built-in type outside `experimental-niches`).
+# separators and the 4.4 niches change no existing table's encoding: the
+# built-in types existing tables use declare a niche only under
+# `experimental-niches`, and the `NonZero` integer types, which 4.4 adds and
+# which do declare one unconditionally, key or store no table here).
 redb = "4.4.0"
 
 # `kameo` actor framework — Stage 2 gate (per `docs/FOLLOWUPS.md`
