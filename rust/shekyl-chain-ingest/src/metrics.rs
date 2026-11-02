@@ -40,8 +40,14 @@ use serde::Serialize;
 
 /// The artifact's schema. `v2` added [`MetricsArtifact::concurrency`];
 /// `v3` added the live sync's phases (chain sync's transit and entry, the
-/// connector's apply).
-pub const METRICS_SCHEMA: &str = "shekyl_e2_metrics_v3";
+/// connector's apply); `v4` added each response's bytes, the header
+/// responses, and the door's seat wait per body span.
+///
+/// Totals only, no derived rate: a per-response minimum rate would be
+/// dominated by tiny tip replies. The model's deadline is `transit +
+/// bytes / SYNC_RATE_FLOOR`, so the floor is throughput after the round
+/// trip, which only the owner's per-response debug lines can separate.
+pub const METRICS_SCHEMA: &str = "shekyl_e2_metrics_v4";
 
 /// How many workers shared the host while the numbers were taken.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize)]
@@ -73,7 +79,15 @@ pub struct Metrics {
     apply_ns: AtomicU64,
     transit_spans: AtomicU64,
     transit_blocks: AtomicU64,
+    transit_bytes: AtomicU64,
     transit_ns: AtomicU64,
+    header_responses: AtomicU64,
+    header_bytes: AtomicU64,
+    header_ns: AtomicU64,
+    seated_spans: AtomicU64,
+    seat_waits: AtomicU64,
+    seat_wait_ns: AtomicU64,
+    seat_wait_ns_max: AtomicU64,
     entries: AtomicU64,
     entry_ns: AtomicU64,
 }
@@ -116,7 +130,15 @@ impl Metrics {
             apply_ns: AtomicU64::new(0),
             transit_spans: AtomicU64::new(0),
             transit_blocks: AtomicU64::new(0),
+            transit_bytes: AtomicU64::new(0),
             transit_ns: AtomicU64::new(0),
+            header_responses: AtomicU64::new(0),
+            header_bytes: AtomicU64::new(0),
+            header_ns: AtomicU64::new(0),
+            seated_spans: AtomicU64::new(0),
+            seat_waits: AtomicU64::new(0),
+            seat_wait_ns: AtomicU64::new(0),
+            seat_wait_ns_max: AtomicU64::new(0),
             entries: AtomicU64::new(0),
             entry_ns: AtomicU64::new(0),
         }
@@ -160,11 +182,34 @@ impl Metrics {
     }
 
     /// Chain sync's body request for `blocks` blocks was answered `d` after
-    /// it was sent: the round trip and the peer's serving.
-    pub fn transited(&self, blocks: usize, d: Duration) {
+    /// it was sent, with a response of `bytes` bytes: the round trip and
+    /// the peer's serving.
+    pub fn transited(&self, blocks: usize, bytes: usize, d: Duration) {
         observe(&self.transit_spans, &self.transit_ns, d);
         self.transit_blocks
             .fetch_add(u64::try_from(blocks).unwrap_or(u64::MAX), Ordering::Relaxed);
+        self.transit_bytes
+            .fetch_add(u64::try_from(bytes).unwrap_or(u64::MAX), Ordering::Relaxed);
+    }
+
+    /// Chain sync's header request was answered `d` after it was sent,
+    /// with a response of `bytes` bytes.
+    pub fn headers_transited(&self, bytes: usize, d: Duration) {
+        observe(&self.header_responses, &self.header_ns, d);
+        self.header_bytes
+            .fetch_add(u64::try_from(bytes).unwrap_or(u64::MAX), Ordering::Relaxed);
+    }
+
+    /// The door seated one body span chain sync offered. `waited` is how
+    /// long the span was held for a seat first, from the door's first
+    /// refusal for room to the offer it admitted; `None` when it was
+    /// seated at its first offer.
+    pub fn seated(&self, waited: Option<Duration>) {
+        self.seated_spans.fetch_add(1, Ordering::Relaxed);
+        if let Some(d) = waited {
+            observe(&self.seat_waits, &self.seat_wait_ns, d);
+            self.seat_wait_ns_max.fetch_max(ns(d), Ordering::Relaxed);
+        }
     }
 
     /// One arrival chain sync offered the entry was answered `d` after the
@@ -205,7 +250,14 @@ impl Metrics {
         let apply_ns = self.apply_ns.load(Ordering::Relaxed);
         let transit_spans = self.transit_spans.load(Ordering::Relaxed);
         let transit_blocks = self.transit_blocks.load(Ordering::Relaxed);
+        let transit_bytes = self.transit_bytes.load(Ordering::Relaxed);
         let transit_ns = self.transit_ns.load(Ordering::Relaxed);
+        let header_responses = self.header_responses.load(Ordering::Relaxed);
+        let header_bytes = self.header_bytes.load(Ordering::Relaxed);
+        let header_ns = self.header_ns.load(Ordering::Relaxed);
+        let seated_spans = self.seated_spans.load(Ordering::Relaxed);
+        let seat_waits = self.seat_waits.load(Ordering::Relaxed);
+        let seat_wait_ns = self.seat_wait_ns.load(Ordering::Relaxed);
         let entries = self.entries.load(Ordering::Relaxed);
         let entry_ns = self.entry_ns.load(Ordering::Relaxed);
         let mean = |total: u64, n: u64| if n == 0 { None } else { Some(total / n) };
@@ -233,8 +285,19 @@ impl Metrics {
             apply_ns_per_block: mean(apply_ns, applied_blocks),
             transit_spans,
             transit_blocks,
+            transit_bytes,
             transit_ns_total: transit_ns,
             transit_ns_per_block: mean(transit_ns, transit_blocks),
+            header_responses,
+            header_bytes,
+            header_ns_total: header_ns,
+            header_ns_mean: mean(header_ns, header_responses),
+            seated_spans,
+            seat_waits,
+            seat_wait_ns_total: seat_wait_ns,
+            seat_wait_ns_mean: mean(seat_wait_ns, seat_waits),
+            seat_wait_ns_max: (seat_waits > 0)
+                .then(|| self.seat_wait_ns_max.load(Ordering::Relaxed)),
             entries,
             entry_ns_total: entry_ns,
             entry_ns_mean: mean(entry_ns, entries),
@@ -317,10 +380,38 @@ pub struct MetricsArtifact {
     pub transit_spans: u64,
     /// Blocks those requests named.
     pub transit_blocks: u64,
+    /// Bytes those requests' responses carried, summed: the payload each
+    /// peer sent for the blocks it served.
+    pub transit_bytes: u64,
     /// Wall-clock from each request's send to its answer, summed.
     pub transit_ns_total: u64,
     /// Per block named: a request's round trip shared by its blocks.
     pub transit_ns_per_block: Option<u64>,
+    /// Chain sync's header requests answered.
+    pub header_responses: u64,
+    /// Bytes those responses carried, summed.
+    pub header_bytes: u64,
+    /// Wall-clock from each header request's send to its answer, summed.
+    /// A session with a second header request sent before the first was
+    /// answered is timed from the later send.
+    pub header_ns_total: u64,
+    /// Per header response.
+    pub header_ns_mean: Option<u64>,
+    /// Body spans the door seated: every offer it admitted, whether at
+    /// its first offer or after a wait for room.
+    pub seated_spans: u64,
+    /// Seated spans that were first refused for room (`NoRoom` or
+    /// `Throttled`) and offered again. Against `seated_spans`, the share
+    /// of spans that waited; against the cap on body requests in flight,
+    /// the cap at which seats, not spans, become the limit.
+    pub seat_waits: u64,
+    /// Wall-clock from each waiting span's first refusal to the offer the
+    /// door admitted, summed.
+    pub seat_wait_ns_total: u64,
+    /// Per waiting span.
+    pub seat_wait_ns_mean: Option<u64>,
+    /// The longest wait for a seat.
+    pub seat_wait_ns_max: Option<u64>,
     /// Arrivals chain sync offered the entry and heard answered.
     pub entries: u64,
     /// Wall-clock from each offer to its answer, summed: the door's wait,
@@ -386,8 +477,41 @@ mod tests {
         );
         assert_eq!((s.blocks_formed, s.form_ns_mean), (1, Some(1_000)));
         assert_eq!(s.schema_version, METRICS_SCHEMA);
-        assert!(s.to_json().expect("json").contains("shekyl_e2_metrics_v3"));
+        assert!(s.to_json().expect("json").contains(METRICS_SCHEMA));
         assert_eq!(s.concurrency, None, "no pipeline configured the sink");
+        // The sync's responses: the empty artifact has no header mean and
+        // no seat-wait extremes.
+        assert_eq!((empty.header_responses, empty.header_ns_mean), (0, None));
+        assert_eq!((empty.seat_waits, empty.seat_wait_ns_max), (0, None));
+        m.transited(3, 1_500, Duration::from_nanos(900));
+        m.headers_transited(400, Duration::from_nanos(200));
+        m.headers_transited(600, Duration::from_nanos(400));
+        m.seated(None);
+        m.seated(Some(Duration::from_nanos(50)));
+        m.seated(Some(Duration::from_nanos(150)));
+        let s = m.snapshot();
+        assert_eq!(
+            (s.transit_spans, s.transit_blocks, s.transit_bytes),
+            (1, 3, 1_500)
+        );
+        assert_eq!(
+            (s.transit_ns_total, s.transit_ns_per_block),
+            (900, Some(300))
+        );
+        assert_eq!(
+            (s.header_responses, s.header_bytes, s.header_ns_total),
+            (2, 1_000, 600)
+        );
+        assert_eq!(s.header_ns_mean, Some(300));
+        assert_eq!((s.seated_spans, s.seat_waits), (3, 2));
+        assert_eq!(
+            (
+                s.seat_wait_ns_total,
+                s.seat_wait_ns_mean,
+                s.seat_wait_ns_max
+            ),
+            (200, Some(100), Some(150))
+        );
     }
 
     #[test]

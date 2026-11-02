@@ -1861,14 +1861,27 @@ it decided beyond the rows above:
   proof-of-work share (§1.3a.6), which needs #1245's adversarial-block
   builder.
 - **The per-block profile is one sink.** The node's measurement sink
-  (`shekyl-chain-ingest`'s `Metrics`, schema `shekyl_e2_metrics_v3`),
+  (`shekyl-chain-ingest`'s `Metrics`, schema `shekyl_e2_metrics_v4`),
   which the substrate already hashes into, also takes the entry's
   `form_judged` and the connector's apply (through `Follow::metrics`)
   and the owner's body transit and offer-to-answer time (through the
   executor). The owner logs it as one line of JSON each time a sync
   reaches the best chain; `drs_bench.py` records the subject's last such
   line as `sync_profile`. The door's own wait is the answer time less
-  `form_judged` and the apply.
+  `form_judged` and the apply. For §10's two constants the sink also
+  records, from `v4`, each body response's bytes (`transit_bytes`), the
+  header responses' count, bytes and round trip (`header_*`), and the
+  door's seat wait per body span (`seated_spans`, `seat_waits`,
+  `seat_wait_ns_*`: a span counts as waiting from the door's first
+  `NoRoom` or `Throttled` refusal to the offer it admitted), all as
+  totals; and the owner logs each response (`a sync response`: its kind,
+  bytes, blocks and request-to-response time) and each seated span (`a
+  body span seated`: its blocks and wait) at `debug`. `SYNC_RATE_FLOOR`
+  is throughput after the round trip, which only the per-response lines
+  separate, so the sink carries no derived rate; `BODY_REQUESTS_IN_FLIGHT`
+  reads as the cap at which spans wait for seats. Not timed: the model's
+  own gate on planning while it reads zero seats (`plan_bodies`), which
+  the per-response lines show as fewer requests in flight than the cap.
 
 ## §A. What chain sync needs from the DRS-X entry
 

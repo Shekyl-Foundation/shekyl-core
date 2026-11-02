@@ -343,6 +343,17 @@ struct Owner<C: Clock + Clone, R> {
     /// Each session's body request in flight: when it was sent and how
     /// many blocks it named. Its answer is timed from here.
     bodies_sent: HashMap<Session, (Instant, usize)>,
+    /// Each session's header request in flight: when it was sent. Its
+    /// answer is timed from here. `Event::Headers` carries no request id,
+    /// so the key is the session; a second request sent before the first
+    /// is answered times the answer from the later send. A record only:
+    /// nothing the owner sends or decides reads it.
+    headers_sent: HashMap<Session, Instant>,
+    /// Arrivals the door refused for room, by tag: when the first refusal
+    /// came, and the session that served the body. A span's seat wait is
+    /// read off its tags when the door admits it. A record only, like
+    /// `headers_sent`.
+    seat_waiting: HashMap<u64, (Instant, Session)>,
     /// Sessions whose Levin handshake has completed ([`Routed::Opened`]).
     /// The owner sends to no other: a peer still waiting on the
     /// handshake's reply refuses anything else.
@@ -411,6 +422,8 @@ where
         serving: HashMap::new(),
         opened: HashSet::new(),
         bodies_sent: HashMap::new(),
+        headers_sent: HashMap::new(),
+        seat_waiting: HashMap::new(),
         seats: None,
         state_tx,
         published,
@@ -690,6 +703,9 @@ where
                 let session = Session::new(id);
                 self.opened.remove(&session);
                 self.bodies_sent.remove(&session);
+                self.headers_sent.remove(&session);
+                self.seat_waiting
+                    .retain(|_, (_, served_by)| *served_by != session);
                 self.serving.remove(&session);
                 self.door.session_closed(SessionId(session.socket().get()));
                 self.event(Event::SessionClosed { session });
@@ -700,7 +716,19 @@ where
     fn message(&mut self, session: Session, command: SyncCommand, payload: Vec<u8>) {
         match command {
             SyncCommand::ResponseHeaders => {
-                tracing::trace!(%session, bytes = payload.len(), "a header response");
+                if let Some(sent) = self.headers_sent.remove(&session) {
+                    let transit = sent.elapsed();
+                    self.executor
+                        .metrics()
+                        .headers_transited(payload.len(), transit);
+                    tracing::debug!(
+                        %session,
+                        kind = "headers",
+                        bytes = payload.len(),
+                        transit_us = micros(transit),
+                        "a sync response"
+                    );
+                }
                 self.event(Event::Headers {
                     session,
                     bytes: payload,
@@ -708,7 +736,18 @@ where
             }
             SyncCommand::ResponseBodies => {
                 if let Some((sent, blocks)) = self.bodies_sent.remove(&session) {
-                    self.executor.metrics().transited(blocks, sent.elapsed());
+                    let transit = sent.elapsed();
+                    self.executor
+                        .metrics()
+                        .transited(blocks, payload.len(), transit);
+                    tracing::debug!(
+                        %session,
+                        kind = "bodies",
+                        bytes = payload.len(),
+                        items = blocks,
+                        transit_us = micros(transit),
+                        "a sync response"
+                    );
                 }
                 self.event(Event::Bodies {
                     session,
@@ -1036,6 +1075,7 @@ where
                             session,
                             notify(SyncCommand::RequestHeaders.wire_id(), &payload),
                         );
+                        self.headers_sent.insert(session, Instant::now());
                         self.arm(deadline, session, id);
                     }
                     Err(err) => tracing::error!(%err, "a header request did not encode"),
@@ -1174,6 +1214,26 @@ where
             .collect();
         match self.door.offer_bound(span) {
             Ok(tickets) => {
+                // The span's seat wait: from the earliest refusal for room
+                // among its arrivals to this offer, or none when the door
+                // seated it first time. A record only (CS-5 §10's cap
+                // sweep reads it); nothing below decides on it.
+                let waited = tags
+                    .iter()
+                    .filter_map(|(tag, _, _, _, _)| self.seat_waiting.remove(tag))
+                    .map(|(since, _)| since)
+                    .min()
+                    .map(|since| since.elapsed());
+                self.executor.metrics().seated(waited);
+                if let Some((_, session, _, _, _)) = tags.first() {
+                    tracing::debug!(
+                        %session,
+                        blocks = tags.len(),
+                        waited_us = waited.map_or(0, micros),
+                        waited = waited.is_some(),
+                        "a body span seated"
+                    );
+                }
                 for (tag, session, solicited, hash, _) in &tags {
                     self.offered.insert(
                         *tag,
@@ -1206,13 +1266,19 @@ where
                     .door
                     .max_arrival_bytes()
                     .and_then(|max| usize::try_from(max).ok());
-                for (tag, _, solicited, _, bytes) in tags {
+                let now = Instant::now();
+                for (tag, session, solicited, _, bytes) in tags {
                     let outcome = match refusal {
                         // No room and a dry bucket wait for a seat. An
                         // unreadable store does not: the service stops on
                         // that read, and a later seat report must not
                         // offer the body again.
-                        Refusal::NoRoom | Refusal::Throttled => Outcome::NoRoom,
+                        Refusal::NoRoom | Refusal::Throttled => {
+                            // The wait is timed from the first refusal: a
+                            // body refused again keeps its first.
+                            self.seat_waiting.entry(tag).or_insert((now, session));
+                            Outcome::NoRoom
+                        }
                         Refusal::StoreUnreadable => Outcome::StoreUnreadable,
                         Refusal::Oversize if max.is_some_and(|max| bytes > max) => {
                             // A requested body invalidates its header; an
@@ -1229,6 +1295,11 @@ where
         }
         self.room();
     }
+}
+
+/// `d` in microseconds, for a log field.
+fn micros(d: Duration) -> u64 {
+    u64::try_from(d.as_micros()).unwrap_or(u64::MAX)
 }
 
 /// A prove result's kind, for the trace.
