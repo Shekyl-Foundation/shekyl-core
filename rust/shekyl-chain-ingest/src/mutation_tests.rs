@@ -241,6 +241,7 @@ async fn judge(
         PipelineConfig {
             window: NonZeroUsize::new(4).expect("non-zero"),
             hashers: NonZeroUsize::new(2).expect("non-zero"),
+            digest_each_commit: false,
         },
     )
     .await;
@@ -598,7 +599,8 @@ async fn setup_and_judge(mutation: Mutation) -> (Outcome, u64) {
         | Mutation::SubstitutedBody
         | Mutation::RelistedTransaction
         | Mutation::DoubledListing
-        | Mutation::ForgedSignature => {
+        | Mutation::ForgedSignature
+        | Mutation::TooManyInputs => {
             let chain = chain(n);
             let outcome = judge(
                 &format!("{mutation:?}").to_lowercase(),

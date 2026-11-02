@@ -1,8 +1,8 @@
 {
   "block_count": 762,
-  "built_at_dev_sha": "e43d76034",
-  "captured_by_daemon_version": "3.1.0-e43d76034",
-  "description": "A regtest chain captured whole as the DRS-E2 replay pair. corpus.e2: every block 0..=tip_height with the FULL bytes of every listed transaction (shekyl-chain-replay fetch, RD-F15-verified). trace.e2: the passed-through facts per block and the daemon's logical-state digest at the tip (shekyl-e2-trace-export, one LMDB snapshot). Consumed by replay: shekyl-chain-ingest connects the chain against a real store, so the state the 4.I rules read is derived, not asserted. Regenerate with SHEKYL_CAPTURE_CHAIN_VECTORS=1, SHEKYLD_BIN, SHEKYL_CHAIN_REPLAY_BIN and SHEKYL_E2_TRACE_EXPORT_BIN set, running the named generator --ignored.",
+  "built_at_dev_sha": "aad0d0c7e",
+  "captured_by_daemon_version": "3.1.0-aad0d0c7e",
+  "description": "A regtest chain captured whole as the DRS-E2 replay pair. corpus.e2: every block 0..=tip_height with the FULL bytes of every listed transaction (shekyl-chain-replay fetch, RD-F15-verified). trace.e2: the Rust baseline (shekyl-chain-replay baseline): the corpus replayed against a fresh store, then each height's facts and the tip's digest and archival rows read off it, pinned at built_at_dev_sha. A regression gate, not a conformance oracle: the C++ side is gone. Consumed by replay: shekyl-chain-ingest connects the chain against a real store, so the state the 4.I rules read is derived, not asserted. Regenerate with SHEKYL_CAPTURE_CHAIN_VECTORS=1, SHEKYLD_BIN and SHEKYL_CHAIN_REPLAY_BIN set, running the named generator --ignored.",
   "fixed_difficulty": 1,
   "format_version": 4,
   "generator": "e2e_fcmp_spend_over_depth3_tree",
@@ -11,7 +11,7 @@
   "reorg_cap_blocks": 720,
   "settlement_epoch_blocks": 10000,
   "shape": "spend-depth3",
-  "spend_txid": "4768359e0c8a8e7f53f57b7d477292ebe0b25572ca2d887dc8fe6c617538544f",
+  "spend_txid": "66ac0640ae9c5ff73350654576829ec6b00e5d9fb8c98a5bbcf2b0f65053cccb",
   "tip_height": 761,
   "tx_count": 1
 }

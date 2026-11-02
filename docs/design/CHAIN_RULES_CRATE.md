@@ -2134,11 +2134,11 @@ Each commit builds, `fmt`/`clippy` clean, tests green (rule 26 B5).
   `25-rust-architecture.mdc` does **not** enumerate crates (verified) — no edit.
   `rust/Cargo.toml`'s member comment said `build.yml`; corrected to the
   `rust-audit-test.yml` belt script (same correction as §6.5).
-- Crate `//!`: staging note (STAGED; consumer S-CHAIN-W), the graded-oracle
-  hook (E2's replay harness routes disagreement through
-  `shekyl_chain_store::conformance::grade` keyed by `CenRow::as_str()`; this
-  crate never imports it), the consumer map (connect, pool via `PoolView`), the
-  fault channel.
+- Crate `//!`: staging note (STAGED; consumer S-CHAIN-W), the replay hook
+  (E2's replay holds every captured block to the chain's Rust baseline; the
+  graded oracle through `shekyl_chain_store::conformance::grade` it first
+  named left with the C++ side, `DAEMON_REDB_STORE.md` §12.1), the consumer
+  map (connect, pool via `PoolView`), the fault channel.
 
 ---
 

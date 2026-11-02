@@ -262,7 +262,14 @@ ARMED_SLOW=(
 #     linked; alpha.11 never takes the chain and both stay up. Needs the
 #     released binary as SHEKYLD_ALPHA11_BIN, which CI does not have; run
 #     by hand before a release that changes the wire.
+#   bench_source::bench_tx_source — the performance budget's transaction
+#     source (DAEMON_REDB_STORE.md §1.3a, PB-S1's pool point). A load
+#     generator driven by scripts/bench/drs_crash.py against a daemon it
+#     did not start (SHEKYL_BENCH_DAEMON_RPC); without that daemon it has
+#     nothing to do. Not a pass/fail proposition: the crash harness judges
+#     the subject, and the source only feeds it.
 DECIDED_DARK=(
+  engine::regtest_e2e::bench_source::bench_tx_source
   engine::regtest_e2e::capture_chain_keeps_its_datadir
   engine::regtest_e2e::sync::a_node_and_an_alpha_11_node_refuse_each_other_cleanly
   engine::regtest_e2e::generate_ct2_tier_b_fixture
