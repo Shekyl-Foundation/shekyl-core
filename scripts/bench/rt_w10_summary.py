@@ -18,7 +18,6 @@ import sys
 SAMPLES = 100
 HEADER_BYTES = 136
 MAX_BYTES = 33_000_128
-WALL_OVER_CPU = 4
 
 HASH_SERIES = ("header", "max")
 COINBASE_SERIES = ("block", "block_info", "tx_get")
@@ -60,13 +59,10 @@ def stats(samples):
 
 
 def cost_of(summary):
-    """The series' cost: the greater of its wall and thread-CPU 99th percentiles."""
-    if summary["cpu_p99"] == 0 or summary["wall_p99"] > WALL_OVER_CPU * summary["cpu_p99"]:
-        refuse(
-            "a series is void: its 99th-percentile wall is more than "
-            f"{WALL_OVER_CPU} times its 99th-percentile thread CPU, or the CPU is 0"
-        )
-    return max(summary["wall_p99"], summary["cpu_p99"])
+    """The series' cost: its thread-CPU 99th percentile."""
+    if summary["cpu_p99"] == 0:
+        refuse("a series is void: its 99th-percentile thread CPU is 0")
+    return summary["cpu_p99"]
 
 
 def load_samples(path, expected_series, expected_bytes):

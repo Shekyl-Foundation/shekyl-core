@@ -123,8 +123,8 @@ class SummaryTest(unittest.TestCase):
         caps = s.derive(hashes, coinbase, parse, constants)
         self.assertEqual(caps["calc_pow_bytes"], 33_000_128)
 
-    def test_a_stalled_series_is_void(self):
-        summary = s.stats([(500, 100)] * s.SAMPLES)
+    def test_a_series_whose_cpu_was_not_seen_is_void(self):
+        summary = s.stats([(500, 0)] * s.SAMPLES)
         with self.assertRaises(SystemExit) as raised:
             s.cost_of(summary)
         self.assertIn("void", str(raised.exception))

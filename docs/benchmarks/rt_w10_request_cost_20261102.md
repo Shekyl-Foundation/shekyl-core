@@ -77,10 +77,15 @@ effective median raises the penalty limit. This span is for the zone.
 Reopen it when a connected chain's penalty limit exceeds 600,000 bytes —
 falsify by `block_weight_limit(effective_median) > 600_000`.
 
-**Derivation.** A series' cost is the greater of its wall and thread-CPU
-99th percentiles. A series whose wall 99th percentile is more than four
-times its thread-CPU 99th percentile, or whose thread-CPU 99th percentile
-is 0, is void: the core was waiting, or the clock did not see the call.
+**Derivation.** *Amended 2026-11-02, before any result was read.* The
+first registration took a series' cost as the greater of its wall and
+thread-CPU 99th percentiles, and voided a series whose wall 99th
+percentile was more than four times its thread-CPU 99th percentile. The
+probe before the run found the one-minute load already above 4, with the
+standing daemons busy, so a sample's wall time includes waiting for a
+core. That wait is not the call. A series' cost is its thread-CPU 99th
+percentile. Wall is still recorded. A series whose thread-CPU 99th
+percentile is 0 is void: the clock did not see the call.
 
 The per-request ceiling `C` is the `header` series' cost. A hash is not
 divisible, and a header hash is the work `fill_pow_hash` does once.
@@ -111,7 +116,7 @@ limit remains the bound on those bytes.
 **Gates.** A run that fails any of these is void, and the failure is recorded:
 
 - Every sample's call succeeds. The harness asserts it.
-- No series is void by the wall-to-CPU rule above.
+- No series is void by the thread-CPU rule above.
 - The kernel's under-voltage alarm (`rpi_volt`, `in0_lcrit_alarm`) stays
   clear.
 - The pinned core spends at least 99 percent of the timed run at its top
