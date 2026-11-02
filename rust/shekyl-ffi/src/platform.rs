@@ -18,7 +18,7 @@ use std::path::PathBuf;
 #[derive(Debug)]
 pub struct HardenError {
     /// The step that failed, as a reader would name it (`RLIMIT_CORE`,
-    /// `PR_SET_DUMPABLE`).
+    /// `PR_SET_DUMPABLE`, `PROC_TRACE_CTL`).
     pub step: &'static str,
     /// The operating system's error.
     pub source: std::io::Error,
@@ -50,6 +50,11 @@ impl std::error::Error for HardenError {
 /// - Linux, in addition: `PR_SET_DUMPABLE` to zero, which also makes
 ///   `/proc/self` root-owned and refuses `ptrace` from a process that is
 ///   not root. The daemon reads nothing under `/proc/self` it would lose.
+/// - FreeBSD, in addition: `procctl(PROC_TRACE_CTL, PROC_TRACE_CTL_DISABLE)`
+///   on this process, which refuses `ptrace` attach and `procfs`/`kvm`
+///   memory reads from any process, root included, and writes no core
+///   whatever the limit. It cannot be re-enabled by this process.
+/// - macOS: `RLIMIT_CORE` alone; the process has no dumpable flag to clear.
 /// - Windows: `SetErrorMode` with `SEM_NOGPFAULTERRORBOX`, so a fault ends
 ///   the process instead of blocking a headless service on a dialog, and
 ///   `SEM_FAILCRITICALERRORS` / `SEM_NOOPENFILEERRORBOX`, so a missing
@@ -88,6 +93,27 @@ pub fn harden_process() -> Result<(), HardenError> {
         if unsafe { libc::prctl(libc::PR_SET_DUMPABLE, 0, 0, 0, 0) } != 0 {
             return Err(HardenError {
                 step: "PR_SET_DUMPABLE",
+                source: std::io::Error::last_os_error(),
+            });
+        }
+    }
+    #[cfg(target_os = "freebsd")]
+    {
+        let mut disable: libc::c_int = libc::PROC_TRACE_CTL_DISABLE;
+        // SAFETY: `procctl(2)` with `PROC_TRACE_CTL` reads one `int` behind
+        // a valid pointer to a live local; `P_PID` with id 0 names the
+        // calling process.
+        if unsafe {
+            libc::procctl(
+                libc::P_PID,
+                0,
+                libc::PROC_TRACE_CTL,
+                (&raw mut disable).cast::<libc::c_void>(),
+            )
+        } != 0
+        {
+            return Err(HardenError {
+                step: "PROC_TRACE_CTL",
                 source: std::io::Error::last_os_error(),
             });
         }
@@ -226,5 +252,26 @@ mod tests {
         // returns the flag.
         let dumpable = unsafe { libc::prctl(libc::PR_GET_DUMPABLE, 0, 0, 0, 0) };
         assert_eq!(dumpable, 0);
+    }
+
+    /// On FreeBSD tracing reads back as disabled: `PROC_TRACE_STATUS`
+    /// writes -1 for a process that refused it.
+    #[cfg(target_os = "freebsd")]
+    #[test]
+    fn hardening_disables_tracing() {
+        harden_process().expect("hardening applies to an ordinary process");
+        let mut status: libc::c_int = 0;
+        // SAFETY: `procctl(2)` with `PROC_TRACE_STATUS` writes one `int`
+        // behind a valid pointer to a live local.
+        let rc = unsafe {
+            libc::procctl(
+                libc::P_PID,
+                0,
+                libc::PROC_TRACE_STATUS,
+                (&raw mut status).cast::<libc::c_void>(),
+            )
+        };
+        assert_eq!(rc, 0);
+        assert_eq!(status, -1);
     }
 }
