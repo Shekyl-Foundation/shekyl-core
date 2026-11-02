@@ -136,8 +136,7 @@ pub use error::{
     AccrualFault, AltCannot, BodyHolderFault, CellFault, DigestFault, DrawRowFault, DrawableFault,
     EdgeFault, EngineError, ErrorClass, FrozenFault, HeldRegion, LeafCountFault, LeafDensity,
     PoolCannot, QueueCannot, SeatFault, SettlementFault, SlashFault, StoreCannot, StoreError,
-    StoreInvariant,
-    UndoFault,
+    StoreInvariant, UndoFault,
 };
 pub use halt::ConnectState;
 pub use keyed::{
