@@ -25,7 +25,7 @@ use std::collections::{HashMap, VecDeque};
 use std::future::Future;
 use std::net::Ipv4Addr;
 use std::pin::Pin;
-use std::sync::atomic::{AtomicUsize, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex};
 use std::task::{Context, Poll};
 use std::thread;
@@ -122,6 +122,8 @@ struct HeldDial {
     clock: Mutex<Option<ManualClock>>,
     /// Every connect, refused or not.
     connects: AtomicUsize,
+    /// The peer closes each channel as soon as it opens.
+    close_on_open: AtomicBool,
 }
 
 impl HeldDial {
@@ -133,7 +135,14 @@ impl HeldDial {
             refusals: Mutex::new(VecDeque::new()),
             clock: Mutex::new(None),
             connects: AtomicUsize::new(0),
+            close_on_open: AtomicBool::new(false),
         }
+    }
+
+    /// From now on the peer closes each channel as soon as it opens: a
+    /// stream that opened, then the peer's end.
+    fn close_on_open(&self) {
+        self.close_on_open.store(true, Ordering::Release);
     }
 
     /// The next connect fails with `cause` after `took` on `clock`.
@@ -200,6 +209,18 @@ impl Dial for HeldDial {
             ends.inbound
                 .blocking_send(answer)
                 .expect("room for the answer");
+        }
+        if self.close_on_open.load(Ordering::Acquire) {
+            // The peer's end: recorded, and no sender or queue kept, so the
+            // session's reads end at once.
+            ends.inbound
+                .close(tables::peer_closed(endpoint.connector()));
+            return Ok(Channel {
+                open,
+                session: ends.session,
+                endpoint: *endpoint,
+                gap: None,
+            });
         }
         self.held.lock().expect("held").insert(
             open.id(),

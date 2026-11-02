@@ -26,6 +26,7 @@ pub struct Life {
     alive: Arc<AtomicBool>,
     now: Arc<dyn Fn() -> u64 + Send + Sync>,
     own: Arc<AtomicU64>,
+    step: Arc<AtomicU64>,
 }
 
 /// Milliseconds of `clock`, the judge's unit.
@@ -37,27 +38,41 @@ impl Life {
     /// Drive `dialer`'s judge from `clock`. Nothing has received a byte.
     pub fn install(dialer: &Dialer, clock: &ManualClock) -> Self {
         let clock = clock.clone();
-        Self::with_clock(dialer, Arc::new(move || ms(&clock)), Arc::default())
+        Self::with_clock(
+            dialer,
+            Arc::new(move || ms(&clock)),
+            Arc::default(),
+            Arc::default(),
+        )
     }
 
     /// Drive `dialer`'s judge from a clock of its own, at `start_ms` until
-    /// [`Self::set_ms`] moves it.
+    /// [`Self::set_ms`] moves it, and moving by itself at each read once
+    /// [`Self::advance_per_read`] says so.
     pub fn install_own(dialer: &Dialer, start_ms: u64) -> Self {
         let own = Arc::new(AtomicU64::new(start_ms));
-        let read = Arc::clone(&own);
-        Self::with_clock(dialer, Arc::new(move || read.load(Ordering::Acquire)), own)
+        let step = Arc::new(AtomicU64::new(0));
+        let (read, by) = (Arc::clone(&own), Arc::clone(&step));
+        Self::with_clock(
+            dialer,
+            Arc::new(move || read.fetch_add(by.load(Ordering::Acquire), Ordering::AcqRel)),
+            own,
+            step,
+        )
     }
 
     fn with_clock(
         dialer: &Dialer,
         now: Arc<dyn Fn() -> u64 + Send + Sync>,
         own: Arc<AtomicU64>,
+        step: Arc<AtomicU64>,
     ) -> Self {
         let life = Self {
             stamps: Arc::default(),
             alive: Arc::default(),
             now,
             own,
+            step,
         };
         let read = life.clone();
         dialer.set_life_clock(
@@ -80,6 +95,12 @@ impl Life {
     /// The judge's clock now.
     pub fn now_ms(&self) -> u64 {
         (self.now)()
+    }
+
+    /// From now on the judge's own clock moves `ms` at every read: no two
+    /// reads of it are the same instant.
+    pub fn advance_per_read(&self, ms: u64) {
+        self.step.store(ms, Ordering::Release);
     }
 
     /// Move the judge's own clock ([`Self::install_own`]) to `at_ms`.

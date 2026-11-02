@@ -611,3 +611,39 @@ fn the_verdicts_wake_reads_the_byte_clock() {
     assert_eq!(rig.pending(), 0, "and the wake finds it due");
     assert_eq!(rig.dialer.next_verdict_due(TOR), None);
 }
+
+/// **The failing attempt's own stream never vouches for its failure**
+/// (#1235 review R2-1), on a byte clock that advances 1 ms at every read,
+/// so no two reads are the same instant. A Tor white test whose every
+/// attempt opens a stream that the peer then closes: the earlier attempts'
+/// streams are life before the final failure, so its verdict waits; the
+/// final attempt's own stream comes before its own failure, so nothing is
+/// after it, and the failure is excused. The edit that makes this red:
+/// stamping the stream from a second reading of the clock, after the
+/// failure was judged.
+#[test]
+fn the_failing_attempts_own_stream_never_vouches_for_it() {
+    let mut rig = JudgeRig::new(TOR, 290);
+    let white = rig.whites(0, 1).remove(0);
+    rig.life.advance_per_read(1);
+    rig.dial.close_on_open();
+    let attempts = usize::from(dial_profile(TOR).attempts.white);
+    for attempt in 1..=attempts {
+        assert!(rig.dialer.wake(TOR, &mut rig.rng), "attempt {attempt}");
+        if attempt < attempts {
+            assert_eq!(rig.pending(), 0, "attempt {attempt} retries");
+            rig.advance(Duration::from_secs(31));
+        }
+    }
+    assert_eq!(
+        rig.pending(),
+        1,
+        "the earlier attempts' streams are life before the failure"
+    );
+    rig.close_bracket();
+    assert_eq!(rig.pending(), 0);
+    assert!(
+        rig.lists_white(&white) && !rig.demoted(&white),
+        "nothing after the failure vouched for it"
+    );
+}
