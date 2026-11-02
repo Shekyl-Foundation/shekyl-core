@@ -443,7 +443,7 @@ Marshal-tax remains qualitative; Path B stands on rule 40.
 **§1.3a.1 Rules**
 
 1. **When.** At the flip, as a record that gates nothing: the flip is gated by §1.3's ratio alone. From the first release cut after CS-5, **every release cut** gates on it. Daemon runs happen at releases, not on every build.
-2. **Where.** Two devices: the **reference** (§1.3's hardware class, x86_64 server class, CPU, RAM and disk recorded in the artifact) and the **floor** (the floor device of record, DX-Q8 Leg 5's). **Host qualification before any row runs**, two questions kept apart: *latency*, a 30-minute fsync-probe soak at rest with no stall above 1.5 s, the probe's median, p99 and maximum recorded; and *durability*, the storage's write-cache posture recorded as a fact (the device model; whether a volatile write cache is enabled and whether it is power-loss protected, from the NVMe controller's identification, `hdparm -W` for SATA, or the hypervisor's cache mode for a virtual disk), a volatile cache without power-loss protection failing the host because it voids DRS-D9 whatever the latency reads. A median flush in the microseconds is the signal to verify that posture, not a failure by itself: power-loss-protected storage completes durable flushes that fast, and slow acknowledgement proves nothing about persistence. No resident daemon runs. The probe runs beside every measured row as a control channel, and a row with a probe stall inside it does not count.
+2. **Where.** Two devices: the **reference** (§1.3's hardware class, x86_64 server class, CPU, RAM and disk recorded in the artifact) and the **floor** (the floor device of record, DX-Q8 Leg 5's). **Host qualification before any row runs**, two questions kept apart: *latency*, a 30-minute fsync-probe soak at rest with no stall above 1.5 s, the probe's median, p99 and maximum recorded; and *durability*, the storage's write-cache posture recorded as a fact (the device model; whether a volatile write cache is enabled and whether it is power-loss protected, from the NVMe controller's identification, `hdparm -W` for SATA, or the hypervisor's cache mode for a virtual disk), a volatile cache without power-loss protection failing the host because it voids DRS-D9 whatever the latency reads. A median flush in the microseconds is the signal to verify that posture, not a failure by itself: power-loss-protected storage completes durable flushes that fast, and slow acknowledgement proves nothing about persistence. No resident daemon runs. The probe runs beside every measured row as a control channel, and a row with a probe stall inside it does not count: `scripts/bench/fsync_probe.py` is the probe and the soak (`qualify`), and `drs_bench.py` runs it beside each measurement and records the window in the artifact (schema `shekyl_drs_bench_v2`), whose gate refuses a row with no probe block or a stall in it.
 3. **Durability.** Production policy only (DRS-D9: `Immediate`, two-phase commit), read back from the daemon into every artifact.
 4. **Load profiles**, pre-registered here and never chosen after a run: the **design load** of **30 transactions per block**, each a 2-in/2-out FCMP++ spend with the production signature set; the **stress load** of 4× the design load; the **adversarial block** of PB-D1.
 5. **Two runs per row.** Both meet the budget or the row misses.
@@ -464,7 +464,7 @@ Marshal-tax remains qualitative; Path B stands on rule 40.
 
 | Row | Subject | Budget: reference / floor | Why | How measured |
 | --- | --- | --- | --- | --- |
-| **PB-D1** | Adversarial block: validate, connect, commit, publish the tip | ≤ **2 s** / ≤ **10 s** | the interval is 120 s; relay and the next miner must not wait on our slowest node, and 10 s on the floor leaves more than 90 % of the interval | the block built from whichever shape in a pre-registered set costs the most to verify, the heaviest post-quantum signature kind among them, at the block weight limit |
+| **PB-D1** | Adversarial block: validate, connect, commit, publish the tip | ≤ **2 s** / ≤ **10 s** | the interval is 120 s; relay and the next miner must not wait on our slowest node, and 10 s on the floor leaves more than 90 % of the interval | the block built from whichever shape in §1.3a.7's pre-registered set costs the most to verify, the heaviest post-quantum signature kind among them, at the block weight limit |
 | **PB-D1s** | Store share of PB-D1 (connect plus commit, verification excluded) | ≤ **250 ms** / ≤ **1 s** | a store regression shows separately from a verifier regression | the same run, the writer's span timings |
 | **PB-D2** | Catch-up after a week offline (5,040 blocks at design load) to a usable tip | ≤ **15 min** / ≤ **2 h** | what a returning user feels; within the body horizon, so daemon and store work alone | the subject stops at a height, the seed advances a week, the subject resumes; the artifact reports the proof-of-work share of the time (the verifier's per-hash timings against the wall), so a miss at a release cut names its cause |
 | **PB-D2r** | Reads stay responsive during catch-up | wallet-path RPC p99 ≤ **250 ms** / ≤ **1 s** | a syncing node still answers its wallet; a writer must not starve readers | a fixed wallet-shaped RPC mix (`get_info`, header and block reads, curve-tree reads) during PB-D2 |
@@ -502,6 +502,23 @@ A full sync from genesis pulls the chain by consensus until the tip is the curre
 6. **PB-S5's ceiling** is 2× the no-reader growth, under the reader workload stated in the row.
 7. **Rule 2's durability question** is the storage's write-cache posture as the recorded fact; a microsecond median is the signal to verify it, not a failure.
 8. **The proof-of-work share of the per-block cost is read when it is needed**: before PB-D2's first run, or when CS-5's profiling asks, whichever comes first. The DRS lane reads it from the qualified F-A artifact's per-hash timings (`metrics.timed_hash` in `shekyl-chain-ingest`'s `substrate.rs`; the replay tool prints the mean). If hashing dominates, the remedy, checking proof of work across cores during catch-up, is chain-ingest's and so the DRS lane's, and CS-5's attribution of the cost is corrected; if it does not, the work stays with CS-5. For scale: a light-mode RandomX hash costs about 1.25 s per core on the floor device (`shekyl-chain-ingest`'s `admission.rs`), so a week of catch-up is about 1.75 h checked serially and about 26 min across four cores.
+
+**§1.3a.7 PB-D1's shape set (pre-registered; Rick, 2026-11-01)**
+
+Fixed before any run (rule 4), and never extended after a number is seen. Each shape is one block of transactions of that shape, filled to the block weight limit. PB-D1 is the block that costs the most to verify; PB-D1s is read on the same runs.
+
+| # | Shape | Why it is in the set |
+| --- | --- | --- |
+| 1 | 1-in/2-out spends | the per-transaction fixed costs (one proof and one signature set per transaction) are highest per byte in the smallest spend |
+| 2 | 8-in/2-out spends, at the input cap (`MAX_FCMP_INPUTS`) | the most membership proof and key images per transaction |
+| 3 | the multisig container at its maximum signers | the heaviest post-quantum signature kind |
+| 4 | spends at the output cap (`MAX_OUTPUTS`, 16) | the most range proof and outputs per transaction, and the most tree leaves per block |
+| 5 | emission claims | the claim's own verification path |
+| 6 | bond posts | the bond post's own verification path |
+| 7 | 8-in/2-out spends whose inputs' tree references are spread across the reference window, not all at the tip | the same verification as shape 2 with the most distinct store reads: the shape that stresses PB-D1s, the store's share |
+| 8 | the block's serve-credit bundle at its maximum record count | bundles are verified per block once SO-D12 4b lands, so their worst case belongs in the set. In the set **from the release cut where 4b lands**; its builder is 4b's, because 4b builds the bundle |
+
+The builder for shapes 1–7 is the DRS line's tooling (rule 7; the FOLLOWUPS row). It builds every transaction with the production wallet path and submits it through the subject's RPC, as the crash harness's transaction source does.
 
 ### 1.4 Non-unification (DRS-D3) — load-bearing rationale
 

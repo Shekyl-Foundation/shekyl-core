@@ -198,6 +198,7 @@ async fn replay(name: &str, chain: &Chain, trace: Trace) -> (RunReport, std::pat
         PipelineConfig {
             window: NonZeroUsize::new(4).expect("non-zero"),
             hashers: NonZeroUsize::new(2).expect("non-zero"),
+            digest_each_commit: false,
         },
     )
     .await

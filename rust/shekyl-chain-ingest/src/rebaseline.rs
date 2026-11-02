@@ -138,7 +138,7 @@ fn partial_path(path: &Path) -> std::io::Result<PathBuf> {
 /// The destination is not opened until the sibling is complete, so a short
 /// write never truncates it. The sibling is removed if the write or the
 /// rename fails.
-fn publish_bytes(path: &Path, bytes: &[u8]) -> std::io::Result<()> {
+pub(crate) fn publish_bytes(path: &Path, bytes: &[u8]) -> std::io::Result<()> {
     let partial = partial_path(path)?;
     let write = (|| {
         let mut file = std::fs::File::create(&partial)?;

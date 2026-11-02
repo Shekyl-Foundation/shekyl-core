@@ -40,12 +40,14 @@ import urllib.request
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 import drs_artifact as A  # noqa: E402
+import fsync_probe  # noqa: E402
 
 # scripts/armed_lever.py, one directory up from this file.
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 import armed_lever  # noqa: E402
 
 ROOT = A.ROOT
+HERE = os.path.dirname(os.path.abspath(__file__))
 
 
 def _fail(msg):
@@ -341,6 +343,25 @@ class _RunningDaemon:
         return self.proc.pid
 
 
+def _await_posted(port, timeout):
+    """Wait until the daemon on `port` answers `get_miner_data`: its node
+    has posted a template, so `generateblocks` will not be refused at
+    start. Fails the run when no template is posted within `timeout`."""
+    deadline = time.time() + timeout
+    last = None
+    while time.time() < deadline:
+        try:
+            resp = _rpc(port, "get_miner_data")
+            if "result" in resp:
+                return
+            last = resp.get("error")
+        except (urllib.error.URLError, OSError, json.JSONDecodeError, TimeoutError) as e:
+            last = repr(e)
+        time.sleep(0.1)
+    _fail(f"the seed on 127.0.0.1:{port} posted no template within {timeout}s; "
+          f"last answer: {last}")
+
+
 def mining_address(timeout):
     """A current-format regtest mining address, minted by the canonical emitter.
 
@@ -397,6 +418,33 @@ def measure(args):
     if args.fresh_seed:
         shutil.rmtree(seed_dir, ignore_errors=True)
         os.makedirs(seed_dir)
+
+    # The control channel (§1.3a rule 2): the fsync probe on the subject's
+    # filesystem from before the seed starts to after the sync ends, so the
+    # artifact can show the host did not stall inside the timed window.
+    probe_dir = os.path.join(work, "probe")
+    probe_out = os.path.join(work, "probe.jsonl")
+    open(probe_out, "w", encoding="utf-8").close()
+    probe = subprocess.Popen(
+        [sys.executable, os.path.join(HERE, "fsync_probe.py"), "run",
+         "--dir", probe_dir, "--out", probe_out],
+        stdout=subprocess.DEVNULL, stderr=subprocess.STDOUT)
+    try:
+        artifact_or_fail = _measure_with_probe(args, work, seed_dir, daemon, seed_daemon,
+                                               addr, subj_dir)
+    finally:
+        probe.terminate()
+        try:
+            probe.wait(timeout=10)
+        except subprocess.TimeoutExpired:
+            probe.kill()
+            probe.wait()
+    _finish(args, artifact_or_fail, probe_out)
+
+
+def _measure_with_probe(args, work, seed_dir, daemon, seed_daemon, addr, subj_dir):
+    """The measurement proper, with the probe running beside it. Returns the
+    artifact without its probe block; `_finish` adds the window's summary."""
 
     # The grammar's spellings (INPUT_GRAMMAR.md §5). Nothing is wiped on start
     # (a fresh chain is a fresh data directory). The daemon takes no sync-mode
@@ -483,6 +531,14 @@ def measure(args):
             _fail(shape_refusal)
         have_h = _rpc(srpc, "get_info")["result"]["height"]
         seed_reused = have_h > 1
+        # A Rust seed posts its first template once its follower has looped
+        # after open (shekyl-node `sync_at_open`); a generateblocks sent
+        # before that post is refused `mine.not_synced` by a daemon whose
+        # RPC is already up. The regtest harness waits the same way
+        # (`await_posted`). An archived seed generates through its own
+        # request shape and is not asked.
+        if uses_this_binary:
+            _await_posted(srpc, args.startup_timeout)
         gen_blocks, gen_wall = 0, None
         if have_h < target_h:
             gen_blocks = target_h - have_h
@@ -686,6 +742,19 @@ def measure(args):
                 "differs from the allocated figure only if the engine leaves holes"),
         ],
     }
+    return artifact, t0, t0 + elapsed
+
+
+def _finish(args, measured, probe_out):
+    """Attach the probe's summary over the timed window, then refuse or emit.
+
+    The window is the sync's: the subject's first answered `get_info` to the
+    height it was asked to reach, the span every measure row is over."""
+    artifact, start, end = measured
+    window = fsync_probe.window(fsync_probe.read(probe_out), start, end)
+    probe = fsync_probe.summary(window)
+    probe["window_s"] = round(end - start, 3)
+    artifact["probe"] = probe
     refusals = A.artifact_refusals(artifact)
     if refusals:
         _fail("the harness produced an artifact it will not emit:\n  " +
@@ -693,10 +762,16 @@ def measure(args):
     with open(args.out, "w", encoding="utf-8") as fh:
         json.dump(artifact, fh, indent=2, sort_keys=True)
         fh.write("\n")
+    rows = {m["name"]: m["value"] for m in artifact["measures"]}
+    env = artifact["environment"]
+    reached = artifact["fixture"]["height_reached"]
     print(f"wrote {args.out}: engine={artifact['engine']} height_reached={reached} "
-          f"{A.PRIMARY_MEASURE}={elapsed:.3f}s peak_rss={peak} "
-          f"store={store_bytes} (apparent {store_apparent}) "
-          f"load={load_at_start[0]:.2f}->{load_at_end[0]:.2f} on {os.cpu_count()} cores")
+          f"{A.PRIMARY_MEASURE}={rows[A.PRIMARY_MEASURE]:.3f}s "
+          f"peak_rss={rows['peak_rss_bytes']} store={rows['store_bytes']} "
+          f"(apparent {rows['store_bytes_apparent']}) "
+          f"load={env['loadavg_1m_at_start']:.2f}->{env['loadavg_1m_at_end']:.2f} "
+          f"on {env['cpu_count']} cores; probe {probe['samples']} sample(s), "
+          f"median {probe['median_ms']} ms, max {probe['max_ms']} ms, no stall")
     for note in A.saturation_notes(artifact, "this run"):
         print(f"CONTENTION: {note}")
     if reached < A.REFERENCE_HEIGHT:

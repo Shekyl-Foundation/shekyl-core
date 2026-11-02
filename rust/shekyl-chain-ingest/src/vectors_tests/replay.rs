@@ -98,6 +98,7 @@ where
         PipelineConfig {
             window: PipelineConfig::DEFAULT_WINDOW,
             hashers: CAPTURED_REPLAY_HASHERS,
+            digest_each_commit: false,
         },
     )
     .await
