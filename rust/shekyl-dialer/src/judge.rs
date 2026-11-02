@@ -97,19 +97,30 @@ pub fn judge(
         }),
         Evidence::Local => Judgement::Now(Verdict::Excused),
         Evidence::Uncertain => {
-            let bracket = bracket_ms(judging);
             let before = observed
                 .last_life(judging.corroboration)
-                .is_some_and(|life| life.saturating_add(bracket) >= failed_ms);
+                .is_some_and(|life| opens_the_bracket(judging, failed_ms, life));
             if before {
                 Judgement::AtBracketEnd {
-                    deadline_ms: failed_ms.saturating_add(bracket),
+                    deadline_ms: failed_ms.saturating_add(bracket_ms(judging)),
                 }
             } else {
                 Judgement::Now(Verdict::Excused)
             }
         }
     }
+}
+
+/// The bracket's before side: whether a sign of life at `life_ms` shows the
+/// link working within δ before a failure at `failed_ms`, that instant
+/// included. A stamp after the failure is the after side, or nothing. The
+/// dialer keeps only the latest stamp, so one that arrived after the
+/// failure hides any earlier one and the failure is excused: a verdict
+/// applied late errs only toward excusing.
+#[must_use]
+pub const fn opens_the_bracket(judging: FailureJudging, failed_ms: u64, life_ms: u64) -> bool {
+    let earliest = failed_ms.saturating_sub(bracket_ms(judging));
+    earliest <= life_ms && life_ms <= failed_ms
 }
 
 /// The bracket's after side: whether a sign of life at `life_ms` counts a
@@ -136,7 +147,9 @@ mod tests {
         Reached, Retry, StreamOpens,
     };
 
-    use super::{bracket_ms, closes_the_bracket, judge, Judgement, Observations};
+    use super::{
+        bracket_ms, closes_the_bracket, judge, opens_the_bracket, Judgement, Observations,
+    };
 
     const T_F: u64 = 1_000_000;
 
@@ -229,6 +242,23 @@ mod tests {
                 judge(uncertain(), judging, Observations::default(), T_F),
                 Judgement::Now(Verdict::Excused),
                 "{connector:?}: nothing before"
+            );
+            assert_eq!(
+                judge(uncertain(), judging, sessions(T_F + 1), T_F),
+                Judgement::Now(Verdict::Excused),
+                "{connector:?}: life only after the failure is not the before side"
+            );
+            assert!(
+                opens_the_bracket(judging, T_F, T_F - delta),
+                "{connector:?}: life at the start of δ is the before side"
+            );
+            assert!(
+                opens_the_bracket(judging, T_F, T_F),
+                "{connector:?}: life at the failure is the before side"
+            );
+            assert!(
+                !opens_the_bracket(judging, T_F, T_F + 1),
+                "{connector:?}: life after the failure is not the before side"
             );
             assert!(
                 closes_the_bracket(judging, T_F, T_F + 1),
@@ -331,6 +361,7 @@ mod tests {
                         (Some(T_F - delta), None),
                         (Some(T_F - delta - 1), Some(T_F + 1)),
                         (None, Some(T_F + 1)),
+                        (Some(T_F + 1), Some(T_F + delta)),
                         (Some(T_F), Some(T_F + 1)),
                         (Some(T_F - delta), Some(T_F + delta)),
                         (Some(T_F), Some(T_F + delta + 1)),
@@ -344,7 +375,10 @@ mod tests {
                             },
                             Evidence::Uncertain => {
                                 let seen = matches!(source, Source::Session) || streams;
-                                let before = before.is_some_and(|ms| ms + delta >= T_F);
+                                let before = before.is_some_and(|ms| {
+                                    let earliest = T_F.saturating_sub(delta);
+                                    earliest <= ms && ms <= T_F
+                                });
                                 let after = after.is_some_and(|ms| T_F < ms && ms <= T_F + delta);
                                 if seen && before && after {
                                     Verdict::Counted

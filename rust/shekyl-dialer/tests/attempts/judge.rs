@@ -722,3 +722,50 @@ fn a_queued_failure_is_dated_when_the_attempt_ended() {
         "traffic during the wait does not corroborate the failure"
     );
 }
+
+/// **Recovery inside δ is not the before side of a queued failure.**
+/// The result waits in the completion queue. A byte after the attempt
+/// ended, still inside δ, is noted before the owner applies the result,
+/// and another byte still inside δ arrives after the apply. Both are
+/// after the failure. The latest stamp is the only one kept, so the byte
+/// already noted is not the before side and the failure is excused at
+/// once. Treating that byte as the before side defers the verdict, and
+/// the later byte counts it.
+#[test]
+fn recovery_inside_the_bracket_does_not_corroborate_a_queued_failure() {
+    let mut rig = JudgeRig::new(TOR, 311);
+    let held = rig.hold(0);
+    let white = rig.whites(0, 1).remove(0);
+    let ended = rig.life.now_ms();
+    rig.dial.refuse_after(
+        &rig.clock,
+        shekyl_tor::reply_end(0x01),
+        Duration::from_secs(1),
+    );
+    let Launch::Running(id) = rig.dialer.launch(TOR, &mut rig.rng) else {
+        panic!("a draw");
+    };
+    rig.dialer.wait_posted(id);
+    let bracket = dial_profile(TOR).judging.bracket_nanos / 1_000_000;
+    let during = ended.saturating_add(5_000);
+    let applied = during.saturating_add(1_000);
+    let after = applied.saturating_add(1_000);
+    assert!(
+        after < ended.saturating_add(bracket),
+        "both bytes are inside δ"
+    );
+    rig.life.received(held, during);
+    rig.life.set_ms(applied);
+    rig.dialer.apply_completions(TOR, &mut rig.rng);
+    assert_eq!(
+        rig.pending(),
+        0,
+        "nothing before the failure, so the verdict does not wait"
+    );
+    rig.life.received(held, after);
+    rig.dialer.apply_verdicts(&mut rig.rng);
+    assert!(
+        rig.lists_white(&white) && !rig.demoted(&white),
+        "recovery after the failure does not demote white"
+    );
+}
