@@ -538,3 +538,41 @@ fn the_tally_carries_the_judges_last_sign_of_life() {
     rig.dialer.apply_verdicts(&mut rig.rng);
     assert_eq!(rig.dialer.tor_link_tally().last_sign_of_life, Some(now));
 }
+
+/// **The after side is bounded** (#1235 review, F1), both connectors. A
+/// verdict resolved late, past its deadline: a sign of life at the
+/// deadline plus one, the link coming back after an outage, does not count
+/// a failure from inside it; a sign of life just after the failure does,
+/// however late it is read. The edit that makes this red: dropping the
+/// deadline from `closes_the_bracket`, or reading the after side when the
+/// verdict is performed.
+#[test]
+fn a_late_resolution_counts_only_life_inside_the_bracket() {
+    for connector in [TOR, CLEARNET] {
+        for (case, life_after_ms, demoted) in [
+            ("just after the failure", 1, true),
+            ("past the deadline", 1, false),
+        ] {
+            let mut rig = JudgeRig::new(connector, 270);
+            let held = rig.hold(20);
+            let white = rig.whites(0, 1).remove(0);
+            rig.life.received_now(held);
+            rig.later(1_000);
+            rig.fail_uncertain();
+            assert_eq!(rig.pending(), 1, "{connector:?} {case}");
+            let failed = rig.life.now_ms();
+            let bracket = dial_profile(connector).judging.bracket_nanos / 1_000_000;
+            let life = if demoted {
+                failed + life_after_ms
+            } else {
+                failed + bracket + life_after_ms
+            };
+            rig.life.received(held, life);
+            // Resolved late: nothing looks until well past the deadline.
+            rig.later(bracket + 5_000);
+            rig.dialer.apply_verdicts(&mut rig.rng);
+            assert_eq!(rig.pending(), 0, "{connector:?} {case}");
+            assert_eq!(rig.demoted(&white), demoted, "{connector:?} {case}");
+        }
+    }
+}

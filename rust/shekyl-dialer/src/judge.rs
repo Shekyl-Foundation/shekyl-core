@@ -96,22 +96,14 @@ pub fn judge(
     }
 }
 
-/// The bracket's after side, read at its deadline: the failure counts only
-/// if the link was shown working after it.
+/// The bracket's after side: whether a sign of life at `life_ms` counts a
+/// failure at `failed_ms`. It must come after the failure and no later than
+/// the bracket's deadline, `failed_ms + δ`. A later one never counts it, so
+/// a verdict resolved late can err only toward excusing: the deadline
+/// excuses, and only a sign of life inside the bracket counts.
 #[must_use]
-pub fn judge_at_bracket_end(
-    judging: FailureJudging,
-    observed: Observations,
-    failed_ms: u64,
-) -> Verdict {
-    if observed
-        .last_life(judging.corroboration)
-        .is_some_and(|life| life > failed_ms)
-    {
-        Verdict::Counted
-    } else {
-        Verdict::Excused
-    }
+pub const fn closes_the_bracket(judging: FailureJudging, failed_ms: u64, life_ms: u64) -> bool {
+    failed_ms < life_ms && life_ms <= failed_ms.saturating_add(bracket_ms(judging))
 }
 
 /// δ in byte-stamp milliseconds, rounded up so the bracket never shrinks.
@@ -127,7 +119,7 @@ mod tests {
         DialFailure, Evidence, FailureJudging, ProofKind, Reached, Retry, StreamOpens,
     };
 
-    use super::{bracket_ms, judge, judge_at_bracket_end, Judgement, Observations};
+    use super::{bracket_ms, closes_the_bracket, judge, Judgement, Observations};
 
     const T_F: u64 = 1_000_000;
 
@@ -221,15 +213,21 @@ mod tests {
                 Judgement::Now(Verdict::Excused),
                 "{connector:?}: nothing before"
             );
-            assert_eq!(
-                judge_at_bracket_end(judging, sessions(T_F + 1), T_F),
-                Verdict::Counted,
-                "{connector:?}: life on both sides"
+            assert!(
+                closes_the_bracket(judging, T_F, T_F + 1),
+                "{connector:?}: life just after"
             );
-            assert_eq!(
-                judge_at_bracket_end(judging, before, T_F),
-                Verdict::Excused,
-                "{connector:?}: life before only"
+            assert!(
+                closes_the_bracket(judging, T_F, T_F + delta),
+                "{connector:?}: life at the deadline"
+            );
+            assert!(
+                !closes_the_bracket(judging, T_F, T_F + delta + 1),
+                "{connector:?}: life past the deadline is not the after side"
+            );
+            assert!(
+                !closes_the_bracket(judging, T_F, T_F),
+                "{connector:?}: life at the failure is not after it"
             );
         }
     }
@@ -280,11 +278,15 @@ mod tests {
                 session_received_ms: None,
             },
         };
+        let counted = |life: Option<u64>| {
+            at(life)
+                .last_life(judging.corroboration)
+                .is_some_and(|life| closes_the_bracket(judging, T_F, life))
+        };
         match judge(failure, judging, at(before), T_F) {
             Judgement::Now(verdict) => verdict,
-            Judgement::AtBracketEnd { .. } => {
-                judge_at_bracket_end(judging, at(after.or(before)), T_F)
-            }
+            Judgement::AtBracketEnd { .. } if counted(after) => Verdict::Counted,
+            Judgement::AtBracketEnd { .. } => Verdict::Excused,
         }
     }
 
@@ -313,6 +315,7 @@ mod tests {
                         (None, Some(T_F + 1)),
                         (Some(T_F), Some(T_F + 1)),
                         (Some(T_F - delta), Some(T_F + delta)),
+                        (Some(T_F), Some(T_F + delta + 1)),
                     ] {
                         let verdict = verdict_over(failure, judging, source, before, after);
                         let expected = match failure.evidence() {
@@ -324,7 +327,8 @@ mod tests {
                             Evidence::Uncertain => {
                                 let seen = matches!(source, Source::Session) || streams;
                                 let before = before.is_some_and(|ms| ms + delta >= T_F);
-                                if seen && before && after.is_some() {
+                                let after = after.is_some_and(|ms| T_F < ms && ms <= T_F + delta);
+                                if seen && before && after {
                                     Verdict::Counted
                                 } else {
                                     Verdict::Excused

@@ -157,12 +157,16 @@ impl WhiteRig {
         (id, failing)
     }
 
-    /// Past the bracket of the last failure, and its verdict performed.
+    /// Past the bracket of the last failure, and its verdict performed. A
+    /// wake one second in looks at the link first, as the owner loop's
+    /// wakes do: a sign of life counts only inside the bracket.
     fn close_the_bracket(&mut self) {
         let bracket = shekyl_peerlist::dial_profile(self.connector)
             .judging
             .bracket_nanos;
-        self.advance(Duration::from_nanos(bracket + 1_000_000));
+        self.advance(Duration::from_secs(1));
+        self.dialer.apply_verdicts(&mut self.rng);
+        self.advance(Duration::from_nanos(bracket));
         self.dialer.apply_verdicts(&mut self.rng);
     }
 

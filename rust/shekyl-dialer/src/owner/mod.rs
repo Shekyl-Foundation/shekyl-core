@@ -730,8 +730,9 @@ impl Dialer {
         // The attempt frees its slot whatever the verdict: a deferred one
         // holds only the outstanding seat.
         shared.attempts(connector).finish(outcome);
-        Self::judge_outcome(shared, connector, outcome, now, rng);
-        Self::note_stream(shared, connector, outcome, now);
+        let at_ms = (shared.life_clock.now_ms)();
+        Self::judge_outcome(shared, connector, outcome, at_ms, now, rng);
+        Self::note_stream(shared, connector, outcome, at_ms, now);
         let held = Self::tor_held(shared);
         shared.tor_link.observe(connector, outcome, held);
     }
@@ -791,7 +792,8 @@ impl Dialer {
                             ran_nanos / 1_000_000,
                             wait / 1_000_000
                         );
-                        Self::note_stream(shared, connector, outcome, now);
+                        let at_ms = (shared.life_clock.now_ms)();
+                        Self::note_stream(shared, connector, outcome, at_ms, now);
                         let held = Self::tor_held(shared);
                         shared.tor_link.observe(connector, outcome, held);
                         return;

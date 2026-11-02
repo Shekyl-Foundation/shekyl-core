@@ -853,9 +853,13 @@ impl TorAttempt {
             1,
             "the verdict waits for its bracket"
         );
+        // A wake inside the bracket sees the live link and counts it; the
+        // rest of the bracket then passes.
         let bracket = shekyl_peerlist::dial_profile(TOR).judging.bracket_nanos;
         self.clock
-            .set(Tick::new(self.clock.now().get() + bracket + 1_000_000));
+            .set(Tick::new(self.clock.now().get() + 1_000_000_000));
+        self.dialer.apply_verdicts(&mut self.rng);
+        self.clock.set(Tick::new(self.clock.now().get() + bracket));
         self.dialer.apply_verdicts(&mut self.rng);
         assert!(
             self.dialer.shared().lists.is_cooling(&self.onion),

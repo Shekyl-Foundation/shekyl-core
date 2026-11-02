@@ -16,9 +16,11 @@
 //!   inbound. The probe of this node's own onion is dropped in that
 //!   handshake, so it is never one of them (§3.3, the brief's test 7).
 //! - **The deferred verdict** holds no in-flight slot and no target place:
-//!   the attempt finished, and only the seat stays outstanding, so it is not
-//!   drawn again. The connector's owner loop arms its wake for the earliest
-//!   deadline.
+//!   the attempt finished, and the address is not drawn again meanwhile.
+//!   A sign of life inside its bracket counts it when the dialer sees it
+//!   ([`closes_the_bracket`]); the deadline only excuses. A verdict
+//!   performed late can therefore err only toward excusing. The
+//!   connector's owner loop arms its wake for the earliest deadline.
 //! - **Clearing.** The first sign of life on a connector after an excusal
 //!   clears the excusals of its addresses with no counted failure.
 //! - **At stop** a verdict still waiting is not performed: the failure
@@ -32,7 +34,7 @@ use shekyl_seam::{Board, Direction};
 use shekyl_transport_layer::SessionTraffic;
 
 use super::{Dialer, Shared};
-use crate::judge::{judge, judge_at_bracket_end, Judgement, Observations};
+use crate::judge::{closes_the_bracket, judge, Judgement, Observations};
 use crate::reach::{attempt_stream, AttemptStream};
 
 /// The clock the judge reads, and each session's last received byte on it:
@@ -62,6 +64,8 @@ pub(super) struct PendingVerdict {
     pub(super) failed_ms: u64,
     /// When the bracket closes, on the byte-stamp clock.
     pub(super) deadline_ms: u64,
+    /// A sign of life inside the bracket was seen: the failure counts.
+    pub(super) counted: bool,
     /// The same deadline on the engine's clock, for the owner's wake.
     pub(super) due: Tick,
 }
@@ -105,31 +109,44 @@ impl Dialer {
         }
     }
 
-    /// A finished attempt's stream, noted after its own failure was judged.
+    /// A finished attempt's stream, noted after its own failure was judged,
+    /// at `at_ms`: the instant that failure was judged at, so the stream is
+    /// never after its own failure and cannot close its own bracket.
     pub(super) fn note_stream(
         shared: &mut Shared,
         connector: ConnectorId,
         outcome: &DialOutcome,
+        at_ms: u64,
         now: Tick,
     ) {
         if attempt_stream(outcome) == AttemptStream::Opened {
-            let at = (shared.life_clock.now_ms)();
-            shared.evidence[connector.index()].observed.stream_opened_ms = Some(at);
+            shared.evidence[connector.index()].observed.stream_opened_ms = Some(at_ms);
             Self::note_life(shared, connector, now);
         }
     }
 
-    /// A sign of life the judge has not acted on yet clears the excusals
-    /// made since the last one, and on Tor it is published for the posture
-    /// line (§6).
+    /// A sign of life the judge has not acted on yet counts every pending
+    /// failure whose bracket it falls inside, clears the excusals made
+    /// since the last one, and on Tor is published for the posture line
+    /// (§6).
     fn note_life(shared: &mut Shared, connector: ConnectorId, now: Tick) {
-        let corroboration = dial_profile(connector).judging.corroboration;
+        let judging = dial_profile(connector).judging;
         let evidence = &mut shared.evidence[connector.index()];
-        let life = evidence.observed.last_life(corroboration);
+        let life = evidence.observed.last_life(judging.corroboration);
         if life <= evidence.seen {
             return;
         }
         evidence.seen = life;
+        if let Some(life_ms) = life {
+            for pending in shared
+                .pending
+                .iter_mut()
+                .filter(|pending| pending.connector == connector)
+            {
+                pending.counted |= closes_the_bracket(judging, pending.failed_ms, life_ms);
+            }
+        }
+        let evidence = &mut shared.evidence[connector.index()];
         if std::mem::take(&mut evidence.excused_since) {
             shared.lists.clear_excused(connector);
         }
@@ -138,12 +155,13 @@ impl Dialer {
         }
     }
 
-    /// Judge a failed test, or defer its verdict. A test that is not a
-    /// failure is performed as it is.
+    /// Judge a failed test at `failed_ms`, or defer its verdict. A test
+    /// that is not a failure is performed as it is.
     pub(super) fn judge_outcome<R: RelayRng + ?Sized>(
         shared: &mut Shared,
         connector: ConnectorId,
         outcome: &DialOutcome,
+        failed_ms: u64,
         now: Tick,
         rng: &mut R,
     ) {
@@ -159,7 +177,6 @@ impl Dialer {
             }
         };
         let judging = dial_profile(connector).judging;
-        let failed_ms = (shared.life_clock.now_ms)();
         let observed = shared.evidence[connector.index()].observed;
         match judge(failure, judging, observed, failed_ms) {
             Judgement::Now(verdict) => Self::perform(shared, connector, outcome, now, verdict, rng),
@@ -170,14 +187,16 @@ impl Dialer {
                     outcome: outcome.clone(),
                     failed_ms,
                     deadline_ms,
+                    counted: false,
                     due,
                 });
             }
         }
     }
 
-    /// Every deferred verdict whose bracket has closed, judged on its after
-    /// side and performed.
+    /// Every deferred verdict a sign of life counted, and every one whose
+    /// deadline has passed with nothing counting it, performed: counted, or
+    /// excused.
     pub(super) fn apply_due_verdicts<R: RelayRng + ?Sized>(
         shared: &mut Shared,
         now: Tick,
@@ -187,12 +206,14 @@ impl Dialer {
         let (due, waiting): (Vec<PendingVerdict>, Vec<PendingVerdict>) =
             std::mem::take(&mut shared.pending)
                 .into_iter()
-                .partition(|pending| pending.deadline_ms <= now_ms);
+                .partition(|pending| pending.counted || pending.deadline_ms <= now_ms);
         shared.pending = waiting;
         for pending in due {
-            let judging = dial_profile(pending.connector).judging;
-            let observed = shared.evidence[pending.connector.index()].observed;
-            let verdict = judge_at_bracket_end(judging, observed, pending.failed_ms);
+            let verdict = if pending.counted {
+                Verdict::Counted
+            } else {
+                Verdict::Excused
+            };
             Self::perform(
                 shared,
                 pending.connector,
@@ -204,8 +225,9 @@ impl Dialer {
         }
     }
 
-    /// Perform every deferred verdict whose bracket has closed. Each wake
-    /// does this first, as the owner loop does.
+    /// Perform every deferred verdict that is decided: counted by a sign of
+    /// life inside its bracket, or excused at its deadline. Each wake does
+    /// this first, as the owner loop does.
     pub fn apply_verdicts<R: RelayRng + ?Sized>(&self, rng: &mut R) {
         let now = self.hub.now();
         self.with_inbound(|shared| Self::apply_due_verdicts(shared, now, rng));
