@@ -38,9 +38,9 @@ use crate::codec::{
 use crate::ids::OutputSlot;
 use crate::lmdb_order::{Hash32, LmdbHashKey};
 use crate::schema::{
-    BLOCKS, BLOCK_BURN, BLOCK_HEIGHTS, BLOCK_INFO, CURVE_TREE_ROOTS, HF_VERSIONS, OUTPUT_AMOUNTS,
-    OUTPUT_TXS, SPENT_KEYS, TXS_PQC_AUTHS, TXS_PRUNABLE, TXS_PRUNABLE_HASH, TXS_PRUNED, TX_INDICES,
-    TX_OUTPUTS, UNDO_LOG,
+    BLOCKS, BLOCK_BURN, BLOCK_HEIGHTS, BLOCK_INFO, CURVE_TREE_ROOTS, OUTPUT_AMOUNTS, OUTPUT_TXS,
+    RULE_SET_IN_FORCE, SPENT_KEYS, TXS_PQC_AUTHS, TXS_PRUNABLE, TXS_PRUNABLE_HASH, TXS_PRUNED,
+    TX_INDICES, TX_OUTPUTS, UNDO_LOG,
 };
 use shekyl_chain_rules::harness::fixture;
 
@@ -55,7 +55,7 @@ fn genesis_connect_writes_every_row_of_the_write_set_at_the_lmdb_layouts() {
     // miner tx: spent_keys 0, tx_indices 1, txs_pruned 1, txs_prunable 1,
     // txs_prunable_hash 1, output_txs 1, output_amounts 1, tx_outputs 1;
     // leaf count 1 (DRS-E3, every connect); root 1; blocks 1,
-    // block_heights 1, block_info 1; hf_versions 1; the open epoch's
+    // block_heights 1, block_info 1; rule_set_in_force 1; the open epoch's
     // `archival_budget_accruing` upsert 1 (DRS-E4 commit 5, every connect
     // that is not a close); the recorded PoW 1 (`block_pow`); the drawable
     // digest of epoch 0, which genesis opens, 1 (`SO-D12` increment 2);
@@ -130,13 +130,13 @@ fn genesis_connect_writes_every_row_of_the_write_set_at_the_lmdb_layouts() {
         weights.weight.to_raw()
     );
     assert_eq!(
-        snap.open_table(HF_VERSIONS)
+        snap.open_table(RULE_SET_IN_FORCE)
             .expect("t")
             .get(0)
             .expect("g")
             .map(|g| g.value().decode().expect("decodes")),
         Some(RuleSetInForce(RuleSetId::GENESIS)),
-        "hf_versions[h] is the rule set in force's id (SCW-16; the id, not the set — RD-Q10)"
+        "rule_set_in_force[h] is the rule set in force's id (SCW-16; the id, not the set — RD-Q10)"
     );
     assert_eq!(
         snap.open_table(CURVE_TREE_ROOTS)
@@ -388,7 +388,8 @@ fn two_blocks_in_one_batch_with_a_spend() {
     // image + the same 4 tx rows + the 4-part txid's txs_pqc_auths segment
     // and txs_pqc_auth_hash row + its txs_archival_len row (`SHT-Q2`; the
     // coinbase carries no length and writes none) + 2 outputs × (output_txs
-    // + member) + tx_outputs) + leaf count 1 + root 1 + block 3 + hf 1 +
+    // + member) + tx_outputs) + leaf count 1 + root 1 + block 3 +
+    // rule_set_in_force 1 +
     // the open epoch's `archival_budget_accruing` upsert 1 (DRS-E4 commit
     // 5) + the recorded PoW 1 (`block_pow`) + the draw row 1 (`SO-D12`
     // increment 3) + the support count 1 = 30, plus the drain: `s` is past the unlock window, so block

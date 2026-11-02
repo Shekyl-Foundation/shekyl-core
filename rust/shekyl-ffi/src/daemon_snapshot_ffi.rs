@@ -7,7 +7,7 @@
 //! (`DAEMON_CONFIG_CUTOVER.md` §2.9), and the snapshot export the C++ test
 //! binaries and the blockchain importer construct their core from.
 //!
-//! **Ten fields** (§2.9). [`SNAPSHOT_FIELDS`] pins the count and
+//! **Nine fields** (§2.9). [`SNAPSHOT_FIELDS`] pins the count and
 //! [`shekyl_daemon_snapshot_field_count`] exports it for the C++ to assert;
 //! each later slice that moves a reader into Rust deletes its field.
 //! `dev-sync` is not a field: chain sync's owner reads it from the
@@ -53,7 +53,7 @@ pub struct ShekylStringList {
 /// Four octets in network order, so a `memcpy` into a `uint32_t` is the
 /// value `inet_addr` would have returned, and the port in host order.
 /// `present` is false for a daemon start. One member of the snapshot, so
-/// the field count stays eleven.
+/// the field count stays ten.
 #[repr(C)]
 #[derive(Clone, Copy, Debug)]
 pub struct ShekylClientEndpoint {
@@ -72,7 +72,7 @@ pub struct ShekylClientEndpoint {
 /// the miner derives the X25519 prefix from `view` and assembles the
 /// account address from these bytes. The pointers are into the snapshot's
 /// owned data and live as long as that data does. One member of the
-/// snapshot, so the field count stays eleven.
+/// snapshot, so the field count stays ten.
 #[repr(C)]
 #[derive(Clone, Copy, Debug)]
 pub struct ShekylMineAddress {
@@ -102,8 +102,6 @@ pub struct ShekylDaemonSnapshot {
     pub offline: bool,
     /// The fixed difficulty, or 0 for none; read by core.
     pub fixed_difficulty: u64,
-    /// The pool's weight bound in bytes; read by core.
-    pub txpool_weight_max: u64,
     /// The decoded mining address, or null for none; read by the miner.
     pub mine_address: *const ShekylMineAddress,
     /// The mining thread count, or 0 for `auto`; read by the miner. The
@@ -124,7 +122,7 @@ const _: () = assert!(std::mem::align_of::<ShekylClientEndpoint>() == 2);
 
 /// The snapshot's field count. A gate asserts it against the definition
 /// above and the C++ asserts it against [`shekyl_daemon_snapshot_field_count`].
-pub const SNAPSHOT_FIELDS: u32 = 10;
+pub const SNAPSHOT_FIELDS: u32 = 9;
 
 /// The snapshot's field count, for the C++ to assert against the
 /// structure it reads. `no_mangle` is what the `unsafe_code` lint flags
@@ -156,7 +154,6 @@ pub struct SnapshotData {
     network: u8,
     offline: bool,
     fixed_difficulty: u64,
-    txpool_weight_max: u64,
     mine: Option<MineOwned>,
     mine_threads: u32,
     console: bool,
@@ -192,7 +189,6 @@ impl SnapshotData {
             network: config.network.cryptonote_code(),
             offline: config.offline(),
             fixed_difficulty: config.dev.difficulty.unwrap_or(0),
-            txpool_weight_max: config.txpool_weight_max,
             mine,
             // 0 is auto. The miner chooses the count; this does not collapse
             // it to one thread.
@@ -265,7 +261,6 @@ impl SnapshotData {
             network: self.network,
             offline: self.offline,
             fixed_difficulty: self.fixed_difficulty,
-            txpool_weight_max: self.txpool_weight_max,
             mine_address: match mine {
                 Some(header) => header,
                 None => std::ptr::null(),
@@ -403,7 +398,7 @@ mod tests {
     }
 
     #[test]
-    fn the_snapshot_carries_the_ten_values() {
+    fn the_snapshot_carries_the_nine_values() {
         let d = tempfile::tempdir().unwrap();
         let args_v: Vec<OsString> = [
             "--network",
