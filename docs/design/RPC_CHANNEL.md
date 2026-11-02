@@ -321,9 +321,7 @@ type and the minimal required-privilege list (RT-P8 confirms both).
 - **The process entry is Rust's** (`DAEMON_CONFIG_CUTOVER.md` DC-Q19,
   PR #1254, 2026-11-01): `shekyld` is a rustc-linked binary whose `main`
   runs through `std::rt::lang_start`, so the SCM dispatcher RT-W14 needs
-  has its process entry. *Records-was:* the daemon-configuration cutover
-  (PR #1066, #1088) kept a C++ `main()` making one call into Rust
-  (DC-Q13 (b)), and RT-W14 waited on this.
+  has its process entry.
 - **Service mode is new Rust work, not a revival.** The inherited daemonizer
   was deleted in V3.1 and its five flags retired
   (lines 74 to 78 of `src/common/removed_flags.cpp` at `d26148535e`); none of

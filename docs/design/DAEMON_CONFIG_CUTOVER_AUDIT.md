@@ -156,33 +156,23 @@ of its own, for the same reason as the negative one.
 
 ## 7. Decisions the implementation takes inside the brief
 
-- **Where the entry lives.** *SUPERSEDED 2026-11-01 (the Rust-binary PR,
-  #1254, `DAEMON_CONFIG_CUTOVER.md` DC-Q19): `shekyld` is a rustc-linked
-  binary (`rust/shekyld`); `shekyl_daemon_main`, `ShekylDaemonEntry`,
-  `entry.rs`, `from_process_entry` and `shekyl-daemon-image` are deleted,
-  and the C++ remnant is reached through `shekyl_remnant_run` /
-  `shekyl_remnant_stop`. The bullet below records the cutover as it
-  shipped in #1088.* The start and stop logic is a new safe crate,
-  `shekyl-daemon`, over `shekyl-daemon-config`, `shekyl-logging`,
-  `shekyl-ffi`'s Rust surface and `shekyl-runtime`. Its one C symbol,
-  `shekyl_daemon_main`, is defined there and carried into the archive by
-  `shekyl-daemon-image`, the composition root §2.1 names, as
-  `shekyl-ffi`'s exports are: `shekyl-ffi` cannot define it without
-  depending on crates that depend on `shekyl-ffi`. The C++ defines no
-  symbol Rust imports: `main()` hands the entry a `ShekylDaemonEntry` of
-  the version strings and two function pointers, `run` and `stop`, so no
-  Rust crate links against the daemon's objects, every Rust test drives
-  the entry with a fake pair, and the signature gate's rule that every
-  declared `shekyl_` function is a Rust export holds. The entry and the
-  entry types are `rust/shekyl-daemon/src/entry.rs`, a gate surface. The
-  snapshot is `rust/shekyl-ffi/src/daemon_snapshot_ffi.rs`;
+- **Where the entry lives.** `shekyld` is a rustc-linked binary
+  (`rust/shekyld`, `DAEMON_CONFIG_CUTOVER.md` DC-Q19): its `main` calls
+  `shekyl_daemon::main` with the remnant pair, and the start and stop
+  logic is the safe crate `shekyl-daemon`, over `shekyl-daemon-config`,
+  `shekyl-logging`, `shekyl-ffi`'s Rust surface and `shekyl-runtime`. The
+  C++ remnant is the callee, reached through `shekyl_remnant_run` /
+  `shekyl_remnant_stop` (`src/daemon/daemon.cpp`), bound in
+  `rust/shekyl-daemon/src/remnant.rs`; every Rust test drives the entry
+  with a fake pair. The snapshot is
+  `rust/shekyl-ffi/src/daemon_snapshot_ffi.rs`;
   `shekyl_daemon_snapshot_field_count` is the export the C++ asserts. The
   argument vector is `rust/shekyl-ffi/src/argument_vector.rs`:
-  `from_process_entry` for the daemon (Unix pointers, Windows
-  `GetCommandLineW`) and `from_narrow_argv` for the snapshot export.
-  `shekyl_daemon_main` and `shekyl_daemon_request_stop` in `entry.rs`, and
-  `unsafe_c_str` in `run.rs`, carry `shekyl-daemon`'s `allow(unsafe_code)`,
-  each scoped to itself.
+  `from_os_strings` over `std::env::args_os` for the daemon and
+  `from_narrow_argv` for the snapshot export. `shekyl-daemon` denies
+  `unsafe_code` and allows it on its `no_mangle` exports alone
+  (`shekyl_daemon_request_stop`); the one call of the remnant's `unsafe`
+  `run` is `SnapshotData::call` in `shekyl-ffi`, with its `SAFETY` comment.
 - **The daemon at each intermediate commit.** From commit (b) Rust owns
   `argv` and parses it with the grammar. Until commit (e) deletes the last
   C++ reader, C++ still reads options through `boost::program_options`, so
