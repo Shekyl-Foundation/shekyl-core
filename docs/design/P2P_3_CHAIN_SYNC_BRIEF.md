@@ -1502,11 +1502,17 @@ lines needs none; a file with an edited line needs one naming its path.
 | 2 | `src/p2p/net_node.h` | shrinks | none expected |
 | 3 | `…/cryptonote_protocol_handler.inl` | shrinks; RD's routes stay | one: the constructor's initialiser list is edited |
 | 4 | `…/cryptonote_protocol_handler.h` | shrinks | one: the base-class list (`.h:84`) is edited |
-| 5 | `…/cryptonote_protocol_handler-base.cpp` | deleted | none |
+| 5 | `…/cryptonote_protocol_handler-base.cpp` | deleted; row removed | none |
 | 6 | `…/cryptonote_protocol_handler_common.h` | shrinks; `relay_transactions` stays | none expected |
-| 7 | `…/block_queue.h` | deleted | none |
-| 8 | `…/block_queue.cpp` | deleted | none |
+| 7 | `…/block_queue.h` | deleted; row removed | none |
+| 8 | `…/block_queue.cpp` | deleted; row removed | none |
 | 9 | `…/cryptonote_protocol_defs.h` | shrinks (1d) | none expected |
+
+A deleted file's row leaves with the file, in the cutover (rows 5, 7, 8).
+The gate reads the list at the base revision, so a row whose file the base
+no longer has is a rule-47 failure for every PR after the one that deleted
+it; the cutover is judged by the list it started from, where the three
+files are present at base and deleted at head, which passes.
 
 **The claim tap is slice 4's to delete (Rick, 2026-10-24).** Once the hub
 posts `HandshakeResult` for inbound sessions, as it does for outbound
