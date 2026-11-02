@@ -262,8 +262,8 @@ fn digest(store: &std::path::Path, rules: &ChainRules) -> Result<(), Failure> {
     let recorded = snap.tip()?.recorded;
     let digest = snap.logical_state_digest_v0()?;
     let line = height_digests::store_digest_line(
-        recorded.as_ref().map(|t| t.height.to_raw()),
-        recorded.as_ref().map(|t| t.hash.as_bytes().as_slice()),
+        recorded.as_ref().map(|tip| tip.height),
+        recorded.as_ref().map(|tip| tip.hash.as_bytes().as_slice()),
         &digest,
     )?;
     println!("{line}");

@@ -22,7 +22,7 @@ use shekyl_chain_store::lmdb_order::LmdbHashKey;
 use shekyl_chain_store::schema::{BLOCK_INFO, CURVE_TREE_ROOTS, SPENT_KEYS};
 use shekyl_chain_store::store::{ConnectState, StoreError, StoreInvariant};
 use shekyl_difficulty::{CumulativeDifficulty, SEEDHASH_EPOCH_BLOCKS, SEEDHASH_EPOCH_LAG};
-use shekyl_types::{BlockHash, CurveTreeRoot};
+use shekyl_types::{BlockHash, BlockHeight, CurveTreeRoot};
 use shekyl_units::AtomicUnits;
 
 use crate::connector::{Apply, Connector, ConnectorArgs, Digest, HashAt, RunEnd, RunFault};
@@ -407,12 +407,8 @@ async fn a_one_block_window_records_the_store_digest_at_every_height() {
     )
     .await
     .expect("the corpus replays one block per commit");
-    let heights: Vec<u64> = report
-        .digests
-        .keys()
-        .map(|height| height.to_raw())
-        .collect();
-    assert_eq!(heights, vec![0, 1, 2, 3, 4]);
+    let block_heights: Vec<BlockHeight> = report.digests.keys().copied().collect();
+    assert_eq!(block_heights, vec![h(0), h(1), h(2), h(3), h(4)]);
     assert_eq!(
         report.digests[&h(4)],
         expected_state(&chain),

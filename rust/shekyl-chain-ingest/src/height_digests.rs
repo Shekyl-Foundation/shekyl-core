@@ -25,10 +25,12 @@ pub const HEIGHT_DIGESTS_SCHEMA: &str = "shekyl_height_digests_v1";
 
 /// One store's recorded tip, as the replay tool prints it: `tip` is null
 /// when the store is empty, and `hash` is empty in that same case.
+///
+/// `BlockHeight` is serde-transparent, so `tip` is still a JSON number.
 #[derive(Debug, PartialEq, Eq, Serialize)]
 pub struct StoreDigestLine {
-    /// The tip height, or null when the store holds no block.
-    pub tip: Option<u64>,
+    /// The recorded block's height, or null when the store holds no block.
+    pub tip: Option<BlockHeight>,
     /// The tip's block hash, lowercase hex, or empty when there is no tip.
     pub hash: String,
     /// `logical_state_digest_v0`, lowercase hex.
@@ -42,7 +44,7 @@ pub struct StoreDigestLine {
 ///
 /// Serialization only.
 pub fn store_digest_line(
-    tip: Option<u64>,
+    tip: Option<BlockHeight>,
     hash: Option<&[u8]>,
     digest: &Digest,
 ) -> Result<String, serde_json::Error> {
@@ -55,7 +57,9 @@ pub fn store_digest_line(
 
 #[derive(Serialize)]
 struct HeightDigestRow {
-    height: u64,
+    /// The block this digest was recorded at. Serde-transparent, so the
+    /// table's `height` field stays the JSON number a reader already keys.
+    height: BlockHeight,
     digest: String,
 }
 
@@ -77,8 +81,8 @@ pub fn publish(path: &Path, digests: &BTreeMap<BlockHeight, Digest>) -> std::io:
         schema: HEIGHT_DIGESTS_SCHEMA,
         rows: digests
             .iter()
-            .map(|(height, digest)| HeightDigestRow {
-                height: height.to_raw(),
+            .map(|(&height, digest)| HeightDigestRow {
+                height,
                 digest: hex_of(digest),
             })
             .collect(),
@@ -123,7 +127,12 @@ mod tests {
 
     #[test]
     fn a_tip_carries_its_height_and_hash_ahead_of_the_digest() {
-        let line = store_digest_line(Some(4), Some(&[0x10, 0x2a]), &[0x01; 32]).expect("serialize");
+        let line = store_digest_line(
+            Some(BlockHeight::from_raw(4)),
+            Some(&[0x10, 0x2a]),
+            &[0x01; 32],
+        )
+        .expect("serialize");
         assert!(line.starts_with("{\"tip\":4,\"hash\":\"102a\",\"digest\":\""));
     }
 
