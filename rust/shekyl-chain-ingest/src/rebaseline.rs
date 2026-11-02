@@ -15,9 +15,10 @@
 //! A later replay that disagrees has changed what this pipeline derives.
 //!
 //! [`write_trace_file`] serializes the whole trace before it touches the
-//! destination, then replaces that file by renaming a sibling. A store that
-//! cannot be written — empty, a hole, a refused read — leaves the previous
-//! trace in place.
+//! destination, then replaces that file by renaming a sibling named for
+//! that attempt. A store that cannot be written — empty, a hole, a refused
+//! read — leaves the previous trace in place, and a failed publish removes
+//! only the sibling it created.
 
 use std::io::Write;
 use std::path::{Path, PathBuf};
@@ -103,8 +104,9 @@ pub fn trace_of<W: Write>(snap: &ReadSnapshot<'_>, out: W) -> Result<W, Rebaseli
 /// The trace is serialized completely first. [`RebaselineFault::Empty`], a
 /// hole, or a refused read returns before `path` is opened, so a previous
 /// trace stays byte-for-byte. The bytes are then published by renaming a
-/// same-directory sibling; a failure of that publish removes the sibling
-/// and leaves `path` as it was.
+/// same-directory sibling named for this attempt. Two publishes never share
+/// a file, so one cannot truncate the other's staged bytes, and a failure
+/// removes only the sibling this attempt created.
 ///
 /// # Errors
 ///
@@ -115,47 +117,64 @@ pub fn write_trace_file(snap: &ReadSnapshot<'_>, path: &Path) -> Result<(), Reba
     Ok(())
 }
 
-/// The sibling [`publish_bytes`] writes, then renames onto `path`.
-fn partial_path(path: &Path) -> std::io::Result<PathBuf> {
+/// A sibling [`publish_bytes`] creates for one attempt, then renames onto
+/// `path`. Each call is a new name: the process id and an attempt count.
+fn sibling_path(path: &Path) -> std::io::Result<PathBuf> {
     let name = path.file_name().ok_or_else(|| {
         std::io::Error::new(
             std::io::ErrorKind::InvalidInput,
             "a trace path names a file",
         )
     })?;
-    let mut partial = std::ffi::OsString::from(".");
-    partial.push(name);
-    partial.push(".partial");
-    let parent = match path.parent() {
+    static ATTEMPT: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+    let attempt = ATTEMPT.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+    let mut sibling = std::ffi::OsString::from(".");
+    sibling.push(name);
+    sibling.push(".");
+    sibling.push(std::process::id().to_string());
+    sibling.push(".");
+    sibling.push(attempt.to_string());
+    sibling.push(".partial");
+    Ok(trace_parent(path).join(sibling))
+}
+
+/// The directory a sibling must share with `path`, so the rename is atomic.
+fn trace_parent(path: &Path) -> &Path {
+    match path.parent() {
         Some(parent) if !parent.as_os_str().is_empty() => parent,
         _ => Path::new("."),
-    };
-    Ok(parent.join(partial))
+    }
 }
 
 /// Replace `path` with `bytes` by writing a sibling and renaming it.
 ///
-/// The destination is not opened until the sibling is complete, so a short
-/// write never truncates it. The sibling is removed if the write or the
-/// rename fails.
+/// The destination is not opened until the sibling is complete. The sibling
+/// is created with `create_new`, so this attempt never truncates a file
+/// another attempt already holds, and the cleanup below removes only the
+/// sibling this attempt created. The height-digest table publishes through
+/// this same rename.
 pub(crate) fn publish_bytes(path: &Path, bytes: &[u8]) -> std::io::Result<()> {
-    let partial = partial_path(path)?;
-    let write = (|| {
-        let mut file = std::fs::File::create(&partial)?;
-        file.write_all(bytes)?;
-        file.sync_all()?;
-        Ok(())
-    })();
-    if let Err(error) = write {
+    let sibling = sibling_path(path)?;
+    let mut file = std::fs::OpenOptions::new()
+        .write(true)
+        .create_new(true)
+        .open(&sibling)?;
+    if let Err(error) = write_synced(&mut file, bytes) {
         // The sibling is ours. Leaving it would be a second trace beside the
         // destination the caller still has.
-        let _removed = std::fs::remove_file(&partial);
+        let _removed = std::fs::remove_file(&sibling);
         return Err(error);
     }
-    if let Err(error) = std::fs::rename(&partial, path) {
-        let _removed = std::fs::remove_file(&partial);
+    if let Err(error) = std::fs::rename(&sibling, path) {
+        let _removed = std::fs::remove_file(&sibling);
         return Err(error);
     }
+    Ok(())
+}
+
+fn write_synced(file: &mut std::fs::File, bytes: &[u8]) -> std::io::Result<()> {
+    file.write_all(bytes)?;
+    file.sync_all()?;
     Ok(())
 }
 
@@ -180,7 +199,7 @@ mod tests {
             b"previous"
         );
         assert!(
-            !partial_path(&trace).expect("sibling").exists(),
+            siblings_of(&trace).is_empty(),
             "a refusal publishes nothing"
         );
         drop(store);
@@ -194,7 +213,64 @@ mod tests {
         std::fs::write(&path, b"previous").expect("seed");
         publish_bytes(&path, b"next").expect("publish");
         assert_eq!(std::fs::read(&path).expect("read"), b"next");
-        assert!(!partial_path(&path).expect("sibling").exists());
+        assert!(siblings_of(&path).is_empty(), "the sibling was renamed");
         crate::test_support::cleanup(&path);
+    }
+
+    #[test]
+    fn two_attempts_name_different_siblings() {
+        let path = crate::test_support::tmp("rebaseline-sibling-names");
+        let first = sibling_path(&path).expect("first");
+        let second = sibling_path(&path).expect("second");
+        assert_ne!(first, second);
+        crate::test_support::cleanup(&path);
+    }
+
+    #[test]
+    fn a_failed_publish_removes_only_its_own_sibling() {
+        let path = crate::test_support::tmp("rebaseline-dest-dir");
+        std::fs::create_dir(&path).expect("destination is a directory");
+        let foreign = trace_parent(&path).join({
+            let mut name = std::ffi::OsString::from(".");
+            name.push(path.file_name().expect("name"));
+            name.push(".partial");
+            name
+        });
+        std::fs::write(&foreign, b"another attempt").expect("plant a shared-style sibling");
+        let error = publish_bytes(&path, b"next").expect_err("a directory is not replaced");
+        assert_eq!(error.kind(), std::io::ErrorKind::IsADirectory);
+        assert!(path.is_dir(), "the destination is untouched");
+        assert_eq!(
+            std::fs::read(&foreign).expect("the other sibling survives"),
+            b"another attempt"
+        );
+        assert!(
+            siblings_of(&path).is_empty(),
+            "this attempt removed only the sibling it created"
+        );
+        crate::test_support::cleanup(&path);
+        crate::test_support::cleanup(&foreign);
+    }
+
+    /// Siblings this process would create for `path`: `.{name}.{pid}.{n}.partial`.
+    /// The old shared name `.{name}.partial` does not match.
+    fn siblings_of(path: &Path) -> Vec<PathBuf> {
+        let name = path.file_name().expect("a trace path names a file");
+        let mut prefix = std::ffi::OsString::from(".");
+        prefix.push(name);
+        prefix.push(".");
+        prefix.push(std::process::id().to_string());
+        prefix.push(".");
+        let parent = trace_parent(path);
+        let mut found = Vec::new();
+        for entry in std::fs::read_dir(parent).expect("the trace directory") {
+            let entry = entry.expect("a directory entry");
+            let file_name = entry.file_name();
+            let bytes = file_name.as_encoded_bytes();
+            if bytes.starts_with(prefix.as_encoded_bytes()) && bytes.ends_with(b".partial") {
+                found.push(entry.path());
+            }
+        }
+        found
     }
 }

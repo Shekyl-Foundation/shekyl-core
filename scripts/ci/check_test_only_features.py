@@ -173,6 +173,17 @@ from pathlib import Path
 # feature without a row leaves it ungated, so add both in the same commit.
 TEST_ONLY: dict[tuple[str, str], str] = {
     (
+        "shekyl-wire",
+        "test-fixtures",
+    ): "BoundTx::whole and BoundTx::modify: a fixture's whole body bound to "
+    "the identity it hashes to itself. Production constructs a BoundTx "
+    "through SkeletonTx::bind alone (DRS_SB_BELOW_HORIZON.md SB-Q2), so the "
+    "whole-body constructor is out of every production build. Enabled from "
+    "the scanner's, the engine's and the ingest's dev edges for their unit "
+    "tests; the lib-level fixture surfaces (shekyl-scanner/test-utils, "
+    "shekyl-engine-core/test-helpers) bind through the production path "
+    "(bench_fixtures::bound) and forward nothing",
+    (
         "shekyl-tor-control-client",
         "unpinned-tor-for-tests",
     ): "forges VerifiedTorBinary, the SP-T0c hash-pin witness, for lifecycle "
@@ -340,6 +351,7 @@ PERMANENT: dict[tuple[str, str], str] = {
 # the trigger is a different, nearly free thing, and it is what landed.)
 GOVERNED_OWNERS: frozenset[str] = frozenset(
     {
+        "shekyl-wire",
         "shekyl-chain-store",
         "shekyl-tor-control-client",
         "shekyl-chain-rules",
