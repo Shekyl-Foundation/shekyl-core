@@ -149,9 +149,7 @@ impl Dialer {
         if std::mem::take(&mut evidence.excused_since) {
             shared.lists.clear_excused(connector);
         }
-        if connector == ConnectorId::Tor {
-            shared.tor_link.life(now);
-        }
+        shared.tor_link.life(connector, now);
     }
 
     /// Judge a failed test at `failed_ms`, or defer its verdict. A test

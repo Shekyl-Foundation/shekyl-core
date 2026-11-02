@@ -116,7 +116,8 @@ pub const fn bracket_ms(judging: FailureJudging) -> u64 {
 mod tests {
     use shekyl_peerlist::{dial_profile, ConnectorId, Verdict};
     use shekyl_transport_layer::{
-        DialFailure, Evidence, FailureJudging, ProofKind, Reached, Retry, StreamOpens,
+        declaration, Assessment, DestinationAuth, DialFailure, Evidence, FailureJudging, ProofKind,
+        Reached, Retry, StreamOpens,
     };
 
     use super::{bracket_ms, closes_the_bracket, judge, Judgement, Observations};
@@ -232,8 +233,11 @@ mod tests {
         }
     }
 
-    /// Every failure a connector can stamp: each evidence kind under each
-    /// retry and reach, the peer's own refusal, and on Tor every reply code.
+    /// Every failure any connector can stamp, judged under `connector`'s
+    /// declaration: each evidence kind under each retry and reach, the
+    /// peer's own refusal on this connector, and every onion reply code.
+    /// The judge reads the failure and the declaration, never which
+    /// connector stamped it, so the set need not be split by connector.
     fn every_failure(connector: ConnectorId) -> Vec<DialFailure> {
         let mut failures = Vec::new();
         for retry in [Retry::Final, Retry::Again, Retry::AgainInsideWindow] {
@@ -246,9 +250,7 @@ mod tests {
         for reached in [Reached::NoStream, Reached::StreamOpened] {
             failures.push(DialFailure::refused_by_peer(connector, reached));
         }
-        if connector == ConnectorId::Tor {
-            failures.extend((0..=0xFF).map(shekyl_tor::stamp_reply));
-        }
+        failures.extend((0..=0xFF).map(shekyl_tor::stamp_reply));
         failures
     }
 
@@ -342,11 +344,15 @@ mod tests {
                     }
                 }
             }
+            let authenticated = matches!(
+                declaration(connector.column()).destination_authenticated(),
+                Assessment::Assessed(DestinationAuth::OneWay)
+            );
             assert_eq!(
                 DialFailure::refused_by_peer(connector, Reached::StreamOpened)
                     .proves_misbehaviour(),
-                connector == ConnectorId::Tor,
-                "proof only where the destination is authenticated"
+                authenticated,
+                "{connector:?}: proof only where the destination is authenticated"
             );
         }
     }

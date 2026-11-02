@@ -89,8 +89,12 @@ impl LinkFold {
         self.publish(next);
     }
 
-    /// The judge saw the Tor link work at `now`.
-    pub(crate) fn life(&mut self, now: Tick) {
+    /// The judge saw `connector`'s link work at `now`: the tally's last
+    /// sign of life when it is the Tor link.
+    pub(crate) fn life(&mut self, connector: ConnectorId, now: Tick) {
+        if connector != ConnectorId::Tor {
+            return;
+        }
         let mut next = self.tally;
         next.last_sign_of_life = Some(now);
         self.publish(next);
