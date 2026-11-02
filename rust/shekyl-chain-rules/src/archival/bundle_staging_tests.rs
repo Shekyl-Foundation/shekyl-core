@@ -6,8 +6,8 @@
 //! The bundle rows' census registration, and the falsifier that the
 //! verifier is still staged.
 //!
-//! Sibling of `bundle_tests` and `bundle_section_tests`. Every test names
-//! the edit that turns it red.
+//! Sibling of `bundle_tests`, `bundle_section_tests`, and
+//! `bundle_fill_tests`. Every test names the edit that turns it red.
 
 use std::path::{Path, PathBuf};
 
@@ -189,6 +189,10 @@ fn nothing_on_the_connect_path_calls_the_bundle_verifier() {
     assert!(
         section_text.contains("pub fn check_section<"),
         "archival/bundle_section.rs no longer holds the section checker"
+    );
+    assert!(
+        section_text.contains("pub fn fill_section<"),
+        "archival/bundle_section.rs no longer holds the template's section"
     );
     assert!(
         section_text.contains("fn inside_window"),

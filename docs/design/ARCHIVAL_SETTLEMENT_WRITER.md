@@ -1302,11 +1302,14 @@ This lane's increments, each its own change:
      Increment 4a does not call the verifier: a connect writes the plan
      only when it is handed bundles;
    - the template's section, **staged** (4b preparation): `fill_section`
-     beside `check_section` in the rules crate takes the bundle queue's
-     references in ascending `h`, inside the window and within the budget
-     their largest `D` sets, passing over one that would exceed it; what it
-     returns is a section `check_section` admits. The block template calls
-     it at the switch;
+     beside `check_section` in the rules crate walks the bundle queue's
+     references in ascending `h` and keeps those inside the window whose
+     epoch's `D` the view holds. A section spans at most two epochs. It
+     packs them oldest-first under the budget the epochs it keeps earn —
+     the largest `D` among those epochs, the cap `check_section` applies —
+     passing over one that would exceed it, and passing over one that would
+     crowd out the epoch earning a larger `D`. What it returns is a section
+     `check_section` admits. The block template calls it at the switch;
    - flip the switch as one rule-07 cutover, calling the verifier from
      `validate`. The `passed` bit is set by
      an admitted record and by nothing else, and the Fakechain door is
