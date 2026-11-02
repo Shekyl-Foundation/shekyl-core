@@ -1,6 +1,6 @@
 # Daemon configuration cutover — the option surface moves to Rust
 
-**Status: OPEN — implemented and merged (#1088, merge `09402ea19`, 2026-10-17); `shekyld` a Rust binary in the Rust-binary PR (#1254, 2026-11-01: DC-Q13 amended, DC-Q19…DC-Q24 ruled, DC-F15…DC-F27 established); open residue only: the FOLLOWUPS rows this brief owns (§2.2 step 8's parked Tor connector, §3's SOCKS credentials, §5.1's GUI stop and mainnet listener, §9's utilities), the §10 carries, and the Rust-binary PR's items for Rick (§10.1).** Every DC-Q ruled, the grammar's Part B folded in, PR-3 merged. Rule 26 is cited.
+**Status: OPEN — implemented and merged (#1088, merge `09402ea19`, 2026-10-17); `shekyld` a Rust binary in the Rust-binary PR (#1254, 2026-11-01: DC-Q13 amended, DC-Q19…DC-Q24 ruled, DC-F15…DC-F28 established); open residue only: the FOLLOWUPS rows this brief owns (§2.2 step 8's parked Tor connector, §3's SOCKS credentials, §5.1's GUI stop and mainnet listener, §9's utilities), the §10 carries, and the Rust-binary PR's items for Rick (§10.1).** Every DC-Q ruled, the grammar's Part B folded in, PR-3 merged. Rule 26 is cited.
 The input grammar is ruled and merged: Part A (#1067, merge `7cf70b7052`)
 and Part B (#1068, merge `cd1d0cc8ed`). Its rules are the cursor rule
 [`83-input-grammar`](../../.cursor/rules/83-input-grammar.mdc) and the
@@ -986,7 +986,7 @@ recorded in §1.1 and an edit to this list in the same change.
 
 ---
 
-## 11. Findings established at source (DC-F1…DC-F27)
+## 11. Findings established at source (DC-F1…DC-F28)
 
 | Id | Finding | Route |
 | --- | --- | --- |
@@ -1005,8 +1005,8 @@ recorded in §1.1 and an edit to this list in the same change.
 | DC-F13 | On Windows a run-as-user daemon is terminated, not stopped, by every console event but Ctrl-C and Ctrl-Break: the handler logs "Exiting without saving" and returns `FALSE` for window close, logoff and shutdown ([`src/common/util.h:193-201`](../../src/common/util.h)), so RT-16's "stops at logout" does not hold today. Low severity: the stores are transactional and Tor exits through `TAKEOWNERSHIP` | absorbed: one stop path for every signal, console event and SCM control (§2.2 step 9) |
 | DC-F12 | The first notify command switches child reaping off for the whole process. `tools::spawn` sets `signal(SIGCHLD, SIG_IGN)` after a spawn it does not wait for (line 124 of `src/common/spawn.cpp` at `d26148535e`); from then on the kernel reaps every child, the managed Tor included, which the Rust side waits on ([`rust/shekyl-tor-control-client/src/control/actor.rs:616`](../../rust/shekyl-tor-control-client/src/control/actor.rs), [`:1011`](../../rust/shekyl-tor-control-client/src/control/actor.rs)). Under tokio 1.51.0 on Linux the pidfd reaper's wait then fails with `ECHILD` instead of an exit status; on macOS and FreeBSD the `SIGCHLD` handler tokio relies on is overwritten and the wait never completes | absorbed: the Rust runner reaps its own children and never changes a signal disposition (§2.10); pre-flight demonstrates it (§9) |
 
-DC-F15…DC-F25 are the Rust-binary brief's (Rick, 2026-11-01); DC-F26 and
-DC-F27 were made in that PR's work and fixed in it.
+DC-F15…DC-F25 are the Rust-binary brief's (Rick, 2026-11-01); DC-F26,
+DC-F27 and DC-F28 were made in that PR's work and fixed in it.
 
 | Id | Finding | Route |
 | --- | --- | --- |
@@ -1023,6 +1023,7 @@ DC-F27 were made in that PR's work and fixed in it.
 | DC-F25 | Four snapshot fields had no C++ reader: `fixed_difficulty`, `txpool_weight_max`, `mine_address` and `mine_threads` (the Rust miner reads `mine-address` from the configuration itself; core opens no LMDB). The count gate pinned a number and could not see a reader leave. `data_dir` has no C++ reader either (the chain is the Rust store), and the grammar rows `dev-difficulty`, `txpool-weight-max` and `mine-threads` have no reader in either language | absorbed by DC-Q24 for the four; `data_dir` is `EXEMPT` and goes to Rick with the three rows (§10.1) |
 | DC-F26 | Retiring the daemon image took `shekyl_daemon_ctl_*` out of `unit_tests`' link: the C++ test reached those exports through the image, and the exports lived in `shekyl-daemon-rpc`, which `shekyl-ffi` did not link | fixed in the Rust-binary PR: `shekyl-ffi` re-exports `shekyl-daemon-rpc` (`rust/shekyl-ffi/Cargo.toml`), no new cycle; two lines to revert if Rick rules otherwise |
 | DC-F27 | The `__cxa_throw` hook had a second path. `common/stack_trace.cpp` was a member of `libcommon`; in a non-STATIC build (the default developer and CI Linux build) its object defines `__cxa_throw` itself, resolving `__real` through `dlsym` per throw, so every binary that linked `common` resolved its throws to the hook before libstdc++ was searched, the Rust `shekyld` included. Observed: a refused RPC bind printed nine `[stacktrace]` frames to standard error past the Rust log sink. DC-F17's premise, that the remnant carried no hook because it was not built by `shekyl_add_executable`, was the link-flag path only | fixed in the Rust-binary PR: `stack_trace` is its own library, linked by `enable_stack_trace` and `unit_tests`; `nm shekyld` shows `U __cxa_throw` and no `log_stack_trace`. `util.cpp`'s `setup_crash_dump` is now dead in every binary and goes to Rick (§10.1) |
+| DC-F28 | The C++ daemon's CMake target was named `daemon` (`shekyl_add_executable(daemon …)`, `OUTPUT_NAME shekyld`); `corrosion_import_crate` names the Rust binary's build target `cargo-build_shekyld` and `shekyld` is its IMPORTED target with no build step, so `cmake --build … --target daemon` (and `--target shekyld`) is refused. Six live sites still named the old target after §3's rename: the nightly full-parity job of `.github/workflows/randomx-v2-differential.yml`, three recipes in `docs/COMPILING_DEBUGGING_TESTING.md`, the `SHEKYLD_BIN` hint in `rust/shekyl-engine-core/src/engine/regtest_e2e.rs`, `check_randomx_symbol_isolation.sh`'s FATAL line, and `rust/shekyld/build.rs`'s own warning (which named `shekyld`). Found by the §4 acceptance builds (the old spelling failed on every host) | fixed in the Rust-binary PR: every live site names `cargo-build_shekyld`; `WINDOWS_WALLET_SUPPORT.md` §8 carries the rename as records-was; `git grep -E -- '--target[ =]+(daemon\|shekyld)\b'` outside `docs/completed`, the CHANGELOG and the audit trail → 0 |
 
 ---
 

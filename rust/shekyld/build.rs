@@ -17,7 +17,7 @@ fn main() {
     if std::env::var_os("SHEKYL_CMAKE_LINK").is_none() {
         println!(
             "cargo:warning=shekyld links the C++ remnant only through CMake \
-             (`cmake --build <dir> --target shekyld`); a bare cargo build of \
+             (`cmake --build <dir> --target cargo-build_shekyld`); a bare cargo build of \
              this binary stops at the link with `shekyl_remnant_run` undefined"
         );
     }

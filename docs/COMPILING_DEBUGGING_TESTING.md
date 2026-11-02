@@ -357,7 +357,7 @@ cmake -S . -B build/seed-release \
   -DCMAKE_BUILD_TYPE=Release \
   -DARCH="x86-64" \
   -DBUILD_TESTS=OFF
-cmake --build build/seed-release --target daemon -- -j"$(nproc)"
+cmake --build build/seed-release --target cargo-build_shekyld -- -j"$(nproc)"
 ```
 
 If you previously configured the same build directory with a different `ARCH`
@@ -403,7 +403,7 @@ cmake --build build/testnet-release --target all -- -j"$(nproc)"
 Daemon only:
 
 ```bash
-cmake --build build/testnet-release --target daemon -- -j"$(nproc)"
+cmake --build build/testnet-release --target cargo-build_shekyld -- -j"$(nproc)"
 ```
 
 Wallet CLI and wallet RPC (both Rust, one CMake target since the C1/C2
@@ -441,7 +441,7 @@ Common fix sequence for stale/generated artifacts:
 ```bash
 rm -rf build/testnet-release
 cmake -S . -B build/testnet-release -DCMAKE_BUILD_TYPE=Release -DBUILD_TESTS=ON
-cmake --build build/testnet-release --target daemon -- -j"$(nproc)"
+cmake --build build/testnet-release --target cargo-build_shekyld -- -j"$(nproc)"
 ```
 
 ### 6) Testnet launch sanity command (runtime, not build)

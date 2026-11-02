@@ -653,8 +653,9 @@ default path, not an opt-in one.
 Sequencing note: WP-W5 is what actually restores a Windows wallet to release
 archives, and until it lands the Windows release story is unchanged from
 PR #500 — daemon yes, wallet no. The Windows CI job is currently named
-`Windows (MSVC, daemon)` and builds `--target daemon`; **WP-W5 owns renaming it
-back** and re-adding the wallet binaries.
+`Windows (MSVC, daemon)` and builds the daemon alone (`cargo-build_shekyld`
+since the Rust binary, #1254; `--target daemon` before it); **WP-W5 owns
+renaming it back** and re-adding the wallet binaries.
 
 ## 8.1 WP-W2 preamble — what the scouting runs actually found
 
