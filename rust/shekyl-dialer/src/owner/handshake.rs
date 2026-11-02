@@ -29,6 +29,8 @@
 //! that is not ours, and a peerlist the lists refuse. A later refusal of
 //! a kept session is the payload owner closing it.
 
+use std::sync::Arc;
+
 use shekyl_capped_stream::Session;
 use shekyl_draw_rng::RelayRng;
 use shekyl_levin::{
@@ -102,6 +104,8 @@ pub(super) struct Prepared {
     endpoint: Endpoint,
     request: Vec<u8>,
     network_id: [u8; 16],
+    /// The judge's clock, read when the channel opens.
+    stamp: Arc<dyn Fn() -> u64 + Send + Sync>,
 }
 
 /// Why no well-formed handshake response was read.
@@ -131,10 +135,12 @@ impl Dialer {
             return Err(local());
         };
         let request = request_frame(network_id, &snapshot, nonce).ok_or_else(local)?;
+        let stamp = Arc::clone(&self.shared().life_clock.now_ms);
         Ok(Prepared {
             endpoint,
             request,
             network_id,
+            stamp,
         })
     }
 
@@ -231,6 +237,8 @@ impl Dialer {
 }
 
 /// The attempt task: the I/O and the Levin layer's checks, nothing else.
+/// Its result carries when its stream opened, on the judge's clock, when
+/// one did: the instant the channel arrived.
 ///
 /// It opens the channel through the hub's dialer, writes the request,
 /// reads until one whole handshake response decodes, and checks the
@@ -243,16 +251,32 @@ pub(super) async fn attempt_task(
     connector: ConnectorId,
     address: NetworkAddress,
     prepared: Prepared,
-) -> TaskResult {
+) -> (TaskResult, Option<u64>) {
     let Prepared {
         endpoint,
         request,
         network_id,
+        stamp,
     } = prepared;
     let channel = match hub.dial_channel_async(&endpoint).await {
         Ok(channel) => Unadopted::new(hub, channel),
-        Err(end) => return TaskResult::Failed(end),
+        Err(end) => return (TaskResult::Failed(end), None),
     };
+    let opened_ms = stamp();
+    (
+        handshake(channel, connector, &address, request, network_id).await,
+        Some(opened_ms),
+    )
+}
+
+/// The Levin handshake on a channel that opened.
+async fn handshake(
+    channel: Unadopted,
+    connector: ConnectorId,
+    address: &NetworkAddress,
+    request: Vec<u8>,
+    network_id: [u8; 16],
+) -> TaskResult {
     let mut channel = channel;
     let connected_at = std::time::Instant::now();
     if let Err(kind) = channel.held().session.try_send(request) {

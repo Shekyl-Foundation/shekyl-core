@@ -108,8 +108,9 @@ impl Dialer {
     }
 
     /// A finished attempt's stream, noted after its own failure was judged,
-    /// at `at_ms`: the instant that failure was judged at, so the stream is
-    /// never after its own failure and cannot close its own bracket.
+    /// at `at_ms`: when the stream opened, and never later than the instant
+    /// that failure was judged at, so the stream cannot close its own
+    /// bracket.
     pub(super) fn note_stream(
         shared: &mut Shared,
         connector: ConnectorId,

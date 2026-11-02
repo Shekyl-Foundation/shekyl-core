@@ -94,14 +94,20 @@ pub(super) struct Finished {
     /// queue counts, so a timeout's place against the Tor window
     /// ([`Dialer::window`]) is the attempt's own.
     ran_nanos: u64,
+    /// When the attempt's stream opened, on the judge's clock, when one did.
+    opened_ms: Option<u64>,
 }
 
 /// `attempt`, timed inside its task ([`Finished::ran_nanos`]).
-async fn timed(hub: Hub, attempt: impl Future<Output = TaskResult>) -> Finished {
+async fn timed(hub: Hub, attempt: impl Future<Output = (TaskResult, Option<u64>)>) -> Finished {
     let started = hub.now();
-    let result = attempt.await;
+    let (result, opened_ms) = attempt.await;
     let ran_nanos = hub.now().get().saturating_sub(started.get());
-    Finished { result, ran_nanos }
+    Finished {
+        result,
+        ran_nanos,
+        opened_ms,
+    }
 }
 
 /// The results attempt tasks have posted and the loops have not taken.
@@ -620,7 +626,7 @@ impl Dialer {
                 return BeforeIo::Stopped;
             }
             let outcome = failed_outcome(address, end);
-            Self::record(shared, connector, &outcome, now, rng);
+            Self::record(shared, connector, &outcome, None, now, rng);
             BeforeIo::Recorded
         })
     }
@@ -642,7 +648,7 @@ impl Dialer {
                 return BeforeIo::Stopped;
             }
             let outcome = failed_outcome(address, DialEnd::local_close());
-            Self::record(shared, connector, &outcome, now, rng);
+            Self::record(shared, connector, &outcome, None, now, rng);
             BeforeIo::Recorded
         })
     }
@@ -683,7 +689,11 @@ impl Dialer {
         finished: Finished,
         rng: &mut R,
     ) -> Option<Applied> {
-        let Finished { result, ran_nanos } = finished;
+        let Finished {
+            result,
+            ran_nanos,
+            opened_ms,
+        } = finished;
         let Some((record, permit)) = self.begin_apply(id) else {
             drop(result);
             return None;
@@ -692,12 +702,12 @@ impl Dialer {
         let kept = match self.apply_result(connector, &address, record.aim, result, rng) {
             Attempt::Done(outcome) => {
                 tracing::debug!("{connector:?} dial {address:?} ended: {outcome:?}");
-                self.settle_or_retry(connector, &outcome, ran_nanos, rng);
+                self.settle_or_retry(connector, &outcome, ran_nanos, opened_ms, rng);
                 None
             }
             Attempt::Kept(kept) => {
                 let socket = kept.id;
-                self.accept_and_notify(connector, &address, kept, rng)
+                self.accept_and_notify(connector, &address, kept, opened_ms, rng)
                     .then_some(socket)
             }
         };
@@ -737,6 +747,7 @@ mod tests {
         Finished {
             result: TaskResult::Failed(DialEnd::local_close()),
             ran_nanos: 0,
+            opened_ms: None,
         }
     }
 

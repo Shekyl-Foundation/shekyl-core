@@ -647,3 +647,38 @@ fn the_failing_attempts_own_stream_never_vouches_for_it() {
         "nothing after the failure vouched for it"
     );
 }
+
+/// **A stream is dated when it opened** (#1235 review R2-2), not when its
+/// attempt ended: a failed attempt's life is not dated up to one handshake
+/// span late. A pending failure's bracket closes while another attempt's
+/// stream is open: the stream opened inside the bracket and the attempt
+/// ended after it. On a byte clock that steps one second per read, the
+/// reads during that attempt are the span between its open and its end.
+/// Dated at the open, the stream counts the pending failure. The edit that
+/// makes this red: dating the stream when its attempt ended.
+#[test]
+fn a_stream_is_dated_when_it_opened() {
+    let mut rig = JudgeRig::new(TOR, 300);
+    let held = rig.hold(20);
+    let whites = rig.whites(0, 2);
+    rig.life.received_now(held);
+    rig.later(1_000);
+    rig.fail_uncertain();
+    assert_eq!(rig.pending(), 1, "the first white's verdict waits");
+    let failed = rig.life.now_ms();
+    let bracket = dial_profile(TOR).judging.bracket_nanos / 1_000_000;
+    // One read at the wake's start, the stream's open the next, the
+    // attempt's end the one after: the deadline falls between the last two.
+    rig.life.set_ms(failed + bracket - 1_500);
+    rig.life.advance_per_read(1_000);
+    rig.dial.close_on_open();
+    assert!(
+        rig.dialer.wake(TOR, &mut rig.rng),
+        "the other white's attempt"
+    );
+    rig.life.advance_per_read(0);
+    rig.later(bracket);
+    rig.dialer.apply_verdicts(&mut rig.rng);
+    let demoted = whites.iter().filter(|white| rig.demoted(white)).count();
+    assert_eq!(demoted, 1, "the stream opened inside the bracket counts it");
+}
