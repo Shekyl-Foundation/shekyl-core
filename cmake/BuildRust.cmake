@@ -561,19 +561,56 @@ function(shekyl_rust_link_cxx_closure rust_target cxx_target)
         if("${_item}" STREQUAL "")
             continue()
         endif()
-        # `$<LINK_ONLY:x>` → x; any other generator expression has no
-        # classification here.
+        # `$<LINK_ONLY:x>` → x. `$<$<CONFIG:c>:x>` and
+        # `$<$<NOT:$<CONFIG:c>>:x>` are how CMake stores the `debug` /
+        # `optimized` keywords of target_link_libraries (FindOpenSSL's
+        # `OPENSSL_LIBRARIES` under vcpkg carries a pair: DC-F31); x is
+        # a library file or name, and the condition travels with it onto
+        # the flag, which Corrosion evaluates per configuration the same
+        # way it evaluates its own conditional link arguments. Any other
+        # generator expression has no classification here.
+        set(_cond "")
         if(_item MATCHES "^\\$<LINK_ONLY:(.*)>$")
             set(_item "${CMAKE_MATCH_1}")
-        elseif(_item MATCHES "\\$<")
+        elseif(_item MATCHES "^\\$<(\\$<CONFIG:[A-Za-z0-9_]+>):(.*)>$")
+            # (two branches, not one `OR`: if() evaluates both operands
+            # and the second MATCHES resets CMAKE_MATCH_n)
+            set(_cond "${CMAKE_MATCH_1}")
+            set(_item "${CMAKE_MATCH_2}")
+        elseif(_item MATCHES "^\\$<(\\$<NOT:\\$<CONFIG:[A-Za-z0-9_]+>>):(.*)>$")
+            set(_cond "${CMAKE_MATCH_1}")
+            set(_item "${CMAKE_MATCH_2}")
+        endif()
+        if(_item MATCHES "\\$<")
             message(FATAL_ERROR
                 "shekyl_rust_link_cxx_closure: generator expression in ${cxx_target}'s closure "
                 "cannot be classified: ${_item}")
         endif()
-        if("${_item}" IN_LIST _seen)
+        if("${_cond}${_item}" IN_LIST _seen)
             continue()
         endif()
-        list(APPEND _seen "${_item}")
+        list(APPEND _seen "${_cond}${_item}")
+
+        if(_cond)
+            # Only a library the keyword form can name: a file or a name.
+            # A target under a configuration condition is not a shape
+            # this tree produces, and would need its closure walked
+            # under the same condition.
+            if(IS_ABSOLUTE "${_item}")
+                list(APPEND _args "$<${_cond}:-Clink-arg=${_item}>")
+            elseif(_item MATCHES "^[A-Za-z0-9_.+-]+$" AND NOT TARGET "${_item}")
+                if(MSVC)
+                    list(APPEND _args "$<${_cond}:-Clink-arg=${_item}.lib>")
+                else()
+                    list(APPEND _args "$<${_cond}:-Clink-arg=-l${_item}>")
+                endif()
+            else()
+                message(FATAL_ERROR
+                    "shekyl_rust_link_cxx_closure: configuration-conditional item in "
+                    "${cxx_target}'s closure is not a library file or name: ${_cond}: ${_item}")
+            endif()
+            continue()
+        endif()
 
         if("${_item}" STREQUAL "shekyl_ffi")
             continue()
