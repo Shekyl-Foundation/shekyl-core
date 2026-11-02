@@ -15,6 +15,14 @@
 //! follows. The abort's status is distinct from the configuration
 //! refusal's 2 and the runtime failure's 1, so a supervisor tells the three
 //! apart.
+//!
+//! On Windows the hook does not return: it ends the process itself with
+//! `TerminateProcess` and `0xC0000409`, the code `abort` would report
+//! (DC-Q21, DC-F38). `abort` on MSVC is `__fastfail`, which reaches the
+//! kernel and Windows Error Reporting without passing the top-level
+//! exception filter `harden_process` installed, so a machine's
+//! `LocalDumps` policy would write the panicking process's memory to disk.
+//! `TerminateProcess` is an ordinary termination that path never sees.
 
 use std::panic::PanicHookInfo;
 
@@ -45,6 +53,8 @@ fn report(info: &PanicHookInfo<'_>) {
     write_stderr_raw(line.as_bytes());
     // Queued sinks: this call hands the line to a writer thread and returns.
     tracing::error!(target: "daemon", "{}", line.trim_end());
+    #[cfg(windows)]
+    crate::platform::end_process(windows_sys::Win32::Foundation::STATUS_STACK_BUFFER_OVERRUN);
 }
 
 /// A write that takes no lock: the panicking thread may hold the standard

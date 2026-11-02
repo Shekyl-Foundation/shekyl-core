@@ -96,15 +96,18 @@ Section "Shekyl Core (required)" SecCore
     "NoRepair" 1
 
   ; Windows Error Reporting reports a faulting process and offers to send
-  ; its memory. The daemon disables its own core dumps in process
-  ; (DAEMON_CONFIG_CUTOVER.md DC-Q21); WER is a per-machine setting, so
-  ; the exclusion is written here, where the installer already holds the
-  ; machine, in the 64-bit view (.onInit). This is the value
-  ; WerAddExcludedApplication writes, and it excludes the name from WER's
-  ; reporting only: a machine-wide LocalDumps policy
-  ; (`...\Windows Error Reporting\LocalDumps`) still writes a dump of an
-  ; excluded name (DC-F38), and Windows documents no per-name setting that
-  ; stops it; the operator guide says so.
+  ; its memory. The daemon forbids its own dumps from inside
+  ; (DAEMON_CONFIG_CUTOVER.md DC-Q21, DC-F38): its top-level exception
+  ; filter and its panic hook end the process before WER's fault path
+  ; runs. What they cannot reach is a fail-fast the process does not
+  ; route (an allocation failure's abort, OS-heap corruption, a C++ /GS
+  ; check). For those this value, the one WerAddExcludedApplication
+  ; writes, is the backstop: it excludes the name from WER's *reporting*,
+  ; so no report leaves the machine. It does not stop a machine-wide
+  ; LocalDumps policy (`...\Windows Error Reporting\LocalDumps`) writing a
+  ; dump of those cases; the operator guide says so. WER is a per-machine
+  ; setting, so it is written here, where the installer already holds the
+  ; machine, in the 64-bit view (.onInit).
   WriteRegDWORD HKLM "SOFTWARE\Microsoft\Windows\Windows Error Reporting\ExcludedApplications" \
     "shekyld.exe" 1
 

@@ -356,15 +356,20 @@ writes no core file whatever the system's limit, and on Linux and
 FreeBSD a process that is not root cannot attach a debugger to it. A
 fault ends it by the signal; a stack overflow prints the runtime's
 message and ends it by `SIGABRT` (on FreeBSD by `SIGSEGV` without the
-message). On Windows it raises no fault dialog, and the installer
-excludes `shekyld.exe` from Windows Error Reporting's reporting. That
-exclusion does not reach a **LocalDumps** policy: on a machine where
+message). On Windows it raises no fault dialog and ends itself before
+Windows Error Reporting is consulted: a fault or a stack overflow exits
+with the exception's code (`0xC0000005`, `0xC00000FD`), a panic with
+`0xC0000409`, and none of them writes a dump or a report, whatever the
+machine's policy. The installer also excludes `shekyld.exe` from Windows
+Error Reporting's reporting, as a backstop for the failures the process
+cannot route itself — an allocation failure, heap corruption the system
+detects, a C++ stack check. That backstop does not reach a
+**LocalDumps** policy: on a machine where
 `HKLM\SOFTWARE\Microsoft\Windows\Windows Error Reporting\LocalDumps`
-is set (by Group Policy or by hand), Windows writes a memory dump of a
-crashed `shekyld.exe` to that policy's folder (by default
-`%LOCALAPPDATA%\CrashDumps`) whatever the exclusion says, and gives no
-per-program way to stop it. If you run the daemon on such a machine,
-treat that folder as you treat the data directory: the dump holds the
+is set (by Group Policy or by hand), Windows may still write a memory
+dump of one of *those* failures to that policy's folder (by default
+`%LOCALAPPDATA%\CrashDumps`). If you run the daemon on such a machine,
+treat that folder as you treat the data directory: a dump holds the
 process's memory, and while the daemon holds no wallet keys, it does
 hold its onion service's secret key, its peer list and its mining
 address.

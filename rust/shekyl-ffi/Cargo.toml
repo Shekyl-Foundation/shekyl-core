@@ -212,10 +212,16 @@ harness = false
 # The known-folder roots for the daemon configuration (IG-13).
 shekyl-win-sec = { path = "../shekyl-win-sec" }
 # The snapshot export's narrow argv is the active code page. `windows-sys`
-# 0.61 is already in the lock through shekyl-win-sec; this names the two
+# 0.61 is already in the lock through shekyl-win-sec; this names the
 # modules this crate calls: `argument_vector`'s (`MultiByteToWideChar`,
-# `CP_ACP`) and `platform::harden_process`'s (`SetErrorMode`, DC-Q21).
+# `CP_ACP`) and `platform::harden_process`'s (`SetErrorMode`,
+# `SetUnhandledExceptionFilter` and `EXCEPTION_POINTERS`, which the crate
+# gates behind `Win32_System_Kernel` for the `CONTEXT` they carry,
+# `TerminateProcess`, the `STATUS_*` codes; DC-Q21, DC-F38).
 windows-sys = { version = "0.61", features = [
+  "Win32_Foundation",
   "Win32_Globalization",
   "Win32_System_Diagnostics_Debug",
+  "Win32_System_Kernel",
+  "Win32_System_Threading",
 ] }
