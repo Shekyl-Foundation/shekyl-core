@@ -368,6 +368,11 @@ struct Inner {
     /// The ban list's timing owner, once one is installed
     /// ([`Sockets::set_ban_expiry`]).
     ban_expiry: Option<BanExpiry>,
+    /// The generation a running ban timer claimed. `None` when no task
+    /// holds the claim. A start for that generation does nothing. A later
+    /// generation takes the claim at once; the earlier task clears the
+    /// field on drop only while it still names that earlier generation.
+    timer_generation: Option<u64>,
     /// An operator cap for one connector. `None` means that connector has
     /// no cap of its own. The process ceiling applies either way.
     zone_caps: [Option<u32>; ConnectorId::COUNT],
@@ -387,6 +392,7 @@ impl Inner {
             live: HashMap::new(),
             bans: BanList::new(),
             ban_expiry: None,
+            timer_generation: None,
             zone_caps: [None; ConnectorId::COUNT],
             clearnet_rate,
             refusals: AcceptRefusals::default(),

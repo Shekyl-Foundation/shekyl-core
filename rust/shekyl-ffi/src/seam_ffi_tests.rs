@@ -188,7 +188,7 @@ const PAST_THE_DEADLINE: Duration = Duration::from_millis(20);
 
 /// The ban list's timer is the only expiry (Rick, 2026-10-31): a timed ban
 /// stays in force past its deadline while no timer runs, and the timer
-/// the zone host starts, on the process engine, ends it at the process
+/// `spawn_expiry` starts, on the process engine, ends it at the process
 /// clock. Red edit: drop the `expire_bans` call from `spawn_expiry`'s loop.
 #[test]
 fn the_ban_timer_ends_a_timed_ban_and_nothing_else_does() {
@@ -211,11 +211,8 @@ fn the_ban_timer_ends_a_timed_ban_and_nothing_else_does() {
         .enable_time()
         .build()
         .expect("runtime");
-    super::bans::spawn_expiry(
-        runtime.handle(),
-        &super::process_engine(),
-        process_sockets(),
-    );
+    let (engine, generation) = super::process_engine_generation();
+    super::bans::spawn_expiry(runtime.handle(), &engine, process_sockets(), generation);
     let give_up = std::time::Instant::now() + Duration::from_secs(10);
     while host_is_banned(host) {
         assert!(

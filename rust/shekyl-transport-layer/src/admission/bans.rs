@@ -164,6 +164,39 @@ impl Sockets {
     pub fn listed(&self, now: Tick) -> Vec<ListedBan> {
         self.lock().bans.listed(now)
     }
+
+    /// Take the ban timer for `generation`, or `None` when a task already
+    /// holds the claim for that generation. A different generation takes
+    /// the claim immediately. The guard releases it on drop only when the
+    /// table still records this generation, so an older task cannot clear
+    /// a newer claim.
+    pub fn take_ban_timer(&self, generation: u64) -> Option<BanTimer> {
+        let mut inner = self.lock();
+        if inner.timer_generation == Some(generation) {
+            return None;
+        }
+        inner.timer_generation = Some(generation);
+        Some(BanTimer {
+            sockets: self.clone(),
+            generation,
+        })
+    }
+}
+
+/// The task that ends timed bans. Dropped when that task ends, which
+/// releases the table for a later generation.
+pub struct BanTimer {
+    sockets: Sockets,
+    generation: u64,
+}
+
+impl Drop for BanTimer {
+    fn drop(&mut self) {
+        let mut inner = self.sockets.lock();
+        if inner.timer_generation == Some(self.generation) {
+            inner.timer_generation = None;
+        }
+    }
 }
 
 #[derive(Clone, Copy)]

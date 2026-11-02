@@ -267,29 +267,60 @@ pub(crate) fn process_clock() -> Arc<MonotonicClock> {
     Arc::clone(CLOCK.get_or_init(|| Arc::new(MonotonicClock::new())))
 }
 
-/// The process's one timing engine. The zone host and the Tor supervisor
-/// arm deadlines on it. The service lives here so a handle alone cannot
-/// close it.
-pub(crate) fn process_engine() -> Handle<MonotonicClock> {
-    let mut slot = process_engine_slot().lock().expect("process engine");
-    if slot.is_none() {
-        let clock = MonotonicClock::clone(&process_clock());
-        *slot = Some(EngineService::start(clock));
-    }
-    slot.as_ref().expect("the engine was just started").handle()
+/// The process timing engine and how many times one has been started.
+///
+/// The service lives here so a handle alone cannot close it. `started`
+/// advances only when a new engine is created, and a ban timer reads it
+/// under this same lock, so the claim names the engine the task registers
+/// on. Closing the engine does not reuse the number: the next start is the
+/// next generation.
+struct ProcessTiming {
+    service: Option<EngineService<MonotonicClock>>,
+    started: u64,
 }
 
-/// Stop the process engine. The next [`process_engine`] starts another.
+fn process_engine_slot() -> &'static Mutex<ProcessTiming> {
+    static ENGINE: Mutex<ProcessTiming> = Mutex::new(ProcessTiming {
+        service: None,
+        started: 0,
+    });
+    &ENGINE
+}
+
+/// The process's one timing engine. The zone host and the Tor supervisor
+/// arm deadlines on it.
+pub(crate) fn process_engine() -> Handle<MonotonicClock> {
+    process_engine_generation().0
+}
+
+/// The running process engine and the generation a ban timer claims.
+///
+/// Both come from one hold of the engine lock. A timer started from this
+/// pair registers on the engine the generation names, including when a
+/// close and a new engine overlap the start.
+pub(crate) fn process_engine_generation() -> (Handle<MonotonicClock>, u64) {
+    let mut slot = process_engine_slot().lock().expect("process engine");
+    if slot.service.is_none() {
+        let clock = MonotonicClock::clone(&process_clock());
+        slot.service = Some(EngineService::start(clock));
+        slot.started = slot.started.checked_add(1).expect("ban timer generations");
+    }
+    let generation = slot.started;
+    let handle = slot
+        .service
+        .as_ref()
+        .expect("the engine was just started")
+        .handle();
+    (handle, generation)
+}
+
+/// Stop the process engine. The next [`process_engine`] starts another,
+/// and that start is the next ban-timer generation.
 pub(crate) fn close_process_engine() {
-    let engine = process_engine_slot().lock().expect("process engine").take();
-    if let Some(engine) = engine {
+    let mut slot = process_engine_slot().lock().expect("process engine");
+    if let Some(engine) = slot.service.take() {
         engine.close();
     }
-}
-
-fn process_engine_slot() -> &'static Mutex<Option<EngineService<MonotonicClock>>> {
-    static ENGINE: Mutex<Option<EngineService<MonotonicClock>>> = Mutex::new(None);
-    &ENGINE
 }
 
 fn ban_now() -> Tick {

@@ -20,20 +20,36 @@ pub use shekyl_seam::Ipv4Subnet as Subnet;
 
 use super::{ban_now, hub, process_sockets};
 
+/// Start the ban list's timer on `runtime` for `sockets`, if that table
+/// does not already have one for the process engine now running.
+///
+/// The node calls this at open. An offline node has no zone host, and the
+/// zone host is not what ends a ban: the timer is the table's. A zone host
+/// calls it again; the table already holding the timer for this engine
+/// does nothing. After the engine closes, the task ends and the next start
+/// arms the earliest deadline again.
+pub fn start(runtime: &tokio::runtime::Handle, sockets: Sockets) {
+    let (engine, generation) = super::process_engine_generation();
+    spawn_expiry(runtime, &engine, sockets, generation);
+}
+
 /// Start the ban list's timing owner (Rick, 2026-10-31): one owner on the
 /// process engine holds the earliest ban deadline; when it fires, every
 /// ban due ends and the next deadline is armed. It is the only expiry: a
 /// lookup never ends a ban. The table tells it of each deadline a new ban
 /// makes the earliest ([`Sockets::set_ban_expiry`]), holding it only
-/// weakly, so the task owns the registration. A task on the transport
-/// runtime, not a thread of its own (decision B, Rick 2026-10-25). It ends
-/// when the engine closes or the runtime stops; the next zone host starts
-/// another, which arms the earliest deadline again.
+/// weakly, so the task owns the registration. A task on `runtime`, not a
+/// thread of its own (decision B, Rick 2026-10-25). It ends when the engine
+/// closes or the runtime stops.
 pub(crate) fn spawn_expiry(
     runtime: &tokio::runtime::Handle,
     engine: &Handle<MonotonicClock>,
     sockets: Sockets,
+    generation: u64,
 ) {
+    let Some(timer) = sockets.take_ban_timer(generation) else {
+        return;
+    };
     let owner = match engine.register(OwnerClass::Housekeeping) {
         Ok(owner) => Arc::new(owner),
         Err(err) => {
@@ -41,6 +57,7 @@ pub(crate) fn spawn_expiry(
                 "the ban list's timer could not start ({err:?}): a timed ban stays in force \
                  until it is lifted"
             );
+            drop(timer);
             return;
         }
     };
@@ -53,6 +70,7 @@ pub(crate) fn spawn_expiry(
         }
     }));
     drop(runtime.spawn(async move {
+        let _timer = timer;
         while owner.wait_wake_async().await.is_ok() {
             if let Some(next) = sockets.expire_bans(owner.clock().now()) {
                 if owner.arm(next).is_err() {
