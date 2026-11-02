@@ -544,7 +544,7 @@ where
                     return Ok(());
                 }
                 Proved::NotHeld => {
-                    self.spend(session, Spent::CacheAbsent, out);
+                    self.seed_not_held(session, out);
                     return Ok(());
                 }
                 Proved::Formed(formed) => {
@@ -825,6 +825,35 @@ where
             state.gates.header_spent = true;
         }
         out.push(Command::HeadersSpent { session, cause });
+    }
+
+    /// The run's next header could not be proven because the slots did
+    /// not hold its seed: the run is dropped and the session is closed to
+    /// header draws until the slots change (`Event::Seeds`). Not a spend:
+    /// the same request would be answered once the window holds the seed,
+    /// with the claim and `H*` unchanged.
+    fn seed_not_held(&mut self, session: K, out: &mut Vec<Command<K>>) {
+        let Some(state) = self.peers.get_mut(&session) else {
+            return;
+        };
+        let Some(run) = state.run.take() else {
+            return;
+        };
+        state.gates.seed_not_held = true;
+        let seed = run
+            .chain
+            .checked
+            .get(run.chain.proven)
+            .map_or(BlockHash::NULL, |checked| checked.seed);
+        out.push(Command::SeedNotHeld { session, seed });
+    }
+
+    /// The ingest window's slots changed: every session closed for a seed
+    /// they did not hold is open to header draws again.
+    pub(crate) fn seeds_changed(&mut self) {
+        for peer in self.peers.values_mut() {
+            peer.gates.seed_not_held = false;
+        }
     }
 
     fn session_for_job(&self, job: u64) -> Option<K> {

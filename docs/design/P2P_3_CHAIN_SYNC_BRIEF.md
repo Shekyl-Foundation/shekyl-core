@@ -311,12 +311,26 @@ ingest deciding forks.**
        owner logs): it is not drawn to extend `H*` again until its claim
        or `H*` changes, because the same locator would get the same
        answer. The same gate closes on a response that names no header
-       `T` lacks and says the chain ends there, on a run whose headers
-       could not be judged where they were placed, and on a proof whose
-       cache was not held; a response that names only headers `T` holds
-       *with more to come* continues from the last header served instead
-       of from `H*`. Before the gate, a node whose `H*` was reachable by
-       no heavier tip re-sent the same request every millisecond. **The
+       `T` lacks and says the chain ends there, and on a run whose
+       headers could not be judged where they were placed; a response
+       that names only headers `T` holds *with more to come* continues
+       from the last header served instead of from `H*`. Before the
+       gate, a node whose `H*` was reachable by no heavier tip re-sent
+       the same request every millisecond. **A proof whose seed the
+       cache slots did not hold is not a spend (amended 2026-11-02,
+       #1237's `a_main_seed_not_held_asks_again_when_the_window_changes`;
+       defect 8):** the gate as first written closed on it too, and a
+       joiner whose one source was idle then stood at height 1 for ever,
+       because neither the source's claim nor `H*` would move while the
+       ingest attendant was still deriving the genesis seed's cache (a
+       startup race a 4-vCPU host loses and a 16-thread one does not).
+       The slots are the window's state, not the peer's answer: the run
+       is dropped (`Command::SeedNotHeld`, a record the owner logs) and
+       the session is closed to header draws only until the window's
+       published pair changes (`Event::Seeds`, raised by the owner off
+       the door's seed watch, and again by the owner itself when the
+       pair already holds the seed by the time the record is handled),
+       its claim changes, or `H*` does. **The
        liar is judged first (amended 2026-11-02, #1237's
        `the_liar_closes_at_claim_unmet`):** a response that names only
        held headers, or none, and says the chain ends there is read

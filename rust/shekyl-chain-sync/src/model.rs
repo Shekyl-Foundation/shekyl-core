@@ -252,6 +252,7 @@ where
             if changed {
                 open.gates.header_quiet = false;
                 open.gates.header_spent = false;
+                open.gates.seed_not_held = false;
                 open.gates.past_cap_followed = false;
             }
         } else {
@@ -718,6 +719,7 @@ where
             Event::Proven { job, results } => self.on_proven(main, job, &results, out)?,
             Event::Entry { tag, outcome } => self.on_entry(main, tag, outcome, now, out)?,
             Event::Room { seats } => self.on_room(seats, out),
+            Event::Seeds => self.seeds_changed(),
             Event::Announce { session, body } => {
                 self.on_announce(main, session, &body, now, out)?
             }
@@ -796,8 +798,10 @@ where
                 peer.span = None;
                 peer.gates.body_excluded = false;
                 // A new `H*` is a new locator: an answer that yielded
-                // nothing from the old one says nothing about this one.
+                // nothing from the old one says nothing about this one,
+                // and the headers it fetches may hash under another seed.
                 peer.gates.header_spent = false;
+                peer.gates.seed_not_held = false;
             }
         }
         Ok(())
@@ -844,6 +848,7 @@ where
             .filter(|(_, peer)| {
                 !peer.gates.header_quiet
                     && !peer.gates.header_spent
+                    && !peer.gates.seed_not_held
                     && !peer.gates.past_cap_followed
                     && peer.follow_up.is_none()
                     && peer.claim.is_some_and(|claim| claim.work > self.star.work)

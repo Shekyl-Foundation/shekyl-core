@@ -54,6 +54,12 @@ pub(crate) struct Gates {
     /// the same answer, so it is not drawn to extend `H*` until its claim
     /// or `H*` changes.
     pub header_spent: bool,
+    /// The last header response from this session could not be proven:
+    /// the ingest window's slots did not hold its seed
+    /// (`Command::SeedNotHeld`). The window's state, not the peer's
+    /// answer: not drawn to extend `H*` until the slots change
+    /// (`Event::Seeds`) or the claim does.
+    pub seed_not_held: bool,
     /// Missed a body deadline. A source again when `H*` changes.
     pub body_excluded: bool,
     /// Already followed one past-cap run. Clears when the claim changes.
@@ -67,6 +73,7 @@ impl Gates {
         Self {
             header_quiet: false,
             header_spent: false,
+            seed_not_held: false,
             body_excluded: false,
             past_cap_followed: false,
             evidence_spent: false,
