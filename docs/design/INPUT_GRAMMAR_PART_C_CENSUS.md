@@ -50,7 +50,7 @@
 | `on_get_block_hash` | bare `hash64` string | `D/methods.rs:447-451` |
 | `calc_pow` | bare `hash64` string | `H:414` (`typedef std::string response`); `S:604`; `F:226-245` |
 | `/submit_transaction` | a tagged `verdict` object | `T/lib.rs:165-206` |
-| `/get_stem_tallies` | a hand-built `{floor,tallies}` object | `src/p2p/net_node.inl:772-826` |
+| `/get_stem_tallies` | a hand-built `{floor,tallies}` object | `src/p2p/net_node.inl:545-599` |
 | `option_set`, `option_show` | `{options:[…]}` | `D/options.rs:347-352` |
 
 #### JSON-RPC envelope (`POST /json_rpc`)
@@ -1330,7 +1330,7 @@ Same reply as §2.15.
 | attribute | value |
 |---|---|
 | transport | REST |
-| owner | C++ (hand-built JSON; `D/handlers/json.rs:598` → `S:786-789` → `src/p2p/net_node.inl:772-826`) |
+| owner | C++ (hand-built JSON; `D/handlers/json.rs:598` → `S:786-789` → `src/p2p/net_node.inl:545-599`) |
 | visibility | **admin** |
 | aliases | none |
 | params | none |
