@@ -879,8 +879,9 @@ the address shortened to its first and last eight characters.
 
 The miner mines only on a chain the node knows to be synced. A node that
 is alone on its network with `clearnet` or `tor` on has no view of that
-network and never counts itself synced: `mining_status` reports
-`no_template` with `mine.not_synced` (`no_view`) and the height does not
+network and never counts itself synced: the start announces `mining: the
+miner waits for a view of the network …`, `mining_status` reports
+`no_template` with `mine.not_synced` (`no_view`), and the height does not
 move. That is the rule, not a fault. To mine alone — a fresh regtest, a
 single-machine test — declare it: turn both connectors off,
 

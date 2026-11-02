@@ -140,8 +140,9 @@ fn accepted_lines(
     config: &DaemonConfig,
     warnings: &[String],
 ) -> (Vec<String>, Vec<String>) {
-    let announced =
+    let mut announced =
         announce::announcements(&TABLE, resolved, read_path, config_path, config, warnings);
+    announced.rest.extend(crate::run::mining_notice(config));
     let out = vec![
         format!("shekyld: configuration verified for {}", account::current()),
         format!("shekyld: {}", announced.effective),
@@ -437,5 +438,94 @@ mod tests {
         assert!(err.iter().any(|line| line.contains("warning: managed Tor")));
         assert_eq!(crate::run::main(checking_remnant(), &a, &host(d.path())), 0);
         assert!(!data.exists());
+    }
+
+    /// `mine = on` on a node declared `Open` announces, in the check as at
+    /// a start, that the miner waits for a view of the network (DC-F41);
+    /// the same configuration with both connectors off, or with a closed
+    /// peer list, announces nothing of the kind, and nor does `mine = off`.
+    /// Red edit: drop `mining_notice` from either `accepted_lines` or the
+    /// start, or make it ignore the declaration.
+    #[test]
+    fn mine_on_with_an_open_declaration_announces_that_the_miner_waits_for_a_view() {
+        let address = shekyl_address::ShekylAddress::new(
+            shekyl_address::Network::Mainnet,
+            [0xaa; 32],
+            [0xbb; 32],
+            [0xee; shekyl_address::MSG_SIGN_PK_LEN],
+            vec![0xcc; shekyl_address::PQC_PAYLOAD_LEN],
+        )
+        .encode()
+        .unwrap();
+        let notice_lines = |cli: &[&str]| -> Vec<String> {
+            let d = tempfile::tempdir().unwrap();
+            let data = d.path().join("data");
+            let log = d.path().join("shekyld.log");
+            let mut full = vec![
+                "--config-verify",
+                "--network",
+                "regtest",
+                "--data-dir",
+                data.to_str().unwrap(),
+                "--log-file",
+                log.to_str().unwrap(),
+            ];
+            full.extend_from_slice(cli);
+            let a = args(&full);
+            let cli = read_cli(&TABLE, a[1..].to_vec()).unwrap();
+            let loaded = load(cli, &host(d.path()).platform).unwrap();
+            let walked = walk(&loaded.config, &loaded.resolved, &host(d.path())).unwrap();
+            let (_, err) = accepted_lines(
+                &loaded.resolved,
+                loaded.file_read.as_deref(),
+                &loaded.config_path,
+                &loaded.config,
+                &walked.warnings,
+            );
+            err.into_iter()
+                .filter(|line| line.starts_with("shekyld: mining: "))
+                .collect()
+        };
+        // Open: clearnet on, no closed peer list.
+        let open = notice_lines(&["--tor", "off", "--mine", "on", "--mine-address", &address]);
+        assert_eq!(open.len(), 1, "{open:?}");
+        assert!(
+            open[0].contains("waits for a view of the network"),
+            "{}",
+            open[0]
+        );
+        assert!(
+            open[0].contains("`clearnet = off` and `tor = off`"),
+            "{}",
+            open[0]
+        );
+        assert!(open[0].contains("`p2p-closed-peer`"), "{}", open[0]);
+        // Offline: synced at open, mines at once.
+        let offline = notice_lines(&[
+            "--clearnet",
+            "off",
+            "--tor",
+            "off",
+            "--mine",
+            "on",
+            "--mine-address",
+            &address,
+        ]);
+        assert!(offline.is_empty(), "{offline:?}");
+        // Closed: the operator named the whole network.
+        let closed = notice_lines(&[
+            "--tor",
+            "off",
+            "--p2p-closed-peer",
+            "192.0.2.1:12020",
+            "--mine",
+            "on",
+            "--mine-address",
+            &address,
+        ]);
+        assert!(closed.is_empty(), "{closed:?}");
+        // Open, but the miner is not asked to start.
+        let idle = notice_lines(&["--tor", "off", "--mine-address", &address]);
+        assert!(idle.is_empty(), "{idle:?}");
     }
 }

@@ -68,6 +68,7 @@ mod mining;
 
 pub use facts::free_bytes;
 pub use mining::{MiningControl, MiningRefused, MiningStatus, PostedJob};
+pub use shekyl_chain_sync::Declaration;
 
 use std::num::NonZeroUsize;
 use std::sync::{Arc, Mutex, PoisonError};
@@ -84,7 +85,7 @@ use shekyl_chain_store::apply_policy::ApplyPolicy;
 use shekyl_chain_store::pool::PoolOpen;
 use shekyl_chain_store::store::{ChainStore, Horizons, SnapshotView};
 use shekyl_chain_sync::SyncState;
-use shekyl_chain_sync::{Declaration, Requesting};
+use shekyl_chain_sync::Requesting;
 use shekyl_chain_sync_runtime::executor::Executor;
 use shekyl_chain_sync_runtime::owner::OwnerParts;
 use shekyl_daemon_config::sections::{DaemonConfig, Dev};
@@ -116,8 +117,11 @@ fn blocking_threads(permits: NonZeroUsize, window: NonZeroUsize) -> NonZeroUsize
 /// The operator's declaration of the node's network (CS-Q2 step 8), from
 /// the resolved configuration: `Offline` when both connectors are off,
 /// `Closed` when the peer list is closed, `Open` otherwise. Configuration,
-/// never the network type (rule 71).
-fn declaration(config: &DaemonConfig) -> Declaration {
+/// never the network type (rule 71). Public so the daemon's start can say,
+/// before the node opens, that an `Open` node's miner waits for a view
+/// ([`shekyl_daemon`]'s mining notice, DC-F41).
+#[must_use]
+pub fn declaration(config: &DaemonConfig) -> Declaration {
     if config.offline() {
         Declaration::Offline
     } else if !config.p2p.closed_peers.is_empty() {

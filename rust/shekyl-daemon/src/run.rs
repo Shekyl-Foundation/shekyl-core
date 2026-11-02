@@ -179,15 +179,16 @@ pub fn main(remnant: Remnant, args: &[OsString], host: &Host) -> i32 {
         );
         return EXIT_FAILED;
     }
-    let lines = announce::announcements(
+    let mut announced = announce::announcements(
         &TABLE,
         &resolved,
         read_path,
         &config_path,
         &config,
         &walked.warnings,
-    )
-    .into_lines();
+    );
+    announced.rest.extend(mining_notice(&config));
+    let lines = announced.into_lines();
     announce_all(&config.logging.file, &lines);
 
     // The node, after the marker and before the remnant's run (DX-Q6).
@@ -539,6 +540,26 @@ fn finish_remnant(
 
 fn note_stop(by: &'static str) {
     tracing::warn!(target: "daemon", "stop requested by {by}");
+}
+
+/// The line a start with `mine = on` announces when the node's declaration
+/// is `Open` (DC-F41, rule 82). Such a node mines only once it has a view
+/// of its network, and a node alone on an open network never gets one:
+/// until then the only signs were `mining_status.no_template` and a dialer
+/// warning. `None` for `mine = off`, or for a node declared offline or
+/// closed, which is synced at open and mines at once. The configuration
+/// check repeats it ([`crate::verify`]).
+#[must_use]
+pub fn mining_notice(config: &DaemonConfig) -> Option<String> {
+    if !config.mine.start || shekyl_node::declaration(config) != shekyl_node::Declaration::Open {
+        return None;
+    }
+    Some(
+        "mining: the miner waits for a view of the network; a node alone on an open network \
+         never gets one, and mines alone only when declared offline (`clearnet = off` and \
+         `tor = off`) or closed (`p2p-closed-peer`)"
+            .to_owned(),
+    )
 }
 
 /// The announcements, to standard error and appended to the log file.
