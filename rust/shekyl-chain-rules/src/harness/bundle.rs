@@ -238,6 +238,57 @@ pub struct FixturePersona {
     pub shards: Vec<u64>,
 }
 
+/// A record's anchor: the block a read was anchored to, and its hash.
+#[derive(Clone, Copy, Debug)]
+pub struct Anchor {
+    /// Below the issuing block (`anchor_height < h`).
+    pub height: BlockHeight,
+    /// The anchor block's hash on the chain the bundle is judged against.
+    pub hash: BlockHash,
+}
+
+/// The record a pass files, with the receipt `P` would have signed: the
+/// receipt is `secret_key`'s signature, under the receipt scheme's domain,
+/// over the pass transcript of `stream`, `nonce`, `anchor`, `shard_id` and
+/// a fixed delivery digest. What stands in for `P` serving the read, for a
+/// fixture that drives admission without a serving host; the verifier
+/// checks the receipt and the anchor, never the bytes served.
+///
+/// # Panics
+///
+/// If signing fails.
+#[must_use]
+pub fn signed_record(
+    secret_key: &FnDsaHybridSecretKey,
+    stream: shekyl_archival_retention::PassStream,
+    nonce: &[u8; 32],
+    anchor: Anchor,
+    shard_id: u64,
+    attempt: u8,
+) -> BundleRecord {
+    let delivery_digest = [0xDD; 32];
+    let transcript = pass_countersignature_message(
+        stream,
+        nonce,
+        anchor.height,
+        anchor.hash.as_bytes(),
+        shard_id,
+        &delivery_digest,
+    );
+    let receipt: [u8; BUNDLE_SIGNATURE_LEN] = HybridEd25519FnDsa
+        .sign(secret_key, SCHEME_DOMAIN_RECEIPT, &transcript)
+        .expect("fixture receipt signing")
+        .to_canonical_bytes()
+        .try_into()
+        .expect("the canonical signature length");
+    BundleRecord {
+        attempt,
+        anchor_height: anchor.height,
+        delivery_digest,
+        receipt,
+    }
+}
+
 /// A producer, three personas and the chain they are on: enough to build
 /// a bundle for one block `h` that [`verify_bundle`](crate::verify_bundle)
 /// admits, and every near miss of one.
@@ -471,31 +522,21 @@ impl BundleWorld {
         stream: shekyl_archival_retention::PassStream,
         nonce: &[u8; 32],
     ) -> BundleRecord {
-        let delivery_digest = [0xDD; 32];
         let anchor_hash = self
             .view
             .chain_block_hash(anchor)
             .expect("anchor is at or below the fixture chain's tip");
-        let transcript = pass_countersignature_message(
+        signed_record(
+            secret_key,
             stream,
             nonce,
-            anchor,
-            anchor_hash.as_bytes(),
+            Anchor {
+                height: anchor,
+                hash: anchor_hash,
+            },
             shard_id,
-            &delivery_digest,
-        );
-        let receipt: [u8; BUNDLE_SIGNATURE_LEN] = HybridEd25519FnDsa
-            .sign(secret_key, SCHEME_DOMAIN_RECEIPT, &transcript)
-            .expect("fixture receipt signing")
-            .to_canonical_bytes()
-            .try_into()
-            .expect("the canonical signature length");
-        BundleRecord {
             attempt,
-            anchor_height: anchor,
-            delivery_digest,
-            receipt,
-        }
+        )
     }
 
     /// The bundle an honest producer files when exactly `passes` passed,
