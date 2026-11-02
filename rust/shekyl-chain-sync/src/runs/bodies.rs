@@ -393,6 +393,7 @@ where
             return false;
         }
         peer.gates.header_quiet
+            || peer.gates.header_spent
             || peer.gates.past_cap_followed
             || peer.claim.is_none_or(|claim| claim.work <= self.star.work)
     }

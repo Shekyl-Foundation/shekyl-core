@@ -7,14 +7,57 @@
 //! end is the loopback harness's (`shekyl-p2p-harness`,
 //! `tests/chain_sync_loopback.rs`).
 
-use shekyl_chain_ingest::service::{ArrivalTag, CannotFollow, Reply};
+use shekyl_chain_ingest::service::{ArrivalTag, CannotFollow, Refusal, Reply};
 use shekyl_chain_ingest::PopBeyondReorgCap;
 use shekyl_chain_rules::{CenRow, InvalidBlock, Locus};
 use shekyl_levin::{RequestBodies, RequestHeaders};
 use shekyl_types::{BlockCount, BlockHash, BlockHeight};
 
-use super::{outcome_of, ServeRequest, Serving};
+use super::{outcome_of, outcome_of_refusal, ServeRequest, Serving};
 use shekyl_chain_sync::{Outcome, SyncState};
+
+/// A refused offer reaches the model as the outcome its refusal names. A
+/// dry bucket is `Throttled`, never `NoRoom`: no seat report follows a
+/// refusal that did not move the room, so a body held for one would be
+/// held for good (2026-11-02, a node `behind` with every offer throttled).
+#[test]
+fn every_door_refusal_has_an_outcome() {
+    let cases = [
+        (Refusal::NoRoom, true, 10, Some(100), Outcome::NoRoom),
+        (Refusal::Throttled, true, 10, Some(100), Outcome::Throttled),
+        (Refusal::Throttled, false, 10, None, Outcome::Throttled),
+        (
+            Refusal::StoreUnreadable,
+            true,
+            10,
+            Some(100),
+            Outcome::StoreUnreadable,
+        ),
+        (
+            Refusal::Oversize,
+            true,
+            101,
+            Some(100),
+            Outcome::Oversize { invalidate: true },
+        ),
+        (
+            Refusal::Oversize,
+            false,
+            101,
+            Some(100),
+            Outcome::Oversize { invalidate: false },
+        ),
+        (Refusal::Oversize, true, 100, Some(100), Outcome::Again),
+        (Refusal::Oversize, true, 101, None, Outcome::Again),
+    ];
+    for (refusal, solicited, bytes, max, expected) in cases {
+        assert_eq!(
+            outcome_of_refusal(refusal, solicited, bytes, max),
+            expected,
+            "{refusal:?} solicited={solicited} bytes={bytes} max={max:?}"
+        );
+    }
+}
 
 #[test]
 fn every_entry_reply_has_an_outcome() {

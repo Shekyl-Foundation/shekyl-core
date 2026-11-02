@@ -1121,6 +1121,9 @@ where
                     tracing::debug!(%session, ?cause, "chain sync closes a session");
                     self.close(session);
                 }
+                Command::HeadersSpent { session, cause } => {
+                    tracing::debug!(%session, ?cause, "a session's headers from H* yielded nothing");
+                }
                 Command::RaiseAlarm { fork_at, tip, work } => {
                     // The latch watch carries the write back as `Latch`.
                     let alarm = self.alarm.clone();
@@ -1268,27 +1271,20 @@ where
                     .and_then(|max| usize::try_from(max).ok());
                 let now = Instant::now();
                 for (tag, session, solicited, _, bytes) in tags {
-                    let outcome = match refusal {
-                        // No room and a dry bucket wait for a seat. An
-                        // unreadable store does not: the service stops on
-                        // that read, and a later seat report must not
-                        // offer the body again.
-                        Refusal::NoRoom | Refusal::Throttled => {
-                            // The wait is timed from the first refusal: a
-                            // body refused again keeps its first.
-                            self.seat_waiting.entry(tag).or_insert((now, session));
-                            Outcome::NoRoom
-                        }
-                        Refusal::StoreUnreadable => Outcome::StoreUnreadable,
-                        Refusal::Oversize if max.is_some_and(|max| bytes > max) => {
-                            // A requested body invalidates its header; an
-                            // announced one does not.
-                            Outcome::Oversize {
-                                invalidate: solicited,
-                            }
-                        }
-                        Refusal::Oversize => Outcome::Again,
-                    };
+                    let outcome = outcome_of_refusal(refusal, solicited, bytes, max);
+                    if outcome == Outcome::NoRoom {
+                        // The wait is timed from the first refusal: a
+                        // body refused again keeps its first.
+                        self.seat_waiting.entry(tag).or_insert((now, session));
+                    }
+                    tracing::debug!(
+                        %session,
+                        tag,
+                        ?refusal,
+                        ?outcome,
+                        solicited,
+                        "the door refused an offer"
+                    );
                     self.event(Event::Entry { tag, outcome });
                 }
             }
@@ -1328,6 +1324,35 @@ fn framed(command: u32, message: &impl PortableMap) -> Result<Vec<u8>, String> {
 /// `arrival` is the promoted tip, and [`Outcome::Noted`] otherwise. A
 /// promoted tip that is some other block has no supplier this offer can
 /// name; the model relays it from the tip event.
+/// The outcome the model is told when the door refuses an offer of
+/// `bytes`. No room waits for a seat (`Event::Room`). An unreadable store
+/// does not: the service stops on that read, and a later seat report must
+/// not offer the body again. A dry bucket is the session's, not the
+/// door's: the room did not move, so no seat report follows, and a body
+/// held for one would be held for good (seen 2026-11-02: a node `behind`
+/// with its target advancing, every offer refused `Throttled` and frozen
+/// as `NoRoom`). The model takes the seat back and asks for the body,
+/// which takes no token. A body larger than the door's bound invalidates
+/// its header when this node asked for it, never when it was announced; a
+/// body within the bound that the door still called oversize is offered
+/// again.
+fn outcome_of_refusal(
+    refusal: Refusal,
+    solicited: bool,
+    bytes: usize,
+    max: Option<usize>,
+) -> Outcome {
+    match refusal {
+        Refusal::NoRoom => Outcome::NoRoom,
+        Refusal::Throttled => Outcome::Throttled,
+        Refusal::StoreUnreadable => Outcome::StoreUnreadable,
+        Refusal::Oversize if max.is_some_and(|max| bytes > max) => Outcome::Oversize {
+            invalidate: solicited,
+        },
+        Refusal::Oversize => Outcome::Again,
+    }
+}
+
 fn outcome_of(reply: Reply, solicited: bool, arrival: Option<BlockHash>) -> Outcome {
     let action = sync_reply(&reply).action(solicited);
     match (action, reply) {

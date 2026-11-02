@@ -1,0 +1,257 @@
+// Copyright (c) 2026, The Shekyl Foundation
+//
+// All rights reserved.
+// BSD-3-Clause
+
+//! A response from `H*` that yields nothing, and a parent that reaches
+//! `T` after its children. Both were seen on the rehearsal fleet on
+//! 2026-11-02 as one node asking the same peer for the same headers
+//! every millisecond: the children sat in `T` under a parent main had
+//! popped, the parent came back as a tip over them, nothing heavier was
+//! reachable, and every answer was already held.
+
+#![cfg(test)]
+
+use std::time::Duration;
+
+use shekyl_chain_rules::harness::fixture::{candidate_on, chain_of, recorded, root};
+use shekyl_chain_rules::harness::MockChain;
+use shekyl_chain_rules::{AtHeight, HeaderView, RuleSet, Trust};
+use shekyl_difficulty::CumulativeDifficulty;
+use shekyl_levin::PortableMap;
+use shekyl_types::{BlockHash, BlockHeight, ChainCount};
+use shekyl_wire::PowBlob;
+
+use crate::model::{Event, Sync};
+use crate::proof::{drive, open_claim};
+use crate::scenarios::{target_one, NoDraw};
+use crate::{Command, PeerClaim, Spent};
+
+type Model = Sync<u8, fn(BlockHeight) -> RuleSet>;
+
+fn response(blobs: &[Vec<u8>], more: bool) -> Vec<u8> {
+    shekyl_levin::ResponseHeaders {
+        blobs: blobs.to_vec(),
+        tip_work: u128::MAX,
+        more,
+    }
+    .store()
+    .expect("the headers encode")
+}
+
+/// Three headers extending `main`'s tip, oldest first, with their hashes.
+fn three_above(main: &MockChain) -> (Vec<Vec<u8>>, Vec<BlockHash>) {
+    let mut block = candidate_on(main, Vec::new()).block;
+    main.with_view(|view| {
+        let tip = view.tip().expect("main answers").expect("a tip");
+        let mut when = match view.header_at(tip.height).expect("main answers") {
+            AtHeight::Recorded(record) => record.header.timestamp,
+            AtHeight::AboveTip => panic!("the tip is on main"),
+        };
+        let mut previous = tip.hash;
+        let mut pows = Vec::new();
+        let mut hashes = Vec::new();
+        for _ in 0..3 {
+            block.header.previous = previous;
+            when += 120;
+            block.header.timestamp = when;
+            let pow = block.pow_blob();
+            previous = PowBlob::read(&pow).expect("preimage").identity();
+            hashes.push(previous);
+            pows.push(pow);
+        }
+        (pows, hashes)
+    })
+}
+
+fn headers_asked(out: &[Command<u8>], session: u8) -> Vec<Vec<[u8; 32]>> {
+    out.iter()
+        .filter_map(|command| match command {
+            Command::RequestHeaders {
+                session: who,
+                request,
+                ..
+            } if *who == session => Some(request.block_ids.clone()),
+            _ => None,
+        })
+        .collect()
+}
+
+/// Session 1 serves the three headers into `T` and leaves; `H*` is the
+/// third. Session 2 is open with a claim above it and has been asked.
+fn primed(main: &MockChain, pows: &[Vec<u8>]) -> Model {
+    let mut sync: Model = Sync::new(Trust::UNANCHORED, target_one);
+    main.with_view(|view| {
+        let tip = view.tip().expect("main answers").expect("a tip");
+        drive(&mut sync, &view, Event::Tip { tip });
+        open_claim(&mut sync, &view, 1);
+        drive(
+            &mut sync,
+            &view,
+            Event::Headers {
+                session: 1,
+                bytes: response(pows, false),
+            },
+        );
+        drive(&mut sync, &view, Event::SessionClosed { session: 1 });
+        open_claim(&mut sync, &view, 2);
+    });
+    sync
+}
+
+/// A peer whose answer from `H*` is headers `T` already holds, and no
+/// more, is not asked from `H*` again: `T` did not change, so the same
+/// locator would get the same page. The record is `HeadersSpent`. A new
+/// claim from that peer draws it again.
+#[test]
+fn an_answer_already_held_spends_the_session_until_its_claim_changes() {
+    let main = chain_of(8);
+    let (pows, hashes) = three_above(&main);
+    let mut sync = primed(&main, &pows);
+    assert_eq!(sync.selected().hash, hashes[2]);
+    main.with_view(|view| {
+        let out = drive(
+            &mut sync,
+            &view,
+            Event::Headers {
+                session: 2,
+                bytes: response(&pows, false),
+            },
+        );
+        assert!(
+            out.iter().any(|command| matches!(
+                command,
+                Command::HeadersSpent {
+                    session: 2,
+                    cause: Spent::Exhausted,
+                }
+            )),
+            "{out:?}"
+        );
+        assert!(
+            headers_asked(&out, 2).is_empty(),
+            "the same locator was sent again: {out:?}"
+        );
+        // Another event: the plan runs again and still does not draw it.
+        let out = drive(
+            &mut sync,
+            &view,
+            Event::SessionOpened {
+                session: 3,
+                transit: Duration::from_secs(1),
+            },
+        );
+        assert!(headers_asked(&out, 2).is_empty(), "{out:?}");
+        // The peer's claim moves: it is a source again.
+        let mut out = Vec::new();
+        sync.claim(
+            2,
+            PeerClaim {
+                count: ChainCount::from_raw(3),
+                work: CumulativeDifficulty::from_raw(u128::MAX - 1),
+                top: BlockHash::NULL,
+            },
+            &view,
+            std::time::Instant::now(),
+            &mut NoDraw,
+            &mut out,
+        )
+        .expect("the claim is a chain");
+        assert_eq!(headers_asked(&out, 2).len(), 1, "{out:?}");
+    });
+}
+
+/// A peer whose answer from `H*` is headers `T` already holds, with more
+/// to come, is asked to continue from the last header it served, not
+/// from `H*` again.
+#[test]
+fn an_answer_already_held_with_more_continues_from_its_last_header() {
+    let main = chain_of(8);
+    let (pows, hashes) = three_above(&main);
+    let mut sync = primed(&main, &pows);
+    main.with_view(|view| {
+        let out = drive(
+            &mut sync,
+            &view,
+            Event::Headers {
+                session: 2,
+                bytes: response(&pows[..2], true),
+            },
+        );
+        assert_eq!(
+            headers_asked(&out, 2),
+            vec![vec![*hashes[1].as_bytes()]],
+            "{out:?}"
+        );
+        assert!(
+            !out.iter()
+                .any(|command| matches!(command, Command::HeadersSpent { .. })),
+            "{out:?}"
+        );
+    });
+}
+
+/// `T` holds `h+1` and `h+2` above a block `h` main has connected. Main
+/// pops `h`; the two are unreachable, and `H*` is main's tip. A peer
+/// serves `h` again. It is their parent, not a tip over them: `H*` is
+/// `h+2`, and the node does not ask from `h` for headers it holds.
+#[test]
+fn a_parent_served_after_its_children_adopts_them() {
+    let main = chain_of(8);
+    let (pows, hashes) = three_above(&main);
+    let mut sync: Model = Sync::new(Trust::UNANCHORED, target_one);
+    main.with_view(|view| {
+        let tip = view.tip().expect("main answers").expect("a tip");
+        drive(&mut sync, &view, Event::Tip { tip });
+        open_claim(&mut sync, &view, 1);
+        drive(
+            &mut sync,
+            &view,
+            Event::Headers {
+                session: 1,
+                bytes: response(&pows, false),
+            },
+        );
+        drive(&mut sync, &view, Event::SessionClosed { session: 1 });
+    });
+    assert_eq!(sync.header_count(), 3);
+    assert_eq!(sync.selected().hash, hashes[2]);
+
+    // Main connects `h`: it leaves `T`, and its children's branch hangs
+    // off main.
+    let mut eighth = recorded(0);
+    eighth.header = sync.header_record(hashes[0]).expect("h is in T");
+    let longer = main.clone().push(eighth, root(9));
+    longer.with_view(|view| {
+        let tip = view.tip().expect("main answers").expect("a tip");
+        assert_eq!(tip.hash, hashes[0]);
+        drive(&mut sync, &view, Event::Tip { tip });
+    });
+    assert_eq!(sync.header_count(), 2);
+    assert!(!sync.contains_header(hashes[0]));
+    assert_eq!(sync.selected().hash, hashes[2]);
+
+    // Main pops `h`. The children's anchor is off main; `H*` is the tip.
+    main.with_view(|view| {
+        let tip = view.tip().expect("main answers").expect("a tip");
+        drive(&mut sync, &view, Event::Tip { tip });
+        assert_eq!(sync.selected().hash, tip.hash);
+
+        // A peer serves `h` from main's tip.
+        open_claim(&mut sync, &view, 2);
+        let out = drive(
+            &mut sync,
+            &view,
+            Event::Headers {
+                session: 2,
+                bytes: response(&pows[..1], false),
+            },
+        );
+        assert_eq!(sync.header_count(), 3);
+        assert_eq!(
+            sync.selected().hash,
+            hashes[2],
+            "the parent was made a tip over its children: {out:?}"
+        );
+    });
+}

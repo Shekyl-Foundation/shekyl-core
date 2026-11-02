@@ -84,12 +84,14 @@ where
             Outcome::Unlinked { at } => {
                 if let Some(state) = self.peers.get_mut(&session) {
                     state.gates.header_quiet = false;
+                    state.gates.header_spent = false;
                 }
                 self.locate(session, at, now, out);
             }
             Outcome::BeyondCap => {
                 if let Some(state) = self.peers.get_mut(&session) {
                     state.gates.header_quiet = false;
+                    state.gates.header_spent = false;
                 }
             }
             Outcome::MissingBodies { indices } => {

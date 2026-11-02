@@ -226,7 +226,13 @@ ingest deciding forks.**
   - A header tree `T` of verified headers.
   - The best chain `H*`: the most cumulative work among the
     **reachable** chains in `T`, meaning those whose fork point with `L`
-    lies within `D_max`.
+    lies within `D_max`. A header main connected leaves `T`; when main
+    pops it, its children stay, anchored at a hash no longer on main, and
+    are unreachable until it is served again — at which point it is
+    their parent in `T`, not a tip over them (fixed 2026-11-02, #1237:
+    a re-served parent was made a tip, its children's branch stayed
+    anchored off main, and `H*` fell back to `L` while every answer
+    from `L` was already held).
 - **Per session.**
   - the peer's claim (height and cumulative work, a hint only);
   - its verified frontier in `T`;
@@ -287,7 +293,18 @@ ingest deciding forks.**
        This is the liar.
      - **The peer has no more, and the run's work is at most
        `work(H*)`:** the run is dropped and the session is kept. This is
-       an honest lighter fork, or a peer that is behind.
+       an honest lighter fork, or a peer that is behind. **Amended
+       2026-11-02 (#1237, the CS-5 §10 rehearsal):** the session is then
+       *spent* for this `H*` (`Command::HeadersSpent`, a record the
+       owner logs): it is not drawn to extend `H*` again until its claim
+       or `H*` changes, because the same locator would get the same
+       answer. The same gate closes on a response that names no header
+       `T` lacks and says the chain ends there, on a run whose headers
+       could not be judged where they were placed, and on a proof whose
+       cache was not held; a response that names only headers `T` holds
+       *with more to come* continues from the last header served instead
+       of from `H*`. Before the gate, a node whose `H*` was reachable by
+       no heavier tip re-sent the same request every millisecond.
      - **The run fills its per-session budget without exceeding
        `work(H*)`:** the run is dropped with zero hashes, and the
        session is not asked again until its claim changes.
@@ -1859,7 +1876,12 @@ it decided beyond the rows above:
   header responses' count, bytes and round trip (`header_*`), and the
   door's seat wait per body span (`seated_spans`, `seat_waits`,
   `seat_wait_ns_*`: a span counts as waiting from the door's first
-  `NoRoom` or `Throttled` refusal to the offer it admitted), all as
+  `NoRoom` refusal to the offer it admitted; a `Throttled` refusal is
+  the session's bucket, not the door's room, so the model takes the
+  seat back and asks for the body, which takes no token — until
+  2026-11-02 the owner reported it as `NoRoom`, and a node `behind` with
+  every unsolicited offer throttled held its bodies for a seat report
+  that never came), all as
   totals; and the owner logs each response (`a sync response`: its kind,
   bytes, blocks and request-to-response time) and each seated span (`a
   body span seated`: its blocks and wait) at `debug`. `SYNC_RATE_FLOOR`

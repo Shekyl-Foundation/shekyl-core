@@ -22,7 +22,7 @@ use shekyl_types::{BlockCount, BlockHash, BlockHeight, PowHash, Timestamp};
 use shekyl_wire::PowBlob;
 
 use crate::branch::{BranchView, Pending};
-use crate::model::{CloseCause, Command, HashClass, Job, ProveItem, Proved, Sync};
+use crate::model::{CloseCause, Command, HashClass, Job, ProveItem, Proved, Spent, Sync};
 use crate::peer::{cache_for, Checked, HeaderRequest, Run};
 
 mod bodies;
@@ -127,7 +127,9 @@ where
             if response.more {
                 self.close(session, CloseCause::HeadersForm, out);
             } else {
-                self.finish_run(session, false, now, out);
+                // Nothing above the locator, and no more: the same
+                // locator would get the same answer.
+                self.spend(session, Spent::Exhausted, out);
             }
             return Ok(());
         }
@@ -202,6 +204,7 @@ where
                 state.frontier = Some((parent_height, parent));
             }
         }
+        let last_served = blobs.last().map(|(hash, _)| *hash);
         let mut fresh = Vec::new();
         for (hash, pow) in blobs {
             if self.tree.contains(hash) {
@@ -225,7 +228,43 @@ where
             fresh.push((hash, pow));
         }
         if fresh.is_empty() {
-            self.finish_run(session, response.more, now, out);
+            if !response.more {
+                // Every header served is in `T` already and the peer's
+                // chain ends there. `T` did not change, so neither did
+                // `H*`, and this locator would be answered the same way:
+                // the request that the runtime saw repeated every
+                // millisecond (2026-11-02) until this gate.
+                self.spend(session, Spent::Exhausted, out);
+                return Ok(());
+            }
+            let running = self
+                .peers
+                .get(&session)
+                .and_then(|s| s.run.as_ref())
+                .is_some_and(|run| !run.chain.checked.is_empty());
+            if running {
+                self.finish_run(session, true, now, out);
+                return Ok(());
+            }
+            // Every header served is in `T` and the peer has more. The
+            // same locator would get the same page, so the next request
+            // continues from the last header served, which `T` or the
+            // locator places.
+            let point = last_served.and_then(|hash| {
+                self.tree
+                    .connecting(hash)
+                    .or_else(|| {
+                        points
+                            .iter()
+                            .find(|(_, known)| *known == hash)
+                            .map(|(height, _)| *height)
+                    })
+                    .map(|height| (height, hash))
+            });
+            match point {
+                Some(point) => self.follow_up(session, point, now, out),
+                None => self.spend(session, Spent::Exhausted, out),
+            }
             return Ok(());
         }
         // The first new header hangs off `parent`, or off the last header
@@ -329,7 +368,7 @@ where
                 }
                 Err(Fault::View(fault)) => return Err(fault),
                 Err(Fault::Stale(_) | Fault::Corrupt(_)) => {
-                    self.drop_run(session);
+                    self.spend(session, Spent::Stale, out);
                     return Ok(());
                 }
             };
@@ -351,7 +390,7 @@ where
                         return Err(fault);
                     }
                     _ => {
-                        self.drop_run(session);
+                        self.spend(session, Spent::Stale, out);
                         return Ok(());
                     }
                 },
@@ -442,7 +481,7 @@ where
                 return Ok(());
             }
             if !beats {
-                self.drop_run(session);
+                self.spend(session, Spent::BelowStar, out);
                 return Ok(());
             }
         }
@@ -485,7 +524,7 @@ where
                     return Ok(());
                 }
                 Proved::NotHeld => {
-                    self.drop_run(session);
+                    self.spend(session, Spent::CacheAbsent, out);
                     return Ok(());
                 }
                 Proved::Formed(formed) => {
@@ -519,12 +558,12 @@ where
                                 }
                                 self.plan_proof(session, HashClass::HeaderPow, out);
                             } else {
-                                self.drop_run(session);
+                                self.spend(session, Spent::Stale, out);
                             }
                             return Ok(());
                         }
                         Judged::Gone => {
-                            self.drop_run(session);
+                            self.spend(session, Spent::Gone, out);
                             return Ok(());
                         }
                         Judged::Ok(header) => {
@@ -725,6 +764,21 @@ where
         if let Some(state) = self.peers.get_mut(&session) {
             state.run = None;
         }
+    }
+
+    /// The session's headers from `H*` yielded nothing: its run, if any,
+    /// is dropped, and it is not drawn to extend `H*` again until its
+    /// claim or `H*` changes ([`crate::peer::Gates::header_spent`]).
+    /// Without the gate, `plan` runs after every event and the extending
+    /// slot is free once a response arrives, so the same request went out
+    /// again at once and the same answer came back: a request loop at
+    /// the round trip.
+    fn spend(&mut self, session: K, cause: Spent, out: &mut Vec<Command<K>>) {
+        if let Some(state) = self.peers.get_mut(&session) {
+            state.run = None;
+            state.gates.header_spent = true;
+        }
+        out.push(Command::HeadersSpent { session, cause });
     }
 
     fn session_for_job(&self, job: u64) -> Option<K> {

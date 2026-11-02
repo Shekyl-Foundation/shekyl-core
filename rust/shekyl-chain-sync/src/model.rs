@@ -55,7 +55,7 @@ const _: () = assert!(BODIES_RESPONSE_BYTES / SYNC_RATE_FLOOR == 1024);
 
 pub use crate::protocol::{
     BoundArrival, CachePlan, CloseCause, Command, Event, HashClass, Job, OfferedBody, Outcome,
-    ProveItem, Proved,
+    ProveItem, Proved, Spent,
 };
 
 /// The chain the model has observed.
@@ -251,6 +251,7 @@ where
             open.claim = Some(claim);
             if changed {
                 open.gates.header_quiet = false;
+                open.gates.header_spent = false;
                 open.gates.past_cap_followed = false;
             }
         } else {
@@ -794,6 +795,9 @@ where
             for peer in self.peers.values_mut() {
                 peer.span = None;
                 peer.gates.body_excluded = false;
+                // A new `H*` is a new locator: an answer that yielded
+                // nothing from the old one says nothing about this one.
+                peer.gates.header_spent = false;
             }
         }
         Ok(())
@@ -839,6 +843,7 @@ where
             .iter()
             .filter(|(_, peer)| {
                 !peer.gates.header_quiet
+                    && !peer.gates.header_spent
                     && !peer.gates.past_cap_followed
                     && peer.follow_up.is_none()
                     && peer.claim.is_some_and(|claim| claim.work > self.star.work)

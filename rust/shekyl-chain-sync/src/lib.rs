@@ -40,6 +40,8 @@ mod scenarios;
 #[cfg(test)]
 mod select_tests;
 #[cfg(test)]
+mod spent_tests;
+#[cfg(test)]
 mod stall_tests;
 
 mod arrivals;
@@ -58,7 +60,7 @@ pub use claim::{PayloadRefused, PeerClaim};
 pub use locator::locator;
 pub use model::{
     BoundArrival, CachePlan, ClaimError, CloseCause, Command, Event, HashClass, Job, OfferedBody,
-    Outcome, ProveItem, Proved, Requesting, Sync, BODY_REQUESTS_IN_FLIGHT, SYNC_RATE_FLOOR,
+    Outcome, ProveItem, Proved, Requesting, Spent, Sync, BODY_REQUESTS_IN_FLIGHT, SYNC_RATE_FLOOR,
 };
 pub use shekyl_chain_rules::HeaderView;
 pub use state::{Declaration, SyncState};

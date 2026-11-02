@@ -48,6 +48,12 @@ pub(crate) struct Inventory {
 pub(crate) struct Gates {
     /// Not drawn for headers until the claim changes.
     pub header_quiet: bool,
+    /// The last header request to this session from the current `H*`
+    /// yielded nothing (`Command::HeadersSpent`): it named no header `T`
+    /// lacked, or its run ended below `H*`. The same request would get
+    /// the same answer, so it is not drawn to extend `H*` until its claim
+    /// or `H*` changes.
+    pub header_spent: bool,
     /// Missed a body deadline. A source again when `H*` changes.
     pub body_excluded: bool,
     /// Already followed one past-cap run. Clears when the claim changes.
@@ -60,6 +66,7 @@ impl Gates {
     pub(crate) const fn open() -> Self {
         Self {
             header_quiet: false,
+            header_spent: false,
             body_excluded: false,
             past_cap_followed: false,
             evidence_spent: false,
