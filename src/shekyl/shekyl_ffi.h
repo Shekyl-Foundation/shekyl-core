@@ -2652,14 +2652,12 @@ void shekyl_block_ingest_reject_with_drop(uint8_t* outcome, uint8_t* drop, uint8
 uint8_t shekyl_block_announce_action(uint8_t outcome, uint8_t drop, bool handle_ok);
 bool shekyl_block_announce_re_request_txs(uint8_t action);
 bool shekyl_block_announce_drop(uint8_t action);
-bool shekyl_block_announce_heavier_score(uint8_t action);
 bool shekyl_block_announce_our_failure(uint8_t action);
 bool shekyl_block_announce_relay(uint8_t action);
 bool shekyl_block_announce_request_history(uint8_t action);
 
 uint8_t shekyl_block_sync_action(uint8_t outcome, uint8_t drop);
 bool shekyl_block_sync_drop(uint8_t action);
-bool shekyl_block_sync_heavier_score(uint8_t action);
 bool shekyl_block_sync_orphan_resync(uint8_t action);
 
 // ---------------------------------------------------------------------------

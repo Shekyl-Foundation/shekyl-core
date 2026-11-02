@@ -94,8 +94,8 @@ pub use archival_reads::{
     GetArchivalShardCoverageResponse, ShardCoverageRow,
 };
 pub use bin_commands::{
-    BinError, BlockEntry, GetBlocksByHeightRequest, GetBlocksByHeightResponse, GetOIndexesRequest,
-    GetOIndexesResponse,
+    BinError, BlockEntry, BlockTx, BlockTxSkeleton, GetBlocksByHeightRequest,
+    GetBlocksByHeightResponse, GetOIndexesRequest, GetOIndexesResponse,
 };
 pub use chain::{
     core_rpc_version_string, BlockHeader, ConnectState, GetBlockCountResponse, GetBlockHashParams,
@@ -137,7 +137,7 @@ pub use p2p::{
     SyncInfoResponse, SyncSpan,
 };
 pub use transactions::{
-    GetTransactionsRequest, GetTransactionsResponse, IsKeyImageSpentRequest,
+    ArchivedTx, GetTransactionsRequest, GetTransactionsResponse, IsKeyImageSpentRequest,
     IsKeyImageSpentResponse, KeyImageStatus, KeyImageStatusError, TxEntry, TxEntryError,
     TxLocation,
 };

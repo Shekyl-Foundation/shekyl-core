@@ -167,7 +167,7 @@ namespace cryptonote
         LOG_PRINT_CCONTEXT_L0("Block verification failed, dropping connection");
         // Every span this peer filled is suspect with the block, and a
         // handed span the door refused would otherwise stay queued as held.
-        drop_connection(context, false, true);
+        drop_connection(context, true);
         return;
       }
       if (reply.kind == SHEKYL_INGEST_CONNECTED || reply.kind == SHEKYL_INGEST_SWITCHED)
@@ -312,7 +312,7 @@ namespace cryptonote
           else
           {
             MINFO(context << "dropping idle peer with negative score");
-            drop_connection_with_score(context, context.m_expect_response == 0 ? 1 : 5, false);
+            drop_connection(context, false);
             return false;
           }
         }
@@ -514,7 +514,7 @@ namespace cryptonote
     if (offered == SHEKYL_INGEST_THROTTLED)
     {
       LOG_PRINT_CCONTEXT_L1("Announced block past the session's bucket; dropping the connection");
-      drop_connection(context, false, false);
+      drop_connection(context, false);
     }
     else if (offered == SHEKYL_INGEST_OVERSIZE)
       LOG_PRINT_CCONTEXT_L1("Announced block blob exceeds the door's size bound; keeping the connection");
@@ -531,7 +531,7 @@ namespace cryptonote
     if (!shekyl::seam_handshake_established(context.m_connection_id))
     {
       LOG_ERROR_CCONTEXT("Requested compact missing tx before handshake, dropping connection");
-      drop_connection(context, false, false);
+      drop_connection(context, false);
       return 1;
     }
     
@@ -542,7 +542,7 @@ namespace cryptonote
     if (!m_core.get_block_by_hash(arg.block_hash, b))
     {
       LOG_ERROR_CCONTEXT("failed to find block: " << arg.block_hash << ", dropping connection");
-      drop_connection(context, false, false);
+      drop_connection(context, false);
       return 1;
     }
 
@@ -573,7 +573,7 @@ namespace cryptonote
             << ", block_height = " << arg.current_blockchain_height
             << ", dropping connection"
           );
-          drop_connection(context, true, false);
+          drop_connection(context, false);
           return 1;
         }
         txids.push_back(b.tx_hashes[tx_idx]);
@@ -590,7 +590,7 @@ namespace cryptonote
           << ", dropping connection"
         );
         
-        drop_connection(context, false, false);
+        drop_connection(context, false);
         return 1;
       }
     }    
@@ -601,14 +601,14 @@ namespace cryptonote
     {
       LOG_ERROR_CCONTEXT("Failed to handle request NOTIFY_REQUEST_COMPACT_MISSING_TX, "
         << "failed to get requested transactions");
-      drop_connection(context, false, false);
+      drop_connection(context, false);
       return 1;
     }
     if (!missed.empty() || txs.size() != txids.size())
     {
       LOG_ERROR_CCONTEXT("Failed to handle request NOTIFY_REQUEST_COMPACT_MISSING_TX, "
         << missed.size() << " requested transactions not found" << ", dropping connection");
-      drop_connection(context, false, false);
+      drop_connection(context, false);
       return 1;
     }
 
@@ -668,7 +668,7 @@ namespace cryptonote
       if (seen.find(blob) != seen.end())
       {
         LOG_PRINT_CCONTEXT_L1("Duplicate transaction in notification, dropping connection");
-        drop_connection(context, false, false);
+        drop_connection(context, false);
         return 1;
       }
       seen.insert(blob);
@@ -739,7 +739,7 @@ namespace cryptonote
         if (shekyl_drop_verdict_severs(tvc.m_drop_verdict))
         {
           LOG_PRINT_CCONTEXT_L1("Tx verification failed, dropping connection");
-          drop_connection(context, false, false);
+          drop_connection(context, false);
           return 1;
         }
         if (shekyl_drop_verdict_is_internal_failure(tvc.m_drop_verdict))
@@ -787,7 +787,7 @@ namespace cryptonote
     if (!shekyl::seam_handshake_established(context.m_connection_id))
     {
       LOG_ERROR_CCONTEXT("Requested objects before handshake, dropping connection");
-      drop_connection(context, false, false);
+      drop_connection(context, false);
       return 1;
     }
     MLOG_P2P_MESSAGE("Received NOTIFY_REQUEST_GET_OBJECTS (" << arg.blocks.size() << " blocks)");
@@ -797,7 +797,7 @@ namespace cryptonote
             "Requested objects count is too big ("
             << arg.blocks.size() << ") expected not more then "
             << CURRENCY_PROTOCOL_MAX_OBJECT_REQUEST_COUNT);
-        drop_connection(context, false, false);
+        drop_connection(context, false);
         return 1;
       }
 
@@ -805,7 +805,7 @@ namespace cryptonote
     if(!m_core.handle_get_objects(arg, rsp, context))
     {
       LOG_ERROR_CCONTEXT("failed to handle request NOTIFY_REQUEST_GET_OBJECTS, dropping connection");
-      drop_connection(context, false, false);
+      drop_connection(context, false);
       return 1;
     }
     context.m_last_request_time = boost::posix_time::microsec_clock::universal_time();
@@ -845,7 +845,7 @@ namespace cryptonote
     if (context.m_expect_response != NOTIFY_RESPONSE_GET_OBJECTS::ID)
     {
       LOG_ERROR_CCONTEXT("Got NOTIFY_RESPONSE_GET_OBJECTS out of the blue, dropping connection");
-      drop_connection(context, true, false);
+      drop_connection(context, false);
       return 1;
     }
     context.m_expect_response = 0;
@@ -886,7 +886,7 @@ namespace cryptonote
     if(arg.blocks.empty())
     {
       LOG_ERROR_CCONTEXT("sent wrong NOTIFY_HAVE_OBJECTS: no blocks");
-      drop_connection(context, true, false);
+      drop_connection(context, false);
       ++m_sync_bad_spans_downloaded;
       return 1;
     }
@@ -894,7 +894,7 @@ namespace cryptonote
     {
       LOG_ERROR_CCONTEXT("sent wrong NOTIFY_HAVE_OBJECTS: arg.m_current_blockchain_height=" << arg.current_blockchain_height
         << " < m_last_response_height=" << context.m_last_response_height << ", dropping connection");
-      drop_connection(context, false, false);
+      drop_connection(context, false);
       ++m_sync_bad_spans_downloaded;
       return 1;
     }
@@ -927,7 +927,7 @@ namespace cryptonote
       {
         LOG_ERROR_CCONTEXT("sent wrong block: failed to parse and validate block: "
           << describe_peer_blob(arg.blocks[i].block) << ", dropping connection");
-        drop_connection(context, false, false);
+        drop_connection(context, false);
         ++m_sync_bad_spans_downloaded;
         return 1;
       }
@@ -935,7 +935,7 @@ namespace cryptonote
       {
         LOG_ERROR_CCONTEXT("sent wrong block: block: miner tx does not have exactly one txin_gen input: "
           << describe_peer_blob(arg.blocks[i].block) << ", dropping connection");
-        drop_connection(context, false, false);
+        drop_connection(context, false);
         ++m_sync_bad_spans_downloaded;
         return 1;
       }
@@ -944,7 +944,7 @@ namespace cryptonote
       if (context.get_expected_hash(this_height) != block_hash)
       {
         LOG_ERROR_CCONTEXT("Sent invalid chain");
-        drop_connection(context, false, false);
+        drop_connection(context, false);
         ++m_sync_bad_spans_downloaded;
         return 1;
       }
@@ -956,7 +956,7 @@ namespace cryptonote
         if (start_height > context.m_expect_height)
         {
           LOG_ERROR_CCONTEXT("sent block ahead of expected height, dropping connection");
-          drop_connection(context, false, false);
+          drop_connection(context, false);
           ++m_sync_bad_spans_downloaded;
           return 1;
         }
@@ -964,7 +964,7 @@ namespace cryptonote
         if (this_height == 0 || context.get_expected_hash(this_height - 1) != b.prev_id)
         {
           LOG_ERROR_CCONTEXT("Sent invalid chain");
-          drop_connection(context, false, false);
+          drop_connection(context, false);
           ++m_sync_bad_spans_downloaded;
           return 1;
         }
@@ -972,7 +972,7 @@ namespace cryptonote
       else if (b.prev_id != previous)
       {
         LOG_ERROR_CCONTEXT("Sent invalid chain");
-        drop_connection(context, false, false);
+        drop_connection(context, false);
         ++m_sync_bad_spans_downloaded;
         return 1;
       }
@@ -981,7 +981,7 @@ namespace cryptonote
       if (start_height + i != this_height)
       {
         LOG_ERROR_CCONTEXT("Sent invalid chain");
-        drop_connection(context, false, false);
+        drop_connection(context, false);
         ++m_sync_bad_spans_downloaded;
         return 1;
       }
@@ -991,7 +991,7 @@ namespace cryptonote
       {
         LOG_ERROR_CCONTEXT("sent wrong NOTIFY_RESPONSE_GET_OBJECTS: block with id=" << epee::string_tools::pod_to_hex(get_blob_hash(arg.blocks[i].block))
           << " wasn't requested, dropping connection");
-        drop_connection(context, false, false);
+        drop_connection(context, false);
         ++m_sync_bad_spans_downloaded;
         return 1;
       }
@@ -999,7 +999,7 @@ namespace cryptonote
       {
         LOG_ERROR_CCONTEXT("sent wrong NOTIFY_RESPONSE_GET_OBJECTS: block with id=" << epee::string_tools::pod_to_hex(get_blob_hash(arg.blocks[i].block))
           << ", tx_hashes.size()=" << b.tx_hashes.size() << " mismatch with block_complete_entry.m_txs.size()=" << arg.blocks[i].txs.size() << ", dropping connection");
-        drop_connection(context, false, false);
+        drop_connection(context, false);
         ++m_sync_bad_spans_downloaded;
         return 1;
       }
@@ -1012,7 +1012,7 @@ namespace cryptonote
     {
       MERROR(context << "returned not all requested objects (context.m_requested_objects.size()="
         << context.m_requested_objects.size() << "), dropping connection");
-      drop_connection(context, false, false);
+      drop_connection(context, false);
       ++m_sync_bad_spans_downloaded;
       return 1;
     }
@@ -1026,14 +1026,14 @@ namespace cryptonote
         if (block_entry.pruned)
         {
           MERROR(context << "returned a pruned block, dropping connection");
-          drop_connection(context, false, false);
+          drop_connection(context, false);
           ++m_sync_bad_spans_downloaded;
           return 1;
         }
         if (block_entry.block_weight)
         {
           MERROR(context << "returned a block weight for a non pruned block, dropping connection");
-          drop_connection(context, false, false);
+          drop_connection(context, false);
           ++m_sync_bad_spans_downloaded;
           return 1;
         }
@@ -1042,7 +1042,7 @@ namespace cryptonote
           if (tx_entry.prunable_hash != crypto::null_hash)
           {
             MERROR(context << "returned at least one pruned object which we did not expect, dropping connection");
-            drop_connection(context, false, false);
+            drop_connection(context, false);
             ++m_sync_bad_spans_downloaded;
             return 1;
           }
@@ -1189,7 +1189,7 @@ namespace cryptonote
   void t_cryptonote_protocol_handler<t_core>::drop_throttled_peer(const boost::uuids::uuid& id)
   {
     m_p2p->for_connection(id, [this](cryptonote_connection_context& origin) {
-      drop_connection(origin, false, true);
+      drop_connection(origin, true);
     });
   }
   template<class t_core>
@@ -1274,7 +1274,7 @@ namespace cryptonote
     if (!request_missing_objects(context, true, force_next_span))
     {
       LOG_ERROR_CCONTEXT("Failed to request missing objects, dropping connection");
-      drop_connection(context, false, false);
+      drop_connection(context, false);
       return 1;
     }
     return 1;
@@ -1373,7 +1373,7 @@ namespace cryptonote
           {
             if (!m_p2p->for_connection(drop_id, [this, syncing, synced](cryptonote_connection_context& ctx){
               MINFO(ctx << "dropping synced peer, " << syncing << " syncing, " << synced << " synced");
-              drop_connection(ctx, false, false);
+              drop_connection(ctx, false);
             }))
               MDEBUG("Failed to find peer we wanted to drop");
           }
@@ -1405,7 +1405,7 @@ namespace cryptonote
     if (!shekyl::seam_handshake_established(context.m_connection_id))
     {
       LOG_ERROR_CCONTEXT("Requested chain before handshake, dropping connection");
-      drop_connection(context, false, false);
+      drop_connection(context, false);
       return 1;
     }
     NOTIFY_RESPONSE_CHAIN_ENTRY::request r;
@@ -1955,14 +1955,14 @@ skip:
     if (context.m_expect_response != NOTIFY_RESPONSE_CHAIN_ENTRY::ID)
     {
       LOG_ERROR_CCONTEXT("Got NOTIFY_RESPONSE_CHAIN_ENTRY out of the blue, dropping connection");
-      drop_connection(context, true, false);
+      drop_connection(context, false);
       return 1;
     }
     context.m_expect_response = 0;
     if (arg.start_height + 1 > context.m_expect_height) // we expect an overlapping block
     {
       LOG_ERROR_CCONTEXT("Got NOTIFY_RESPONSE_CHAIN_ENTRY past expected height, dropping connection");
-      drop_connection(context, true, false);
+      drop_connection(context, false);
       return 1;
     }
 
@@ -1973,19 +1973,19 @@ skip:
     if(!arg.m_block_ids.size())
     {
       LOG_ERROR_CCONTEXT("sent empty m_block_ids, dropping connection");
-      drop_connection(context, true, false);
+      drop_connection(context, false);
       return 1;
     }
     if (arg.total_height < arg.m_block_ids.size() || arg.start_height > arg.total_height - arg.m_block_ids.size())
     {
       LOG_ERROR_CCONTEXT("sent invalid start/nblocks/height, dropping connection");
-      drop_connection(context, true, false);
+      drop_connection(context, false);
       return 1;
     }
     if (!arg.m_block_weights.empty() && arg.m_block_weights.size() != arg.m_block_ids.size())
     {
       LOG_ERROR_CCONTEXT("sent invalid block weight array, dropping connection");
-      drop_connection(context, true, false);
+      drop_connection(context, false);
       return 1;
     }
     MDEBUG(context << "first block hash " << arg.m_block_ids.front() << ", last " << arg.m_block_ids.back());
@@ -1993,7 +1993,7 @@ skip:
     if (arg.total_height >= CRYPTONOTE_MAX_BLOCK_NUMBER || arg.m_block_ids.size() > BLOCKS_IDS_SYNCHRONIZING_MAX_COUNT)
     {
       LOG_ERROR_CCONTEXT("sent wrong NOTIFY_RESPONSE_CHAIN_ENTRY, with total_height=" << arg.total_height << " and block_ids=" << arg.m_block_ids.size());
-      drop_connection(context, false, false);
+      drop_connection(context, false);
       return 1;
     }
     if (arg.total_height < context.m_remote_blockchain_height)
@@ -2009,7 +2009,7 @@ skip:
       LOG_ERROR_CCONTEXT("sent wrong NOTIFY_RESPONSE_CHAIN_ENTRY, with m_total_height=" << arg.total_height
                                                                          << ", m_start_height=" << arg.start_height
                                                                          << ", m_block_ids.size()=" << arg.m_block_ids.size());
-      drop_connection(context, false, false);
+      drop_connection(context, false);
       return 1;
     }
 
@@ -2026,7 +2026,7 @@ skip:
       if (!blocks_found.insert(arg.m_block_ids[i]).second)
       {
         LOG_ERROR_CCONTEXT("Duplicate blocks in chain entry response, dropping connection");
-        drop_connection_with_score(context, 5, false);
+        drop_connection(context, false);
         return 1;
       }
       int where;
@@ -2037,7 +2037,7 @@ skip:
         if (!have_block && m_block_queue.have_height(arg.m_block_ids[i]) != arg.start_height)
         {
           LOG_ERROR_CCONTEXT("First block hash is unknown, dropping connection");
-          drop_connection_with_score(context, 5, false);
+          drop_connection(context, false);
           return 1;
         }
         if (!have_block)
@@ -2054,19 +2054,19 @@ skip:
             default:
             case HAVE_BLOCK_INVALID:
               LOG_ERROR_CCONTEXT("Block is invalid or known without known type, dropping connection");
-              drop_connection(context, true, false);
+              drop_connection(context, false);
               return 1;
             case HAVE_BLOCK_MAIN_CHAIN:
               if (expect_unknown)
               {
                 LOG_ERROR_CCONTEXT("Block is on the main chain, but we did not expect a known block, dropping connection");
-                drop_connection_with_score(context, 5, false);
+                drop_connection(context, false);
                 return 1;
               }
               if (m_core.get_block_id_by_height(arg.start_height + i) != arg.m_block_ids[i])
               {
                 LOG_ERROR_CCONTEXT("Block is on the main chain, but not at the expected height, dropping connection");
-                drop_connection_with_score(context, 5, false);
+                drop_connection(context, false);
                 return 1;
               }
               break;
@@ -2074,7 +2074,7 @@ skip:
               if (expect_unknown)
               {
                 LOG_ERROR_CCONTEXT("Block is on the main chain, but we did not expect a known block, dropping connection");
-                drop_connection_with_score(context, 5, false);
+                drop_connection(context, false);
                 return 1;
               }
               break;
@@ -2091,7 +2091,7 @@ skip:
     if (!request_missing_objects(context, false))
     {
       LOG_ERROR_CCONTEXT("Failed to request missing objects, dropping connection");
-      drop_connection(context, false, false);
+      drop_connection(context, false);
       return 1;
     }
 
@@ -2163,7 +2163,7 @@ skip:
     }
     context.m_score -= score;
     if (context.m_score <= DROP_PEERS_ON_SCORE)
-      drop_connection_with_score(context, 5, false);
+      drop_connection(context, false);
   }
   //------------------------------------------------------------------------------------------------------------------------
   template<class t_core>
@@ -2186,12 +2186,9 @@ skip:
   }
   //------------------------------------------------------------------------------------------------------------------------
   template<class t_core>
-  void t_cryptonote_protocol_handler<t_core>::drop_connection_with_score(cryptonote_connection_context &context, unsigned score, bool flush_all_spans)
+  void t_cryptonote_protocol_handler<t_core>::drop_connection(cryptonote_connection_context &context, bool flush_all_spans)
   {
-    LOG_DEBUG_CC(context, "dropping connection id " << context.m_connection_id << ", score " << score << ", flush_all_spans " << flush_all_spans);
-
-    if (score > 0)
-      m_p2p->add_host_fail(context.m_remote_address, score);
+    LOG_DEBUG_CC(context, "dropping connection id " << context.m_connection_id << ", flush_all_spans " << flush_all_spans);
 
     m_block_queue.flush_spans(context.m_connection_id, flush_all_spans);
 
@@ -2199,17 +2196,11 @@ skip:
   }
   //------------------------------------------------------------------------------------------------------------------------
   template<class t_core>
-  void t_cryptonote_protocol_handler<t_core>::drop_connection(cryptonote_connection_context &context, bool add_fail, bool flush_all_spans)
-  {
-    return drop_connection_with_score(context, add_fail ? 1 : 0, flush_all_spans);
-  }
-  //------------------------------------------------------------------------------------------------------------------------
-  template<class t_core>
   void t_cryptonote_protocol_handler<t_core>::drop_connection(const boost::uuids::uuid& id)
   {
     m_p2p->for_connection(id, [this](cryptonote_connection_context& context){
       // This _could be_ outside of strand, so careful on actions
-      drop_connection(context, true, false);
+      drop_connection(context, false);
     });
   }
   //------------------------------------------------------------------------------------------------------------------------
@@ -2236,13 +2227,11 @@ skip:
 
     MWARNING("dropping connections to " << address.str());
 
-    m_p2p->add_host_fail(address, 5);
-
     m_p2p->post_each([this, address](cryptonote_connection_context& context) {
       if (!address.is_same_host(context.m_remote_address))
         return;
       m_block_queue.flush_spans(context.m_connection_id, true);
-      drop_connection(context, true, false);
+      drop_connection(context, false);
     }, {});
   }
   //------------------------------------------------------------------------------------------------------------------------

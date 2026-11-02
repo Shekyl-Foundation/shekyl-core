@@ -8,6 +8,10 @@
 use super::info::{fetch_get_info, network_label};
 use super::Source;
 use crate::ctl_client;
+use shekyl_rpc_types::mining::MineSpeed;
+
+/// Where [`mining_speed`] leaves raw hashes and starts a metric prefix.
+const PREFIX_FROM_HASHES: u128 = 1_000;
 
 /// The `/mining_status` reply, as much of it as `show_status` reads.
 ///
@@ -19,7 +23,7 @@ use crate::ctl_client;
 struct MiningStatusProvisional {
     status: shekyl_rpc_types::RpcStatus,
     active: bool,
-    speed: u64,
+    speed: MineSpeed,
 }
 
 /// What `show_status` could learn about mining.
@@ -104,7 +108,7 @@ fn fetch_mining_status(src: &Source) -> Result<MiningReadout, String> {
 #[deny(clippy::arithmetic_side_effects)]
 pub(super) fn mining_speed(rate: u128) -> String {
     const PREFIXES: [char; 8] = ['k', 'M', 'G', 'T', 'P', 'E', 'Z', 'Y'];
-    if rate < 1000 {
+    if rate < PREFIX_FROM_HASHES {
         return format!("{rate} H/s");
     }
     let mut scaled = rate;
@@ -120,6 +124,17 @@ pub(super) fn mining_speed(rate: u128) -> String {
         scaled /= 1000;
     }
     format!("{rate} H/s")
+}
+
+/// The miner's rate for the status line. Below the prefix boundary the
+/// hundredths stay, so eight hashes in ten seconds reads `0.80 H/s`.
+fn mine_speed_text(speed: MineSpeed) -> String {
+    let whole = u128::from(speed.whole_hashes_per_second());
+    if whole >= PREFIX_FROM_HASHES {
+        mining_speed(whole)
+    } else {
+        speed.hashes_per_second_text()
+    }
 }
 
 /// `get_sync_percentage`, including its refusal to round up to 100.
@@ -188,7 +203,7 @@ pub(super) fn show_status(src: &Source, now: u64) -> Result<String, String> {
         MiningReadout::Unavailable => "mining info unavailable".to_owned(),
         MiningReadout::Syncing => "syncing".to_owned(),
         MiningReadout::Ready(m) if m.active => {
-            format!("mining at {}", mining_speed(u128::from(m.speed)))
+            format!("mining at {}", mine_speed_text(m.speed))
         }
         MiningReadout::Ready(_) => "not mining".to_owned(),
     };
