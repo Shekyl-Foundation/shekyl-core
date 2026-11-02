@@ -45,7 +45,7 @@ port — it is not part of this Phase 1 transport deletion.
 | `src/rpc/core_rpc_ffi.cpp` | Dispatch tables mapping URIs/methods to `on_*` handlers |
 | `rust/shekyl-daemon-rpc/` | Axum crate: server, routes, handlers, types |
 | `rust/shekyl-daemon-rpc/src/ffi_exports.rs` | `shekyl_daemon_rpc_start(core)` and `shekyl_daemon_rpc_stop()`: the one start, reading the RPC section the Rust `main()` recorded (`DAEMON_CONFIG_CUTOVER.md` §2.3) |
-| `rust/shekyl-daemon-rpc/src/ctl_client.rs` | `shekyl_daemon_ctl_post/free` — the `shekyld <command>` control client's transport (daemon-only) |
+| `rust/shekyl-daemon-ctl/` | `shekyl_daemon_ctl_post/free` — the `shekyld <command>` control client's transport; its own crate so `libshekyl_ffi.a` carries it without the server (`DAEMON_CONFIG_CUTOVER.md` DC-F30) |
 | `src/daemon/rpc_client.h` | `tools::t_rpc_client`: request/response framing for the control client over that export |
 | `src/shekyl/shekyl_ffi.h` | C++ declarations for Rust FFI functions |
 | `src/daemon/daemon.cpp` | The C++ remnant's `run`: calls the one RPC start on the core; the listeners are the RPC section's |
@@ -231,7 +231,7 @@ maps — dual-list single-sourcing is a FOLLOWUPS item.
 | Local | Plaintext loopback (`127.0.0.1` or `::1`), and loopback only: a wildcard or a network bind is refused at the Rust bind seam (RT-1/RT-2; `--confirm-external-bind` retired). `--rpc-use-ipv6` binds `--rpc-bind-ipv6-address` on the same start. shekyld does **not** register `--rpc-login` or `--rpc-ssl*`. |
 | Remote (your other machine) | Onion (address = key; `has_strong_verification` already) or a reverse proxy outside the daemon. Still operator-to-operator. |
 | Wallet-RPC | Separate Rust process. `--rpc-login` (HTTP Basic) on loopback; any non-loopback bind requires it and wildcard binds are refused; there is no `--rpc-ssl*` — the encrypted remote leg is pinned mutual TLS (`docs/design/RPC_TRANSPORT_POSTURE.md` RT-4). |
-| CLI outbound | `shekyld <command>` reaches the running daemon through `shekyl_daemon_ctl_post` (`shekyl-daemon-rpc/src/ctl_client.rs`, over `shekyl-rpc-transport`): plaintext loopback, no login, no TLS — the outbound half mirrors the inbound ruling. epee's `http_simple_client` is no longer on this path. |
+| CLI outbound | `shekyld <command>` reaches the running daemon through `shekyl_daemon_ctl_post` (`rust/shekyl-daemon-ctl`, over `shekyl-rpc-transport`): plaintext loopback, no login, no TLS — the outbound half mirrors the inbound ruling. epee's `http_simple_client` is no longer on this path. |
 
 **Rule-21 reopen for in-daemon clearnet TLS / digest auth:** named production
 need + threat-model review. Disposition is never “implement Axum `--rpc-ssl`”
