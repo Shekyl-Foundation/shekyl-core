@@ -186,34 +186,46 @@ fn curve25519_basepoint() -> [u8; 32] {
     b
 }
 
+/// A fixture path that is absolute on the host running the test: `unix`
+/// as written on Unix, `C:` and backslashes on Windows, where `/bin/x` is
+/// not absolute and the path kinds refuse it for that before anything else
+/// (DC-F40).
+fn abs(unix: &str) -> String {
+    if cfg!(windows) {
+        format!("C:{}", unix.replace('/', "\\"))
+    } else {
+        unix.to_owned()
+    }
+}
+
 #[test]
 fn commands_are_file_only_arrays_with_named_placeholders() {
     const NOTIFY: Kind = Kind::Command {
         placeholders: &["height", "hash"],
     };
     let ok = toml::Value::Array(vec![
-        toml::Value::String("/usr/bin/logger".into()),
+        toml::Value::String(abs("/usr/bin/logger")),
         toml::Value::String("block {height} {hash} 100%".into()),
     ]);
     assert!(matches!(NOTIFY.parse_file(&ok), Ok(Value::Command(ref a)) if a.len() == 2));
     let unknown = toml::Value::Array(vec![
-        toml::Value::String("/bin/x".into()),
+        toml::Value::String(abs("/bin/x")),
         toml::Value::String("{height} {txid}".into()),
     ]);
     assert_eq!(code(NOTIFY.parse_file(&unknown)), Code::ValuePlaceholder);
     let unmatched = toml::Value::Array(vec![
-        toml::Value::String("/bin/x".into()),
+        toml::Value::String(abs("/bin/x")),
         toml::Value::String("{height".into()),
     ]);
     assert_eq!(code(NOTIFY.parse_file(&unmatched)), Code::ValueSyntax);
     let relative = toml::Value::Array(vec![toml::Value::String("logger".into())]);
     assert_eq!(code(NOTIFY.parse_file(&relative)), Code::ValueSyntax);
+    assert_eq!(code(NOTIFY.parse_cli(&[abs("/bin/x")])), Code::ValueSurface);
     assert_eq!(
-        code(NOTIFY.parse_cli(&["/bin/x".into()])),
-        Code::ValueSurface
-    );
-    assert_eq!(
-        code(NOTIFY.parse_file(&toml::Value::String("/bin/x {height}".into()))),
+        code(NOTIFY.parse_file(&toml::Value::String(format!(
+            "{} {{height}}",
+            abs("/bin/x")
+        )))),
         Code::ValueSyntax
     );
 }
@@ -221,7 +233,7 @@ fn commands_are_file_only_arrays_with_named_placeholders() {
 #[test]
 fn a_path_is_absolute_only() {
     assert!(matches!(
-        Kind::Path.parse_text("/etc/shekyl"),
+        Kind::Path.parse_text(&abs("/etc/shekyl")),
         Ok(Value::Path(_))
     ));
     assert_eq!(code(Kind::Path.parse_text("etc/shekyl")), Code::ValueSyntax);

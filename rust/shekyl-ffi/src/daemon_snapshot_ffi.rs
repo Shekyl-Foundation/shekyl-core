@@ -285,7 +285,9 @@ mod tests {
     /// this file's text so a field added without moving the pin fails here.
     #[test]
     fn the_snapshot_has_exactly_the_pinned_fields() {
-        let source = include_str!("daemon_snapshot_ffi.rs");
+        // A checkout with `core.autocrlf` hands this file back with CRLF
+        // line ends, and `"\n}\n"` is then not in it (DC-F40).
+        let source = include_str!("daemon_snapshot_ffi.rs").replace("\r\n", "\n");
         let start = source
             .find("pub struct ShekylDaemonSnapshot {")
             .expect("the struct");

@@ -18,9 +18,28 @@ use crate::platform::{Platform, RunMode};
 use crate::resolve::{choosers, resolve};
 use crate::table::TABLE;
 
+/// A fixture path that is absolute on the host running the test: `unix`
+/// as written on Unix, `C:` and backslashes on Windows, where `/srv/op` is
+/// not absolute and the path kinds refuse it (DC-F40). A TOML fixture
+/// quotes the result with `'…'`, the literal string, so the backslashes
+/// are not escapes.
+fn abs(unix: &str) -> String {
+    if cfg!(windows) {
+        format!("C:{}", unix.replace('/', "\\"))
+    } else {
+        unix.to_owned()
+    }
+}
+
+/// The per-account root under the fixture home: `Shekyl` on Windows,
+/// `.shekyl` elsewhere (IG-13).
+fn home_root() -> PathBuf {
+    PathBuf::from(abs("/srv/op")).join(if cfg!(windows) { "Shekyl" } else { ".shekyl" })
+}
+
 fn platform() -> Platform {
     Platform {
-        home: Some(PathBuf::from("/srv/op")),
+        home: Some(PathBuf::from(abs("/srv/op"))),
         program_data: None,
     }
 }
@@ -45,10 +64,10 @@ fn codes(r: Result<DaemonConfig, Vec<Diagnostic>>) -> Vec<(Code, String)> {
 fn the_defaults_build_a_managed_tor_clearnet_node_on_mainnet() {
     let c = build_from(&[], "").unwrap();
     assert_eq!(c.network, Network::Mainnet);
-    assert_eq!(c.data_dir, PathBuf::from("/srv/op/.shekyl"));
+    assert_eq!(c.data_dir, home_root());
     assert_eq!(
         c.logging.file,
-        PathBuf::from("/srv/op/.shekyl/logs/shekyld-mainnet.log")
+        home_root().join("logs").join("shekyld-mainnet.log")
     );
     assert_eq!(c.logging.directive(), "warn");
     assert_eq!(c.tor, Tor::Managed { binary: None });
@@ -67,19 +86,19 @@ fn the_defaults_build_a_managed_tor_clearnet_node_on_mainnet() {
 #[test]
 fn explicit_paths_are_taken_as_given_and_defaults_follow_the_network() {
     let c = build_from(
-        &["--network", "testnet", "--data-dir", "/srv/chain"],
-        "log-file = \"/var/log/s.log\"\n",
+        &["--network", "testnet", "--data-dir", &abs("/srv/chain")],
+        &format!("log-file = '{}'\n", abs("/var/log/s.log")),
     )
     .unwrap();
-    assert_eq!(c.data_dir, PathBuf::from("/srv/chain"));
-    assert_eq!(c.logging.file, PathBuf::from("/var/log/s.log"));
+    assert_eq!(c.data_dir, PathBuf::from(abs("/srv/chain")));
+    assert_eq!(c.logging.file, PathBuf::from(abs("/var/log/s.log")));
     assert!(matches!(&c.clearnet, Clearnet::On { listen, .. } if listen[0].port() == 12021));
     assert_eq!(c.rpc.admin_listen[0].port(), 12029);
 }
 
 #[test]
 fn no_home_refuses_each_path_that_needs_it_and_not_an_explicit_one() {
-    let args: Vec<OsString> = ["--data-dir", "/srv/chain"]
+    let args: Vec<OsString> = ["--data-dir", &abs("/srv/chain")]
         .iter()
         .map(OsString::from)
         .collect();
@@ -171,7 +190,10 @@ fn a_connector_that_is_off_cannot_carry_its_endpoints_or_its_peers() {
         "",
     ));
     assert_eq!(d, vec![(Code::ValueConflict, "p2p-peer".into())]);
-    let d = codes(build_from(&["--tor-file", "/opt/tor", "--tor", "off"], ""));
+    let d = codes(build_from(
+        &["--tor-file", &abs("/opt/tor"), "--tor", "off"],
+        "",
+    ));
     assert_eq!(d, vec![(Code::ValueConflict, "tor-file".into())]);
     let c = build_from(&["--clearnet", "off", "--tor", "off"], "").unwrap();
     assert!(c.offline());
@@ -429,12 +451,15 @@ fn notify_commands_and_levers_are_carried() {
             "--dev-sync",
             "off",
         ],
-        "notify-block = [\"/usr/bin/logger\", \"{height}\"]\n",
+        &format!(
+            "notify-block = ['{}', '{{height}}']\n",
+            abs("/usr/bin/logger")
+        ),
     )
     .unwrap();
     assert_eq!(
         c.notify.block.as_deref(),
-        Some(&["/usr/bin/logger".to_owned(), "{height}".to_owned()][..])
+        Some(&[abs("/usr/bin/logger"), "{height}".to_owned()][..])
     );
     assert_eq!(c.dev.difficulty, Some(1));
     assert!(!c.dev.sync);

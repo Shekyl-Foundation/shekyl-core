@@ -253,6 +253,22 @@ mod tests {
         }
     }
 
+    /// The example's `/path` values as the host spells an absolute path:
+    /// as written on Unix, `C:\path` on Windows, where `/path` is not
+    /// absolute and the path kinds refuse it (DC-F40). The example itself
+    /// stays the Unix spelling; it is one file for every platform.
+    fn host_absolute(value: &toml::Value) -> toml::Value {
+        match value {
+            toml::Value::String(s) if cfg!(windows) && s.starts_with('/') => {
+                toml::Value::String(format!("C:{}", s.replace('/', "\\")))
+            }
+            toml::Value::Array(items) => {
+                toml::Value::Array(items.iter().map(host_absolute).collect())
+            }
+            other => other.clone(),
+        }
+    }
+
     const TABLE_FILE: &str = "shekyld_options.md";
     const EXAMPLE_FILE: &str = "shekyld.example.toml";
 
@@ -330,7 +346,7 @@ mod tests {
                 continue; // a placeholder for a value the example cannot invent
             }
             row.kind
-                .parse_file(value)
+                .parse_file(&host_absolute(value))
                 .unwrap_or_else(|e| panic!("{key}'s example value is its kind's: {e:?}"));
         }
     }
@@ -344,8 +360,12 @@ mod tests {
             (EXAMPLE_FILE, example_toml(&TABLE)),
         ] {
             let path = generated(name);
+            // A checkout with `core.autocrlf` hands the fragment back with
+            // CRLF line ends; the rendering is the bytes between them
+            // (DC-F40).
             let committed = std::fs::read_to_string(&path)
-                .unwrap_or_else(|e| panic!("{} is committed: {e}", path.display()));
+                .unwrap_or_else(|e| panic!("{} is committed: {e}", path.display()))
+                .replace("\r\n", "\n");
             assert_eq!(
                 committed,
                 text,

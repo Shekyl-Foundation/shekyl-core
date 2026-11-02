@@ -609,11 +609,12 @@ jobs:
             exit 1
           }
 
-      # DC-F39 (DAEMON_CONFIG_CUTOVER.md §11): the daemon crates' tests on
-      # MSVC. Nothing ran them here before, and the first Windows run found
-      # a lib test that did not link (link.exe resolves every symbol an
-      # object references before it discards anything, where GNU ld and lld
-      # drop the unreferenced ones). BLOCKING, with a floor per lib
+      # DC-F39 / DC-F40 (DAEMON_CONFIG_CUTOVER.md §11): the daemon crates'
+      # tests on MSVC. Nothing ran them here before, and the first Windows
+      # run found a lib test that did not link (link.exe resolves every
+      # symbol an object references before it discards anything, where GNU
+      # ld and lld drop the unreferenced ones) and nine tests whose fixtures
+      # assumed `/` paths and LF line ends. BLOCKING, with a floor per lib
       # test binary so a crate whose tests were cfg'd away or filtered out
       # fails here instead of passing as nothing run (rule 47).
       - name: "DC-F39: the daemon crates' tests link and pass on MSVC"
@@ -621,11 +622,11 @@ jobs:
         working-directory: rust
         run: |
           $PSNativeCommandUseErrorActionPreference = $false
-          cargo test --locked -p shekyl-daemon-config -p shekyl-daemon -p shekyl-ffi --no-fail-fast *> daemon-crates.out
+          cargo test --locked -p shekyl-options -p shekyl-daemon-config -p shekyl-daemon -p shekyl-ffi --no-fail-fast *> daemon-crates.out
           $rc = $LASTEXITCODE
           Get-Content daemon-crates.out
           if ($rc -ne 0) { exit $rc }
-          $floors = @{ 'shekyl_daemon-' = 30; 'shekyl_daemon_config-' = 60; 'shekyl_ffi-' = 220 }
+          $floors = @{ 'shekyl_options-' = 25; 'shekyl_daemon-' = 30; 'shekyl_daemon_config-' = 60; 'shekyl_ffi-' = 220 }
           $lines = Get-Content daemon-crates.out
           foreach ($crate in $floors.Keys) {
             $at = ($lines | Select-String -Pattern ("Running unittests .*\\" + [regex]::Escape($crate)) | Select-Object -First 1).LineNumber
