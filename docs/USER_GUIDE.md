@@ -360,13 +360,16 @@ message). On Windows it raises no fault dialog and ends itself before
 Windows Error Reporting is consulted: a fault or a stack overflow exits
 with the exception's code (`0xC0000005`, `0xC00000FD`), a panic with
 `0xC0000409`, and none of them writes a dump or a report, whatever the
-machine's policy. The installer also excludes `shekyld.exe` from Windows
-Error Reporting's reporting, as a backstop for the failures the process
-cannot route itself — an allocation failure, heap corruption the system
-detects, a C++ stack check. That backstop does not reach a
-**LocalDumps** policy: on a machine where
+machine's policy (shown on a machine with a `LocalDumps` policy in
+force, 2026-11-02). The installer also excludes `shekyld.exe` from
+Windows Error Reporting's reporting, as a backstop for the failures the
+process cannot route itself — an allocation failure, heap corruption the
+system detects, a C++ stack check. In the same run those fail-fast exits
+wrote no dump either while the daemon's own error mode stood; the
+backstop is for the case it does not. It does not reach a **LocalDumps**
+policy: on a machine where
 `HKLM\SOFTWARE\Microsoft\Windows\Windows Error Reporting\LocalDumps`
-is set (by Group Policy or by hand), Windows may still write a memory
+is set (by Group Policy or by hand), Windows can still write a memory
 dump of one of *those* failures to that policy's folder (by default
 `%LOCALAPPDATA%\CrashDumps`). If you run the daemon on such a machine,
 treat that folder as you treat the data directory: a dump holds the
