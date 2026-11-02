@@ -41,7 +41,7 @@ use shekyl_peerlist::{ConnectorId, NetworkAddress};
 use shekyl_seam::{Hub, SocketId};
 use shekyl_transport_layer::DialEnd;
 
-use super::handshake::{attempt_task, failed_outcome, Attempt, Prepared, TaskResult};
+use super::handshake::{attempt_task, failed_outcome, Attempt, AttemptEnd, Prepared, TaskResult};
 use super::ready::block_on_future;
 use super::{Dialer, Shared};
 use crate::fill::DialAim;
@@ -86,7 +86,7 @@ pub(super) struct InFlight {
     _cancel: tokio::sync::oneshot::Sender<()>,
 }
 
-/// An attempt task's result, and how long the attempt ran.
+/// An attempt task's result, how long it ran, and when it resolved.
 pub(super) struct Finished {
     result: TaskResult,
     /// Nanoseconds from the task's first poll to its result, on the hub's
@@ -96,17 +96,26 @@ pub(super) struct Finished {
     ran_nanos: u64,
     /// When the attempt's stream opened, on the judge's clock, when one did.
     opened_ms: Option<u64>,
+    /// When the attempt resolved, on the judge's clock ([`AttemptEnd::ended_ms`]).
+    /// The failure is dated here. The wait in the completion queue is not
+    /// part of it, so a verdict applied late can err only toward excusing.
+    ended_ms: u64,
 }
 
 /// `attempt`, timed inside its task ([`Finished::ran_nanos`]).
-async fn timed(hub: Hub, attempt: impl Future<Output = (TaskResult, Option<u64>)>) -> Finished {
+async fn timed(hub: Hub, attempt: impl Future<Output = AttemptEnd>) -> Finished {
     let started = hub.now();
-    let (result, opened_ms) = attempt.await;
+    let AttemptEnd {
+        result,
+        opened_ms,
+        ended_ms,
+    } = attempt.await;
     let ran_nanos = hub.now().get().saturating_sub(started.get());
     Finished {
         result,
         ran_nanos,
         opened_ms,
+        ended_ms,
     }
 }
 
@@ -620,13 +629,14 @@ impl Dialer {
     ) -> BeforeIo {
         drop(nonce);
         let now = self.hub.now();
+        let ended_ms = self.life_now_ms();
         self.with_inbound(|shared| {
             if self.stop.load(Ordering::Acquire) {
                 shared.attempts(connector).cancel(&address);
                 return BeforeIo::Stopped;
             }
             let outcome = failed_outcome(address, end);
-            Self::record(shared, connector, &outcome, None, now, rng);
+            Self::record(shared, connector, &outcome, None, ended_ms, now, rng);
             BeforeIo::Recorded
         })
     }
@@ -643,12 +653,13 @@ impl Dialer {
         rng: &mut R,
     ) -> BeforeIo {
         let now = self.hub.now();
+        let ended_ms = self.life_now_ms();
         self.with_inbound(|shared| {
             if self.stop.load(Ordering::Acquire) {
                 return BeforeIo::Stopped;
             }
             let outcome = failed_outcome(address, DialEnd::local_close());
-            Self::record(shared, connector, &outcome, None, now, rng);
+            Self::record(shared, connector, &outcome, None, ended_ms, now, rng);
             BeforeIo::Recorded
         })
     }
@@ -693,6 +704,7 @@ impl Dialer {
             result,
             ran_nanos,
             opened_ms,
+            ended_ms,
         } = finished;
         let Some((record, permit)) = self.begin_apply(id) else {
             drop(result);
@@ -702,12 +714,12 @@ impl Dialer {
         let kept = match self.apply_result(connector, &address, record.aim, result, rng) {
             Attempt::Done(outcome) => {
                 tracing::debug!("{connector:?} dial {address:?} ended: {outcome:?}");
-                self.settle_or_retry(connector, &outcome, ran_nanos, opened_ms, rng);
+                self.settle_or_retry(connector, &outcome, ran_nanos, opened_ms, ended_ms, rng);
                 None
             }
             Attempt::Kept(kept) => {
                 let socket = kept.id;
-                self.accept_and_notify(connector, &address, kept, opened_ms, rng)
+                self.accept_and_notify(connector, &address, kept, opened_ms, ended_ms, rng)
                     .then_some(socket)
             }
         };
@@ -748,6 +760,7 @@ mod tests {
             result: TaskResult::Failed(DialEnd::local_close()),
             ran_nanos: 0,
             opened_ms: None,
+            ended_ms: 0,
         }
     }
 

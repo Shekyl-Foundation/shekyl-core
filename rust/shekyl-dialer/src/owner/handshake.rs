@@ -233,9 +233,20 @@ impl Dialer {
     }
 }
 
+/// What one attempt resolved, dated on the judge's clock.
+pub(super) struct AttemptEnd {
+    pub(super) result: TaskResult,
+    /// When the stream opened, if one did: the instant the channel arrived.
+    pub(super) opened_ms: Option<u64>,
+    /// When the attempt resolved. A failure is dated here, so the bracket
+    /// does not move because the result waited to be applied.
+    pub(super) ended_ms: u64,
+}
+
 /// The attempt task: the I/O and the Levin layer's checks, nothing else.
-/// Its result carries when its stream opened, on the judge's clock, when
-/// one did: the instant the channel arrived.
+/// Its result carries when its stream opened and when the attempt resolved,
+/// both on the judge's clock. The open is the instant the channel arrived.
+/// The end is the last thing the task reads, before the result can wait.
 ///
 /// It opens the channel through the hub's dialer, writes the request,
 /// reads until one whole handshake response decodes, and checks the
@@ -248,7 +259,7 @@ pub(super) async fn attempt_task(
     connector: ConnectorId,
     address: NetworkAddress,
     prepared: Prepared,
-) -> (TaskResult, Option<u64>) {
+) -> AttemptEnd {
     let Prepared {
         endpoint,
         request,
@@ -257,13 +268,21 @@ pub(super) async fn attempt_task(
     } = prepared;
     let channel = match hub.dial_channel_async(&endpoint).await {
         Ok(channel) => Unadopted::new(hub, channel),
-        Err(end) => return (TaskResult::Failed(end), None),
+        Err(end) => {
+            return AttemptEnd {
+                result: TaskResult::Failed(end),
+                opened_ms: None,
+                ended_ms: stamp(),
+            };
+        }
     };
     let opened_ms = stamp();
-    (
-        handshake(channel, connector, &address, request, network_id).await,
-        Some(opened_ms),
-    )
+    let result = handshake(channel, connector, &address, request, network_id).await;
+    AttemptEnd {
+        result,
+        opened_ms: Some(opened_ms),
+        ended_ms: stamp(),
+    }
 }
 
 /// The Levin handshake on a channel that opened.

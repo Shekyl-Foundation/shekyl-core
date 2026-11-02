@@ -720,14 +720,16 @@ impl Dialer {
     }
 
     /// Record a test's outcome. `opened_ms` is when its final attempt's
-    /// stream opened, on the judge's clock, when one did: the stream is
-    /// dated then, never later than the failure judged here, so it is never
-    /// after its own failure and never dated by when the attempt ended.
+    /// stream opened, on the judge's clock, when one did. `ended_ms` is
+    /// when that attempt resolved, on the same clock: the failure is judged
+    /// then, not when this record runs. The stream is dated at its open,
+    /// and never later than `ended_ms`, so it is never after its own failure.
     fn record<R: RelayRng + ?Sized>(
         shared: &mut Shared,
         connector: ConnectorId,
         outcome: &DialOutcome,
         opened_ms: Option<u64>,
+        ended_ms: u64,
         now: Tick,
         rng: &mut R,
     ) {
@@ -735,9 +737,8 @@ impl Dialer {
         // The attempt frees its slot whatever the verdict: a deferred one
         // holds only the outstanding seat.
         shared.attempts(connector).finish(outcome);
-        let at_ms = (shared.life_clock.now_ms)();
-        Self::judge_outcome(shared, connector, outcome, at_ms, now, rng);
-        let opened = opened_ms.map_or(at_ms, |opened| opened.min(at_ms));
+        Self::judge_outcome(shared, connector, outcome, ended_ms, now, rng);
+        let opened = opened_ms.map_or(ended_ms, |opened| opened.min(ended_ms));
         Self::note_stream(shared, connector, outcome, opened, now);
         let held = Self::tor_held(shared);
         shared.tor_link.observe(connector, outcome, held);
@@ -760,6 +761,7 @@ impl Dialer {
         outcome: &DialOutcome,
         ran_nanos: u64,
         opened_ms: Option<u64>,
+        ended_ms: u64,
         rng: &mut R,
     ) {
         let now = self.hub.now();
@@ -799,8 +801,7 @@ impl Dialer {
                             ran_nanos / 1_000_000,
                             wait / 1_000_000
                         );
-                        let at_ms = (shared.life_clock.now_ms)();
-                        let opened = opened_ms.map_or(at_ms, |opened| opened.min(at_ms));
+                        let opened = opened_ms.map_or(ended_ms, |opened| opened.min(ended_ms));
                         Self::note_stream(shared, connector, outcome, opened, now);
                         let held = Self::tor_held(shared);
                         shared.tor_link.observe(connector, outcome, held);
@@ -808,7 +809,7 @@ impl Dialer {
                     }
                 }
             }
-            Self::record(shared, connector, outcome, opened_ms, now, rng);
+            Self::record(shared, connector, outcome, opened_ms, ended_ms, now, rng);
         });
     }
 
@@ -830,6 +831,7 @@ impl Dialer {
         address: &NetworkAddress,
         kept: KeptDial,
         opened_ms: Option<u64>,
+        ended_ms: u64,
         rng: &mut R,
     ) -> bool {
         let now = self.hub.now();
@@ -839,7 +841,7 @@ impl Dialer {
                 Some(end) => DialOutcome::DialFailed(address.clone(), end.failure()),
                 None => DialOutcome::SessionAccepted(address.clone()),
             };
-            Self::record(shared, connector, &outcome, opened_ms, now, rng);
+            Self::record(shared, connector, &outcome, opened_ms, ended_ms, now, rng);
             if closed.is_none() {
                 shared.kept.insert(kept.id.get(), address.clone());
             }

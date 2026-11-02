@@ -14,7 +14,7 @@ use std::sync::atomic::Ordering;
 use std::sync::Arc;
 use std::time::Duration;
 
-use shekyl_dialer::Dialer;
+use shekyl_dialer::{Dialer, Launch};
 use shekyl_draw_rng::SplitMix64;
 use shekyl_peerlist::{dial_profile, ConnectorId, NetworkAddress, Tick};
 use shekyl_seam::{Dial, Endpoint, Hub, SocketId};
@@ -681,4 +681,44 @@ fn a_stream_is_dated_when_it_opened() {
     rig.dialer.apply_verdicts(&mut rig.rng);
     let demoted = whites.iter().filter(|white| rig.demoted(white)).count();
     assert_eq!(demoted, 1, "the stream opened inside the bracket counts it");
+}
+
+/// **A queued failure is dated when the attempt ended** (#1235 review).
+/// The result waits in the completion queue. Recovery traffic strictly
+/// between that end and the moment the owner applies it, and traffic just
+/// after the apply, must not form a bracket around the apply. Dated at the
+/// apply, the earlier byte is the before side and the later byte the after
+/// side, and white is demoted. Dated at the attempt's end, both are after
+/// the bracket and the failure is excused.
+#[test]
+fn a_queued_failure_is_dated_when_the_attempt_ended() {
+    let mut rig = JudgeRig::new(TOR, 310);
+    let held = rig.hold(0);
+    let white = rig.whites(0, 1).remove(0);
+    let ended = rig.life.now_ms();
+    rig.dial.refuse_after(
+        &rig.clock,
+        shekyl_tor::reply_end(0x01),
+        Duration::from_secs(1),
+    );
+    let Launch::Running(id) = rig.dialer.launch(TOR, &mut rig.rng) else {
+        panic!("a draw");
+    };
+    rig.dialer.wait_posted(id);
+    // Outside the attempt's own bracket, and inside δ before an apply that
+    // late: the before side of a failure dated at the apply.
+    let bracket = dial_profile(TOR).judging.bracket_nanos / 1_000_000;
+    let between = ended.saturating_add(bracket).saturating_add(5_000);
+    let applied = between.saturating_add(bracket);
+    let after = applied.saturating_add(1_000);
+    rig.life.received(held, between);
+    rig.life.set_ms(applied);
+    rig.dialer.apply_completions(TOR, &mut rig.rng);
+    rig.life.received(held, after);
+    rig.dialer.apply_verdicts(&mut rig.rng);
+    assert_eq!(rig.pending(), 0, "the bracket has closed");
+    assert!(
+        rig.lists_white(&white) && !rig.demoted(&white),
+        "traffic during the wait does not corroborate the failure"
+    );
 }

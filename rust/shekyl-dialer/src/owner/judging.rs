@@ -280,6 +280,11 @@ impl Dialer {
             .count()
     }
 
+    /// The judge's clock now, read outside the dialer lock.
+    pub(super) fn life_now_ms(&self) -> u64 {
+        (self.shared().life_clock.now_ms)()
+    }
+
     /// Drive the judge's clock and each session's received byte from the
     /// caller, in place of the byte-stamp clock and the node gate.
     #[cfg(feature = "test-seams")]
