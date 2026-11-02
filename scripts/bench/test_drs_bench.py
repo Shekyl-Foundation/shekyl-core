@@ -108,6 +108,37 @@ class ArtifactRefusals(unittest.TestCase):
         self.assertTrue(any(needle in x for x in r),
                         f"refusals did not mention {needle!r}: {r}")
 
+    def test_refuses_a_row_without_the_probe(self):
+        self._refuse(lambda a: a.pop("probe"), "probe block absent")
+
+    def test_refuses_a_row_with_a_probe_stall(self):
+        self._refuse(lambda a: a["probe"].update(stalls=1), "does not count")
+
+    def test_refuses_a_probe_that_did_not_watch_the_row(self):
+        self._refuse(lambda a: a["probe"].update(samples=10), "did not watch the row")
+
+    def test_a_fractional_probe_window_is_not_truncated_into_a_pass(self):
+        """10 samples in 10.9s is under 95% of the seconds. int(10.9) is 10
+        and would accept them."""
+        self._refuse(lambda a: a["probe"].update(window_s=10.9, samples=10),
+                     "did not watch the row")
+
+    def test_eleven_samples_cover_a_fractional_window(self):
+        a = valid_artifact()
+        a["probe"].update(window_s=10.9, samples=11)
+        self.assertEqual(D.artifact_refusals(a), [])
+
+    def test_a_v1_record_is_read_without_the_probe(self):
+        a = valid_artifact(schema_version=D.SCHEMA_V1)
+        a.pop("probe")
+        self.assertEqual(D.artifact_refusals(a), [])
+
+    def test_a_v1_record_is_not_comparable_with_a_v2_run(self):
+        old = valid_artifact(schema_version=D.SCHEMA_V1)
+        old.pop("probe")
+        refusals = D.comparability_refusals(old, valid_artifact(engine="redb"))
+        self.assertTrue(any("schema versions differ" in x for x in refusals), refusals)
+
     def test_refuses_missing_durability_block(self):
         self._refuse(lambda a: a.pop("durability"), "durability block absent")
 

@@ -19,6 +19,7 @@ use super::posture::{
 
 mod announce;
 mod backoff;
+mod clock;
 mod clock_evidence;
 mod clock_jump;
 mod dials;
@@ -28,7 +29,7 @@ mod probe;
 mod resume;
 mod running;
 
-use crate::control::{NetworkView, RelayFingerprint};
+use crate::control::{NetworkView, RelayFingerprint, ServiceDescriptor};
 use announce::{Announcements, Cadence};
 use backoff::Backoff;
 pub use dials::DialTally;
@@ -98,6 +99,17 @@ pub struct Policy {
     /// probe asks (§4.5, "Overdue"; Rick, 2026-10-31). Tor's
     /// `HS_DESC_DEFAULT_LIFETIME`, re-checked at every re-pin.
     pub descriptor_lifetime: Duration,
+    /// How far this computer's clock may sit behind the consensus's
+    /// `valid-after` before the clock is named (§4.2, §10 `TSR-M13`; Rick,
+    /// 2026-11-01). A correct clock can hold a consensus up to the
+    /// authorities' distribution delay before its `valid-after`, and Tor's
+    /// own early-consensus notice allows that plus 60 s.
+    pub clock_behind_after: Duration,
+    /// The first wait between republishes once one has been judged and
+    /// failed (§4.5, "Republish backoff", §10 `TSR-M14`): one probe check's
+    /// worst case. It doubles at each failed republish, up to
+    /// [`Self::descriptor_lifetime`], and resets on a confirmed Reachable.
+    pub republish_after: Duration,
 }
 
 impl Policy {
@@ -119,12 +131,12 @@ impl Policy {
             // Upload p50 4.6 s (`TSR-M7`); the descriptor then has to reach
             // the directories the probe's own fetch asks (§10).
             probe_after_min: Duration::from_secs(15),
-            probe_after_max: Duration::from_secs(60),
+            probe_after_max: PROBE_AFTER_MAX,
             // Nine of ten probes arrived within 26.44 s and the x86 cluster
             // reached 46 s (`TSR-M2`, `TSR-M3`).
-            probe_within: Duration::from_secs(60),
+            probe_within: PROBE_WITHIN,
             // Five times the longest round that ended (7 to 12 s, §10).
-            round_wait: Duration::from_secs(60),
+            round_wait: ROUND_WAIT,
             // The live tests' wait for a round, where the stuck rounds were
             // found (§10).
             round_stuck_after: Duration::from_secs(300),
@@ -140,9 +152,48 @@ impl Policy {
             // `src/feature/hs/hs_descriptor.h:30`, set as the descriptor's
             // lifetime at `src/feature/hs/hs_service.c:1942`.
             descriptor_lifetime: DESCRIPTOR_LIFETIME,
+            clock_behind_after: CLOCK_BEHIND_AFTER,
+            // One judgment's worst case (`TSR-M14`). Named with the waits it
+            // is made of, so a later probe bound moves this with them.
+            republish_after: REPUBLISH_AFTER,
         }
     }
 }
+
+/// How long the probe waits for a round to end after its first upload
+/// (`TSR-M3`): five times the longest round measured to end.
+pub const ROUND_WAIT: Duration = Duration::from_secs(60);
+
+/// The probe's longest delay (`TSR-M2`).
+pub const PROBE_AFTER_MAX: Duration = Duration::from_secs(60);
+
+/// The probe's bound, and one directory fetch's answer window (`TSR-M2`).
+pub const PROBE_WITHIN: Duration = Duration::from_secs(60);
+
+/// [`Policy::republish_after`] (`TSR-M14`): the round's wait, then a probe
+/// and the refetch's probe, each at its longest delay and its bound. A wait
+/// shorter than one judgment republishes inside the previous check.
+pub const REPUBLISH_AFTER: Duration = {
+    let one_probe = PROBE_AFTER_MAX.saturating_add(PROBE_WITHIN);
+    ROUND_WAIT
+        .saturating_add(one_probe)
+        .saturating_add(one_probe)
+};
+
+/// The directory authorities' distribution delay, `V3AuthDistDelay`'s
+/// default in tor 0.4.9.14 (`src/app/config/config.c:713`, 5 minutes):
+/// how long before its `valid-after` a consensus can already be fetched.
+pub const CONSENSUS_DIST_DELAY: Duration = Duration::from_secs(5 * 60);
+
+/// Tor's own allowance on top of that before it says a consensus came
+/// early (`EARLY_CONSENSUS_NOTICE_SKEW`, `networkstatus.c:1891`).
+pub const EARLY_CONSENSUS_SKEW: Duration = Duration::from_secs(60);
+
+/// [`Policy::clock_behind_after`]: the line Tor draws for its own
+/// early-consensus notice (`networkstatus.c:1899`), 6 minutes. NTP's
+/// slop is far inside it.
+pub const CLOCK_BEHIND_AFTER: Duration =
+    Duration::from_secs(CONSENSUS_DIST_DELAY.as_secs() + EARLY_CONSENSUS_SKEW.as_secs());
 
 /// Tor's `HS_DESC_DEFAULT_LIFETIME` at the pinned tor 0.4.9.14
 /// (`src/feature/hs/hs_descriptor.h:30`): 3 hours.
@@ -323,6 +374,10 @@ pub enum Input {
     OnionPublished,
     /// `ADD_ONION` failed. The process stays up.
     OnionRejected,
+    /// The driver was asked to publish the onion again and did not. A
+    /// liveness sample since the ask named a cause a republish cannot get
+    /// past (§4.5). The anchor that ask moved is put back.
+    RepublishWithheld,
     /// The zone host is up and the forward listener is bound.
     EndpointReady,
     /// Outbound to the Tor network is blocked.
@@ -374,10 +429,20 @@ pub enum Input {
     /// uniform random number from the daemon's CSPRNG; the core maps it onto
     /// the probe's delay range.
     UploadRoundEnded {
-        /// How the round ended.
-        end: RoundEnd,
+        /// How many reached a directory, how many of those that began were
+        /// refused, and how many began.
+        tally: RoundTally,
         /// Uniform over `u64`.
         draw: u64,
+    },
+    /// The consensus's `valid-after` and this machine's wall time, both in
+    /// Unix seconds, read at a liveness sample (§4.2). The core compares
+    /// them; it never reads a clock itself.
+    ConsensusClock {
+        /// `GETINFO consensus/valid-after`.
+        valid_after: u64,
+        /// This machine's wall time when it was read.
+        wall: u64,
     },
     /// The descriptor refetch after a first miss (`HSFETCH`) was asked;
     /// `draw` sets the second probe's delay, as a round's does.
@@ -397,6 +462,12 @@ pub enum Input {
         /// reached none: the probe alone decides. A list that was never
         /// folded is not this: the verdict waits.
         fetches: Vec<DirectoryFetch>,
+        /// This service's `desc_current` (`GETINFO
+        /// hs/service/desc/id/<onion>`): its blinded key and counter. A copy
+        /// of that descriptor counts only at that counter; a copy of another
+        /// counts by being there. `None` when Tor gave none: the check
+        /// counts nothing and the probe alone decides.
+        ours: Option<ServiceDescriptor>,
     },
     /// Tor accepted `HSFETCH` for `hsdir` (`250`). That fetch's answer
     /// window starts at this fold.
@@ -460,18 +531,27 @@ pub enum Input {
     ExternalCleared,
 }
 
-/// How a descriptor round ended.
+/// How one upload round ended (§4.5). The three counts are one fact: how
+/// many reached a directory, how many of the uploads that began were
+/// refused, and how many began. A refused majority is read from `begun`,
+/// not from the successes.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub enum RoundEnd {
-    /// At least one upload reached a directory.
-    Uploaded,
-    /// Every upload ended, none succeeded, and at least one failed:
-    /// Service-class evidence. An upload still in flight is [`Self::Unknown`].
-    FailedAll,
-    /// The round ended without a verdict: an upload is still unfinished, or
-    /// its ends were lost (the sink dropped events, or the next round began).
-    /// Not evidence either way.
-    Unknown,
+pub struct RoundTally {
+    /// Uploads that reached a directory (`UPLOADED`).
+    pub uploaded: u32,
+    /// Of [`Self::begun`], the uploads a directory refused.
+    pub refused: u32,
+    /// Uploads that began, including those that never reported an end.
+    pub begun: u32,
+}
+
+impl RoundTally {
+    /// More than half of the uploads that began were refused. Exactly half
+    /// is not a majority. A round that began nothing is not one.
+    #[must_use]
+    pub fn majority_refused(self) -> bool {
+        self.begun > 0 && u64::from(self.refused) * 2 > u64::from(self.begun)
+    }
 }
 
 /// Actions and the next absolute deadline, in the caller's clock units.
@@ -591,10 +671,23 @@ pub struct Core {
     /// Rounds that stayed open past `Policy::round_stuck_after`, this boot.
     stuck_rounds: u32,
     /// Where the descriptor's lifetime is counted from (§4.5, "Overdue"):
-    /// the last round's first upload, or the last overdue republish. Only an
-    /// upload shows the descriptor's age. None before the first upload and
-    /// after the probe is dropped.
+    /// the last round's first upload, or the moment a republish was handed
+    /// to the driver. A probe's arrival does not move it. None before the
+    /// first of those and after the probe is dropped. Standing down because
+    /// a republish cannot help does not move it, and a hand-over the driver
+    /// then withholds puts back the anchor it moved.
     lifetime_from: Option<u64>,
+    /// The anchor and hold to restore if the remedial send in
+    /// [`clock::QueuedSend`] is withheld before it is published.
+    queued_send: Option<clock::QueuedSend>,
+    /// The probe in hand was scheduled from a republish's own upload round,
+    /// so its Reachable confirms that republish. A clock-jump probe and a
+    /// probe scheduled before the republish do not.
+    probe_confirms: bool,
+    /// More than half of the latest round's directories refused its upload.
+    uploads_refused: bool,
+    /// The republish backoff (§4.5).
+    republish: clock::RepublishHold,
     /// A clock jump during this bootstrap, and `traffic/read`'s movement.
     jump: clock_jump::JumpWatch,
     /// This bootstrap's certificate lines and closed handshakes (§4.2).
@@ -634,6 +727,10 @@ impl Core {
             round: None,
             stuck_rounds: 0,
             lifetime_from: None,
+            queued_send: None,
+            probe_confirms: false,
+            uploads_refused: false,
+            republish: clock::RepublishHold::new(duration_ns(policy.republish_after)),
             jump: clock_jump::JumpWatch::new(now),
             clock_evidence: clock_evidence::ClockEvidence::default(),
             service_republish: false,
@@ -678,10 +775,13 @@ impl Core {
             Input::OnionPublished => self.onion_published(),
             Input::UploadRoundStarted => self.round_started(now),
             Input::FirstUploaded { draw } => self.first_uploaded(now, draw),
-            Input::UploadRoundEnded { end, draw } => self.round_ended(now, end, draw),
+            Input::UploadRoundEnded { tally, draw } => self.round_ended(now, tally, draw),
+            Input::ConsensusClock { valid_after, wall } => {
+                self.consensus_clock(now, valid_after, wall)
+            }
             Input::DescriptorRefetched { draw } => self.refetched(now, draw),
             Input::JumpProbeDrawn { draw } => self.jump_probe_drawn(now, draw),
-            Input::DirectoriesDrawn { fetches } => self.directories_drawn(now, fetches),
+            Input::DirectoriesDrawn { fetches, ours } => self.directories_drawn(now, fetches, ours),
             Input::DirectoryFetchAccepted { hsdir } => self.directory_fetch_accepted(now, hsdir),
             Input::DirectoryAsked {
                 hsdir,
@@ -699,6 +799,7 @@ impl Core {
                 arrived_at,
             } => self.probe_arrived(now, minted_at, arrived_at),
             Input::OnionRejected => self.onion_refused(now),
+            Input::RepublishWithheld => self.republish_withheld(),
             Input::EndpointReady => self.endpoint_ready(),
             Input::ExternalBlocked => self.blocked(now),
             Input::DirectoryUnreachable => self.external(now, Cause::DirectoryUnreachable),
@@ -721,6 +822,36 @@ impl Core {
             Input::ExternalCleared => self.external_cleared(now),
         };
         self.step(now, actions)
+    }
+
+    /// Whether `action` still names work this core is waiting on.
+    ///
+    /// A deadline can queue a republish, a probe, or a directory fetch and
+    /// also a liveness sample. The driver folds the sample first. Once that
+    /// sample has named a cause a republish cannot get past, the later
+    /// actions no longer stand: sending them would replace introduction
+    /// points the directories still advertise, or judge a copy a republish
+    /// cannot replace (§4.5). A Tor's first publish still stands. The clock
+    /// names this machine, and the first descriptor has to be uploaded
+    /// before a directory can refuse it.
+    #[must_use]
+    pub fn action_stands(&self, action: &Action) -> bool {
+        match action {
+            Action::RepublishOnion => !self.service_republish || !self.republish_cannot_help(),
+            Action::Probe => matches!(self.probe, probe::Probe::InFlight { .. }),
+            Action::CheckDirectories => {
+                matches!(
+                    self.directories,
+                    Some(directories::DirectoryHalf::AwaitingDraw)
+                )
+            }
+            Action::FetchFromDirectory { .. } => {
+                matches!(self.directories, Some(directories::DirectoryHalf::Open(_)))
+                    && !self.republish_cannot_help()
+            }
+            Action::RefetchDescriptor => matches!(self.probe, probe::Probe::Refetching),
+            _ => true,
+        }
     }
 
     /// The deadline fired. Each armed time is its own kind of work: a pin
@@ -759,10 +890,9 @@ impl Core {
                 actions.push(Action::CheckPin);
             }
         }
-        if self.sample_at.is_some_and(|at| now >= at) {
-            self.sample_at = None;
-            actions.extend(self.on_sample_deadline(now));
-        }
+        // The liveness sample is first. The driver folds it before the
+        // republish, probe, and directory actions this same deadline queues,
+        // and a clock that sample names stands those down (§4.5).
         if self.alive_at.is_some_and(|at| now >= at) {
             self.alive_at = None;
             match self.phase {
@@ -786,6 +916,10 @@ impl Core {
                 _ => {}
             }
         }
+        if self.sample_at.is_some_and(|at| now >= at) {
+            self.sample_at = None;
+            actions.extend(self.on_sample_deadline(now));
+        }
         if self.round_due().is_some_and(|at| now >= at) {
             actions.extend(self.on_round_deadline(now));
         }
@@ -797,6 +931,9 @@ impl Core {
         }
         if self.directories_due().is_some_and(|at| now >= at) {
             actions.extend(self.on_directories_deadline(now));
+        }
+        if self.republish_due().is_some_and(|at| now >= at) {
+            actions.extend(self.on_republish_deadline(now));
         }
         self.step(now, actions)
     }
@@ -834,6 +971,7 @@ impl Core {
             },
             inbound: self.inbound,
             stuck_upload_rounds: self.stuck_rounds,
+            clock_behind: self.clock_lag(),
         }
     }
 
@@ -849,6 +987,7 @@ impl Core {
             self.round_due(),
             self.overdue_due(),
             self.directories_due(),
+            self.republish_due(),
         ]
         .into_iter()
         .flatten()
@@ -977,6 +1116,9 @@ impl Core {
         if let Phase::Running { onion, .. } = &mut self.phase {
             *onion = Duty::Done;
             self.service_republish = false;
+            // The send happened. The anchor it moved stays; a later withhold
+            // has nothing to put back.
+            self.queued_send = None;
             if self.inbound == Inbound::NotOffered {
                 self.inbound = Inbound::Publishing;
             }
