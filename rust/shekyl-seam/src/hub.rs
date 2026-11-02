@@ -1055,11 +1055,7 @@ impl Hub {
         if let Some(dial) = dial {
             dial.reader_stopped(id);
         }
-        poster(Post::Closed {
-            id,
-            connector,
-            cause,
-        });
+        poster(Post::Closed { id, connector, end });
         CloseResult::Recorded(cause)
     }
 

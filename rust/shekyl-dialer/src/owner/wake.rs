@@ -142,7 +142,10 @@ pub(super) fn plan_wake<R: RelayRng + ?Sized>(
     let exclusive = shared.exclusive.clone();
     let (wake, undrawn, kept) = {
         let Shared {
-            lists, attempts, ..
+            lists,
+            attempts,
+            pending,
+            ..
         } = &mut *shared;
         let kept = attempts[index].kept_count();
         let in_flight = attempts[index].in_flight();
@@ -153,11 +156,16 @@ pub(super) fn plan_wake<R: RelayRng + ?Sized>(
             outbound_hosts: &live.outbound_hosts,
             attempts: &attempts[index],
         };
+        // An address whose verdict waits is not drawn again. A gray one's
+        // seat is still outstanding; a white one has no such state.
         let mut eligible = |address: &NetworkAddress| {
             exclusive
                 .as_ref()
                 .is_none_or(|population| population.contains(address))
                 && filter.admits(address)
+                && !pending
+                    .iter()
+                    .any(|verdict| verdict.outcome.address() == address)
         };
         let seats = settled.census(&mut eligible);
         let census = Census {

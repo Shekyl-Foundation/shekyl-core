@@ -11,7 +11,7 @@ use std::net::Ipv4Addr;
 
 use shekyl_dialer::{Attempts, CandidateFilter, DialAim, Skip};
 use shekyl_draw_rng::SplitMix64;
-use shekyl_peerlist::{CloseCause, CloseKind, DialOutcome, Host, NetworkAddress};
+use shekyl_peerlist::{DialOutcome, Host, NetworkAddress};
 
 fn peer(n: u8, port: u16) -> NetworkAddress {
     NetworkAddress::Ipv4 {
@@ -120,13 +120,19 @@ fn a_pending_keep_counts_toward_the_target_and_a_pending_confirm_does_not() {
 
 #[test]
 fn only_session_accepted_leaves_a_kept_session_and_every_outcome_ends_the_attempt() {
-    let cause = CloseCause::new(CloseKind::LevinHandshakeTimeout);
+    let cause = shekyl_transport_layer::DialEnd::levin_handshake_timeout().failure();
     let outcomes: [(MakeOutcome, usize); 4] = [
         (DialOutcome::SessionAccepted, 1),
         (DialOutcome::Confirmed, 0),
         (
             (|a| {
-                DialOutcome::PeerlistRefused(a, CloseCause::new(CloseKind::LevinHandshakeRejected))
+                DialOutcome::PeerlistRefused(
+                    a,
+                    shekyl_transport_layer::DialFailure::refused_by_peer(
+                        shekyl_peerlist::ConnectorId::Clearnet,
+                        shekyl_transport_layer::Reached::StreamOpened,
+                    ),
+                )
             }) as MakeOutcome,
             0,
         ),

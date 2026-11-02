@@ -23,7 +23,7 @@ The Tor lane's Pi run of 2026-10-31 (shekyl-dev `8049fe7`, `data/tsr-acceptance/
 - recovery took 2 min 44 s after the unblock, against 6 s in the refuse block of 2026-10-25, because the six cooled addresses were waiting out their first cooldown;
 - Tor said nothing about its network the whole time (`TSR-Q14`).
 
-**Why the guard failed.** `Dialer::ladder` (`shekyl-dialer/src/owner/quiet.rs:67`) returns the first step only after K unopened attempts and S elapsed: K = 13, S = 364.5 s on Tor.
+**Why the guard failed.** `Dialer::ladder` (`shekyl-dialer/src/owner/quiet.rs` line 67 at `821beb1215`; *records-was:* #1235 deleted the guard) returns the first step only after K unopened attempts and S elapsed: K = 13, S = 364.5 s on Tor.
 - Each silent drop takes the full 105 s `SocksTimeout`, with 5 in flight, so the block produced 12 failures. K was never reached.
 - Worse, every failure before a count-based guard engages is judged against its address. A white test that fails on the climb is demoted (`partition.rs:454`, `fail_test`'s white arm). With six white entries and K = 13, an outage can empty white before the guard can act.
 - Tuning K and S lower narrows that window, but cannot close it.

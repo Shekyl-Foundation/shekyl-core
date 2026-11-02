@@ -13,9 +13,10 @@ use std::net::Ipv4Addr;
 
 use shekyl_draw_rng::SplitMix64;
 use shekyl_peerlist::{
-    BanEntry, CloseCause, CloseKind, ConnectorId, DialOutcome, Ipv4Subnet, NetworkAddress,
-    NoSessions, Peerlist, Refusal, RefusedSet, Source, Tick, Verdict,
+    BanEntry, ConnectorId, DialOutcome, Ipv4Subnet, NetworkAddress, NoSessions, Peerlist, Refusal,
+    RefusedSet, Source, Tick, Verdict,
 };
+use shekyl_transport_layer::{DialFailure, Reached, Retry};
 
 const CLEARNET: ConnectorId = ConnectorId::Clearnet;
 
@@ -81,7 +82,10 @@ fn census(list: &mut Peerlist, rng: &mut SplitMix64) -> shekyl_peerlist::SeatCen
 fn failed_once(list: &mut Peerlist, address: &NetworkAddress, rng: &mut SplitMix64) {
     draw_until(list, address, rng);
     list.apply(
-        &DialOutcome::DialFailed(address.clone(), CloseCause::new(CloseKind::DialFailed)),
+        &DialOutcome::DialFailed(
+            address.clone(),
+            DialFailure::destination(Retry::Again, Reached::NoStream),
+        ),
         now(),
         Verdict::Counted,
         rng,

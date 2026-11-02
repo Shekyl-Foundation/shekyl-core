@@ -10,12 +10,14 @@
 //! the caller. Revision 4's tests 12 to 16: a Tor timeout at or after the
 //! managed Tor's window is final within its test (Rick, 2026-10-26).
 
+#[path = "../support/life.rs"]
+mod life;
 #[path = "../support/log_capture.rs"]
 mod log_capture;
 #[path = "../support/tables.rs"]
 mod tables;
 
-mod quiet;
+mod judge;
 mod white;
 
 use log_capture::log_text;
@@ -808,9 +810,15 @@ fn one_tor_attempt_under(
     let clock = ManualClock::new(Tick::new(1_000_000_000));
     let sockets = Sockets::new();
     let dial = Arc::new(HeldDial::answering(sockets.clone(), Vec::new()));
-    dial.refuse_after(&clock, cause, took);
-    let (_hub, dialer) = dialer_on(&clock, &sockets, Arc::clone(&dial) as Arc<dyn Dial>);
+    let (hub, dialer) = dialer_on(&clock, &sockets, Arc::clone(&dial) as Arc<dyn Dial>);
     dialer.set_window(TOR, window);
+    // The link works: an inbound Tor session receives throughout, so the
+    // judge counts the attempt's failure once its bracket closes.
+    let held = hub.connect(&Endpoint::TorInbound).expect("accepted");
+    hub.session_established(held.id);
+    dial.connects.store(0, Ordering::Release);
+    life::Life::install(&dialer, &clock).keep_alive();
+    dial.refuse_after(&clock, cause, took);
     let mut rng = SplitMix64::new(seed);
     let onion = onions(1).remove(0);
     dialer
@@ -836,9 +844,19 @@ struct TorAttempt {
 }
 
 impl TorAttempt {
-    /// The test ended on its first attempt: the onion cools, its ladder
-    /// stepped once, and no wake after any retry wait dials it again.
+    /// The test ended on its first attempt: once its bracket closes the
+    /// onion cools, its ladder stepped once, and no wake after any retry
+    /// wait dials it again.
     fn assert_final(mut self) {
+        assert_eq!(
+            self.dialer.pending_verdicts(TOR),
+            1,
+            "the verdict waits for its bracket"
+        );
+        let bracket = shekyl_peerlist::dial_profile(TOR).judging.bracket_nanos;
+        self.clock
+            .set(Tick::new(self.clock.now().get() + bracket + 1_000_000));
+        self.dialer.apply_verdicts(&mut self.rng);
         assert!(
             self.dialer.shared().lists.is_cooling(&self.onion),
             "the onion cools"
@@ -859,6 +877,7 @@ impl TorAttempt {
             !self.dialer.shared().lists.is_cooling(&self.onion),
             "a deferred attempt records no outcome"
         );
+        assert_eq!(self.dialer.pending_verdicts(TOR), 0, "nor a verdict");
         assert_eq!(self.dialer.shared().lists.failed_tests(&self.onion), 0);
         self.wake_after_every_wait();
         assert_eq!(

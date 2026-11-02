@@ -228,6 +228,7 @@ mod tests {
             opened: 0,
             unopened: 1,
             held: 0,
+            last_sign_of_life: None,
         };
         tally_tx.send(tally).expect("the tally's receiver is held");
         let sources = Sources {

@@ -20,10 +20,10 @@ use std::net::{IpAddr, Ipv4Addr};
 use shekyl_draw_rng::SplitMix64;
 use shekyl_peerlist::address_file::decode;
 use shekyl_peerlist::{
-    BanEntry, CloseCause, CloseKind, ConnectorId, DialOutcome, Ipv4Subnet, KeptSessions,
-    NetworkAddress, NoSessions, Peerlist, RefusedSet, Source, Tick, Verdict,
-    EXPIRATION_PERIOD_NANOS, GRAY_CAP,
+    BanEntry, ConnectorId, DialOutcome, Ipv4Subnet, KeptSessions, NetworkAddress, NoSessions,
+    Peerlist, RefusedSet, Source, Tick, Verdict, EXPIRATION_PERIOD_NANOS, GRAY_CAP,
 };
+use shekyl_transport_layer::{DialFailure, Reached, Retry};
 
 /// The cooldown ladder these clearnet addresses cool on: the clearnet
 /// connector's dial profile.
@@ -104,11 +104,11 @@ fn kept_at(list: &mut Peerlist, address: &NetworkAddress, now: Tick, rng: &mut S
     assert!(list.is_white(address));
 }
 
-/// A connection problem on clearnet: a cause that proves nothing.
+/// A connection problem on clearnet: a timeout, which proves nothing.
 fn connection_problem(address: &NetworkAddress) -> DialOutcome {
     DialOutcome::DialFailed(
         address.clone(),
-        CloseCause::new(CloseKind::TransportTimeout),
+        DialFailure::uncertain(Retry::AgainInsideWindow, Reached::NoStream),
     )
 }
 

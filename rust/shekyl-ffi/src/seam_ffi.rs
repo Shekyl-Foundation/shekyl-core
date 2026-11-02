@@ -821,14 +821,12 @@ fn post_one(bound: &Bound, item: Post) {
                 );
             }
         }
-        Post::Closed {
-            id,
-            connector,
-            cause,
-        } => {
-            // The dialer hears every close, with the cause. A kept session
-            // leaves its count; SessionRefused is the lists' PayloadRefused.
-            crate::dialer_ffi::on_closed(id, cause);
+        Post::Closed { id, connector, end } => {
+            // The dialer hears every close, with the row's end. A kept
+            // session leaves its count; SessionRefused is the lists'
+            // PayloadRefused. The C side reads the end's D12 cause.
+            crate::dialer_ffi::on_closed(id, end);
+            let cause = end.cause();
             let observed = routing_c(connector);
             unsafe {
                 (bound.post)(

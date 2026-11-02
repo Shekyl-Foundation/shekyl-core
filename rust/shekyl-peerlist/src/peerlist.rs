@@ -577,6 +577,13 @@ impl Peerlist {
         }
     }
 
+    /// The judge saw `connector`'s link work: clear the excusals of its
+    /// addresses with no counted failure (`OE-D6`). Returns how many seats
+    /// became drawable.
+    pub fn clear_excused(&mut self, connector: ConnectorId) -> usize {
+        self.partitions[connector.index()].clear_excused()
+    }
+
     /// The dialer drew `address` and did not start the test. An outstanding
     /// seat returns to drawable gray on the same ladder rung. White and
     /// cooling are left as they are. This is not an outcome: the ladder
@@ -635,6 +642,13 @@ impl Peerlist {
     #[must_use]
     pub fn gray_count(&self, connector: ConnectorId) -> usize {
         self.partition(connector).gray_len()
+    }
+
+    /// Whether an excused cooldown waits on `address`: it failed a test the
+    /// judge excused, and the cooldown has not ended or been cleared.
+    #[must_use]
+    pub fn is_excused(&self, address: &NetworkAddress) -> bool {
+        Self::connector_of(address).is_some_and(|c| self.partition(c).is_excused(address))
     }
 
     /// Whether `address` is white, on its own connector's list.

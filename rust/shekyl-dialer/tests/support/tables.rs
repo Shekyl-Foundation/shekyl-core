@@ -38,3 +38,11 @@ pub fn levin_rejected(connector: ConnectorId) -> DialEnd {
         CloseCause::new(CloseKind::LevinHandshakeRejected),
     )
 }
+
+/// This node's strand refusing a session's payload, as the hub records it.
+pub fn session_refused() -> DialEnd {
+    DialEnd::new(
+        DialFailure::local(shekyl_transport_layer::Retry::Again, Reached::StreamOpened),
+        CloseCause::new(CloseKind::SessionRefused),
+    )
+}

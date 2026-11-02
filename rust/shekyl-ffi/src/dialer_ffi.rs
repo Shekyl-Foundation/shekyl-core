@@ -37,7 +37,7 @@ use std::net::SocketAddr;
 
 pub use shekyl_peerlist::{ConnectorId, NetworkAddress};
 use shekyl_rpc_types::DaemonNetwork;
-use shekyl_seam::{connector_from_index, CloseCause, Hub, SocketId, SyncPayload};
+use shekyl_seam::{connector_from_index, Hub, SocketId, SyncPayload};
 use shekyl_thread_ledger::{DedicatedThread, ThreadName};
 use shekyl_timing_engine::{EngineError, Handle, MonotonicClock, OwnerClass};
 /// Each connector's dial profile: the dialer, the reservation the daemon
@@ -277,9 +277,9 @@ pub(crate) fn stop() {
 /// `SessionRefused` cause is the lists' `PayloadRefused`. The row is
 /// already off the board, and this poster does not hold the table lock,
 /// so an inbound Tor session leaves the held count here.
-pub(crate) fn on_closed(id: SocketId, cause: CloseCause) {
+pub(crate) fn on_closed(id: SocketId, end: shekyl_transport_layer::DialEnd) {
     if let Some(dialer) = dialer() {
-        dialer.session_closed_from_seam(id, cause, &mut SecureRelayRng);
+        dialer.session_closed_from_seam(id, end, &mut SecureRelayRng);
     }
 }
 

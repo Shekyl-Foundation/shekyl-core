@@ -35,10 +35,9 @@ use shekyl_levin::{
     invoke, BasicNodeData, BucketReader, CoreSyncData, HandshakeRequest, HandshakeResponse,
     PortableMap, Received, COMMAND_HANDSHAKE,
 };
-use shekyl_peerlist::{
-    CloseCause, CloseKind, ConnectorId, DialOutcome, NetworkAddress, SessionRow,
-};
+use shekyl_peerlist::{ConnectorId, DialOutcome, NetworkAddress, SessionRow};
 use shekyl_seam::{Channel, Endpoint, Hub, SocketId, SyncPayload};
+use shekyl_transport_layer::{CloseCause, CloseKind};
 use shekyl_transport_layer::{DialEnd, DialFailure, Reached, Retry};
 
 use super::address::endpoint_of;
@@ -80,11 +79,11 @@ pub(super) enum TaskResult {
     Failed(DialEnd),
 }
 
-/// The peer list's outcome for a failed attempt. The one place a
-/// [`DialEnd`] becomes the peer list's input, until the peer list takes the
-/// judge's (`DIALER_OUTAGE_EVIDENCE.md` §8, step 4).
+/// The peer list's outcome for a failed attempt: the judge's input, the
+/// end's failure. Its D12 cause is logged here and goes no further.
 pub(super) fn failed_outcome(address: NetworkAddress, end: DialEnd) -> DialOutcome {
-    DialOutcome::DialFailed(address, end.cause())
+    tracing::debug!("dial {address:?} ended {:?}", end.cause().kind());
+    DialOutcome::DialFailed(address, end.failure())
 }
 
 /// The Levin layer's refusal on `connector`, after the stream opened: the
@@ -177,7 +176,7 @@ impl Dialer {
             // R4) is the peer's doing: the same stamp as a rejection.
             return Attempt::Done(DialOutcome::PeerlistRefused(
                 address.clone(),
-                refused_by_peer(connector).cause(),
+                refused_by_peer(connector).failure(),
             ));
         }
 
@@ -393,8 +392,8 @@ async fn read_response(session: &mut Session) -> Result<HandshakeResponse, Rejec
 
 #[cfg(test)]
 mod tests {
-    use shekyl_peerlist::{CloseKind, ConnectorId};
-    use shekyl_transport_layer::{Evidence, Reached, Retry};
+    use shekyl_peerlist::ConnectorId;
+    use shekyl_transport_layer::{CloseKind, Evidence, Reached, Retry};
 
     use super::refused_by_peer;
 

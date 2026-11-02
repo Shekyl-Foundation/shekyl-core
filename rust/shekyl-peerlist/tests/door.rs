@@ -12,10 +12,10 @@ use std::net::Ipv4Addr;
 
 use shekyl_draw_rng::SplitMix64;
 use shekyl_peerlist::{
-    CloseCause, CloseKind, ConnectionId, DialOutcome, ListName, Marks, NetworkAddress, NoSessions,
-    Peerlist, Refusal, RefusedSet, SessionRow, Source, Tick, Verdict, EXPIRATION_PERIOD_NANOS,
-    GRAY_CAP, WHITE_CAP,
+    ConnectionId, DialOutcome, ListName, NetworkAddress, NoSessions, Peerlist, Refusal, RefusedSet,
+    SessionRow, Source, Tick, Verdict, EXPIRATION_PERIOD_NANOS, GRAY_CAP, WHITE_CAP,
 };
+use shekyl_transport_layer::{DialEnd, DialFailure, Reached, Retry};
 
 fn v4(n: u8) -> NetworkAddress {
     NetworkAddress::Ipv4 {
@@ -446,7 +446,12 @@ fn a_failed_test_cools_the_draw_a_proving_one_drops_it_and_a_refused_payload_lea
         // A connection problem on clearnet.
         (
             v4(7),
-            |a| DialOutcome::DialFailed(a, CloseCause::new(CloseKind::DialFailed)),
+            |a| {
+                DialOutcome::DialFailed(
+                    a,
+                    DialFailure::destination(Retry::Again, Reached::NoStream),
+                )
+            },
             After::Cooling,
         ),
         // A clearnet rejection: nothing is authenticated, so no proof.
@@ -455,8 +460,10 @@ fn a_failed_test_cools_the_draw_a_proving_one_drops_it_and_a_refused_payload_lea
             |a| {
                 DialOutcome::DialFailed(
                     a,
-                    CloseCause::new(CloseKind::LevinHandshakeRejected)
-                        .proving_misbehaviour_on(shekyl_peerlist::ConnectorId::Clearnet),
+                    DialFailure::refused_by_peer(
+                        shekyl_peerlist::ConnectorId::Clearnet,
+                        Reached::StreamOpened,
+                    ),
                 )
             },
             After::Cooling,
@@ -467,19 +474,22 @@ fn a_failed_test_cools_the_draw_a_proving_one_drops_it_and_a_refused_payload_lea
             |a| {
                 DialOutcome::PeerlistRefused(
                     a,
-                    CloseCause::new(CloseKind::LevinHandshakeRejected)
-                        .proving_misbehaviour_on(shekyl_peerlist::ConnectorId::Clearnet),
+                    DialFailure::refused_by_peer(
+                        shekyl_peerlist::ConnectorId::Clearnet,
+                        Reached::StreamOpened,
+                    ),
                 )
             },
             After::Cooling,
         ),
-        // A Tor proxy reply is the proxy's word, never proof.
+        // A Tor proxy reply is the proxy's word, never proof: `0xF1` as
+        // Tor's table stamps it, the destination's and final.
         (
             onion(7),
             |a| {
                 DialOutcome::DialFailed(
                     a,
-                    CloseCause::proxy_refused(0xF1, Marks::NAMES_DESTINATION),
+                    DialFailure::destination(Retry::Final, Reached::NoStream),
                 )
             },
             After::Cooling,
@@ -490,8 +500,10 @@ fn a_failed_test_cools_the_draw_a_proving_one_drops_it_and_a_refused_payload_lea
             |a| {
                 DialOutcome::PeerlistRefused(
                     a,
-                    CloseCause::new(CloseKind::LevinHandshakeRejected)
-                        .proving_misbehaviour_on(shekyl_peerlist::ConnectorId::Tor),
+                    DialFailure::refused_by_peer(
+                        shekyl_peerlist::ConnectorId::Tor,
+                        Reached::StreamOpened,
+                    ),
                 )
             },
             After::Dropped,
@@ -510,8 +522,8 @@ fn a_failed_test_cools_the_draw_a_proving_one_drops_it_and_a_refused_payload_lea
         let outcome = make(peer.clone());
         // The dialer's verdict: proof of misbehaviour drops, the rest count.
         let verdict = match &outcome {
-            DialOutcome::DialFailed(_, cause) | DialOutcome::PeerlistRefused(_, cause)
-                if cause.proves_misbehaviour() =>
+            DialOutcome::DialFailed(_, failure) | DialOutcome::PeerlistRefused(_, failure)
+                if failure.proves_misbehaviour() =>
             {
                 Verdict::Drop
             }
@@ -560,10 +572,8 @@ fn white_one(seed: u64, peer: &NetworkAddress) -> (Peerlist, SplitMix64) {
 #[test]
 fn a_failed_white_test_moves_it_to_gray_unless_it_is_excused() {
     let peer = v4(8);
-    let failed = DialOutcome::DialFailed(
-        peer.clone(),
-        CloseCause::new(CloseKind::LevinHandshakeTimeout),
-    );
+    let failed =
+        DialOutcome::DialFailed(peer.clone(), DialEnd::levin_handshake_timeout().failure());
     let (mut list, mut rng) = white_one(8, &peer);
     list.apply(&failed, at_hours(1), Verdict::Counted, &mut rng);
     assert!(!list.is_white(&peer), "a failed test demotes");
@@ -604,8 +614,7 @@ fn a_failed_white_test_moves_it_to_gray_unless_it_is_excused() {
     let (mut list, mut rng) = white_one(10, &hidden);
     let proven = DialOutcome::PeerlistRefused(
         hidden.clone(),
-        CloseCause::new(CloseKind::LevinHandshakeRejected)
-            .proving_misbehaviour_on(shekyl_peerlist::ConnectorId::Tor),
+        DialFailure::refused_by_peer(shekyl_peerlist::ConnectorId::Tor, Reached::StreamOpened),
     );
     list.apply(&proven, at_hours(1), Verdict::Drop, &mut rng);
     assert!(

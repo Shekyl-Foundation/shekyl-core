@@ -27,7 +27,7 @@ The intent (Rick, 2026-10-31): each connector declares how its connections are t
 
 ## 1. Pre-flight: what the code holds at the pin
 
-**The brief's anchors hold:** `Dialer::ladder` at `shekyl-dialer/src/owner/quiet.rs:67`; `fail_test` at `shekyl-peerlist/src/partition.rs:454`; the marks at `shekyl-transport-layer/src/cause.rs:143`, `:146`, `:149`, `:156`; `proxy_reply_marks` at `shekyl-tor/src/replies.rs:89`; `Peerlist::apply`'s misbehaviour test at `shekyl-peerlist/src/peerlist.rs:594`. The Pi run is shekyl-dev `8049fe7`, `data/tsr-acceptance/2026-10-31-pi-floor/`, and reads as §1 of the brief says.
+**The brief's anchors hold:** `Dialer::ladder` at `shekyl-dialer/src/owner/quiet.rs` line 67 at `821beb1215` (*records-was:* #1235 deleted the guard); `fail_test` at `shekyl-peerlist/src/partition.rs:454`; the marks at `shekyl-transport-layer/src/cause.rs:143`, `:146`, `:149`, `:156`; `proxy_reply_marks` at `shekyl-tor/src/replies.rs:89`; `Peerlist::apply`'s misbehaviour test at `shekyl-peerlist/src/peerlist.rs:594`. The Pi run is shekyl-dev `8049fe7`, `data/tsr-acceptance/2026-10-31-pi-floor/`, and reads as §1 of the brief says.
 
 **What the design rests on, found at the pin:**
 - **Every finished attempt reaches the lists through one function**, `Dialer::record` (`owner/mod.rs:716-729`). It folds the attempt into the quiet counters, asks `ladder` once, and calls `Peerlist::apply`. Retries within a test are decided before it, in `settle_or_retry` (`owner/mod.rs:742-790`), from `RETRY` and `WINDOW_TIMEOUT`. The judge goes where `ladder` is.
@@ -246,7 +246,7 @@ At target nothing changes, except that the verdict on an Uncertain failure waits
 - **The deferred verdict** holds **no target place and no in-flight slot; only the seat stays outstanding.**
   - The attempt's in-flight slot frees when the attempt completes.
   - The pending verdict is not a kept session or a pending `Keep`, so the fill's count toward the target never includes it. The dialer draws and dials while verdicts wait.
-  - The address's seat stays `Outstanding` until the verdict, so it is not drawn again meanwhile.
+  - The address is not drawn again meanwhile. A gray address's seat stays `Outstanding` until the verdict. A white address has no outstanding state (a re-contact is not a draw), so the dialer's eligibility excludes every address whose verdict waits; the onset test fails without it (#1235).
   - One timing-engine owner per connector carries the earliest pending deadline, the shape of the accept linger in #1226. Tor's five slots are never held idle for δ.
   - At the deadline the judge reads the after-side evidence and applies the verdict.
   - A Destination failure needs no wait and is applied at once.

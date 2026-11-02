@@ -324,8 +324,8 @@ fn closed_cause(rig: &Rig, id: SocketId) -> CloseCause {
         .iter()
         .filter_map(|post| match post {
             Post::Closed {
-                id: closed, cause, ..
-            } if *closed == id => Some(*cause),
+                id: closed, end, ..
+            } if *closed == id => Some(end.cause()),
             _ => None,
         })
         .collect();

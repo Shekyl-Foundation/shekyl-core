@@ -34,9 +34,7 @@ use shekyl_levin::{
 };
 use shekyl_onion_v3::v3_onion_hostname;
 use shekyl_peer_policy::InboundCeiling;
-use shekyl_peerlist::{
-    CloseCause, CloseKind, ConnectorId, Direction, NetworkAddress, RefusedSet, Tick,
-};
+use shekyl_peerlist::{ConnectorId, Direction, NetworkAddress, RefusedSet, Tick};
 use shekyl_seam::{
     Channel, Dial, Endpoint, Hub, Loopback, Post, Route, RoutePublish, SocketId, SyncPayload,
 };
@@ -328,7 +326,7 @@ fn a_session_refused_close_drops_the_kept_row_and_leaves_white() {
     // The payload owner closes with SessionRefused. That close is the
     // lists' PayloadRefused. White was written when the dial returned.
     rig.dialer
-        .session_closed(id, CloseCause::new(CloseKind::SessionRefused), &mut rng);
+        .session_closed(id, tables::session_refused(), &mut rng);
     let shared = rig.dialer.shared();
     assert!(
         shared.lists.is_white(&peer(1)),
@@ -464,7 +462,7 @@ fn a_close_between_adopt_and_the_kept_row_is_not_kept() {
                 if let Some(dialer) = slot_post.lock().expect("slot").clone() {
                     dialer.session_closed(
                         *id,
-                        CloseCause::new(CloseKind::PeerClosed),
+                        tables::peer_closed(ConnectorId::Clearnet),
                         &mut SplitMix64::new(13),
                     );
                 }
@@ -715,9 +713,9 @@ fn a_synchronous_close_notification_finishes() {
         Sockets::new(),
         InboundCeiling::Bounded(8),
         Arc::new(move |post| {
-            if let Post::Closed { id, cause, .. } = &post {
+            if let Post::Closed { id, end, .. } = &post {
                 if let Some(dialer) = slot_post.lock().expect("slot").clone() {
-                    dialer.session_closed(*id, *cause, &mut SplitMix64::new(12));
+                    dialer.session_closed(*id, *end, &mut SplitMix64::new(12));
                 }
                 // The strand's closed path locks the table again
                 // (`shekyl_seam_handler_gone`). A poster that runs under
@@ -963,23 +961,30 @@ fn a_refused_payload_on_a_kept_tor_session_is_not_another_open() {
         vec![reply(NETWORK, vec![])],
     )
     .expect("adopted");
+    let opened = rig.dialer.tor_link_tally();
+    assert!(
+        opened.last_sign_of_life.is_some(),
+        "the stream that opened is a sign of life"
+    );
     assert_eq!(
-        rig.dialer.tor_link_tally(),
+        opened,
         TorLinkTally {
             opened: 1,
             unopened: 0,
             held: 1,
+            last_sign_of_life: opened.last_sign_of_life,
         }
     );
 
     rig.dialer
-        .session_closed(id, CloseCause::new(CloseKind::SessionRefused), &mut rng);
+        .session_closed(id, tables::session_refused(), &mut rng);
     assert_eq!(
         rig.dialer.tor_link_tally(),
         TorLinkTally {
             opened: 1,
             unopened: 0,
             held: 0,
+            last_sign_of_life: opened.last_sign_of_life,
         },
         "the close is not a new stream"
     );
@@ -1032,11 +1037,11 @@ fn an_inbound_tor_session_is_held_once_its_handshake_finishes() {
             opened: 0,
             unopened: 0,
             held: 1,
+            last_sign_of_life: None,
         }
     );
 
     let end = tables::peer_closed(ConnectorId::Tor);
-    let cause = end.cause();
     rig.hub.finish(attached.id, end);
     assert_eq!(
         rig.hub.board().count(ConnectorId::Tor, Direction::Inbound),
@@ -1047,7 +1052,7 @@ fn an_inbound_tor_session_is_held_once_its_handshake_finishes() {
     // `session_closed` alone does not read the board: the adopt poster
     // calls it while holding that lock.
     rig.dialer
-        .session_closed_from_seam(attached.id, cause, &mut SplitMix64::new(1));
+        .session_closed_from_seam(attached.id, end, &mut SplitMix64::new(1));
     assert_eq!(
         rig.dialer.tor_link_tally(),
         TorLinkTally::default(),

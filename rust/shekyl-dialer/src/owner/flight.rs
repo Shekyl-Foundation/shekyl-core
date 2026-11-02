@@ -340,6 +340,7 @@ impl Dialer {
     /// clock. The owner loop never does: it uses [`Self::launch`] and never
     /// waits on a dial.
     pub fn wake<R: RelayRng + ?Sized>(&self, connector: ConnectorId, rng: &mut R) -> bool {
+        self.apply_verdicts(rng);
         let Some((address, aim, nonce)) = self.choose(connector, rng) else {
             return false;
         };

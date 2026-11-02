@@ -220,6 +220,19 @@ impl Partition {
         }
     }
 
+    /// Whether an excused cooldown waits on the seat: a gray seat cooling
+    /// from an excused failure, or a white seat's excusal.
+    pub(crate) fn is_excused(&self, address: &NetworkAddress) -> bool {
+        match self.seat_of(address) {
+            Some(Seat::Gray {
+                phase: GrayPhase::Cooling { excused, .. },
+                ..
+            }) => excused,
+            Some(seat) => is_excused_white(&seat),
+            None => false,
+        }
+    }
+
     pub(crate) fn is_white(&self, address: &NetworkAddress) -> bool {
         matches!(self.seat_of(address), Some(Seat::White { .. }))
     }
@@ -578,6 +591,32 @@ impl Partition {
             }
             Some(Seat::Gray { .. }) | None => false,
         }
+    }
+
+    /// The judge saw the link work (`OE-D6`, clearing): every excused seat
+    /// with no counted failure is drawable again at once, a white one's
+    /// excusal ends with it, and nothing on the ladder is touched. Returns
+    /// how many seats moved.
+    pub(crate) fn clear_excused(&mut self) -> usize {
+        let cleared: Vec<(NetworkAddress, Seat)> = self
+            .seats
+            .iter()
+            .filter_map(|(address, seat)| match seat {
+                Seat::Gray {
+                    phase: GrayPhase::Cooling { excused: true, .. },
+                    failures: 0,
+                } => Some((address.clone(), drawable(0))),
+                Seat::White {
+                    observed,
+                    excused_until: Some(_),
+                } => Some((address.clone(), white(*observed))),
+                Seat::Gray { .. } | Seat::White { .. } => None,
+            })
+            .collect();
+        for (address, seat) in &cleared {
+            self.move_seat(address, *seat);
+        }
+        cleared.len()
     }
 
     /// Every cooling seat whose tick has passed returns to drawable gray,

@@ -33,6 +33,7 @@
 pub mod attempts;
 pub mod candidate;
 pub mod fill;
+pub mod judge;
 pub mod link_tally;
 pub mod nonce;
 pub mod owner;
@@ -44,6 +45,7 @@ pub mod store;
 pub use attempts::Attempts;
 pub use candidate::{CandidateFilter, Skip};
 pub use fill::{plan, Census, DialAim, DrawList, FillRule, Plan};
+pub use judge::{judge, judge_at_bracket_end, Judgement, Observations};
 pub use link_tally::{TallySink, TorLinkTally};
 pub use nonce::{HandshakeNonce, HandshakeNonceSet, InFlightNonce, NonceTake};
 pub use owner::{
