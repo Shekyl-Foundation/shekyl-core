@@ -25,14 +25,20 @@ use shekyl_wire::PowBlob;
 use crate::model::{Event, Sync};
 use crate::proof::{drive, open_claim};
 use crate::scenarios::{target_one, NoDraw};
-use crate::{Command, PeerClaim, Spent};
+use crate::{CloseCause, Command, PeerClaim, Spent};
 
 type Model = Sync<u8, fn(BlockHeight) -> RuleSet>;
 
 fn response(blobs: &[Vec<u8>], more: bool) -> Vec<u8> {
+    stating(blobs, more, u128::MAX)
+}
+
+/// A response whose `tip_work` is `work`: the peer's statement of its
+/// own chain, which replaces its claim (CS-Q2 step 1).
+fn stating(blobs: &[Vec<u8>], more: bool, work: u128) -> Vec<u8> {
     shekyl_levin::ResponseHeaders {
         blobs: blobs.to_vec(),
-        tip_work: u128::MAX,
+        tip_work: work,
         more,
     }
     .store()
@@ -100,22 +106,24 @@ fn primed(main: &MockChain, pows: &[Vec<u8>]) -> Model {
 }
 
 /// A peer whose answer from `H*` is headers `T` already holds, and no
-/// more, is not asked from `H*` again: `T` did not change, so the same
-/// locator would get the same page. The record is `HeadersSpent`. A new
-/// claim from that peer draws it again.
+/// more, stating the work of the chain it served, is not asked from `H*`
+/// again: `T` did not change, so the same locator would get the same
+/// page. The record is `HeadersSpent`. A new claim from that peer draws
+/// it again.
 #[test]
 fn an_answer_already_held_spends_the_session_until_its_claim_changes() {
     let main = chain_of(8);
     let (pows, hashes) = three_above(&main);
     let mut sync = primed(&main, &pows);
     assert_eq!(sync.selected().hash, hashes[2]);
+    let served = sync.selected().work.to_raw();
     main.with_view(|view| {
         let out = drive(
             &mut sync,
             &view,
             Event::Headers {
                 session: 2,
-                bytes: response(&pows, false),
+                bytes: stating(&pows, false, served),
             },
         );
         assert!(
@@ -158,6 +166,97 @@ fn an_answer_already_held_spends_the_session_until_its_claim_changes() {
         )
         .expect("the claim is a chain");
         assert_eq!(headers_asked(&out, 2).len(), 1, "{out:?}");
+    });
+}
+
+/// A peer whose answer from `H*` is headers `T` already holds, and no
+/// more, while stating more work than that chain has, is the liar: closed
+/// at `ClaimUnmet`, not spent. The gate that spends an exhausted peer
+/// first spent the liar too, and it kept its session (2026-11-02, the
+/// loopback `the_liar_closes_at_claim_unmet`).
+#[test]
+fn an_answer_already_held_below_the_stated_work_closes_at_claim_unmet() {
+    let main = chain_of(8);
+    let (pows, hashes) = three_above(&main);
+    let mut sync = primed(&main, &pows);
+    assert_eq!(sync.selected().hash, hashes[2]);
+    let served = sync.selected().work.to_raw();
+    main.with_view(|view| {
+        let out = drive(
+            &mut sync,
+            &view,
+            Event::Headers {
+                session: 2,
+                bytes: stating(&pows, false, served + 1),
+            },
+        );
+        assert!(
+            out.iter().any(|command| matches!(
+                command,
+                Command::Close {
+                    session: 2,
+                    cause: CloseCause::ClaimUnmet,
+                }
+            )),
+            "{out:?}"
+        );
+        assert!(
+            !out.iter()
+                .any(|command| matches!(command, Command::HeadersSpent { .. })),
+            "{out:?}"
+        );
+    });
+}
+
+/// A peer that serves nothing above the locator, and no more, stating
+/// more work than `H*` has, is the liar too: its tip is a locator hash,
+/// none of which outweighs `H*`.
+#[test]
+fn an_empty_answer_below_the_stated_work_closes_at_claim_unmet() {
+    let main = chain_of(8);
+    let (pows, hashes) = three_above(&main);
+    let mut sync = primed(&main, &pows);
+    assert_eq!(sync.selected().hash, hashes[2]);
+    let star = sync.selected().work.to_raw();
+    main.with_view(|view| {
+        let out = drive(
+            &mut sync,
+            &view,
+            Event::Headers {
+                session: 2,
+                bytes: stating(&[], false, star + 1),
+            },
+        );
+        assert!(
+            out.iter().any(|command| matches!(
+                command,
+                Command::Close {
+                    session: 2,
+                    cause: CloseCause::ClaimUnmet,
+                }
+            )),
+            "{out:?}"
+        );
+        // Stating exactly `H*`'s work, the same answer is exhaustion.
+        open_claim(&mut sync, &view, 3);
+        let out = drive(
+            &mut sync,
+            &view,
+            Event::Headers {
+                session: 3,
+                bytes: stating(&[], false, star),
+            },
+        );
+        assert!(
+            out.iter().any(|command| matches!(
+                command,
+                Command::HeadersSpent {
+                    session: 3,
+                    cause: Spent::Exhausted,
+                }
+            )),
+            "{out:?}"
+        );
     });
 }
 

@@ -316,7 +316,15 @@ ingest deciding forks.**
        cache was not held; a response that names only headers `T` holds
        *with more to come* continues from the last header served instead
        of from `H*`. Before the gate, a node whose `H*` was reachable by
-       no heavier tip re-sent the same request every millisecond.
+       no heavier tip re-sent the same request every millisecond. **The
+       liar is judged first (amended 2026-11-02, #1237's
+       `the_liar_closes_at_claim_unmet`):** a response that names only
+       held headers, or none, and says the chain ends there is read
+       against the work of the chain it served (the last held header's
+       record, or `H*` for an empty page), and a claim above that work
+       closes the session as the liar's; the gate spends only a claim at
+       or below it. Until that day the gate spent the liar too, and it
+       kept its session.
      - **The run fills its per-session budget without exceeding
        `work(H*)`:** the run is dropped with zero hashes, and the
        session is not asked again until its claim changes.

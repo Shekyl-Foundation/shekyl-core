@@ -382,9 +382,15 @@ pub(crate) fn serialized(block: &Block) -> Vec<u8> {
 }
 
 pub(crate) fn headers_of(pow: Vec<u8>) -> Vec<u8> {
+    headers_stating(pow, u128::MAX)
+}
+
+/// One header, no more, from a peer whose chain has `work`: a second
+/// server of a held header states that header's work, or it is the liar.
+pub(crate) fn headers_stating(pow: Vec<u8>, work: u128) -> Vec<u8> {
     shekyl_levin::ResponseHeaders {
         blobs: vec![pow],
-        tip_work: u128::MAX,
+        tip_work: work,
         more: false,
     }
     .store()

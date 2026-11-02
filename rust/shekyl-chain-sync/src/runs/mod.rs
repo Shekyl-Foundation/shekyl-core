@@ -126,9 +126,13 @@ where
         if response.blobs.is_empty() {
             if response.more {
                 self.close(session, CloseCause::HeadersForm, out);
+            } else if self.claim_exceeds(session, self.star.work) {
+                // Nothing above the locator, and no more: the peer's tip
+                // is a locator hash, none of which outweighs `H*`, so a
+                // claim above `H*` is unmet.
+                self.close(session, CloseCause::ClaimUnmet, out);
             } else {
-                // Nothing above the locator, and no more: the same
-                // locator would get the same answer.
+                // The same locator would get the same answer.
                 self.spend(session, Spent::Exhausted, out);
             }
             return Ok(());
@@ -251,11 +255,20 @@ where
         }
         if fresh.is_empty() {
             if !response.more {
-                // Every header served is in `T` already and the peer's
-                // chain ends there. `T` did not change, so neither did
-                // `H*`, and this locator would be answered the same way:
-                // the request that the runtime saw repeated every
-                // millisecond (2026-11-02) until this gate.
+                // Every header served is held already and the peer's
+                // chain ends there. A peer that states more work than
+                // that chain has is the liar, closed at `ClaimUnmet`
+                // (CS-Q2 step 7). Otherwise `T` did not change, so
+                // neither did `H*`, and this locator would be answered
+                // the same way: the request that the runtime saw repeated
+                // every millisecond (2026-11-02) until this gate. The
+                // gate first spent the liar too, and it kept its session
+                // (`the_liar_closes_at_claim_unmet`, 2026-11-02).
+                let end = self.end_work(main, held, held_height)?;
+                if self.claim_exceeds(session, end) {
+                    self.close(session, CloseCause::ClaimUnmet, out);
+                    return Ok(());
+                }
                 self.spend(session, Spent::Exhausted, out);
                 return Ok(());
             }
@@ -780,6 +793,32 @@ where
     /// slot is free once a response arrives, so the same request went out
     /// again at once and the same answer came back: a request loop at
     /// the round trip.
+    /// Whether the session's claim states more work than `work`.
+    fn claim_exceeds(&self, session: K, work: CumulativeDifficulty) -> bool {
+        self.peers
+            .get(&session)
+            .and_then(|state| state.claim)
+            .is_some_and(|claim| claim.work > work)
+    }
+
+    /// The work through a header this node holds, in `T` or on `main` at
+    /// `height`. `H*`'s work when neither answers: a held header that
+    /// outweighs `H*` is in `T`, so nothing outside it does.
+    fn end_work<'id, H: HeaderView<'id>>(
+        &self,
+        main: &H,
+        hash: BlockHash,
+        height: BlockHeight,
+    ) -> Result<CumulativeDifficulty, H::Fault> {
+        if let Some(record) = self.tree.record(hash) {
+            return Ok(record.cumulative_difficulty);
+        }
+        Ok(match main.header_at(height)? {
+            AtHeight::Recorded(record) if record.hash == hash => record.cumulative_difficulty,
+            AtHeight::Recorded(_) | AtHeight::AboveTip => self.star.work,
+        })
+    }
+
     fn spend(&mut self, session: K, cause: Spent, out: &mut Vec<Command<K>>) {
         if let Some(state) = self.peers.get_mut(&session) {
             state.run = None;
