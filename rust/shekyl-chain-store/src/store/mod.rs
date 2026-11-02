@@ -699,9 +699,12 @@ fn arm_write(db: &Database) -> Result<WriteTransaction, StoreError> {
 /// is not a refusal. A read-only open returns it before any table read
 /// when the file needs recovery, and only the writable open repairs it.
 /// The writable open's `verify` is the admission, and the provenance of
-/// the handle it returns. The filter's result is not that provenance:
-/// the file can change between the two opens, and the writable open is
-/// the one that holds it.
+/// the handle it returns. The filter's result is not that provenance.
+/// redb opens read-only only by path, so the two opens cannot share a
+/// descriptor. A refusal of the filter writes nothing to the inode it
+/// opened. A directory entry replaced before the writable open is a
+/// different file: refusing it drops that open, which writes the inode
+/// the writable open took.
 fn open_existing(
     builder: &redb::Builder,
     path: &Path,

@@ -2493,7 +2493,10 @@ not change with its address:
   expected }` / `CellCorrupt` — never a default. A writable reopen runs it on a
   **read-only** open first and opens writable only a file it accepted: a writable
   open writes into the file even with nothing committed (redb records its
-  allocator state when it closes), so a refused file is left byte for byte. The
+  allocator state when it closes), so the file the read-only open refused is
+  left byte for byte. The two opens are by path: redb opens read-only only by
+  path, and a directory entry replaced between them is a different file, which
+  a later refusal has already marked for recovery. The
   one exception is a file redb must repair, which a read-only open refuses
   (`RepairAborted`): it is opened writable, repaired by redb, and judged after. The key bytes are pinned by a
   test on `codec::SchemaVersionCell::KEY`.

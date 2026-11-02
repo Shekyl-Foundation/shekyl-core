@@ -25,6 +25,9 @@ use crate::codec::{
     PropertyCellBytes, Raw, SchemaVersion, SchemaVersionCell, TotalBurnedCell, SCHEMA_VERSION,
 };
 use crate::family_set::FamilySet;
+use crate::redb_recovery::{
+    bytes_and_mtime, mark_recovery_required, read_only_open_is_repair_aborted,
+};
 use crate::schema::PROPERTIES;
 
 const SLASH: &[ArchivalFamily] = &[ArchivalFamily::SlashLog];
@@ -362,30 +365,18 @@ fn a_different_version_is_refused_in_both_directions() {
     cleanup(&path);
 }
 
-/// A refused file's bytes and modification time, to hold a refusal to
-/// having written nothing.
-fn untouched(path: &std::path::Path) -> (Vec<u8>, std::time::SystemTime) {
-    (
-        std::fs::read(path).expect("read"),
-        std::fs::metadata(path)
-            .expect("stat")
-            .modified()
-            .expect("mtime"),
-    )
-}
-
 #[test]
 fn a_file_with_no_version_cell_is_refused_not_read_as_v1() {
     // §11.1(a): absent reads as refuse. Two shapes of absence.
     let path = tmp("absent-cell");
     seeded(&path, ApplyPolicy::Full);
     raw_put(&path, "schema_version", None);
-    let before = untouched(&path);
+    let before = bytes_and_mtime(&path);
     assert!(matches!(
         ChainStore::create(&path, EPOCH),
         Err(StoreError::Cannot(StoreCannot::SchemaVersionAbsent))
     ));
-    assert_eq!(untouched(&path), before, "refused unwritten");
+    assert_eq!(bytes_and_mtime(&path), before, "refused unwritten");
     assert!(matches!(
         ChainStore::open_read_only(&path, production_horizons()),
         Err(StoreError::Cannot(StoreCannot::SchemaVersionAbsent))
@@ -400,14 +391,14 @@ fn a_file_with_no_version_cell_is_refused_not_read_as_v1() {
         txn.open_table(PROBE).expect("some other table");
         txn.commit().expect("c");
     }
-    let before = untouched(&foreign);
+    let before = bytes_and_mtime(&foreign);
     assert!(matches!(
         ChainStore::create(&foreign, EPOCH),
         Err(StoreError::Cannot(StoreCannot::SchemaVersionAbsent))
     ));
     // Judged on a read-only open: a writable one would have written the
     // engine's allocator state into the file as it closed.
-    assert_eq!(untouched(&foreign), before, "refused unwritten");
+    assert_eq!(bytes_and_mtime(&foreign), before, "refused unwritten");
     assert!(matches!(
         ChainStore::open_read_only(&foreign, production_horizons()),
         Err(StoreError::Cannot(StoreCannot::SchemaVersionAbsent))
@@ -429,9 +420,9 @@ fn a_file_with_no_version_cell_is_refused_not_read_as_v1() {
 fn a_recovery_bit_reopens_the_probe_row() {
     let path = tmp("repair");
     seeded(&path, ApplyPolicy::Full);
-    crate::redb_recovery::mark_recovery_required(&path);
+    mark_recovery_required(&path);
     assert!(
-        crate::redb_recovery::read_only_open_is_repair_aborted(&path),
+        read_only_open_is_repair_aborted(&path),
         "the bit is the repair arm"
     );
     assert!(

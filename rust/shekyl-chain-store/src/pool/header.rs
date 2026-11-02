@@ -33,6 +33,16 @@
 //! open) takes the same writable open, which repairs it, and is then
 //! admitted like any other file.
 //!
+//! The filter and the claim are two opens of the path. redb's read-only
+//! open takes a path (`Builder::open_read_only`); a read-only database
+//! cannot be built from a `std::fs::File` the caller already holds, so
+//! the filter cannot hand its inode to the claim. A refusal writes
+//! nothing to the inode the filter opened. A directory entry replaced
+//! between the two opens is a different file. The claim admits that
+//! file, and a refusal of it drops the claim, whose shutdown write marks
+//! the inode the claim opened. An identity check after that open would
+//! report a write it did not prevent.
+//!
 //! # A recreate is recoverable at every step
 //!
 //! The old file held which transactions this node had in its stem phase,
@@ -122,7 +132,8 @@ fn open_existing(builder: &redb::Builder, path: &Path) -> Result<(Database, Pool
 /// A readable seal — current or another version — and a file the engine
 /// must repair (`RepairAborted`) both continue. The version a readable
 /// seal names is read again under [`claim`]: this pass holds only a
-/// shared lock, which does not stop a rename.
+/// shared lock, which does not stop a rename. The inode judged here is
+/// the one a refusal leaves unwritten.
 fn filter_foreign(builder: &redb::Builder, path: &Path) -> Result<(), StoreError> {
     match builder.open_read_only(path) {
         Ok(read_only) => match read_header(&read_only)? {
@@ -142,7 +153,8 @@ fn claim(builder: &redb::Builder, path: &Path) -> Result<Database, StoreError> {
 }
 
 /// Admit the file `claimed` holds. A seal at another version is replaced
-/// before `claimed` is dropped, so the lock covers the rename.
+/// before `claimed` is dropped, so the lock covers the rename. A refusal
+/// drops `claimed` too, and that drop writes the inode the claim opened.
 fn admit(
     builder: &redb::Builder,
     claimed: Database,
