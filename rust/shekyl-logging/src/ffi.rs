@@ -142,8 +142,10 @@ pub const SHEKYL_LOG_ERR_NOT_INITIALIZED: i32 = -9;
 pub const SHEKYL_LOG_ERR_INVALID_UTF8: i32 = -10;
 /// Installing the global subscriber failed.
 pub const SHEKYL_LOG_ERR_SUBSCRIBER_INSTALL: i32 = -11;
-/// The tracing forwarder was already installed in this process.
-pub const SHEKYL_LOG_ERR_ALREADY_INSTALLED: i32 = -12;
+// -12 was `SHEKYL_LOG_ERR_ALREADY_INSTALLED`, the return of the C export
+// `shekyl_log_install_tracing_forwarder`, deleted 2026-11-02 with that
+// export (DAEMON_CONFIG_CUTOVER.md DC-F19): the daemon pins the forwarder
+// through [`install_tracing_forwarder`]. The number is not reused.
 /// A sink's writer thread could not be started.
 pub const SHEKYL_LOG_ERR_WRITER_THREAD: i32 = -13;
 /// [`shekyl_log_flush`]'s deadline passed with lines still queued.
@@ -167,11 +169,11 @@ struct FfiState {
 
 static FFI_STATE: OnceLock<Mutex<FfiState>> = OnceLock::new();
 
-/// One-shot pin for `shekyl_log_install_tracing_forwarder`. Flipped
-/// exactly once per process; later calls observe it and return
-/// [`SHEKYL_LOG_ERR_ALREADY_INSTALLED`] so a hot-reload path
-/// (`SIGHUP` re-running `mlog_configure`) can distinguish "first
-/// install" from "already wired" without treating either as failure.
+/// One-shot pin for [`install_tracing_forwarder`]. Flipped exactly once
+/// per process; later calls observe it and return
+/// [`ForwarderError::AlreadyInstalled`], so a re-configure path can
+/// distinguish "first install" from "already wired" without treating
+/// either as failure.
 static FORWARDER_INSTALLED: AtomicBool = AtomicBool::new(false);
 
 thread_local! {
@@ -394,62 +396,6 @@ pub unsafe extern "C" fn shekyl_log_flush(within_ms: u32) -> i32 {
 // Tracing forwarder (single-image verification contract)
 // -----------------------------------------------------------------
 
-/// Pin the tracing-forwarder call ordering (init first) and install
-/// idempotency as a process-global one-shot.
-///
-/// # What this actually does
-///
-/// Decision log 2026-04-25 named this export a "forwarder install".
-/// The 2026-06-10/2026-06-11 amendments (single-image contract)
-/// supersede the mechanism: there is nothing to forward *between*,
-/// because every binary links exactly one Rust image — this crate is
-/// compiled into `libshekyl_ffi.a` for the C++ binaries and into the
-/// `shekyld` binary's own dependency graph (DC-Q19), so the one shared
-/// `tracing-core` dispatcher is common to the `shekyl_log_init_*`
-/// subscriber and every `tracing::*` macro in the image's crate graph.
-///
-/// This function is the runtime half of that contract: it pins the
-/// call-ordering invariant (init first) and gives the caller a typed
-/// success/already/not-initialized signal. The link-time half —
-/// "exactly one `tracing-core` dispatcher in the binary" — cannot be
-/// observed from inside any single Rust image and is enforced by the
-/// post-link `nm` gate on the staged `shekyld` (one `GLOBAL_DISPATCH`
-/// symbol; see `src/daemon/CMakeLists.txt`).
-///
-/// The daemon calls [`install_tracing_forwarder`] directly from Rust,
-/// right after `init` (`shekyl-daemon`'s `run`, DC-Q22); this export is
-/// the same pin for a C caller.
-///
-/// Idempotent: a second call after a successful first returns
-/// [`SHEKYL_LOG_ERR_ALREADY_INSTALLED`]. Calling before a successful
-/// `shekyl_log_init_*` returns [`SHEKYL_LOG_ERR_NOT_INITIALIZED`]
-/// and does *not* consume the one-shot pin — the caller may retry
-/// after init.
-///
-/// # Safety
-///
-/// No pointer parameters, so no pointer-validity obligations.
-#[no_mangle]
-pub unsafe extern "C" fn shekyl_log_install_tracing_forwarder() -> i32 {
-    match install_tracing_forwarder() {
-        Ok(()) => SHEKYL_LOG_OK,
-        Err(ForwarderError::NotInitialized) => {
-            set_last_error(
-                "shekyl_log_install_tracing_forwarder: no successful \
-                 shekyl_log_init_* call preceded this install",
-            );
-            SHEKYL_LOG_ERR_NOT_INITIALIZED
-        }
-        Err(ForwarderError::AlreadyInstalled) => {
-            set_last_error(
-                "shekyl_log_install_tracing_forwarder: forwarder already \
-                 installed in this process",
-            );
-            SHEKYL_LOG_ERR_ALREADY_INSTALLED
-        }
-    }
-}
-
 /// Why [`install_tracing_forwarder`] did not pin the forwarder.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ForwarderError {
@@ -471,11 +417,31 @@ impl std::fmt::Display for ForwarderError {
 
 impl std::error::Error for ForwarderError {}
 
-/// The forwarder pin as safe Rust: the daemon's `run` calls this right
-/// after [`crate::init`] succeeds, so C++ `MCLOG`-family calls made from
-/// the remnant have a subscriber behind them from the first one. See
-/// [`shekyl_log_install_tracing_forwarder`] for what the pin is and is
-/// not.
+/// Pin the tracing-forwarder call ordering (init first) and install
+/// idempotency as a process-global one-shot. The daemon's `run` calls
+/// this right after [`crate::init`] succeeds (DC-Q22), so C++
+/// `MCLOG`-family calls made from the remnant have a subscriber behind
+/// them from the first one.
+///
+/// # What this actually does
+///
+/// Decision log 2026-04-25 named this a "forwarder install". The
+/// 2026-06-10/2026-06-11 amendments (single-image contract) supersede the
+/// mechanism: there is nothing to forward *between*, because every binary
+/// links exactly one Rust image — this crate is compiled into
+/// `libshekyl_ffi.a` for the C++ binaries and into the `shekyld` binary's
+/// own dependency graph (DC-Q19), so the one shared `tracing-core`
+/// dispatcher is common to the `shekyl_log_init_*` subscriber and every
+/// `tracing::*` macro in the image's crate graph.
+///
+/// This function is the runtime half of that contract: it pins the
+/// call-ordering invariant (init first) and gives the caller a typed
+/// success/already/not-initialized signal. The link-time half — "exactly
+/// one `tracing-core` dispatcher in the binary" — cannot be observed from
+/// inside any single Rust image and is enforced by the post-link `nm` gate
+/// on the staged `shekyld` (one `GLOBAL_DISPATCH` symbol; see
+/// `src/daemon/CMakeLists.txt`). There is no C export of it: no C++ calls
+/// it (deleted 2026-11-02, DC-F19).
 ///
 /// # Errors
 ///

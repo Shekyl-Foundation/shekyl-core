@@ -3,38 +3,32 @@
 // All rights reserved.
 // BSD-3-Clause
 
-//! State-machine coverage for `shekyl_log_install_tracing_forwarder`.
+//! State-machine coverage for `install_tracing_forwarder`, the pin the
+//! daemon's `run` sets right after `init` (DC-Q22).
 //!
-//! The forwarder export is the runtime half of the single-Rust-image
-//! logging contract (decision log 2026-04-25, amended 2026-06-10 and
-//! 2026-06-11): every binary links exactly one Rust static archive —
-//! `libshekyl_ffi.a` for the C++ binaries (this crate is a `shekyl-ffi`
-//! dependency), and `shekyld` is itself a Rust binary whose one cargo
-//! graph links `shekyl-ffi` and the rlib-only `shekyl-daemon-rpc`
-//! (DC-Q19) — so each binary carries exactly one `tracing-core`
-//! dispatcher, and this export pins the C++ call ordering
-//! (`shekyl_log_init_*` first) plus install idempotency. The daemon
-//! installs the forwarder through the Rust function
-//! `install_tracing_forwarder` (DC-Q22); no C++ binary calls this C
-//! export today, and whether it stays as these tests' pin or goes is
-//! Rick's (`DAEMON_CONFIG_CUTOVER.md` §10.1, DC-F19).
+//! The pin is the runtime half of the single-Rust-image logging contract
+//! (decision log 2026-04-25, amended 2026-06-10 and 2026-06-11): every
+//! binary links exactly one Rust image — `libshekyl_ffi.a` for the C++
+//! binaries, and `shekyld`'s own cargo graph (DC-Q19) — so each carries
+//! exactly one `tracing-core` dispatcher, and the pin holds the call
+//! ordering (`init` first) plus install idempotency. It has no C export:
+//! no C++ called one (deleted 2026-11-02, `DAEMON_CONFIG_CUTOVER.md`
+//! DC-F19).
 //!
 //! This is an integration test (own process) rather than a unit test
 //! because the install pin and `INITIALIZED` flag are process-global
-//! one-shots: the before-init arm is only observable in a process
-//! where nothing else has initialized the logger yet. Keep this file
-//! to this single `#[test]` — a second test in the same binary could
-//! race the global state.
+//! one-shots: the before-init arm is only observable in a process where
+//! nothing else has initialized the logger yet. Keep this file to this
+//! single `#[test]` — a second test in the same binary could race the
+//! global state.
 //!
 //! The link-time half of the contract — exactly one `GLOBAL_DISPATCH`
-//! symbol in `shekyld` — is asserted by the post-link `nm` gate on
-//! the `daemon` CMake target, not here; no Rust-side test can observe
-//! a foreign image's dispatcher.
+//! symbol in `shekyld` — is asserted by the post-link `nm` gate on the
+//! `cargo-build_shekyld` CMake target, not here; no Rust-side test can
+//! observe a foreign image's dispatcher.
 
-use shekyl_logging::ffi::{
-    shekyl_log_init_stderr, shekyl_log_install_tracing_forwarder, SHEKYL_LOG_ERR_ALREADY_INSTALLED,
-    SHEKYL_LOG_ERR_NOT_INITIALIZED, SHEKYL_LOG_LEVEL_INFO, SHEKYL_LOG_OK,
-};
+use shekyl_logging::ffi::{shekyl_log_init_stderr, SHEKYL_LOG_LEVEL_INFO, SHEKYL_LOG_OK};
+use shekyl_logging::{install_tracing_forwarder, ForwarderError};
 
 #[test]
 fn forwarder_install_state_machine() {
@@ -45,24 +39,26 @@ fn forwarder_install_state_machine() {
     // SAFETY: integration tests run one file per process.
     unsafe { std::env::remove_var(shekyl_logging::SHEKYL_LOG_ENV) };
 
-    // Before any init: typed failure, and the one-shot pin must not
-    // be consumed (the post-init install below must still succeed).
-    // SAFETY: no pointer parameters on any call in this test.
-    let pre = unsafe { shekyl_log_install_tracing_forwarder() };
-    assert_eq!(pre, SHEKYL_LOG_ERR_NOT_INITIALIZED);
+    // Before any init: typed failure, and the one-shot pin must not be
+    // consumed (the post-init install below must still succeed).
+    assert_eq!(
+        install_tracing_forwarder(),
+        Err(ForwarderError::NotInitialized)
+    );
 
+    // SAFETY: no pointer parameters.
     let init = unsafe { shekyl_log_init_stderr(SHEKYL_LOG_LEVEL_INFO) };
     assert_eq!(init, SHEKYL_LOG_OK);
 
     // First install after a successful init.
-    let first = unsafe { shekyl_log_install_tracing_forwarder() };
-    assert_eq!(first, SHEKYL_LOG_OK);
+    assert_eq!(install_tracing_forwarder(), Ok(()));
 
     // Second install: idempotent typed signal, not a panic and not a
-    // silent success — shekyld's SIGHUP-style re-configure path keys
-    // off this distinction.
-    let second = unsafe { shekyl_log_install_tracing_forwarder() };
-    assert_eq!(second, SHEKYL_LOG_ERR_ALREADY_INSTALLED);
+    // silent success — a re-configure path keys off this distinction.
+    assert_eq!(
+        install_tracing_forwarder(),
+        Err(ForwarderError::AlreadyInstalled)
+    );
 
     // Within this (single-image) test binary, the dispatcher that
     // `tracing` macros dispatch through must be the init-installed

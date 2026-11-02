@@ -217,7 +217,7 @@ pub mod panic_hook;
 
 // Single-Rust-image contract: re-export shekyl-logging so its
 // `#[no_mangle]` C exports (`shekyl_log_init_*`, `shekyl_log_emit`,
-// `shekyl_log_install_tracing_forwarder`, …) are compiled into
+// `shekyl_log_set_categories`, …) are compiled into
 // `libshekyl_ffi.a`. Every wallet-side binary then links exactly one
 // Rust archive whose single `tracing-core` GLOBAL_DISPATCH is shared by
 // the C++-installed subscriber and every `tracing::*` call site in this

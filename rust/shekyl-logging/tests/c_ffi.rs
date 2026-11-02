@@ -52,7 +52,6 @@ const C_HARNESS: &str = r##"
 #define SHEKYL_LOG_ERR_ALREADY_INIT (-1)
 
 extern int32_t shekyl_log_init_stderr(uint8_t fallback_level);
-extern int32_t shekyl_log_install_tracing_forwarder(void);
 extern void shekyl_log_shutdown(void);
 extern _Bool shekyl_log_level_enabled(
     uint8_t level,
@@ -94,24 +93,11 @@ int main(void) {
         NULL, 0u,
         pre_msg, (size_t)(sizeof(pre_msg) - 1));
 
-    /* Forwarder before any init: NOT_INITIALIZED (-9), and the
-       one-shot pin must NOT be consumed by the failed attempt. */
-    int fwd_pre = shekyl_log_install_tracing_forwarder();
-    printf("fwd_pre_rc=%d\n", fwd_pre);
-
     int rc = shekyl_log_init_stderr(SHEKYL_LOG_LEVEL_INFO);
     printf("init_rc=%d\n", rc);
 
     int rc2 = shekyl_log_init_stderr(SHEKYL_LOG_LEVEL_INFO);
     printf("double_init_rc=%d\n", rc2);
-
-    /* First install after init succeeds; second returns
-       ALREADY_INSTALLED (-12). Mirrors the shekyld call ordering:
-       mlog_configure -> shekyl_log_init_* -> forwarder install. */
-    int fwd1 = shekyl_log_install_tracing_forwarder();
-    printf("fwd_rc=%d\n", fwd1);
-    int fwd2 = shekyl_log_install_tracing_forwarder();
-    printf("fwd_again_rc=%d\n", fwd2);
 
     static const char tgt[] = "net.p2p";
     _Bool en = shekyl_log_level_enabled(
@@ -312,11 +298,8 @@ fn c_harness_links_and_runs_against_staticlib() {
     for needle in [
         "pre_err_enabled=1",
         "pre_info_enabled=0",
-        "fwd_pre_rc=-9",
         "init_rc=0",
         "double_init_rc=-1",
-        "fwd_rc=0",
-        "fwd_again_rc=-12",
         "enabled=1",
         "emit_ran",
         "set_empty_rc=0",
