@@ -93,7 +93,7 @@ pub(super) fn failed_outcome(address: NetworkAddress, end: DialEnd) -> DialOutco
 fn refused_by_peer(connector: ConnectorId) -> DialEnd {
     DialEnd::new(
         DialFailure::refused_by_peer(connector, Reached::StreamOpened),
-        CloseCause::new(CloseKind::LevinHandshakeRejected).proving_misbehaviour_on(connector),
+        CloseCause::new(CloseKind::LevinHandshakeRejected),
     )
 }
 

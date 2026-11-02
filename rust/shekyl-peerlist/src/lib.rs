@@ -72,7 +72,7 @@ pub use shekyl_relay_privacy::ConnectionId;
 pub use shekyl_timing_engine::Tick;
 pub use shekyl_transport_layer::{
     connector_for, dial_profile, BanEntry, ConnectorId, Cooldown, DialFailure, Direction,
-    Ipv4Subnet, Marks,
+    Ipv4Subnet,
 };
 pub use validity::{RangeV4, RangeV6, RefusedSet, REFUSED_V4, REFUSED_V6};
 

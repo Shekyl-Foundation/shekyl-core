@@ -120,7 +120,7 @@ impl Observed {
             ),
             Self::ProxyReply(reply) => DialEnd::new(
                 stamp_proxy_reply(reply),
-                CloseCause::proxy_refused(reply as u16, 0),
+                CloseCause::proxy_refused(reply as u16),
             ),
             Self::Deadline | Self::HandshakeDeadline => DialEnd::new(
                 DialFailure::uncertain(Retry::AgainInsideWindow, before),
