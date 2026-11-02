@@ -129,6 +129,16 @@ fn recurse(depth: u64) -> u64 {
 /// (b) Unbounded recursion on a spawned thread after hardening prints the
 /// runtime's overflow message on standard error and ends the child by
 /// `SIGABRT`. Red if the message is absent or the child ends another way.
+///
+/// **FreeBSD is pinned to the runtime's defect, DC-F35.** There the fault
+/// lands in the lowest page of the range libthr reports as the stack (the
+/// kernel's `MAP_STACK` guard, `security.bsd.stack_guard_page`, moves up
+/// one page when libthr protects its own guard below it), and std's
+/// `current_guard()` for FreeBSD looks only below that range, so its
+/// handler treats the overflow as an ordinary fault: the child ends by
+/// `SIGSEGV` with no message. That arm asserts the defect so that it is
+/// read every run; the day std's handler recognises the page, the arm goes
+/// red, and the fix is to delete it and the DC-F35 row's caveat.
 #[test]
 fn a_stack_overflow_after_hardening_prints_the_runtimes_message_and_aborts() {
     const NAME: &str = "a_stack_overflow_after_hardening_prints_the_runtimes_message_and_aborts";
@@ -144,6 +154,22 @@ fn a_stack_overflow_after_hardening_prints_the_runtimes_message_and_aborts() {
     let dir = tempfile::tempdir().expect("a working directory for the child");
     let out = run_child("overflow", NAME, dir.path());
     let stderr = String::from_utf8_lossy(&out.stderr);
+    let message = stderr.contains("has overflowed its stack");
+    if cfg!(target_os = "freebsd") {
+        assert_eq!(
+            out.status.signal(),
+            Some(libc::SIGSEGV),
+            "DC-F35: on FreeBSD the runtime misses a spawned thread's guard page and the \
+             overflow ends by SIGSEGV; the child ended otherwise (status {:?}); stderr:\n{stderr}",
+            out.status
+        );
+        assert!(
+            !message,
+            "DC-F35 has lifted: the runtime printed its overflow message on FreeBSD. \
+             Delete this arm and the DC-F35 caveat. stderr:\n{stderr}"
+        );
+        return;
+    }
     assert_eq!(
         out.status.signal(),
         Some(libc::SIGABRT),
@@ -151,7 +177,7 @@ fn a_stack_overflow_after_hardening_prints_the_runtimes_message_and_aborts() {
         out.status
     );
     assert!(
-        stderr.contains("has overflowed its stack"),
+        message,
         "the runtime's overflow message is absent from stderr:\n{stderr}"
     );
 }

@@ -55,7 +55,9 @@ impl std::error::Error for HardenError {
 ///   absorbed once; that is not a crash, and a sender who can signal the
 ///   daemon has `SIGTERM` (DC-F34). `tests/dc_q21_a_fault_ends_by_signal.rs`
 ///   is the check: a fault ends by `SIGSEGV` with no core, an overflow by
-///   `SIGABRT` with the message.
+///   `SIGABRT` with the message. On FreeBSD the runtime misses a spawned
+///   thread's guard page and an overflow there ends by `SIGSEGV` without
+///   the message (DC-F35, std's defect, pinned by that test).
 /// - Linux, in addition: `PR_SET_DUMPABLE` to zero, which also makes
 ///   `/proc/self` root-owned and refuses `ptrace` from a process that is
 ///   not root. The daemon reads nothing under `/proc/self` it would lose.
