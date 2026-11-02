@@ -440,6 +440,17 @@ if(NOT MSVC)
     if(STRIP_TARGETS)
         corrosion_add_target_local_rustflags(shekyld "-Clink-arg=-s")
     endif()
+    # SANITIZE (CMakeLists.txt; `make debug-test-asan`) compiles the C++
+    # remnant and its libraries with `-fsanitize=address`. A C++ executable
+    # had the flag on its link line through CMAKE_CXX_FLAGS and so pulled
+    # in the ASan runtime; this link takes its arguments from the lists
+    # above only, so the instrumented objects' `__asan_*` references need
+    # the driver flag passed here as well. The Rust code is not
+    # instrumented (that is `-Zsanitizer`, nightly-only); the runtime is
+    # linked for the C++. (Review of #1254.)
+    if(SANITIZE)
+        corrosion_add_target_local_rustflags(shekyld "-Clink-arg=-fsanitize=address")
+    endif()
 endif()
 
 # The measurement build only (Rick, 2026-10-14, extended for step 7): the
