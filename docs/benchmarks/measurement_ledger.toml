@@ -619,6 +619,7 @@ stale_through = [
   { through = "92a5de3824", note = "The merge of dev: one ban.rs test calls is_banned(host) under this branch's signature. Tests only. The clearnet dial, handshake and gap do the same I/O. Not re-measured." },
   { through = "f8162491ba", note = "Step 2b's contract: each connector stamps every end it observed from its own table and hands it on as a DialEnd beside the same D12 cause; read_capped no longer stores its cause, and the connector seals with the stamped end in the same select arm. Classification only, after each step: no deadline moved, and the ban check still runs after the TCP connect (step 3 moves it). The clearnet dial, handshake and gap do the same I/O. Not re-measured." },
   { through = "18493ce394", note = "The I/O changes: a clearnet dial is admitted before its TCP connect, so a host banned between the draw and the connect gets no SYN; an admitted dial holds its socket's slot through the connect. An admitted dial's connect, handshake and gap do the same I/O as before. Not re-measured." },
+  { through = "f3438c1330", note = "Two commits. 3cf7479839 binds a test's send result instead of dropping it: tests only. f3438c1330 deletes the close cause's marks byte and its readers; the cause is now a kind and a reply code, and what a close is evidence of is the DialFailure the connector already stamped beside it. A proxy refusal is built without the marks argument. The clearnet dial, handshake and gap do the same I/O, and no deadline moved. Not re-measured." },
 ]
 
 [[constant]]
@@ -741,6 +742,7 @@ cleared = [
   { through = "63bfdbc714", reason = "Ban subscribers are rung after the socket table's lock drops, on a ban, a lift or an expiry, never on a dial. The Tor dial, the gap, the shutdown wait and their I/O are unchanged, so the 2026-10-14 capture still prices this tree." },
   { through = "92a5de3824", reason = "The merge of dev: one ban.rs test calls is_banned(host) under this branch's signature. Tests only. The Tor dial, the gap, the shutdown wait and their I/O are unchanged, so the 2026-10-14 capture still prices this tree." },
   { through = "f8162491ba", reason = "Step 2b's contract: each connector stamps every end it observed from its own table and hands it on as a DialEnd beside the same D12 cause; a malformed SOCKS exchange is labelled ProxyUnavailable instead of LocalClose. Classification only, after each step; no deadline moved. The Tor dial, the gap, the shutdown wait and their I/O are unchanged, so the 2026-10-14 capture still prices this tree." },
+  { through = "f3438c1330", reason = "The close cause's marks are deleted: a cause is a kind and a reply code, and the Tor reply table's retry set is a private predicate behind stamp_reply, which already decided each reply's DialFailure. A proxy refusal is built without the marks argument. The Tor dial, the gap, the shutdown wait and their I/O are unchanged, and no deadline moved, so the 2026-10-14 capture still prices this tree." },
 ]
 
 [[constant]]
