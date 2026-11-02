@@ -314,8 +314,8 @@ impl Partition {
                 Seat::White {
                     excused_until: Some(_),
                     ..
-                } => false,
-                Seat::Gray {
+                }
+                | Seat::Gray {
                     phase: GrayPhase::Outstanding | GrayPhase::Cooling { .. } | GrayPhase::Barred,
                     ..
                 } => false,
