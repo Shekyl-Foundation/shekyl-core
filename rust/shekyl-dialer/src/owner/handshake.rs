@@ -39,6 +39,7 @@ use shekyl_peerlist::{
     CloseCause, CloseKind, ConnectorId, DialOutcome, NetworkAddress, SessionRow,
 };
 use shekyl_seam::{Channel, Endpoint, Hub, SocketId, SyncPayload};
+use shekyl_transport_layer::{DialEnd, DialFailure, Reached, Retry};
 
 use super::address::endpoint_of;
 use super::{session_of, Dialer};
@@ -74,8 +75,27 @@ pub(super) enum TaskResult {
         response: Box<HandshakeResponse>,
     },
     /// The channel never reached a well-formed response on our network:
-    /// the connector's cause, or the Levin layer's rejection.
-    Failed(CloseCause),
+    /// the end the connector stamped, the Levin layer's rejection, or this
+    /// dialer's own failure.
+    Failed(DialEnd),
+}
+
+/// The peer list's outcome for a failed attempt. The one place a
+/// [`DialEnd`] becomes the peer list's input, until the peer list takes the
+/// judge's (`DIALER_OUTAGE_EVIDENCE.md` §8, step 4).
+pub(super) fn failed_outcome(address: NetworkAddress, end: DialEnd) -> DialOutcome {
+    DialOutcome::DialFailed(address, end.cause())
+}
+
+/// The Levin layer's refusal on `connector`, after the stream opened: the
+/// peer rejected the handshake, answered on another network, or sent a
+/// peer list the lists refuse. Proof of misbehaviour only where the
+/// connector authenticates the destination (§2.2), and always final.
+fn refused_by_peer(connector: ConnectorId) -> DialEnd {
+    DialEnd::new(
+        DialFailure::refused_by_peer(connector, Reached::StreamOpened),
+        CloseCause::new(CloseKind::LevinHandshakeRejected).proving_misbehaviour_on(connector),
+    )
 }
 
 /// What the task needs, worked out on the loop before launch.
@@ -102,8 +122,8 @@ impl Dialer {
         connector: ConnectorId,
         address: &NetworkAddress,
         nonce: &InFlightNonce,
-    ) -> Result<Prepared, CloseCause> {
-        let local = || CloseCause::new(CloseKind::LocalClose);
+    ) -> Result<Prepared, DialEnd> {
+        let local = DialEnd::local_close;
         let endpoint = endpoint_of(address).ok_or_else(local)?;
         let (Some(snapshot), Some(network_id)) = ((self.snapshot)(), self.network_id()) else {
             tracing::debug!(
@@ -130,10 +150,9 @@ impl Dialer {
         result: TaskResult,
         rng: &mut R,
     ) -> Attempt {
-        let failed =
-            |cause: CloseCause| Attempt::Done(DialOutcome::DialFailed(address.clone(), cause));
+        let failed = |end: DialEnd| Attempt::Done(failed_outcome(address.clone(), end));
         let (mut channel, response) = match result {
-            TaskResult::Failed(cause) => return failed(cause),
+            TaskResult::Failed(end) => return failed(end),
             TaskResult::Response { channel, response } => (channel, response),
         };
 
@@ -158,8 +177,7 @@ impl Dialer {
             // R4) is the peer's doing: the same stamp as a rejection.
             return Attempt::Done(DialOutcome::PeerlistRefused(
                 address.clone(),
-                CloseCause::new(CloseKind::LevinHandshakeRejected)
-                    .proving_misbehaviour_on(connector),
+                refused_by_peer(connector).cause(),
             ));
         }
 
@@ -169,8 +187,8 @@ impl Dialer {
 
         // A peer that closed while the result waited in the queue: the
         // session already holds the connector's cause. Nothing is adopted.
-        if let Some(cause) = channel.closed() {
-            return failed(cause);
+        if let Some(end) = channel.closed() {
+            return failed(end);
         }
 
         // From here until the kept row is written, a close that reaches the
@@ -189,7 +207,7 @@ impl Dialer {
                 self.shared().adopting.remove(&id.get());
                 // The hub made no row, so nothing else retires the id.
                 self.hub.reap(id);
-                return failed(end.cause());
+                return failed(end);
             }
         };
         // `Established` runs its poster before `adopt` returns. A poster
@@ -198,7 +216,7 @@ impl Dialer {
         if let Some(end) = self.hub.end(id) {
             self.shared().adopting.remove(&id.get());
             drop(attached);
-            return failed(end.cause());
+            return failed(end);
         }
         Attempt::Kept(KeptDial {
             id,
@@ -234,12 +252,21 @@ pub(super) async fn attempt_task(
     } = prepared;
     let channel = match hub.dial_channel_async(&endpoint).await {
         Ok(channel) => Unadopted::new(hub, channel),
-        Err(end) => return TaskResult::Failed(end.cause()),
+        Err(end) => return TaskResult::Failed(end),
     };
     let mut channel = channel;
     let connected_at = std::time::Instant::now();
     if let Err(kind) = channel.held().session.try_send(request) {
-        return TaskResult::Failed(CloseCause::new(kind));
+        // A closed queue is a session the connector already ended, with its
+        // end on the session; a request over the cap is this node's own.
+        return TaskResult::Failed(if kind == CloseKind::SendQueueFull {
+            DialEnd::new(
+                DialFailure::local(Retry::Again, Reached::StreamOpened),
+                CloseCause::new(kind),
+            )
+        } else {
+            channel.held().session.close_end()
+        });
     }
     tracing::debug!(
         "{connector:?} dial {address:?}: handshake queued {} ns after the channel opened",
@@ -248,22 +275,12 @@ pub(super) async fn attempt_task(
     let response = match read_response(&mut channel.held().session).await {
         Ok(response) => response,
         Err(Rejected::Closed) => {
-            return TaskResult::Failed(channel.held().session.close_cause());
+            return TaskResult::Failed(channel.held().session.close_end());
         }
-        // The Levin layer's stamp: a rejection proves misbehaviour where
-        // the connector authenticates the destination (Tor), and names it
-        // without proof where it does not (clearnet).
-        Err(Rejected::ByLevin) => {
-            return TaskResult::Failed(
-                CloseCause::new(CloseKind::LevinHandshakeRejected)
-                    .proving_misbehaviour_on(connector),
-            );
-        }
+        Err(Rejected::ByLevin) => return TaskResult::Failed(refused_by_peer(connector)),
     };
     if response.node_data.network_id != network_id {
-        return TaskResult::Failed(
-            CloseCause::new(CloseKind::LevinHandshakeRejected).proving_misbehaviour_on(connector),
-        );
+        return TaskResult::Failed(refused_by_peer(connector));
     }
     TaskResult::Response {
         channel,
@@ -299,9 +316,9 @@ impl Unadopted {
             .expect("a channel is held until it is adopted")
     }
 
-    /// The connector's cause, when it has already closed the session.
-    fn closed(&mut self) -> Option<CloseCause> {
-        self.held().session.stored_cause()
+    /// The connector's end, when it has already closed the session.
+    fn closed(&mut self) -> Option<DialEnd> {
+        self.held().session.stored_end()
     }
 
     /// The channel, for `adopt`. Nothing is released.
@@ -370,6 +387,30 @@ async fn read_response(session: &mut Session) -> Result<HandshakeResponse, Rejec
                 return HandshakeResponse::load(&payload).map_err(|_| Rejected::ByLevin);
             }
             Ok(Some(_)) | Err(_) => return Err(Rejected::ByLevin),
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use shekyl_peerlist::{CloseKind, ConnectorId};
+    use shekyl_transport_layer::{Evidence, Reached, Retry};
+
+    use super::refused_by_peer;
+
+    /// The Levin layer's refusal (§2.2): after the stream opened, final, and
+    /// proof of misbehaviour only on the connector that authenticates the
+    /// destination. The edit that makes this red is building it as
+    /// Uncertain, or proving misbehaviour on clearnet.
+    #[test]
+    fn a_peers_refusal_is_the_levin_layers_and_proves_only_where_authenticated() {
+        for (connector, proves) in [(ConnectorId::Tor, true), (ConnectorId::Clearnet, false)] {
+            let end = refused_by_peer(connector);
+            assert!(matches!(end.failure().evidence(), Evidence::Destination(_)));
+            assert_eq!(end.failure().proves_misbehaviour(), proves, "{connector:?}");
+            assert_eq!(end.failure().retry(), Retry::Final);
+            assert_eq!(end.failure().reached(), Reached::StreamOpened);
+            assert_eq!(end.cause().kind(), CloseKind::LevinHandshakeRejected);
         }
     }
 }

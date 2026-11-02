@@ -37,10 +37,11 @@ use std::sync::atomic::Ordering;
 use std::sync::{Arc, Condvar, Mutex};
 
 use shekyl_draw_rng::RelayRng;
-use shekyl_peerlist::{CloseCause, CloseKind, ConnectorId, DialOutcome, NetworkAddress};
+use shekyl_peerlist::{ConnectorId, NetworkAddress};
 use shekyl_seam::{Hub, SocketId};
+use shekyl_transport_layer::DialEnd;
 
-use super::handshake::{attempt_task, Attempt, Prepared, TaskResult};
+use super::handshake::{attempt_task, failed_outcome, Attempt, Prepared, TaskResult};
 use super::ready::block_on_future;
 use super::{Dialer, Shared};
 use crate::fill::DialAim;
@@ -457,9 +458,9 @@ impl Dialer {
         tracing::debug!("{connector:?} dial {address:?} aim {aim:?}");
         let prepared = match self.prepare(connector, &address, &nonce) {
             Ok(prepared) => prepared,
-            Err(cause) => {
+            Err(end) => {
                 return self
-                    .record_local(connector, address, nonce, cause, rng)
+                    .record_local(connector, address, nonce, end, rng)
                     .launch();
             }
         };
@@ -494,9 +495,9 @@ impl Dialer {
         tracing::debug!("{connector:?} dial {address:?} aim {aim:?}");
         let prepared = match self.prepare(connector, &address, &nonce) {
             Ok(prepared) => prepared,
-            Err(cause) => {
+            Err(end) => {
                 return self
-                    .record_local(connector, address, nonce, cause, rng)
+                    .record_local(connector, address, nonce, end, rng)
                     .drove();
             }
         };
@@ -607,7 +608,7 @@ impl Dialer {
         connector: ConnectorId,
         address: NetworkAddress,
         nonce: InFlightNonce,
-        cause: CloseCause,
+        end: DialEnd,
         rng: &mut R,
     ) -> BeforeIo {
         drop(nonce);
@@ -617,7 +618,7 @@ impl Dialer {
                 shared.attempts(connector).cancel(&address);
                 return BeforeIo::Stopped;
             }
-            let outcome = DialOutcome::DialFailed(address, cause);
+            let outcome = failed_outcome(address, end);
             Self::record(shared, connector, &outcome, now, rng);
             BeforeIo::Recorded
         })
@@ -639,7 +640,7 @@ impl Dialer {
             if self.stop.load(Ordering::Acquire) {
                 return BeforeIo::Stopped;
             }
-            let outcome = DialOutcome::DialFailed(address, CloseCause::new(CloseKind::LocalClose));
+            let outcome = failed_outcome(address, DialEnd::local_close());
             Self::record(shared, connector, &outcome, now, rng);
             BeforeIo::Recorded
         })
@@ -728,11 +729,12 @@ impl Drop for ApplyPermit<'_> {
 mod tests {
     use super::{Completions, Finished};
     use crate::owner::handshake::TaskResult;
-    use shekyl_peerlist::{CloseCause, CloseKind, ConnectorId};
+    use shekyl_peerlist::ConnectorId;
+    use shekyl_transport_layer::DialEnd;
 
     fn failed() -> Finished {
         Finished {
-            result: TaskResult::Failed(CloseCause::new(CloseKind::LocalClose)),
+            result: TaskResult::Failed(DialEnd::local_close()),
             ran_nanos: 0,
         }
     }
