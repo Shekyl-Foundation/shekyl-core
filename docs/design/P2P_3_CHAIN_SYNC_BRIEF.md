@@ -683,8 +683,11 @@ emits `Rewind`; it offers blocks, and the alt tier switches.
     `tor = off`, or a closed network through `p2p-closed-peer`): local
     configuration, which the exception audit accepts. **Built** (CS-5,
     Rick 2026-11-01): `shekyl_chain_sync::Declaration`, read by the node
-    from the configuration; `an_offline_testnet_node_is_synced_and_mines`
-    and `a_closed_node_whose_peer_is_down_mines_and_opens_when_it_arrives`.
+    from the configuration; `an_offline_testnet_node_is_synced_at_open`,
+    `an_offline_regtest_node_mines` (the mining half runs on regtest under
+    `dev-difficulty`: a testnet block is real proof of work whose time is
+    a draw, 5 s to past 180 s on one runner) and
+    `a_closed_node_whose_peer_is_down_mines_and_opens_when_it_arrives`.
 - **Large network.** `T` holds headers only, about 150-200 B each (CS-F6),
   so a full header chain is held in memory. Runs add one byte budget per
   session.

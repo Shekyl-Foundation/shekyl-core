@@ -160,8 +160,14 @@ ARMED=(
   # 2026-11-01 on the #1237 head before it (a95bc9afa5): the offline
   # testnet node posted no template at open, refused mine.not_synced
   # (no_view); the closed node whose last peer left refused
-  # mine.not_synced. Green 106 s and 49 s, local Release daemon.
-  engine::regtest_e2e::sync::an_offline_testnet_node_is_synced_and_mines
+  # mine.not_synced. Green 106 s and 49 s, local Release daemon. The
+  # testnet gate mined one block then, real proof of work at the
+  # network's difficulty: 5 s, 123 s and past the 180 s HTTP timeout on
+  # one 2-CPU runner (2026-11-02), so it was split: the testnet half
+  # reads synced and a posted template at open, the regtest half mines
+  # under dev-difficulty.
+  engine::regtest_e2e::sync::an_offline_testnet_node_is_synced_at_open
+  engine::regtest_e2e::sync::an_offline_regtest_node_mines
   engine::regtest_e2e::sync::a_closed_node_whose_peer_is_down_mines_and_opens_when_it_arrives
 )
 
