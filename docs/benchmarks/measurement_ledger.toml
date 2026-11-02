@@ -617,6 +617,7 @@ stale_through = [
   { through = "8067c817eb", note = "One ban-set type, a keyed lookup (the exact host, then a range over the subnets), held once by the peer list: bookkeeping with no I/O. The clearnet dial, handshake and gap do the same I/O. Not re-measured." },
   { through = "63bfdbc714", note = "Ban subscribers are rung after the socket table's lock drops, on a ban, a lift or an expiry, never on a dial. The clearnet dial, handshake and gap do the same I/O. Not re-measured." },
   { through = "92a5de3824", note = "The merge of dev: one ban.rs test calls is_banned(host) under this branch's signature. Tests only. The clearnet dial, handshake and gap do the same I/O. Not re-measured." },
+  { through = "f8162491ba", note = "Step 2b's contract: each connector stamps every end it observed from its own table and hands it on as a DialEnd beside the same D12 cause; read_capped no longer stores its cause, and the connector seals with the stamped end in the same select arm. Classification only, after each step: no deadline moved, and the ban check still runs after the TCP connect (step 3 moves it). The clearnet dial, handshake and gap do the same I/O. Not re-measured." },
 ]
 
 [[constant]]
@@ -738,6 +739,7 @@ cleared = [
   { through = "8067c817eb", reason = "One ban-set type, a keyed lookup (the exact host, then a range over the subnets), held once by the peer list: bookkeeping with no I/O. The Tor dial, the gap, the shutdown wait and their I/O are unchanged, so the 2026-10-14 capture still prices this tree." },
   { through = "63bfdbc714", reason = "Ban subscribers are rung after the socket table's lock drops, on a ban, a lift or an expiry, never on a dial. The Tor dial, the gap, the shutdown wait and their I/O are unchanged, so the 2026-10-14 capture still prices this tree." },
   { through = "92a5de3824", reason = "The merge of dev: one ban.rs test calls is_banned(host) under this branch's signature. Tests only. The Tor dial, the gap, the shutdown wait and their I/O are unchanged, so the 2026-10-14 capture still prices this tree." },
+  { through = "f8162491ba", reason = "Step 2b's contract: each connector stamps every end it observed from its own table and hands it on as a DialEnd beside the same D12 cause; a malformed SOCKS exchange is labelled ProxyUnavailable instead of LocalClose. Classification only, after each step; no deadline moved. The Tor dial, the gap, the shutdown wait and their I/O are unchanged, so the 2026-10-14 capture still prices this tree." },
 ]
 
 [[constant]]
