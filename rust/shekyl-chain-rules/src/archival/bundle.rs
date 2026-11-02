@@ -199,7 +199,7 @@ use shekyl_crypto_pq::fn_dsa_hybrid::{
     FnDsaHybridPublicKey, FnDsaHybridSignature, HybridEd25519FnDsa,
 };
 use shekyl_crypto_pq::signature::{SignatureScheme as _, SCHEME_DOMAIN_WITNESS_BUNDLE};
-use shekyl_types::archival::{DrawCommitment, ReceiptSignPk};
+use shekyl_types::archival::DrawCommitment;
 use shekyl_types::{BlockHash, BlockHeight, PCanonicalId, SettlementEpoch};
 
 use crate::census::CenRow;
@@ -278,8 +278,9 @@ pub trait BundleView {
 pub struct SupportSeat {
     /// The tree.
     pub persona: PCanonicalId,
-    /// Its receipt key, as the bond record carries it.
-    pub receipt_key: ReceiptSignPk,
+    /// Its receipt key, parsed: the epoch snapshot's, which parsed the bond
+    /// record's when it was built (`SO-D12` S1).
+    pub receipt_key: FnDsaHybridPublicKey,
 }
 
 /// The section checker: form, the window, then the budget. The only

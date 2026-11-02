@@ -515,16 +515,32 @@ pub enum StoreInvariant {
         /// The height the reduction was counted below.
         height: shekyl_types::BlockHeight,
     },
-    /// **SI-40** — `archival_support_block` holds one row per connected
-    /// height. A second insert is a rewrite. The count is how many support
-    /// draws the block issued. While the support schedule is not on the
-    /// transition the row is [`shekyl_types::archival::SupportCount::NONE`]:
-    /// the block issued none. A missing row is a height the writer did not
-    /// run for, and that absence is not the zero. The row retires with the
-    /// draw rows (SI-34). Fatal, never a verdict on the block.
+    /// **SI-40** — `archival_support_block` holds one seat row per
+    /// connected height. A second insert is a rewrite. The row is the
+    /// complete trees the block seated, in persona order; its length is how
+    /// many support draws the block issued. A block that seated nobody has
+    /// the empty row, [`shekyl_types::archival::SupportSeats::EMPTY`]. A
+    /// missing row is a height the writer did not run for, and that absence
+    /// is not the empty row. The row retires with the draw rows (SI-34).
+    /// Fatal, never a verdict on the block.
     SupportBlockNotSingular {
         /// The height whose row was being written.
         height: shekyl_types::BlockHeight,
+    },
+    /// **SI-42** — a block's seat row is its epoch's schedule: every seat
+    /// is a support member of the epoch snapshot, and every member the
+    /// schedule puts on the height is seated
+    /// ([`shekyl_chain_rules::scheduled_seats`]; `SO-D12` S1). The store's
+    /// bundle view checks it when admission reads a roster. Raised before
+    /// any write. Fatal, never a verdict on the block.
+    SupportSeatsNotScheduled {
+        /// The height whose roster was read.
+        height: shekyl_types::BlockHeight,
+        /// The persona seated without being a member, or scheduled without
+        /// being seated.
+        persona: shekyl_types::PCanonicalId,
+        /// Which direction failed.
+        observed: SeatFault,
     },
     /// **SI-41** — every stored bundle body has a holder, and every queue
     /// entry's body is stored (`ARCHIVAL_SERVE_CREDIT_SPEC.md` §7.5). In
@@ -535,6 +551,16 @@ pub enum StoreInvariant {
     /// Not chain state, so it poisons the batch and leaves the writer
     /// live. Never a verdict on a block.
     BundleBodyHolder(BodyHolderFault),
+}
+
+/// Which half of SI-42 a seat row failed (payload of
+/// [`StoreInvariant::SupportSeatsNotScheduled`]).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum SeatFault {
+    /// The row seats a persona the epoch snapshot does not hold as a member.
+    NotAMember,
+    /// The schedule seats a member at this height and the row does not.
+    ScheduledNotSeated,
 }
 
 /// What an SI-41 check observed (payload of
@@ -801,6 +827,7 @@ impl StoreInvariant {
             Self::VisibleDrawCountPastWidth { .. } => 39,
             Self::SupportBlockNotSingular { .. } => 40,
             Self::BundleBodyHolder(_) => 41,
+            Self::SupportSeatsNotScheduled { .. } => 42,
         }
     }
 }
@@ -1109,7 +1136,24 @@ impl core::fmt::Display for StoreInvariant {
             Self::SupportBlockNotSingular { height } => write!(
                 f,
                 "archival_support_block already holds height {height}; a block records its \
-                 support count once"
+                 support seats once"
+            ),
+            Self::SupportSeatsNotScheduled {
+                height,
+                persona,
+                observed: SeatFault::NotAMember,
+            } => write!(
+                f,
+                "the seat row at height {height} seats {persona:?}, which its epoch snapshot \
+                 does not hold as a support member"
+            ),
+            Self::SupportSeatsNotScheduled {
+                height,
+                persona,
+                observed: SeatFault::ScheduledNotSeated,
+            } => write!(
+                f,
+                "the schedule seats {persona:?} at height {height} and the seat row does not"
             ),
             Self::BundleBodyHolder(BodyHolderFault::EntryWithoutBody { h }) => write!(
                 f,
@@ -1195,6 +1239,7 @@ impl core::error::Error for StoreInvariant {
             | Self::DrawCommitmentUnreadable { .. }
             | Self::VisibleDrawCountPastWidth { .. }
             | Self::SupportBlockNotSingular { .. }
+            | Self::SupportSeatsNotScheduled { .. }
             | Self::BundleBodyHolder(_)
             | Self::UndoLogIncoherent { .. } => None,
         }

@@ -41,7 +41,7 @@ use crate::codec::{SchemaVersion, SettlementEpochBlocks};
 
 pub use super::invariant::{
     AccrualFault, AdmissionWriteFault, BodyHolderFault, CellFault, DigestFault, DrawRowFault,
-    DrawableFault, EdgeFault, FrozenFault, LeafCountFault, LeafDensity, SettlementFault,
+    DrawableFault, EdgeFault, FrozenFault, LeafCountFault, LeafDensity, SeatFault, SettlementFault,
     SlashFault, StoreInvariant, UndoFault,
 };
 

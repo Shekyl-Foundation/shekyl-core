@@ -170,6 +170,10 @@ pub use archival::{
     RecordWrite, RecordWriteKind, ReleasePreImage, ServeCreditKey, Settlement, Slash,
     SupportSettlement, WALK_BACK_EPOCHS,
 };
+// The support stream's schedule on the connect path (`SO-D12` S1): the
+// transition writes a block's seats with it, and the store's bundle view
+// checks a roster against it (SI-42).
+pub use archival::scheduled_seats;
 // The serve-credit bundle rule (`archival/bundle.rs`): STAGED on the
 // connect path. The verifier and its view trait are exported for the
 // lanes that wire them (`SO-D12`'s cutover); the bundle queue runs the

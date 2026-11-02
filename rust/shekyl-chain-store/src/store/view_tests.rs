@@ -128,6 +128,7 @@ fn record_draw_row(batch: &WriteBatch<'_, '_>, height: BlockHeight) -> Result<()
 fn record_empty_digest(batch: &WriteBatch<'_, '_>) -> Result<(), StoreError> {
     let digest = shekyl_chain_rules::DrawableEpoch::new(
         shekyl_types::SettlementEpoch::from_raw(0),
+        0,
         Vec::<(
             shekyl_types::PCanonicalId,
             shekyl_types::archival::ReceiptSignPk,

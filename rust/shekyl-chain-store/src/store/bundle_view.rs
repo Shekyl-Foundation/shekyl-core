@@ -25,11 +25,11 @@ use shekyl_chain_rules::{
     HeaderRecord, HeaderView, SettlementSchedule, Settling,
 };
 use shekyl_types::archival::{
-    BlockDraws, DrawCommitment, IndexedDraw, SupportCount, COUNTED_DRAWS,
+    BlockDraws, DrawCommitment, IndexedDraw, SupportSeats, COUNTED_DRAWS,
 };
 use shekyl_types::{BlockHash, BlockHeight, PCanonicalId, SettlementEpoch, ShardId};
 
-use super::error::{StoreError, StoreInvariant};
+use super::error::{SeatFault, StoreError, StoreInvariant};
 use super::view::BatchView;
 
 /// What the bundle view asks of the chain it reads, and what an invariant does.
@@ -63,12 +63,12 @@ pub trait BundleRows {
         floor: EpochFloor<Settling>,
     ) -> Result<Vec<IndexedDraw>, StoreError>;
 
-    /// [`ChainView::support_block_count`], under this view's arming.
-    fn support_count_row(
+    /// [`ChainView::support_block_seats`], under this view's arming.
+    fn support_seats_row(
         &self,
         height: BlockHeight,
         floor: BlockDrawsFloor,
-    ) -> Result<Option<SupportCount>, StoreError>;
+    ) -> Result<Option<SupportSeats>, StoreError>;
 
     /// [`HeaderView::header_at`], under this view's arming.
     fn header_row(&self, height: BlockHeight) -> Result<AtHeight<HeaderRecord>, StoreError>;
@@ -102,12 +102,12 @@ impl<'id> BundleRows for BatchView<'_, 'id> {
         ChainView::issued_draws(self, epoch, floor)
     }
 
-    fn support_count_row(
+    fn support_seats_row(
         &self,
         height: BlockHeight,
         floor: BlockDrawsFloor,
-    ) -> Result<Option<SupportCount>, StoreError> {
-        ChainView::support_block_count(self, height, floor)
+    ) -> Result<Option<SupportSeats>, StoreError> {
+        ChainView::support_block_seats(self, height, floor)
     }
 
     fn header_row(&self, height: BlockHeight) -> Result<AtHeight<HeaderRecord>, StoreError> {
@@ -385,22 +385,64 @@ impl<V: BundleRows> BundleView for StoreBundleView<'_, V> {
         let floor = BlockDrawsFloor::in_force(self.h_incl, self.schedule);
         Ok(self
             .view
-            .support_count_row(h, floor)?
-            .map(SupportCount::get))
+            .support_seats_row(h, floor)?
+            .map(|seats| u32::try_from(seats.len()).expect("a block seats fewer than 2^32 trees")))
     }
 
     fn support_roster(
         &self,
-        _: BlockHeight,
+        h: BlockHeight,
     ) -> Result<Option<Vec<shekyl_chain_rules::SupportSeat>>, StoreError> {
-        // The roster is admission's. A written zero never asks. A count
-        // with no roster is the hole: the verifier reports the draw
-        // unanswered rather than an empty seat list.
-        Ok(None)
+        // `h`'s seat row, as written when `h` connected, with each seat's
+        // key from `h`'s epoch snapshot (`SO-D12` S1). A missing row is the
+        // hole, never an empty roster. The snapshot's miss is SI-35, as for
+        // `D`: admission never rebuilds.
+        let floor = BlockDrawsFloor::in_force(self.h_incl, self.schedule);
+        let Some(seats) = self.view.support_seats_row(h, floor)? else {
+            return Ok(None);
+        };
+        let epoch = self.schedule.epoch_at(h);
+        let Some(drawable) = self.drawable_epoch(epoch)? else {
+            return Err(self.miss(epoch));
+        };
+        // SI-42: the row is the schedule over the snapshot.
+        let mut roster = Vec::with_capacity(seats.len());
+        for persona in seats.as_slice() {
+            let Some(receipt_key) = drawable.support_key(persona) else {
+                return Err(self.view.arm_row(StoreInvariant::SupportSeatsNotScheduled {
+                    height: h,
+                    persona: *persona,
+                    observed: SeatFault::NotAMember,
+                }));
+            };
+            roster.push(shekyl_chain_rules::SupportSeat {
+                persona: *persona,
+                receipt_key: receipt_key.clone(),
+            });
+        }
+        let scheduled = shekyl_chain_rules::scheduled_seats(drawable, h, self.schedule);
+        if let Some(missing) = scheduled
+            .as_slice()
+            .iter()
+            .find(|persona| seats.as_slice().binary_search(persona).is_err())
+        {
+            return Err(self.view.arm_row(StoreInvariant::SupportSeatsNotScheduled {
+                height: h,
+                persona: *missing,
+                observed: SeatFault::ScheduledNotSeated,
+            }));
+        }
+        Ok(Some(roster))
     }
 
-    fn archive_width(&self, _: BlockHeight) -> Result<Option<u64>, StoreError> {
-        Ok(None)
+    fn archive_width(&self, h: BlockHeight) -> Result<Option<u64>, StoreError> {
+        // The width at `h_open` of `h`'s epoch, from the same snapshot the
+        // roster's keys come from.
+        let epoch = self.schedule.epoch_at(h);
+        let Some(drawable) = self.drawable_epoch(epoch)? else {
+            return Err(self.miss(epoch));
+        };
+        Ok(Some(drawable.archive_width()))
     }
 }
 

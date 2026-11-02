@@ -45,7 +45,9 @@ use shekyl_archival_retention::{
     sign_bundle_commitment, BundleBody, BundleKept, BundleRecord, BundleRef, DrawableEpoch,
     DrawablePair, PassBitmap, BUNDLE_SIGNATURE_LEN, BUNDLE_WITNESS_KEY_LEN,
 };
-use shekyl_crypto_pq::fn_dsa_hybrid::{FnDsaHybridSecretKey, HybridEd25519FnDsa};
+use shekyl_crypto_pq::fn_dsa_hybrid::{
+    FnDsaHybridPublicKey, FnDsaHybridSecretKey, HybridEd25519FnDsa,
+};
 use shekyl_crypto_pq::signature::{SignatureScheme as _, SCHEME_DOMAIN_RECEIPT};
 use shekyl_types::archival::ReceiptSignPk;
 use shekyl_types::{BlockHash, BlockHeight, PCanonicalId, SettlementEpoch, ShardId};
@@ -238,6 +240,19 @@ pub struct FixturePersona {
     pub shards: Vec<u64>,
 }
 
+impl FixturePersona {
+    /// The persona's receipt key, parsed, as a seat carries it.
+    ///
+    /// # Panics
+    ///
+    /// Never for a fixture persona: its key came from a keypair.
+    #[must_use]
+    pub fn receipt_key(&self) -> FnDsaHybridPublicKey {
+        FnDsaHybridPublicKey::from_receipt_sign_pk(&self.receipt_public_key)
+            .expect("a fixture key parses")
+    }
+}
+
 /// A producer, three personas and the chain they are on: enough to build
 /// a bundle for one block `h` that [`verify_bundle`](crate::verify_bundle)
 /// admits, and every near miss of one.
@@ -316,8 +331,15 @@ impl BundleWorld {
             .expect("the canonical key length");
 
         let epoch = rule_set.settlement_schedule().epoch_at(h);
+        // The archive spans every fixture shard.
+        let width = personas
+            .iter()
+            .flat_map(|p| p.shards.iter().copied())
+            .max()
+            .map_or(0, |top| top + 1);
         let drawable = DrawableEpoch::new(
             epoch,
+            width,
             personas.iter().map(|p| (p.persona, &p.receipt_public_key)),
             personas.iter().flat_map(|p| {
                 p.shards.iter().map(|shard| DrawablePair {

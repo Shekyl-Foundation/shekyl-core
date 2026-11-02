@@ -123,7 +123,7 @@ use super::{
     FollowingDegraded, HeldShard, Holdings, IssuedDigest, IssuedDraw, LayerHash, LeafCount, OutKey,
     OutTx, PoolRecord, ProbeCell, PropertyCell, QueuedBody, QueuedBundle, RMarket, RecordedPow,
     RuleSetInForce, SchemaVersion, SettlementEpochBlocks, SettlementRow, SigmaWorkMilli,
-    SlashLogEntry, SlashedHolding, SupportCount, SupportIssued, TreeDepth, TxIndex,
+    SlashLogEntry, SlashedHolding, SupportCount, SupportIssued, SupportSeats, TreeDepth, TxIndex,
     TxOutputIndices, UndoEntry, UndoLog, PROPERTY_CELLS, SCHEMA_VERSION,
 };
 use crate::ids::{AmountIndex, OutputStorageId, TxStorageId};
@@ -950,6 +950,22 @@ impl Fixtures for SupportIssued {
     }
 }
 
+impl Fixtures for SupportSeats {
+    fn fixtures() -> Vec<(&'static str, Self)> {
+        vec![
+            ("empty", SupportSeats::EMPTY),
+            (
+                "two",
+                SupportSeats::new(vec![
+                    PCanonicalId::from_bytes([0x10; 32]),
+                    PCanonicalId::from_bytes([0x30; 32]),
+                ])
+                .expect("ascending"),
+            ),
+        ]
+    }
+}
+
 impl Fixtures for SupportCount {
     fn fixtures() -> Vec<(&'static str, Self)> {
         vec![
@@ -1596,6 +1612,7 @@ snapshotted_codecs! {
     IssuedDigest => codec_snapshot_issued_digest in Chain,
     BlockDraws => codec_snapshot_block_draws in Chain,
     SupportCount => codec_snapshot_support_count in Chain,
+    SupportSeats => codec_snapshot_support_seats in Chain,
     SupportIssued => codec_snapshot_support_issued in Chain,
     DrawableDigest => codec_snapshot_drawable_digest in Chain,
     CompleteTreeSet => codec_snapshot_complete_tree_set in Chain,

@@ -106,6 +106,22 @@ pub fn support_slot(
     Some(offset.wrapping_add(step) % span)
 }
 
+/// Whether `persona`'s schedule seats it at epoch-relative height
+/// `relative`: some `r_i`, `i` in `0..c`, is `relative`. A tree takes at
+/// most one seat on a block however many of its `r_i` land there (§2: one
+/// draw per tree per chosen block). `false` for every height when the
+/// window is not shorter than the epoch.
+#[must_use]
+pub fn support_seated_at(
+    persona: &PCanonicalId,
+    relative: u64,
+    seb: u64,
+    response_window: u64,
+) -> bool {
+    (0..SUPPORT_DRAWS_PER_EPOCH)
+        .any(|index| support_slot(persona, index, seb, response_window) == Some(relative))
+}
+
 /// The shard a support draw names, uniform in `0..final_count`.
 ///
 /// Rejection sampling on the first eight bytes of

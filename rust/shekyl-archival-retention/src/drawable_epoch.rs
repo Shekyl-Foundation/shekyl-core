@@ -4,7 +4,8 @@
 // BSD-3-Clause
 
 //! [`DrawableEpoch`]: an epoch's drawable set `D` and each pair's receipt
-//! key, as one value.
+//! key, its support members with theirs, and the archive width, as one
+//! value.
 //!
 //! The spec calls this the `h_open(E)` snapshot. The type is not named
 //! that: `shekyl-chain-rules`' emission gather is already `EpochSnapshot`
@@ -36,6 +37,25 @@
 //! different digest (`SO-D12` ruling B, 2026-10-17). One function on the
 //! type, so the writer and the check cannot hash different encodings.
 //!
+//! # The support stream reads the same value
+//!
+//! A complete tree is drawn on its own stream, not from `D`
+//! (`ARCHIVAL_SUPPORT_DRAW.md`). The schedule seats the trees that were
+//! members at `h_open(E)` and selects each draw's shard from the archive
+//! width at that block, and the bundle rule verifies a support bit under
+//! the member's receipt key. Those are the same kind of fact as `D`: state
+//! at `h_open(E)` that the bundle rule reads and admission never rebuilds.
+//! So they are filed with it, under its digest (`SO-D12` S1, ruled
+//! 2026-11-01). [`DrawableEpoch::with_support`] adds the members;
+//! [`DrawableEpoch::new`] takes the width.
+//!
+//! The width is the count of shards closed and final at `h_open(E)`, the
+//! prefix `0..width`. Every pair's shard is inside it, and a set with
+//! members has a width above zero: a complete tree of an empty archive
+//! holds nothing a draw could select, as a compact holding of a shard not
+//! yet closed is no pair. Both are checked here, so neither is a state the
+//! verifier meets.
+//!
 //! # Who builds it
 //!
 //! `shekyl-chain-rules`' drawable-epoch builder, from the post-state at
@@ -54,7 +74,7 @@ use crate::hash::cshake256_32;
 
 /// cSHAKE256 customization for [`DrawableEpoch::digest`] (rule 30: one
 /// label, one function, versioned).
-pub const DRAWABLE_EPOCH_DIGEST_CUSTOMIZATION: &[u8] = b"shekyl/archival-drawable-epoch-v1";
+pub const DRAWABLE_EPOCH_DIGEST_CUSTOMIZATION: &[u8] = b"shekyl/archival-drawable-epoch-v2";
 
 /// Why a [`DrawableEpoch`] could not be built. Each is a defect of the
 /// state the caller read, never a verdict on a block.
@@ -89,10 +109,43 @@ pub enum DrawableEpochError {
         /// The shard.
         shard: ShardId,
     },
+    /// A pair's shard is not below the archive width.
+    #[error("persona {persona:?} holds shard {shard}, outside an archive of {width}")]
+    PairOutsideArchive {
+        /// The persona.
+        persona: PCanonicalId,
+        /// The shard.
+        shard: ShardId,
+        /// The archive width.
+        width: u64,
+    },
+    /// A support member was supplied twice.
+    #[error("support member {persona:?} was given twice")]
+    DuplicateSupportMember {
+        /// The persona.
+        persona: PCanonicalId,
+    },
+    /// A support member's receipt key does not parse.
+    #[error("support member {persona:?}'s receipt key does not parse")]
+    SupportKeyMalformed {
+        /// The persona.
+        persona: PCanonicalId,
+    },
+    /// A support member also holds a drawable pair. A record is a
+    /// complete tree or a compact set, never both.
+    #[error("support member {persona:?} also holds a drawable pair")]
+    SupportMemberHoldsPair {
+        /// The persona.
+        persona: PCanonicalId,
+    },
+    /// Support members were given for an archive with no shard.
+    #[error("support members given for an empty archive")]
+    SupportOnEmptyArchive,
 }
 
 /// The `h_open(E)` state the draw and the bundle rule both read: the
-/// drawable pairs in canonical order, and each pair's receipt key.
+/// drawable pairs in canonical order with each pair's receipt key, the
+/// support members in persona order with theirs, and the archive width.
 ///
 /// Canonical order is persona canonical-id bytes, then the shard
 /// numerically (§4.1) — [`DrawablePair`]'s `Ord`. `index(P, s)` is a
@@ -105,10 +158,18 @@ pub struct DrawableEpoch {
     /// One parsed key per persona that holds a pair, ascending by persona
     /// id. A key is stored once and returned per pair.
     receipt_keys: Vec<(PCanonicalId, FnDsaHybridPublicKey)>,
+    /// The shards closed and final at `h_open(E)`: the prefix `0..width`.
+    archive_width: u64,
+    /// The complete trees that were members at `h_open(E)`, ascending by
+    /// persona id, each with its parsed receipt key. Empty when the width
+    /// is zero.
+    support: Vec<(PCanonicalId, FnDsaHybridPublicKey)>,
 }
 
 impl DrawableEpoch {
-    /// The drawable epoch of `epoch` with these receipt keys and these pairs.
+    /// The drawable epoch of `epoch` over an archive of `archive_width`
+    /// shards, with these receipt keys and these pairs, and no support
+    /// member ([`Self::with_support`] adds them).
     ///
     /// `receipt_keys` is one entry per persona: its id and its bond
     /// record's receipt key at `h_open(E)`. `pairs` is `D` in any order.
@@ -129,8 +190,11 @@ impl DrawableEpoch {
     ///   not in `receipt_keys`.
     /// - [`DrawableEpochError::ReceiptKeyMalformed`]: the key of a persona
     ///   that holds a pair does not parse.
+    /// - [`DrawableEpochError::PairOutsideArchive`]: a pair's shard is not
+    ///   below `archive_width`.
     pub fn new<K: Borrow<ReceiptSignPk>>(
         epoch: SettlementEpoch,
+        archive_width: u64,
         receipt_keys: impl IntoIterator<Item = (PCanonicalId, K)>,
         pairs: impl IntoIterator<Item = DrawablePair>,
     ) -> Result<Self, DrawableEpochError> {
@@ -140,6 +204,13 @@ impl DrawableEpoch {
             return Err(DrawableEpochError::DuplicatePair {
                 persona: twice[0].persona,
                 shard: twice[0].shard,
+            });
+        }
+        if let Some(outside) = pairs.iter().find(|p| p.shard.to_raw() >= archive_width) {
+            return Err(DrawableEpochError::PairOutsideArchive {
+                persona: outside.persona,
+                shard: outside.shard,
+                width: archive_width,
             });
         }
 
@@ -177,21 +248,104 @@ impl DrawableEpoch {
             epoch,
             pairs,
             receipt_keys: parsed,
+            archive_width,
+            support: Vec::new(),
         })
     }
 
-    /// An epoch with no drawable pair.
+    /// This epoch with these support members: the complete trees that
+    /// were members at `h_open(E)`, each with its bond record's receipt key,
+    /// in any order. Replaces any members already set.
     ///
-    /// The same value as [`Self::new`] with no keys and no pairs. An open
-    /// with no bonds writes this set's digest. There is no pair that could
-    /// lack a key, so this constructor does not fail.
+    /// A member's key is parsed here, as a pair holder's is in
+    /// [`Self::new`]: the bundle rule verifies a support bit under it.
+    ///
+    /// # Errors
+    ///
+    /// - [`DrawableEpochError::SupportOnEmptyArchive`]: members were given
+    ///   and the archive width is zero.
+    /// - [`DrawableEpochError::DuplicateSupportMember`]: a persona appears
+    ///   twice.
+    /// - [`DrawableEpochError::SupportMemberHoldsPair`]: a member holds a
+    ///   pair of `D`.
+    /// - [`DrawableEpochError::SupportKeyMalformed`]: a member's key does
+    ///   not parse.
+    pub fn with_support<K: Borrow<ReceiptSignPk>>(
+        mut self,
+        members: impl IntoIterator<Item = (PCanonicalId, K)>,
+    ) -> Result<Self, DrawableEpochError> {
+        let mut offered: Vec<(PCanonicalId, K)> = members.into_iter().collect();
+        if offered.is_empty() {
+            self.support = Vec::new();
+            return Ok(self);
+        }
+        if self.archive_width == 0 {
+            return Err(DrawableEpochError::SupportOnEmptyArchive);
+        }
+        offered.sort_unstable_by(|a, b| a.0.cmp(&b.0));
+        if let Some(twice) = offered.windows(2).find(|w| w[0].0 == w[1].0) {
+            return Err(DrawableEpochError::DuplicateSupportMember {
+                persona: twice[0].0,
+            });
+        }
+        let mut support = Vec::with_capacity(offered.len());
+        for (persona, key) in offered {
+            if self
+                .receipt_keys
+                .binary_search_by(|(holder, _)| holder.cmp(&persona))
+                .is_ok()
+            {
+                return Err(DrawableEpochError::SupportMemberHoldsPair { persona });
+            }
+            let key = FnDsaHybridPublicKey::from_receipt_sign_pk(key.borrow())
+                .map_err(|_| DrawableEpochError::SupportKeyMalformed { persona })?;
+            support.push((persona, key));
+        }
+        self.support = support;
+        Ok(self)
+    }
+
+    /// An epoch with no drawable pair, no support member, and an empty
+    /// archive.
+    ///
+    /// The same value as [`Self::new`] at width zero with no keys and no
+    /// pairs: the open of a chain that has no bonds and has closed no
+    /// shard. There is no pair that could lack a key, so this constructor
+    /// does not fail.
     #[must_use]
     pub const fn empty(epoch: SettlementEpoch) -> Self {
         Self {
             epoch,
             pairs: Vec::new(),
             receipt_keys: Vec::new(),
+            archive_width: 0,
+            support: Vec::new(),
         }
+    }
+
+    /// The archive width at `h_open(E)`: the support draw selects its shard
+    /// from `0..width`.
+    #[must_use]
+    pub const fn archive_width(&self) -> u64 {
+        self.archive_width
+    }
+
+    /// The support members, ascending by persona id, each with its receipt
+    /// key.
+    #[must_use]
+    pub fn support_members(&self) -> &[(PCanonicalId, FnDsaHybridPublicKey)] {
+        &self.support
+    }
+
+    /// The receipt key of support member `persona`, or `None` when it is
+    /// not a member.
+    #[must_use]
+    pub fn support_key(&self, persona: &PCanonicalId) -> Option<&FnDsaHybridPublicKey> {
+        let at = self
+            .support
+            .binary_search_by(|(member, _)| member.cmp(persona))
+            .ok()?;
+        Some(&self.support[at].1)
     }
 
     /// The epoch this is the `h_open(E)` state of.
@@ -232,15 +386,18 @@ impl DrawableEpoch {
     }
 
     /// The digest the store keeps for this epoch's drawable set (spec §9.5
-    /// check 2; `SO-D12` ruling B):
+    /// check 2; `SO-D12` ruling B, widened by S1 of 2026-11-01):
     ///
     /// ```text
-    /// cSHAKE256_32("shekyl/archival-drawable-epoch-v1",
+    /// cSHAKE256_32("shekyl/archival-drawable-epoch-v2",
     ///       E_le8
     ///     ‖ n_pairs_le8
     ///     ‖ for each pair, canonical order:     p_canonical_id[32] ‖ shard_id_le8
     ///     ‖ n_personas_le8
     ///     ‖ for each persona, ascending by id:  p_canonical_id[32] ‖ receipt_sign_pk[1837]
+    ///     ‖ archive_width_le8
+    ///     ‖ n_members_le8
+    ///     ‖ for each member, ascending by id:   p_canonical_id[32] ‖ receipt_sign_pk[1837]
     /// )
     /// ```
     ///
@@ -249,17 +406,23 @@ impl DrawableEpoch {
     /// hold a pair, which are the keys this value keeps; a key is hashed
     /// once per persona, as its canonical encoding. The pair list fixes
     /// every `index(P, s)`, and the persona list fixes the key each
-    /// index's receipt is verified under. A plain hash over the whole
-    /// value, computed once: `D` is never extended a draw at a time, as
-    /// the issued-draw index is.
+    /// index's receipt is verified under. The width fixes the set a
+    /// support draw selects from, and the member list fixes who is seated
+    /// and the key each support bit is verified under. A member holds no
+    /// pair, so it is in the member list and not the persona list. A plain
+    /// hash over the whole value, computed once: `D` is never extended a
+    /// draw at a time, as the issued-draw index is.
     #[must_use]
     pub fn digest(&self) -> DrawableDigest {
-        // The epoch and the two counts are each one little-endian `u64`.
+        // The epoch, the width and the three counts are each one
+        // little-endian `u64`.
         const WORD: usize = size_of::<u64>();
         const PAIR_LEN: usize = size_of::<PCanonicalId>() + WORD;
         const PERSONA_LEN: usize = size_of::<PCanonicalId>() + RECEIPT_SIGN_PK_LEN;
         let mut input = Vec::with_capacity(
-            3 * WORD + self.pairs.len() * PAIR_LEN + self.receipt_keys.len() * PERSONA_LEN,
+            5 * WORD
+                + self.pairs.len() * PAIR_LEN
+                + (self.receipt_keys.len() + self.support.len()) * PERSONA_LEN,
         );
         input.extend_from_slice(&self.epoch.to_raw().to_le_bytes());
         input.extend_from_slice(&self.len().to_le_bytes());
@@ -269,6 +432,12 @@ impl DrawableEpoch {
         }
         input.extend_from_slice(&(self.receipt_keys.len() as u64).to_le_bytes());
         for (persona, key) in &self.receipt_keys {
+            input.extend_from_slice(persona.as_bytes());
+            input.extend_from_slice(key.to_receipt_sign_pk().as_bytes());
+        }
+        input.extend_from_slice(&self.archive_width.to_le_bytes());
+        input.extend_from_slice(&(self.support.len() as u64).to_le_bytes());
+        for (persona, key) in &self.support {
             input.extend_from_slice(persona.as_bytes());
             input.extend_from_slice(key.to_receipt_sign_pk().as_bytes());
         }

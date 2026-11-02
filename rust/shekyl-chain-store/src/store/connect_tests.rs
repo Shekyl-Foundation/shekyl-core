@@ -294,6 +294,7 @@ fn genesis_connect_writes_every_row_of_the_write_set_at_the_lmdb_layouts() {
     // set's, since no bond joins before epoch 0. A row, not an absence.
     let empty = shekyl_chain_rules::DrawableEpoch::new(
         shekyl_types::SettlementEpoch::from_raw(0),
+        0,
         Vec::<(
             shekyl_types::PCanonicalId,
             shekyl_types::archival::ReceiptSignPk,
@@ -310,9 +311,9 @@ fn genesis_connect_writes_every_row_of_the_write_set_at_the_lmdb_layouts() {
         Some(empty.digest())
     );
     assert_eq!(
-        snap.support_block_count(BlockHeight::ZERO, shekyl_chain_rules::BlockDrawsFloor::NONE,)
+        snap.support_block_seats(BlockHeight::ZERO, shekyl_chain_rules::BlockDrawsFloor::NONE,)
             .expect("read"),
-        Some(shekyl_types::archival::SupportCount::NONE),
+        Some(shekyl_types::archival::SupportSeats::EMPTY),
         "genesis records that it issued no support draws"
     );
     // The recorded PoW (`block_pow`, layout 26): one row at genesis, under

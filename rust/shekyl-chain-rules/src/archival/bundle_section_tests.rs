@@ -491,6 +491,7 @@ fn drawable(epoch: u64, pairs: u64) -> DrawableEpoch {
     let keys = (pairs > 0).then(|| (PERSONA, receipt_key()));
     DrawableEpoch::new(
         epoch,
+        pairs,
         keys,
         (0..pairs).map(|shard| DrawablePair {
             persona: PERSONA,

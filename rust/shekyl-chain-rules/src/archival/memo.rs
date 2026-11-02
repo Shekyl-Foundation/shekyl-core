@@ -121,6 +121,7 @@ mod tests {
             .to_receipt_sign_pk();
         DrawableEpoch::new(
             epoch,
+            2,
             [(persona, key)],
             [DrawablePair {
                 persona,

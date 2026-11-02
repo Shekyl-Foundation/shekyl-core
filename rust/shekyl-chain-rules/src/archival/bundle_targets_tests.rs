@@ -26,7 +26,7 @@ fn targets(world: &BundleWorld) -> Result<DrawTargets, BundleRefused<BundleReadF
 fn seat(world: &BundleWorld, n: usize) -> SupportSeat {
     SupportSeat {
         persona: world.personas[n].persona,
-        receipt_key: world.personas[n].receipt_public_key.clone(),
+        receipt_key: world.personas[n].receipt_key(),
     }
 }
 

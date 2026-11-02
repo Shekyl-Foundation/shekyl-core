@@ -120,6 +120,7 @@ mod drawable;
 mod inputs;
 mod memo;
 mod slash;
+mod support_seats;
 
 pub use admission::{admission_plan, AdmissionPlan, AdmissionPlanFault, EpochIssues};
 pub(crate) use arm::BondArm;
@@ -141,6 +142,7 @@ pub use delta::{
 pub use drawable::{drawable_epoch_walked_back, WALK_BACK_EPOCHS};
 pub use memo::DrawableMemo;
 pub(crate) use slash::apply_slash;
+pub use support_seats::scheduled_seats;
 
 use std::collections::btree_map::Entry;
 use std::collections::BTreeMap;
@@ -221,7 +223,7 @@ pub(crate) fn transition<'id, V: ChainView<'id>>(
     let close = transition.close(accrued);
     let opened = transition.drawable_at_open(view)?;
     let drawable_digest = opened.as_ref().map(|(write, _)| *write);
-    let draws = transition.block_draws(
+    let (draws, support_seats) = transition.block_draws(
         view,
         opened.as_ref().map(|(_, drawable)| drawable),
         count_memo,
@@ -233,6 +235,7 @@ pub(crate) fn transition<'id, V: ChainView<'id>>(
         close,
         drawable_digest,
         draws,
+        support_seats,
     )))
 }
 
@@ -428,6 +431,7 @@ impl Transition {
         close: Option<EpochClose>,
         drawable_digest: Option<DrawableDigestWrite>,
         draws: shekyl_types::archival::BlockDraws,
+        support_seats: shekyl_types::archival::SupportSeats,
     ) -> ArchivalDelta {
         let records = self
             .posts
@@ -472,9 +476,7 @@ impl Transition {
             close,
             drawable_digest,
             draws,
-            // The support schedule is not on this transition, so the block
-            // issued none. The row is that zero. A missing row is the hole.
-            support_count: shekyl_types::archival::SupportCount::NONE,
+            support_seats,
         }
     }
 }

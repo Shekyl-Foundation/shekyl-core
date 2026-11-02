@@ -380,8 +380,20 @@ use super::{Canonical, CodecError};
 ///   `tables.snap` re-pins. No row's bytes move. A `33` file is refused at
 ///   open. Rebuild from the block corpus, as at every bump.
 ///
+/// - `35` — the support schedule joins the connect path (`SO-D12` 4b §5.1
+///   item 3; S1, ruled 2026-11-01). `archival_support_block`'s value goes
+///   from a `support_count` (four bytes) to the block's `support_seats`
+///   (`count_le4 ‖ count × persona[32]`, strictly increasing), so a `34`
+///   row does not decode as one; `support_seats.snap` is new and
+///   `tables.snap` re-pins the row. In the same bump the epoch snapshot
+///   gains its support members and archive width under the
+///   `shekyl/archival-drawable-epoch-v2` digest, so every
+///   `archival_drawable_digest` row a `34` binary wrote is a `-v1` digest
+///   the settlement compare would refuse. A `34` file is refused at open.
+///   Rebuild from the block corpus, as at every bump.
+///
 /// [`FamilySet`]: crate::family_set::FamilySet
-pub const SCHEMA_VERSION: SchemaVersion = SchemaVersion::new(34);
+pub const SCHEMA_VERSION: SchemaVersion = SchemaVersion::new(35);
 
 /// A layout version as stored in the `schema_version` cell.
 ///
@@ -438,10 +450,10 @@ mod tests {
         // Moves with every layout bump, on purpose: the history list above
         // this constant is the record, and this line is what makes a bump
         // without a history entry visible in review.
-        assert_eq!(SCHEMA_VERSION, SchemaVersion::new(34));
-        assert_eq!(SCHEMA_VERSION.encode(), [34, 0, 0, 0, 0, 0, 0, 0]);
+        assert_eq!(SCHEMA_VERSION, SchemaVersion::new(35));
+        assert_eq!(SCHEMA_VERSION.encode(), [35, 0, 0, 0, 0, 0, 0, 0]);
         assert_eq!(
-            SchemaVersion::decode(&[34, 0, 0, 0, 0, 0, 0, 0]),
+            SchemaVersion::decode(&[35, 0, 0, 0, 0, 0, 0, 0]),
             Ok(SCHEMA_VERSION)
         );
     }

@@ -11,9 +11,12 @@
 
 use std::sync::OnceLock;
 
-use shekyl_crypto_pq::fn_dsa_hybrid::HybridEd25519FnDsa;
+use shekyl_crypto_pq::fn_dsa_hybrid::{FnDsaHybridPublicKey, HybridEd25519FnDsa};
 
 use super::*;
+
+/// An archive wide enough for every fixture shard.
+const WIDTH: u64 = 16;
 
 const EPOCH: SettlementEpoch = SettlementEpoch::from_raw(7);
 
@@ -69,7 +72,8 @@ fn pairs_are_held_in_canonical_order() {
         pair(P2, 0),
         pair(P1, 300),
     ];
-    let drawable = DrawableEpoch::new(EPOCH, all_keys(), supplied).expect("every pair has a key");
+    let drawable =
+        DrawableEpoch::new(EPOCH, 512, all_keys(), supplied).expect("every pair has a key");
     assert_eq!(drawable.epoch(), EPOCH);
     assert_eq!(drawable.len(), 6);
     assert!(!drawable.is_empty());
@@ -103,6 +107,7 @@ fn a_pairs_receipt_key_is_its_personas() {
     let supplied_keys = vec![(P3, &k[2]), (P1, &k[0]), (P2, &k[1])];
     let drawable = DrawableEpoch::new(
         EPOCH,
+        512,
         supplied_keys,
         [
             pair(P1, 2),
@@ -131,7 +136,12 @@ fn a_pair_without_a_receipt_key_fails_construction() {
     let k = keys();
     let two_keys = vec![(P1, &k[0]), (P3, &k[2])];
     assert_eq!(
-        DrawableEpoch::new(EPOCH, two_keys, [pair(P1, 2), pair(P2, 9), pair(P3, 1)]),
+        DrawableEpoch::new(
+            EPOCH,
+            WIDTH,
+            two_keys,
+            [pair(P1, 2), pair(P2, 9), pair(P3, 1)]
+        ),
         Err(DrawableEpochError::MissingReceiptKey {
             persona: P2,
             shard: ShardId::from_raw(9),
@@ -141,6 +151,7 @@ fn a_pair_without_a_receipt_key_fails_construction() {
     assert_eq!(
         DrawableEpoch::new(
             EPOCH,
+            WIDTH,
             Vec::<(PCanonicalId, &ReceiptSignPk)>::new(),
             [pair(P1, 2)]
         ),
@@ -163,6 +174,7 @@ fn a_receipt_key_that_does_not_parse_fails_construction() {
     let build = |bad: ReceiptSignPk| {
         DrawableEpoch::new(
             EPOCH,
+            WIDTH,
             vec![(P1, k[0].clone()), (P2, bad)],
             [pair(P1, 2), pair(P2, 9)],
         )
@@ -186,7 +198,12 @@ fn a_receipt_key_that_does_not_parse_fails_construction() {
 fn duplicates_are_refused() {
     let k = keys();
     assert_eq!(
-        DrawableEpoch::new(EPOCH, all_keys(), [pair(P1, 2), pair(P2, 9), pair(P1, 2)]),
+        DrawableEpoch::new(
+            EPOCH,
+            WIDTH,
+            all_keys(),
+            [pair(P1, 2), pair(P2, 9), pair(P1, 2)]
+        ),
         Err(DrawableEpochError::DuplicatePair {
             persona: P1,
             shard: ShardId::from_raw(2),
@@ -195,6 +212,7 @@ fn duplicates_are_refused() {
     assert_eq!(
         DrawableEpoch::new(
             EPOCH,
+            WIDTH,
             vec![(P1, &k[0]), (P2, &k[1]), (P1, &k[2])],
             [pair(P1, 2)],
         ),
@@ -207,16 +225,20 @@ fn duplicates_are_refused() {
 #[test]
 fn an_epoch_with_no_pairs_is_an_empty_drawable_epoch() {
     let unparsable = ReceiptSignPk::from_bytes([0; shekyl_types::archival::RECEIPT_SIGN_PK_LEN]);
-    let empty = DrawableEpoch::new(EPOCH, vec![(P1, unparsable)], []).expect("no pair to key");
+    let empty =
+        DrawableEpoch::new(EPOCH, WIDTH, vec![(P1, unparsable)], []).expect("no pair to key");
     assert_eq!(empty.len(), 0);
     assert!(empty.is_empty());
     assert_eq!(empty.pair(0), None);
     assert!(empty.receipt_key(0).is_none());
 }
 
-/// The digest vectors (`SO-D12` ruling B), computed independently of this
-/// crate from the specification's encoding (§9.5 check 2) with a
-/// standalone cSHAKE256, then pinned.
+/// The digest vectors (`SO-D12` ruling B, widened by S1 of 2026-11-01),
+/// computed independently of this crate from the encoding on
+/// [`DrawableEpoch::digest`] with a standalone Keccak-f[1600] and SP 800-185
+/// cSHAKE256 (checked against SHAKE256, NIST's cSHAKE256 sample 3, and the
+/// four `-v1` vectors these replace), then pinned. Vectors 2 to 6 are at an
+/// archive width of [`WIDTH`].
 mod digest_vectors {
     use super::*;
 
@@ -227,31 +249,32 @@ mod digest_vectors {
         hex::encode(digest.as_bytes())
     }
 
-    /// Vector 3's value: a complete tree over three shards, expanded to
-    /// its pairs ([`P2`]), and one compact persona ([`P1`]). `p2_key` is
-    /// [`P2`]'s receipt key.
-    fn tree_and_compact(p2_key: &ReceiptSignPk) -> DrawableEpoch {
+    /// Vector 3's value: three pairs of one compact persona ([`P2`]) and
+    /// one of another ([`P1`]). `p2_key` is [`P2`]'s receipt key.
+    fn two_compact(p2_key: &ReceiptSignPk) -> DrawableEpoch {
         DrawableEpoch::new(
             E5,
+            WIDTH,
             vec![(P1, &keys()[0]), (P2, p2_key)],
             [pair(P2, 0), pair(P2, 1), pair(P2, 2), pair(P1, 5)],
         )
         .expect("every pair has a key")
     }
 
-    /// Vector 1: the empty set at epoch 0, what genesis writes. Red edit:
-    /// any change to the label, the epoch word or the empty lists' counts.
+    /// Vector 1: the empty set at epoch 0 over an empty archive, what
+    /// genesis writes. Red edit: any change to the label, the epoch word,
+    /// the width word or the empty lists' counts.
     #[test]
     fn the_empty_set_at_epoch_zero() {
         let empty = DrawableEpoch::empty(E0);
         assert_eq!(
             empty,
-            DrawableEpoch::new(E0, Vec::<(PCanonicalId, &ReceiptSignPk)>::new(), [])
+            DrawableEpoch::new(E0, 0, Vec::<(PCanonicalId, &ReceiptSignPk)>::new(), [])
                 .expect("no pair to key")
         );
         assert_eq!(
             hex(empty.digest()),
-            "33aeb943e48f57989ecf85df23e4c2c7fae2aa5fa4ab69ad681e351fcc0bb465"
+            "5e8fe65de213f5b1703847916d229be2a6f51c33d7d521caf0c41553e9e1ad7a"
         );
     }
 
@@ -259,11 +282,11 @@ mod digest_vectors {
     /// order, or the persona and key hashed in another order.
     #[test]
     fn one_compact_pair() {
-        let one = DrawableEpoch::new(E5, vec![(P1, &keys()[0])], [pair(P1, 7)])
+        let one = DrawableEpoch::new(E5, WIDTH, vec![(P1, &keys()[0])], [pair(P1, 7)])
             .expect("the pair has a key");
         assert_eq!(
             hex(one.digest()),
-            "cab2fbe4394e517964a13f245b5d333fa18b40d54142a9cc0bd34bfd07cf0383"
+            "b412c41d8b98f5d4a4701763b1a201968b414d77c775870296ad1c1d5c151878"
         );
     }
 
@@ -271,10 +294,10 @@ mod digest_vectors {
     /// out of canonical order. Red edit: hash the pairs as supplied, hash a
     /// key once per pair instead of once per persona, or drop a count.
     #[test]
-    fn a_complete_tree_over_three_shards_and_one_compact_persona() {
+    fn three_pairs_of_one_persona_and_one_of_another() {
         assert_eq!(
-            hex(tree_and_compact(&keys()[1]).digest()),
-            "6d7018a6abbf5b8c62c665b3748a3f57dc17e4e799dcf76753f202f5f431bf55"
+            hex(two_compact(&keys()[1]).digest()),
+            "93538ea33901cee30fd288571137a175ee9ef0a28c02488a304ecd7bae9257cb"
         );
     }
 
@@ -288,11 +311,124 @@ mod digest_vectors {
         let key = &keys()[1];
         let last = shekyl_types::archival::RECEIPT_SIGN_PK_LEN - 1;
         let changed = edited(key, last, key.as_bytes()[last] ^ 0x01);
-        let digest = hex(tree_and_compact(&changed).digest());
+        let digest = hex(two_compact(&changed).digest());
         assert_eq!(
             digest,
-            "2691af460e3726d70cfb52c0e1e7783add3ff29b434fe87eb1389f5814f4a56a"
+            "38f5036032170dd4418c4557e14a7b5cd6661ea11e36552ace5283ffc52e103b"
         );
-        assert_ne!(digest, hex(tree_and_compact(key).digest()));
+        assert_ne!(digest, hex(two_compact(key).digest()));
     }
+
+    /// Vector 5: vector 2 with one support member ([`P3`]). The pairs and
+    /// their keys are vector 2's, so a digest that left the members out
+    /// would give vector 2's. Red edit: leave the member list out.
+    #[test]
+    fn a_support_member_changes_the_digest() {
+        let with_member = DrawableEpoch::new(E5, WIDTH, vec![(P1, &keys()[0])], [pair(P1, 7)])
+            .and_then(|d| d.with_support(vec![(P3, &keys()[2])]))
+            .expect("a member at a width above zero");
+        assert_eq!(
+            hex(with_member.digest()),
+            "7925a3cd423bebf1e6e79028bad4691f716d837a2db43467e3db6313e0bdda3a"
+        );
+    }
+
+    /// Vector 6: vector 2 at width 17. Nothing else differs. Red edit:
+    /// leave the width word out.
+    #[test]
+    fn the_archive_width_changes_the_digest() {
+        let wider = DrawableEpoch::new(E5, 17, vec![(P1, &keys()[0])], [pair(P1, 7)])
+            .expect("the pair has a key");
+        assert_eq!(
+            hex(wider.digest()),
+            "801e13f3208b7ff53f5cbc3e2f84bc4b348e391d4f857c1ef2d865964da636bd"
+        );
+    }
+}
+
+/// The support members are held in persona order with their own keys, and
+/// a member holds no pair. Red edit: keep the members in the order supplied
+/// (`support_members` then lists P3 first).
+#[test]
+fn support_members_are_held_in_persona_order_with_their_keys() {
+    let k = keys();
+    let drawable = DrawableEpoch::new(EPOCH, WIDTH, vec![(P2, &k[1])], [pair(P2, 3)])
+        .and_then(|d| d.with_support(vec![(P3, &k[2]), (P1, &k[0])]))
+        .expect("two members, one pair holder");
+    let members: Vec<PCanonicalId> = drawable
+        .support_members()
+        .iter()
+        .map(|(persona, _)| *persona)
+        .collect();
+    assert_eq!(members, [P1, P3]);
+    assert_eq!(
+        drawable
+            .support_key(&P3)
+            .map(FnDsaHybridPublicKey::to_receipt_sign_pk),
+        Some(k[2].clone())
+    );
+    assert!(
+        drawable.support_key(&P2).is_none(),
+        "a pair holder is not a member"
+    );
+    assert_eq!(drawable.archive_width(), WIDTH);
+    assert_eq!(drawable.len(), 1, "a member adds no pair");
+}
+
+/// The constructor refuses what the verifier must never meet. Red edits,
+/// one per arm: drop the width check (a pair outside the archive is built);
+/// drop the empty-archive check (a member of an empty archive is built);
+/// drop the overlap check (a persona is both member and holder).
+#[test]
+fn a_snapshot_refuses_what_the_verifier_must_not_meet() {
+    let k = keys();
+    assert_eq!(
+        DrawableEpoch::new(EPOCH, 3, vec![(P1, &k[0])], [pair(P1, 3)]),
+        Err(DrawableEpochError::PairOutsideArchive {
+            persona: P1,
+            shard: ShardId::from_raw(3),
+            width: 3,
+        })
+    );
+    assert_eq!(
+        DrawableEpoch::new(EPOCH, 0, Vec::<(PCanonicalId, &ReceiptSignPk)>::new(), [])
+            .and_then(|d| d.with_support(vec![(P1, &k[0])])),
+        Err(DrawableEpochError::SupportOnEmptyArchive)
+    );
+    assert_eq!(
+        DrawableEpoch::new(EPOCH, WIDTH, vec![(P1, &k[0])], [pair(P1, 1)])
+            .and_then(|d| d.with_support(vec![(P1, &k[0])])),
+        Err(DrawableEpochError::SupportMemberHoldsPair { persona: P1 })
+    );
+    assert_eq!(
+        DrawableEpoch::new(
+            EPOCH,
+            WIDTH,
+            Vec::<(PCanonicalId, &ReceiptSignPk)>::new(),
+            []
+        )
+        .and_then(|d| d.with_support(vec![(P1, &k[0]), (P1, &k[1])])),
+        Err(DrawableEpochError::DuplicateSupportMember { persona: P1 })
+    );
+    let bad = edited(&k[0], 0, k[0].as_bytes()[0] ^ 0xFF);
+    let refused = DrawableEpoch::new(
+        EPOCH,
+        WIDTH,
+        Vec::<(PCanonicalId, &ReceiptSignPk)>::new(),
+        [],
+    )
+    .and_then(|d| d.with_support(vec![(P1, bad)]));
+    assert!(
+        matches!(
+            refused,
+            Err(DrawableEpochError::SupportKeyMalformed { persona: P1 })
+        ),
+        "{refused:?}"
+    );
+    // No members at an empty archive is the empty snapshot.
+    assert_eq!(
+        DrawableEpoch::new(EPOCH, 0, Vec::<(PCanonicalId, &ReceiptSignPk)>::new(), [])
+            .and_then(|d| d.with_support(Vec::<(PCanonicalId, &ReceiptSignPk)>::new())),
+        Ok(DrawableEpoch::empty(EPOCH))
+    );
 }

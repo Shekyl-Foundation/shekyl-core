@@ -301,10 +301,11 @@ fn a_release_journals_the_record_it_replaced() {
 /// tampered rows. The same chain untampered settles the epoch: that is
 /// [`the_two_derivations_agree_at_every_height_across_releases`].
 ///
-/// - The pre-image of slot 3's Release, with its holdings emptied: epoch 2
-///   loses a pair. Drift.
+/// - The pre-image of slot 3's Release, a complete tree's, with its
+///   holdings emptied: epoch 2 loses a support member. Drift (`SO-D12` S1:
+///   the members are under the digest).
 /// - The same pre-image with one byte of its receipt key changed (an edit
-///   that still parses): the pairs are the same and the key is not. Drift.
+///   that still parses): the member is the same and its key is not. Drift.
 /// - A slash row planted under slot 0, a complete tree at tip, as a
 ///   complete-tree demotion above the open: the record cannot have been
 ///   left by it. The walk refuses it.
@@ -400,28 +401,24 @@ fn a_journal_that_changed_after_the_open_halts_the_settlement() {
         epoch,
         check: SettlementCheck::DrawableDrift,
     };
-    // A complete tree is not in `D`, so its release pre-image and its
-    // receipt key are not operands of the digest. Rewriting them lets the
-    // pass settle. The slash row, the replaced digest and the removed
-    // digest are still faults: the first cannot be undone onto a complete
-    // tree, and the other two are the digest cell itself.
-    for (label, tamper) in [
-        ("holdings", holdings_emptied as Tamper),
-        ("key", key_changed),
-    ] {
-        let chain = released_chain(&format!("drawable-tamper-{label}"), settles - 1);
-        let out: Result<(), TestErr> = chain.store.write(|batch| {
-            tamper(batch)?;
-            let view = batch.chain_view();
-            let Ok(_) = chain.grown.judge_empty_or_corrupt(&view, &RULES)? else {
-                panic!("{label}: the pass refused a journal that is not in D");
-            };
-            Ok(())
-        });
-        out.expect("{label}: a complete tree's journal is not an operand of D");
-        chain.finish();
-    }
-    let cases: [(&str, Tamper, Corrupt, &str); 3] = [
+    // Slot 3's Release is a complete tree's. A complete tree holds no pair
+    // of `D`, but it is a support member of the epoch with its receipt key,
+    // under the same digest (`SO-D12` S1, ruled 2026-11-01). So rewriting
+    // its pre-image's holdings or its key moves the digest, as a compact
+    // pair holder's would.
+    let cases: [(&str, Tamper, Corrupt, &str); 5] = [
+        (
+            "holdings",
+            holdings_emptied,
+            drift,
+            "does not digest to archival_drawable_digest",
+        ),
+        (
+            "key",
+            key_changed,
+            drift,
+            "does not digest to archival_drawable_digest",
+        ),
         (
             "slash",
             slash_planted,

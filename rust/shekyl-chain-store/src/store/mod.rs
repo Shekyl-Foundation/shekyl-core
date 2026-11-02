@@ -133,7 +133,8 @@ pub use connect::Connected;
 pub use error::{
     AccrualFault, AltCannot, BodyHolderFault, CellFault, DigestFault, DrawRowFault, DrawableFault,
     EdgeFault, EngineError, ErrorClass, FrozenFault, LeafCountFault, LeafDensity, PoolCannot,
-    QueueCannot, SettlementFault, SlashFault, StoreCannot, StoreError, StoreInvariant, UndoFault,
+    QueueCannot, SeatFault, SettlementFault, SlashFault, StoreCannot, StoreError, StoreInvariant,
+    UndoFault,
 };
 pub use halt::ConnectState;
 pub use keyed::{

@@ -31,8 +31,11 @@
 //! [`emit`] holds the three pins of the proposal's §7.4 for both, with pin
 //! 2 restated by `ARCHIVAL_SUPPORT_DRAW.md`: a bond that joined in `E` or
 //! later is excluded (pin 1); a complete tree is a support role and
-//! contributes no pair (pin 2); and the pairs are in canonical order
-//! (pin 3, [`DrawablePair`]'s `Ord`).
+//! contributes no pair (pin 2), and is instead a support member of the
+//! epoch, with its receipt key, when `final_count` is above zero; and the
+//! pairs are in canonical order (pin 3, [`DrawablePair`]'s `Ord`). The
+//! width the support draw selects from is `final_count` (`SO-D12` S1,
+//! 2026-11-01).
 //!
 //! Closed and final at `h_open` is one count for both arms. Shards close
 //! in order, so the shards closed and final at `h_open` are the prefix
@@ -329,8 +332,9 @@ fn unslashed(holdings: &Holdings, shard: ShardId, took: SlashedHolding) -> Optio
     }
 }
 
-/// The emitter both derivations share: pins 1 to 3 over `records`, and
-/// each persona's receipt key, into the one constructor.
+/// The emitter both derivations share: pins 1 to 3 over `records`, each
+/// persona's receipt key, the support members and the archive width, into
+/// the one constructor.
 fn emit<'r>(
     epoch: SettlementEpoch,
     records: impl IntoIterator<Item = (&'r PCanonicalId, &'r BondRecord)>,
@@ -338,15 +342,24 @@ fn emit<'r>(
 ) -> Result<DrawableEpoch, DrawableEpochFault> {
     let mut pairs = Vec::new();
     let mut keys = Vec::new();
+    let mut members = Vec::new();
     for (&persona, record) in records {
         if record.join_settlement_epoch >= epoch {
             continue;
         }
         let held = pairs.len();
         match &record.holdings {
-            // A complete tree is a support role. It is drawn on its own
-            // stream and is not a member of this set.
-            Holdings::CompleteTree => {}
+            // A complete tree is a support role: drawn on its own stream,
+            // not a member of `D`. It is a support member of the epoch,
+            // with its receipt key, when the archive has a shard to draw
+            // (`ARCHIVAL_SUPPORT_DRAW.md` §6; `SO-D12` S1). At width zero
+            // it holds nothing a draw could select, as a compact holding
+            // of a shard not yet closed is no pair.
+            Holdings::CompleteTree => {
+                if final_count > 0 {
+                    members.push((persona, &record.receipt_sign_pk));
+                }
+            }
             Holdings::ShardSet(set) => {
                 pairs.extend(
                     set.iter()
@@ -362,7 +375,9 @@ fn emit<'r>(
             keys.push((persona, &record.receipt_sign_pk));
         }
     }
-    DrawableEpoch::new(epoch, keys, pairs).map_err(DrawableEpochFault::Construction)
+    DrawableEpoch::new(epoch, final_count, keys, pairs)
+        .and_then(|drawable| drawable.with_support(members))
+        .map_err(DrawableEpochFault::Construction)
 }
 
 #[cfg(test)]

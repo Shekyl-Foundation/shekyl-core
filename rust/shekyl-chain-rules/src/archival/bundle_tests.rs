@@ -188,7 +188,7 @@ fn an_empty_support_bitmap_over_an_issued_support_draw_is_a_count_refusal() {
     let refuse = |count: u32| {
         let mut world = BundleWorld::new(count);
         let persona = world.personas[0].persona;
-        let receipt_key = world.personas[0].receipt_public_key.clone();
+        let receipt_key = world.personas[0].receipt_key();
         world.view.support_roster.insert(
             world.h,
             vec![SupportSeat {
@@ -1153,7 +1153,7 @@ fn a_receipt_under_a_key_the_drawable_epoch_does_not_hold_refuses() {
         .collect();
     world.view.drawable_epochs.insert(
         epoch,
-        DrawableEpoch::new(epoch, keys, pairs).expect("every pair has a key"),
+        DrawableEpoch::new(epoch, u64::MAX, keys, pairs).expect("every pair has a key"),
     );
     assert!(judge(&world, &reference, &body).is_ok());
     // And the honest bundle, signed by key A, is now the one refused.
@@ -1297,7 +1297,7 @@ fn a_later_support_attempt_refuses_before_an_earlier_receipt() {
     let hash = fixture_block_hash(world.h);
     let seat = |world: &BundleWorld, n: usize| SupportSeat {
         persona: world.personas[n].persona,
-        receipt_key: world.personas[n].receipt_public_key.clone(),
+        receipt_key: world.personas[n].receipt_key(),
     };
     let support_record = |world: &BundleWorld, draw: u32, attempt: u8| {
         let persona = &world.personas[draw as usize];
@@ -1477,7 +1477,7 @@ fn a_view_with_a_hole_is_unanswered_and_never_a_verdict() {
     let other_epoch = shekyl_types::SettlementEpoch::from_raw(epoch.to_raw() + 1);
     world.view.drawable_epochs.insert(
         epoch,
-        DrawableEpoch::new(other_epoch, keys, pairs).expect("keyed"),
+        DrawableEpoch::new(other_epoch, u64::MAX, keys, pairs).expect("keyed"),
     );
     assert_eq!(
         unanswered(&world, &bundle),
@@ -1494,7 +1494,8 @@ fn a_view_with_a_hole_is_unanswered_and_never_a_verdict() {
     let (mut world, bundle) = fresh();
     world.view.drawable_epochs.insert(
         epoch,
-        DrawableEpoch::new(epoch, Vec::<(PCanonicalId, ReceiptSignPk)>::new(), []).expect("empty"),
+        DrawableEpoch::new(epoch, 0, Vec::<(PCanonicalId, ReceiptSignPk)>::new(), [])
+            .expect("empty"),
     );
     assert_eq!(
         unanswered(&world, &bundle),
@@ -1571,7 +1572,7 @@ fn a_support_pass_is_not_serve_credit() {
 
     let mut world = BundleWorld::new(4);
     let persona = world.personas[0].persona;
-    let receipt_key = world.personas[0].receipt_public_key.clone();
+    let receipt_key = world.personas[0].receipt_key();
     let width = 64;
     world.view.archive_width.insert(world.h, width);
     world.view.support_roster.insert(

@@ -165,8 +165,8 @@ use crate::codec::{
     BondRecord, Coded, CompleteTreeSet, CurveTreeState, DrawableDigest, IssuedDigest, IssuedDraw,
     LayerHash, LeafCount, OutKey, OutTx, Present, PropertyCellBytes, QueuedBody, QueuedBundle,
     RMarket, RecordedPow, RuleSetInForce, SettlementRow, SigmaWorkMilli, SlashLogEntry,
-    SupportCount, SupportIssued, TxIndex, TxOutputIndices, TxPqcAuthsSegment, TxPrunableSegment,
-    TxPrunedSegment, UndoLog,
+    SupportCount, SupportIssued, SupportSeats, TxIndex, TxOutputIndices, TxPqcAuthsSegment,
+    TxPrunableSegment, TxPrunedSegment, UndoLog,
 };
 use crate::ids::{IssuedDrawTuple, ReleaseJournalTuple, SupportIssuedTuple};
 use crate::lmdb_order::LmdbHashKey;
@@ -889,13 +889,13 @@ tables! {
         TableDefinition::new("archival_support_unissued");
 
     /// `archival_support_block` — **Rust-only** ([`RUST_ONLY_TABLES`]);
-    /// height → the [`SupportCount`] of support draws that block issued,
-    /// the width of its support bitmap. Written when the block connects,
-    /// insert-once (SI-40), the zero included: a block that issued none
-    /// still has a row. A height with no row was not connected. Retired
-    /// with [`ARCHIVAL_BLOCK_DRAWS`] on the draw rows' floor (SI-34).
-    /// Ordinal 47.
-    pub const ARCHIVAL_SUPPORT_BLOCK: TableDefinition<u64, Coded<SupportCount>> =
+    /// height → the [`SupportSeats`] that block seated: the complete trees
+    /// in persona order, whose length is the width of its support bitmap
+    /// (`SO-D12` S1). Written when the block connects, insert-once (SI-40),
+    /// the empty row included: a block that seated nobody still has a row.
+    /// A height with no row was not connected. Retired with
+    /// [`ARCHIVAL_BLOCK_DRAWS`] on the draw rows' floor (SI-34). Ordinal 47.
+    pub const ARCHIVAL_SUPPORT_BLOCK: TableDefinition<u64, Coded<SupportSeats>> =
         TableDefinition::new("archival_support_block");
 
     /// `archival_support_issued` — **Rust-only** ([`RUST_ONLY_TABLES`]);
