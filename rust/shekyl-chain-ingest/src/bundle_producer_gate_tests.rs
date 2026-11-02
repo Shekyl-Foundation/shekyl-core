@@ -558,7 +558,12 @@ async fn a_produced_support_bundle_is_admitted_and_connects_through_the_staged_d
     let filled = close_shards(&mut scenario, &mut chain, FILL_FROM_COINBASE, 1).await;
     let close = filled.closed[0];
     let shard = close.shard;
-    mine_to(&mut scenario, &mut chain, first_admissible_compact_join(&rules, close)).await;
+    mine_to(
+        &mut scenario,
+        &mut chain,
+        first_admissible_compact_join(&rules, close),
+    )
+    .await;
     let tree = Persona::at(SLOT);
     let joining = Spender::over(&chain).spend_coinbase_posting(
         scenario.wallet(),
