@@ -27,8 +27,8 @@ use shekyl_runtime::{runtime, RuntimeBudget, ThreadName};
 /// The cause a Tor link is taken down with.
 pub use shekyl_seam::DownCause;
 use shekyl_seam::{
-    drive_inbound_async, AttemptTask, Channel, CloseCause, CloseKind, ConnectFuture, ConnectorId,
-    Dial, Direction, Endpoint, Hub, Route, RoutePublish, SocketId,
+    drive_inbound_async, AttemptTask, Channel, CloseCause, ConnectFuture, ConnectorId, Dial,
+    Direction, Endpoint, Hub, Route, RoutePublish, SocketId,
 };
 use shekyl_socks::{Proxy, SocksUsername};
 use shekyl_timing_engine::{Clock, Handle, MonotonicClock, Tick};
@@ -36,7 +36,7 @@ use shekyl_tor::{
     accept_inbound as accept_tor_inbound, dial_one as dial_tor, Admitted as TorAdmitted,
     Inbound as TorInbound,
 };
-use shekyl_transport_layer::spans;
+use shekyl_transport_layer::{spans, DialEnd, DialFailure, StreamEnd};
 /// The inbound facet of a link, and why it is down (`TOR_SUPERVISOR.md` §4.1).
 pub use shekyl_transport_layer::{InboundCause, InboundFacet};
 use tokio::net::TcpListener;
@@ -105,7 +105,7 @@ impl Dial for ZoneDial {
         endpoint: &Endpoint,
         ceiling: InboundCeiling,
         now: Tick,
-    ) -> Result<Channel, CloseCause> {
+    ) -> Result<Channel, DialEnd> {
         // Accept reads the hub's ceiling. An outbound dial does not admit
         // against the inbound ceiling, so this copy is not stored.
         let _ = (ceiling, now);
@@ -134,8 +134,12 @@ impl Dial for ZoneDial {
         let _ = (ceiling, now);
         match self.start(endpoint) {
             Ok(started) => started,
-            Err(cause) => Box::pin(std::future::ready(Err(cause))),
+            Err(end) => Box::pin(std::future::ready(Err(end))),
         }
+    }
+
+    fn stamp_stream_end(&self, connector: ConnectorId, end: StreamEnd) -> DialFailure {
+        connector_tables(connector, end)
     }
 
     /// Every attempt is a task on the transport runtime's async workers,
@@ -157,11 +161,22 @@ impl Dial for ZoneDial {
     }
 }
 
+/// Each connector's own stamping of a stream end shared code observed: the
+/// one dispatch from a connector to its table (`DIALER_OUTAGE_EVIDENCE.md`
+/// §2.2). Zone bind's dialer reads it, and so does every harness dialer
+/// this crate installs.
+pub(crate) fn connector_tables(connector: ConnectorId, end: StreamEnd) -> DialFailure {
+    match connector {
+        ConnectorId::Clearnet => shekyl_clearnet::stamp_stream_end(end),
+        ConnectorId::Tor => shekyl_tor::stamp_stream_end(end),
+    }
+}
+
 impl ZoneDial {
     /// Start the dial `endpoint` names on the runtime, and return the wait
-    /// for its admission. A refusal before anything is spawned is the
-    /// error.
-    fn start(&self, endpoint: &Endpoint) -> Result<ConnectFuture, CloseCause> {
+    /// for its admission. A refusal before anything is spawned is this
+    /// node's own failure before any I/O.
+    fn start(&self, endpoint: &Endpoint) -> Result<ConnectFuture, DialEnd> {
         match endpoint {
             Endpoint::Clearnet {
                 ip,
@@ -169,16 +184,16 @@ impl ZoneDial {
                 direction,
             } => {
                 if *direction != Direction::Outbound {
-                    return Err(CloseCause::new(CloseKind::LocalClose));
+                    return Err(DialEnd::local_close());
                 }
                 self.dial_clearnet(*ip, *port)
             }
             Endpoint::Tor { key, port } => self.dial_tor(key, *port),
-            Endpoint::TorInbound => Err(CloseCause::new(CloseKind::LocalClose)),
+            Endpoint::TorInbound => Err(DialEnd::local_close()),
         }
     }
 
-    fn dial_clearnet(&self, ip: IpAddr, port: u16) -> Result<ConnectFuture, CloseCause> {
+    fn dial_clearnet(&self, ip: IpAddr, port: u16) -> Result<ConnectFuture, DialEnd> {
         let ready = self
             .host
             .clearnet
@@ -190,18 +205,18 @@ impl ZoneDial {
                 tally: Arc::clone(&ready.tally),
                 proxy: ready.proxy.clone(),
             })
-            .ok_or_else(|| CloseCause::new(CloseKind::LocalClose))?;
+            .ok_or_else(DialEnd::local_close)?;
         let proxy = match self.host.hub.links().get(ConnectorId::Clearnet).route {
             Some(Route::Direct) => None,
             Some(Route::Socks(at)) => Some(presented(at, ready.proxy.as_ref())),
-            None => return Err(CloseCause::new(CloseKind::LocalClose)),
+            None => return Err(DialEnd::local_close()),
         };
         let address = match ip {
             IpAddr::V4(ip) => NetworkAddress::Ipv4 { ip, port },
             IpAddr::V6(ip) => NetworkAddress::Ipv6 { ip, port },
         };
         let (admitted_tx, admitted_rx) = mpsc::unbounded_channel();
-        let (on_cause, fail_rx) = failure_slot();
+        let (on_end, fail_rx) = failure_slot();
         let dial = ClearnetDial {
             address,
             proxy,
@@ -216,7 +231,7 @@ impl ZoneDial {
             handshake_within: self.host.clearnet_handshake_within,
             gap_within: Some(self.host.clearnet_gap_within),
             tally: ready.tally,
-            on_cause,
+            on_end,
             send_queue_bytes: self.host.send_queue_bytes,
             admitted: admitted_tx,
         };
@@ -239,11 +254,11 @@ impl ZoneDial {
         ))
     }
 
-    fn dial_tor(&self, key: &[u8; 32], port: u16) -> Result<ConnectFuture, CloseCause> {
+    fn dial_tor(&self, key: &[u8; 32], port: u16) -> Result<ConnectFuture, DialEnd> {
         // The route is read from the link at each dial. A link that fell
         // after the plan read it still costs this one draw (`TSR-F1`).
         let Some(Route::Socks(at)) = self.host.hub.links().get(ConnectorId::Tor).route else {
-            return Err(CloseCause::new(CloseKind::LocalClose));
+            return Err(DialEnd::local_close());
         };
         let proxy = presented(at, self.host.tor_proxy.lock().expect("tor proxy").as_ref());
         let address = NetworkAddress::Tor {
@@ -251,14 +266,14 @@ impl ZoneDial {
             port,
         };
         let (admitted_tx, admitted_rx) = mpsc::unbounded_channel();
-        let (on_cause, fail_rx) = failure_slot();
+        let (on_end, fail_rx) = failure_slot();
         let dial = shekyl_tor::Dial {
             address,
             proxy,
             sockets: self.host.sockets.clone(),
             dial_within: self.host.tor_dial_within,
             gap_within: self.host.tor_gap_within,
-            on_cause,
+            on_end,
             send_queue_bytes: self.host.send_queue_bytes,
             admitted: admitted_tx,
         };
@@ -306,7 +321,7 @@ impl Drop for AbortUntilAdmitted {
 fn until_admitted<T: Send + 'static>(
     spawned: tokio::task::JoinHandle<()>,
     admitted_rx: mpsc::UnboundedReceiver<T>,
-    fail_rx: oneshot::Receiver<CloseCause>,
+    fail_rx: oneshot::Receiver<DialEnd>,
     into_channel: impl FnOnce(T) -> Channel + Send + 'static,
 ) -> ConnectFuture {
     let mut guard = AbortUntilAdmitted(Some(spawned));
@@ -317,26 +332,29 @@ fn until_admitted<T: Send + 'static>(
     })
 }
 
+/// The connector's first end, for the connect future: its failure before
+/// the channel. Later calls (the session's end after admission) find the
+/// slot taken.
 fn failure_slot() -> (
-    Arc<dyn Fn(CloseCause) + Send + Sync>,
-    oneshot::Receiver<CloseCause>,
+    Arc<dyn Fn(DialEnd) + Send + Sync>,
+    oneshot::Receiver<DialEnd>,
 ) {
     let (tx, rx) = oneshot::channel();
     let slot = Arc::new(Mutex::new(Some(tx)));
-    let on_cause = Arc::new(move |cause: CloseCause| {
+    let on_end = Arc::new(move |end: DialEnd| {
         if let Some(tx) = slot.lock().expect("dial failure").take() {
-            match tx.send(cause) {
+            match tx.send(end) {
                 Ok(()) | Err(_) => {}
             }
         }
     });
-    (on_cause, rx)
+    (on_end, rx)
 }
 
 async fn recv_admitted<T>(
     mut rx: mpsc::UnboundedReceiver<T>,
-    fail: oneshot::Receiver<CloseCause>,
-) -> Result<T, CloseCause> {
+    fail: oneshot::Receiver<DialEnd>,
+) -> Result<T, DialEnd> {
     tokio::pin!(fail);
     tokio::select! {
         biased;
@@ -349,13 +367,13 @@ async fn recv_admitted<T>(
             // sender is dropped when the task returns, which is the same
             // moment the channel closes.
             None => match fail.await {
-                Ok(cause) => Err(cause),
-                Err(_) => Err(CloseCause::new(CloseKind::LocalClose)),
+                Ok(end) => Err(end),
+                Err(_) => Err(DialEnd::local_close()),
             },
         },
         result = &mut fail => match result {
-            Ok(cause) => Err(cause),
-            Err(_) => Err(CloseCause::new(CloseKind::LocalClose)),
+            Ok(end) => Err(end),
+            Err(_) => Err(DialEnd::local_close()),
         },
     }
 }

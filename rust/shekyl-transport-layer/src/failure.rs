@@ -209,6 +209,21 @@ pub enum StreamEnd {
     SendQueueFull,
 }
 
+impl StreamEnd {
+    /// The end shared code observed, read from the D12 kind it recorded.
+    /// `None` for every kind that is not one of these three: those are a
+    /// connector's own observation or this node's own act.
+    #[must_use]
+    pub const fn observed(kind: CloseKind) -> Option<Self> {
+        match kind {
+            CloseKind::PeerClosed => Some(Self::PeerClosed),
+            CloseKind::IoError => Some(Self::IoError),
+            CloseKind::SendQueueFull => Some(Self::SendQueueFull),
+            _ => None,
+        }
+    }
+}
+
 /// How one dial ended, as the layer that observed it reports it: the
 /// judge's input, and the D12 cause beside it for the log. The judge reads
 /// [`Self::failure`] and never [`Self::cause`].
@@ -239,6 +254,28 @@ impl DialEnd {
         }
     }
 
+    /// This node's own close after a stream opened: the hub's, the
+    /// dialer's, or the connector's own. Local, so it never counts, and it
+    /// keeps its redial.
+    #[must_use]
+    pub const fn local_close_after_channel() -> Self {
+        Self {
+            failure: DialFailure::local(Retry::Again, Reached::StreamOpened),
+            cause: CloseCause::new(CloseKind::LocalClose),
+        }
+    }
+
+    /// The peer's Levin handshake did not arrive within the gap. The Levin
+    /// layer's: the link or the destination (§2.2), read against the window
+    /// as the dial's own deadline is.
+    #[must_use]
+    pub const fn levin_handshake_timeout() -> Self {
+        Self {
+            failure: DialFailure::uncertain(Retry::AgainInsideWindow, Reached::StreamOpened),
+            cause: CloseCause::new(CloseKind::LevinHandshakeTimeout),
+        }
+    }
+
     /// What the judge reads.
     #[must_use]
     pub const fn failure(self) -> DialFailure {
@@ -254,8 +291,8 @@ impl DialEnd {
 
 #[cfg(test)]
 mod tests {
-    use super::{DialFailure, Evidence, Proof, ProofKind, Reached, Retry};
-    use crate::ConnectorId;
+    use super::{DialEnd, DialFailure, Evidence, Proof, ProofKind, Reached, Retry, StreamEnd};
+    use crate::{CloseKind, ConnectorId};
 
     /// Proof of misbehaviour follows the connector's declaration: a peer's
     /// refusal proves it on Tor (an onion address is the service's key)
@@ -315,5 +352,38 @@ mod tests {
                 }
             }
         }
+    }
+
+    /// Shared code's three observed kinds, and only those, read as a stream
+    /// end. The edit that makes this red is reading a connector's own kind
+    /// (a record that did not open) or this node's own close as one.
+    #[test]
+    fn only_the_three_observed_kinds_are_a_stream_end() {
+        for &kind in CloseKind::ALL {
+            let expected = match kind {
+                CloseKind::PeerClosed => Some(StreamEnd::PeerClosed),
+                CloseKind::IoError => Some(StreamEnd::IoError),
+                CloseKind::SendQueueFull => Some(StreamEnd::SendQueueFull),
+                _ => None,
+            };
+            assert_eq!(StreamEnd::observed(kind), expected, "{kind:?}");
+        }
+    }
+
+    /// The two after-channel ends this crate builds: this node's own close
+    /// is Local and keeps its redial; the Levin gap timing out is Uncertain
+    /// and read against the window. Both are after a stream opened.
+    #[test]
+    fn the_after_channel_ends_are_pinned() {
+        let own = DialEnd::local_close_after_channel();
+        assert_eq!(own.failure().evidence(), Evidence::Local);
+        assert_eq!(own.failure().retry(), Retry::Again);
+        assert_eq!(own.failure().reached(), Reached::StreamOpened);
+        assert_eq!(own.cause().kind(), CloseKind::LocalClose);
+        let gap = DialEnd::levin_handshake_timeout();
+        assert_eq!(gap.failure().evidence(), Evidence::Uncertain);
+        assert_eq!(gap.failure().retry(), Retry::AgainInsideWindow);
+        assert_eq!(gap.failure().reached(), Reached::StreamOpened);
+        assert_eq!(gap.cause().kind(), CloseKind::LevinHandshakeTimeout);
     }
 }

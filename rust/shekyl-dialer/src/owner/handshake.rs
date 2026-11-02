@@ -185,20 +185,20 @@ impl Dialer {
         } = channel.into_adopted();
         let attached = match self.hub.adopt(open, session, endpoint, gap) {
             Ok(attached) => attached,
-            Err(cause) => {
+            Err(end) => {
                 self.shared().adopting.remove(&id.get());
                 // The hub made no row, so nothing else retires the id.
                 self.hub.reap(id);
-                return failed(cause);
+                return failed(end.cause());
             }
         };
         // `Established` runs its poster before `adopt` returns. A poster
         // that closed the session has already won: recording a kept row
         // would resurrect it.
-        if let Some(cause) = self.hub.cause(id) {
+        if let Some(end) = self.hub.end(id) {
             self.shared().adopting.remove(&id.get());
             drop(attached);
-            return failed(cause);
+            return failed(end.cause());
         }
         Attempt::Kept(KeptDial {
             id,
@@ -234,7 +234,7 @@ pub(super) async fn attempt_task(
     } = prepared;
     let channel = match hub.dial_channel_async(&endpoint).await {
         Ok(channel) => Unadopted::new(hub, channel),
-        Err(cause) => return TaskResult::Failed(cause),
+        Err(end) => return TaskResult::Failed(end.cause()),
     };
     let mut channel = channel;
     let connected_at = std::time::Instant::now();

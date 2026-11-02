@@ -53,7 +53,7 @@ use shekyl_peer_policy::InboundCeiling;
 use shekyl_runtime::Pool;
 use shekyl_timing_engine::{Clock, Handle, Tick};
 use shekyl_transport_layer::{
-    stack_plan, AddedLayer, CloseCause, NetworkColumn, Sockets, StackPlan,
+    stack_plan, AddedLayer, CloseCause, DialEnd, NetworkColumn, Sockets, StackPlan,
 };
 use tokio::net::TcpListener;
 use tokio::sync::mpsc;
@@ -229,7 +229,10 @@ where
             handshake_within: self.handshake_within,
             gap_within: None,
             tally: Arc::clone(&self.tally),
-            on_cause: Arc::clone(&self.on_cause),
+            on_end: {
+                let on_cause = Arc::clone(&self.on_cause);
+                Arc::new(move |end: DialEnd| on_cause(end.cause()))
+            },
             send_queue_bytes: self.send_queue_bytes,
             admitted: self.admitted_tx.clone(),
         };

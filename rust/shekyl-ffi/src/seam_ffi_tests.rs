@@ -56,7 +56,7 @@ fn the_ban_path_goes_through_a_bound_hub() {
     unbind();
     bind();
     let hub = super::hub().expect("bound");
-    hub.install_loopback(32);
+    hub.install_loopback(32, crate::zone_ffi::connector_tables);
     let host = IpAddr::V4(Ipv4Addr::new(203, 0, 113, 77));
     let endpoint = Endpoint::Clearnet {
         ip: host,
@@ -73,7 +73,7 @@ fn the_ban_path_goes_through_a_bound_hub() {
     let Err(refused) = hub.connect(&endpoint) else {
         panic!("a banned host was dialled");
     };
-    assert_eq!(refused.kind(), CloseKind::AdmissionRefused);
+    assert_eq!(refused.cause().kind(), CloseKind::AdmissionRefused);
     assert_eq!(path.remaining(host), Some(BanLeft::Permanent));
     assert!(path
         .listed()
@@ -108,7 +108,7 @@ fn the_peer_counts_are_the_bound_hubs() {
     assert_eq!(crate::rpc_peerlist_ffi::session_counts(), None);
     bind();
     let hub = super::hub().expect("bound");
-    hub.install_loopback(32);
+    hub.install_loopback(32, crate::zone_ffi::connector_tables);
     let endpoint = Endpoint::Clearnet {
         ip: IpAddr::V4(Ipv4Addr::new(203, 0, 113, 88)),
         port: 18080,

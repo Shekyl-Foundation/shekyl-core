@@ -13,9 +13,10 @@ use std::time::Duration;
 
 use shekyl_dialer::Dialer;
 use shekyl_draw_rng::SplitMix64;
-use shekyl_peerlist::{CloseCause, CloseKind, ConnectorId, NetworkAddress, Tick};
+use shekyl_peerlist::{ConnectorId, NetworkAddress, Tick};
 use shekyl_seam::{Dial, Hub, SocketId};
 use shekyl_timing_engine::{Clock, ManualClock};
+use shekyl_transport_layer::DialEnd;
 use shekyl_transport_layer::Sockets;
 
 use super::{dialer_on, onions, peer, reply, HeldDial, CLEARNET, NETWORK, TOR, TOR_WINDOW};
@@ -79,10 +80,10 @@ impl WhiteRig {
 
     /// The peer closes `id`'s session.
     fn close(&self, id: SocketId) {
-        let cause = CloseCause::new(CloseKind::PeerClosed);
-        self.hub.finish(id, cause);
+        let end = crate::tables::peer_closed(self.connector);
+        self.hub.finish(id, end);
         self.dialer
-            .session_closed_from_seam(id, cause, &mut SplitMix64::new(0));
+            .session_closed_from_seam(id, end.cause(), &mut SplitMix64::new(0));
     }
 
     fn advance(&self, by: Duration) {
@@ -92,7 +93,7 @@ impl WhiteRig {
 
     /// One attempt at the drawable white address, refused with `cause`
     /// after `took`.
-    fn attempt(&mut self, cause: CloseCause, took: Duration) {
+    fn attempt(&mut self, cause: DialEnd, took: Duration) {
         self.dial.refuse_after(&self.clock, cause, took);
         assert!(self.dialer.wake(self.connector, &mut self.rng), "a draw");
     }
@@ -108,10 +109,14 @@ impl WhiteRig {
     /// The cause, the time it takes, and the attempts one failed test of a
     /// white address makes: Tor's `0x06` at the window, final at once; a
     /// clearnet dial failure, then its one redial.
-    fn failing_test(&self) -> (CloseCause, Duration, usize) {
+    fn failing_test(&self) -> (DialEnd, Duration, usize) {
         match self.connector {
-            ConnectorId::Tor => (shekyl_tor::refused(0x06), TOR_WINDOW, 1),
-            ConnectorId::Clearnet => (CloseCause::new(CloseKind::DialFailed), Duration::ZERO, 2),
+            ConnectorId::Tor => (shekyl_tor::reply_end(0x06), TOR_WINDOW, 1),
+            ConnectorId::Clearnet => (
+                shekyl_clearnet::Observed::ConnectRefused.end(),
+                Duration::ZERO,
+                2,
+            ),
         }
     }
 
@@ -122,16 +127,16 @@ impl WhiteRig {
         let quiet = shekyl_peerlist::dial_profile(self.connector).quiet();
         self.advance(Duration::from_nanos(quiet.span_nanos));
         let k = usize::try_from(quiet.attempts).expect("small");
-        let (primers, cause): (Vec<NetworkAddress>, CloseCause) = match self.connector {
+        let (primers, cause): (Vec<NetworkAddress>, DialEnd) = match self.connector {
             ConnectorId::Tor => (
                 onions(self.white.len() + k).split_off(self.white.len()),
-                shekyl_tor::refused(0xF1),
+                shekyl_tor::reply_end(0xF1),
             ),
             ConnectorId::Clearnet => (
                 (1..=k)
                     .map(|n| peer(900 + u16::try_from(n).expect("small")))
                     .collect(),
-                CloseCause::new(CloseKind::DialFailed),
+                shekyl_clearnet::Observed::ConnectRefused.end(),
             ),
         };
         for address in &primers {
@@ -165,7 +170,7 @@ const PAST_EVERY_RETRY_WAIT: Duration = Duration::from_secs(31);
 /// when the attempt used Tor's whole window.
 #[test]
 fn a_white_address_failing_its_test_is_gray_and_cooling() {
-    let dial_failed = CloseCause::new(CloseKind::DialFailed);
+    let dial_failed = shekyl_clearnet::Observed::ConnectRefused.end();
     let mut rig = WhiteRig::new(CLEARNET, 71, 1);
     let address = rig.white[0].clone();
     rig.attempt(dial_failed, Duration::ZERO);
@@ -180,7 +185,7 @@ fn a_white_address_failing_its_test_is_gray_and_cooling() {
         "clearnet: after the redial"
     );
 
-    let early = shekyl_tor::refused(0xF0);
+    let early = shekyl_tor::reply_end(0xF0);
     let mut rig = WhiteRig::new(TOR, 72, 1);
     let address = rig.white[0].clone();
     for attempt in 1..=2 {
@@ -199,7 +204,7 @@ fn a_white_address_failing_its_test_is_gray_and_cooling() {
 
     let mut rig = WhiteRig::new(TOR, 73, 1);
     let address = rig.white[0].clone();
-    rig.attempt(shekyl_tor::refused(0x06), TOR_WINDOW);
+    rig.attempt(shekyl_tor::reply_end(0x06), TOR_WINDOW);
     assert!(
         !rig.is_white(&address) && rig.is_cooling(&address),
         "Tor: a full-window failure is already retried"
@@ -211,7 +216,10 @@ fn a_white_address_failing_its_test_is_gray_and_cooling() {
 fn a_clearnet_white_address_whose_redial_succeeds_stays_white() {
     let mut rig = WhiteRig::new(CLEARNET, 74, 1);
     let address = rig.white[0].clone();
-    rig.attempt(CloseCause::new(CloseKind::DialFailed), Duration::ZERO);
+    rig.attempt(
+        shekyl_clearnet::Observed::ConnectRefused.end(),
+        Duration::ZERO,
+    );
     rig.advance(PAST_EVERY_RETRY_WAIT);
     rig.dial
         .answers
@@ -296,7 +304,7 @@ fn a_clearnet_white_redial_is_decided_by_the_clearnet_window() {
         Some(deadline),
         "a publish does not move the deadline"
     );
-    rig.attempt(CloseCause::new(CloseKind::TransportTimeout), deadline);
+    rig.attempt(shekyl_clearnet::Observed::Deadline.end(), deadline);
     assert!(
         !rig.is_white(&address) && rig.is_cooling(&address),
         "a full-window timeout demotes with no redial"

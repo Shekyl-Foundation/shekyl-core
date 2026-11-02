@@ -14,9 +14,10 @@ use std::time::Duration;
 
 use shekyl_dialer::Dialer;
 use shekyl_draw_rng::SplitMix64;
-use shekyl_peerlist::{CloseCause, CloseKind, ConnectorId, Direction, NetworkAddress, Tick};
+use shekyl_peerlist::{ConnectorId, Direction, NetworkAddress, Tick};
 use shekyl_seam::{Dial, Endpoint, Hub};
 use shekyl_timing_engine::{Clock, ManualClock};
+use shekyl_transport_layer::DialEnd;
 use shekyl_transport_layer::Sockets;
 
 use super::{dialer_on, onions, peer, reply, HeldDial, CLEARNET, NETWORK, TOR, TOR_WINDOW};
@@ -33,7 +34,7 @@ struct QuietRig {
     dialer: Arc<Dialer>,
     connector: ConnectorId,
     failing: Vec<NetworkAddress>,
-    cause: CloseCause,
+    cause: DialEnd,
     took: Duration,
     rng: SplitMix64,
 }
@@ -61,12 +62,12 @@ impl QuietRig {
         dialer.set_window(TOR, Some(TOR_WINDOW));
         let mut rng = SplitMix64::new(seed);
         let (mut addresses, cause, took) = match connector {
-            ConnectorId::Tor => (onions(count), shekyl_tor::refused(0xF1), Duration::ZERO),
+            ConnectorId::Tor => (onions(count), shekyl_tor::reply_end(0xF1), Duration::ZERO),
             ConnectorId::Clearnet => (
                 (1..=count)
                     .map(|n| peer(600 + u16::try_from(n).expect("small")))
                     .collect(),
-                CloseCause::new(CloseKind::DialFailed),
+                shekyl_clearnet::Observed::ConnectRefused.end(),
                 Duration::ZERO,
             ),
         };
@@ -163,7 +164,7 @@ impl QuietRig {
     fn open_one(&mut self) {
         self.dial.refuse_after(
             &self.clock,
-            CloseCause::new(CloseKind::LevinHandshakeRejected),
+            crate::tables::levin_rejected(self.connector),
             Duration::ZERO,
         );
         assert!(self.dialer.wake(self.connector, &mut self.rng), "a draw");
@@ -187,7 +188,7 @@ impl QuietRig {
 fn a_connect_this_node_cannot_make_keeps_the_first_step() {
     for (connector, seed) in [(TOR, 71), (CLEARNET, 72)] {
         let mut rig = QuietRig::new(connector, seed, false);
-        rig.cause = CloseCause::new(CloseKind::LocalClose);
+        rig.cause = DialEnd::local_close();
         let quiet = rig.go_quiet();
         rig.fail_each_once();
         rig.advance(PAST_EVERY_COOLDOWN);

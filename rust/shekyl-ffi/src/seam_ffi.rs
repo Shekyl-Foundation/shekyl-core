@@ -413,7 +413,7 @@ pub extern "C" fn shekyl_seam_install_loopback() -> i32 {
     let Some(hub) = hub() else {
         return -1;
     };
-    hub.install_loopback(HARNESS_SEND_CAP);
+    hub.install_loopback(HARNESS_SEND_CAP, crate::zone_ffi::connector_tables);
     0
 }
 
@@ -452,7 +452,7 @@ pub unsafe extern "C" fn shekyl_seam_open(
     };
     let attached = match hub.connect(&endpoint) {
         Ok(attached) => attached,
-        Err(cause) => return refused(cause),
+        Err(end) => return refused(end.cause()),
     };
     let id = attached.id;
     hub.drive(id, attached.session);
@@ -620,29 +620,6 @@ pub extern "C" fn shekyl_seam_close(id: u64) {
         return;
     };
     hub.close(id);
-}
-
-/// Record `kind` when the row has no cause yet. An unknown kind records
-/// nothing. The row stays until [`shekyl_seam_reap`].
-#[no_mangle]
-pub extern "C" fn shekyl_seam_record_cause(id: u64, kind: u8, reply: u16) {
-    let Some(hub) = hub() else {
-        return;
-    };
-    let Some(id) = SocketId::from_ffi(id) else {
-        return;
-    };
-    let Some(kind) = CloseKind::from_code(kind) else {
-        return;
-    };
-    let cause = if kind == CloseKind::ProxyRefused {
-        // The C++ has no reply table: a reply recorded here is final and
-        // names nothing. The connectors build their own causes in Rust.
-        CloseCause::proxy_refused(reply, shekyl_transport_layer::Marks::NONE)
-    } else {
-        CloseCause::new(kind)
-    };
-    hub.finish(id, cause);
 }
 
 /// Live sockets for one connector and direction.

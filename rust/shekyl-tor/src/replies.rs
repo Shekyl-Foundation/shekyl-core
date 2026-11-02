@@ -218,6 +218,9 @@ pub enum Observed {
     /// This node's own failure: the engine, the socket table, an address
     /// this connector cannot dial.
     OwnFailure,
+    /// This node's admission refused the dial, with the cause it refused
+    /// with: this node's own act, never the onion's.
+    RefusedHere(CloseCause),
 }
 
 impl Observed {
@@ -234,6 +237,9 @@ impl Observed {
                 CloseCause::new(CloseKind::TransportTimeout),
             ),
             Self::OwnFailure => DialEnd::local_close(),
+            Self::RefusedHere(cause) => {
+                DialEnd::new(DialFailure::local(Retry::Again, Reached::NoStream), cause)
+            }
         }
     }
 }
@@ -248,6 +254,19 @@ pub const fn stamp_stream_end(end: StreamEnd) -> DialFailure {
         StreamEnd::PeerClosed | StreamEnd::IoError | StreamEnd::SendQueueFull => {
             DialFailure::uncertain(Retry::Again, Reached::StreamOpened)
         }
+    }
+}
+
+/// How an onion connection ended after the channel, from either side: an
+/// end shared code observed is [`stamp_stream_end`]'s; anything else is
+/// this node's own close. Each keeps the D12 cause it was recorded with.
+pub(crate) fn stream_side_end(cause: CloseCause) -> DialEnd {
+    match StreamEnd::observed(cause.kind()) {
+        Some(end) => DialEnd::new(stamp_stream_end(end), cause),
+        None => DialEnd::new(
+            DialFailure::local(Retry::Again, Reached::StreamOpened),
+            cause,
+        ),
     }
 }
 
@@ -347,5 +366,66 @@ mod tests {
                 "reply {reply:#x}"
             );
         }
+    }
+
+    /// Every observation before the channel other than a reply, against
+    /// §3.2: this node's proxy and its own failures are Local, the deadline
+    /// is Uncertain and read against the window, and each keeps its D12
+    /// kind. The edit that makes this red is moving a row.
+    #[test]
+    fn each_onion_observation_is_stamped_as_the_table_says() {
+        let refused = CloseCause::new(CloseKind::AdmissionRefused);
+        for (observed, evidence, retry, kind) in [
+            (
+                Observed::ProxyUnavailable,
+                Evidence::Local,
+                Retry::Again,
+                CloseKind::ProxyUnavailable,
+            ),
+            (
+                Observed::Deadline,
+                Evidence::Uncertain,
+                Retry::AgainInsideWindow,
+                CloseKind::TransportTimeout,
+            ),
+            (
+                Observed::OwnFailure,
+                Evidence::Local,
+                Retry::Again,
+                CloseKind::LocalClose,
+            ),
+            (
+                Observed::RefusedHere(refused),
+                Evidence::Local,
+                Retry::Again,
+                CloseKind::AdmissionRefused,
+            ),
+        ] {
+            let end = observed.end();
+            assert_eq!(end.failure().evidence(), evidence, "{observed:?}");
+            assert_eq!(end.failure().retry(), retry, "{observed:?}");
+            assert_eq!(end.failure().reached(), Reached::NoStream, "{observed:?}");
+            assert_eq!(end.cause().kind(), kind, "{observed:?}");
+        }
+    }
+
+    /// After the channel, an end shared code observed is this connector's
+    /// table row with the cause it was recorded with, and this node's own
+    /// close is Local. The edit that makes this red is stamping this node's
+    /// own close as the onion's.
+    #[test]
+    fn an_onion_end_after_the_channel_is_stamped_by_this_connector() {
+        for (kind, end) in [
+            (CloseKind::PeerClosed, StreamEnd::PeerClosed),
+            (CloseKind::IoError, StreamEnd::IoError),
+            (CloseKind::SendQueueFull, StreamEnd::SendQueueFull),
+        ] {
+            let stamped = stream_side_end(CloseCause::new(kind));
+            assert_eq!(stamped.failure(), stamp_stream_end(end), "{end:?}");
+            assert_eq!(stamped.cause().kind(), kind, "{end:?}");
+        }
+        let own = stream_side_end(CloseCause::new(CloseKind::LocalClose));
+        assert_eq!(own.failure().evidence(), Evidence::Local);
+        assert_eq!(own.failure().reached(), Reached::StreamOpened);
     }
 }

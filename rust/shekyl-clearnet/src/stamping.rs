@@ -60,6 +60,9 @@ pub enum Observed {
     /// This node's own failure: the engine, the socket table, an address
     /// this connector cannot dial.
     OwnFailure,
+    /// This node's admission refused the dial, with the cause it refused
+    /// with: this node's own act, never the destination's.
+    RefusedHere(CloseCause),
     /// The peer's handshake message did not verify: a definitive answer.
     HandshakeUnverified,
     /// The peer closed or reset the connection mid-handshake.
@@ -124,6 +127,9 @@ impl Observed {
                 CloseCause::new(CloseKind::TransportTimeout),
             ),
             Self::OwnFailure => DialEnd::local_close(),
+            Self::RefusedHere(cause) => {
+                DialEnd::new(DialFailure::local(Retry::Again, before), cause)
+            }
             Self::HandshakeUnverified => DialEnd::new(
                 DialFailure::destination(Retry::Final, before),
                 CloseCause::new(CloseKind::TransportHandshakeFailed),
@@ -184,13 +190,44 @@ pub const fn stamp_stream_end(end: StreamEnd) -> DialFailure {
     }
 }
 
+/// How a connection ended after the channel, from what its read side
+/// observed. A record that did not open is this connector's own
+/// observation ([`Observed::RecordRejected`]); an end shared code observed
+/// is [`stamp_stream_end`]'s; anything else is this node's own close.
+pub(crate) fn read_side_end(cause: CloseCause) -> DialEnd {
+    if cause.kind() == CloseKind::RecordRejected {
+        return Observed::RecordRejected.end();
+    }
+    after_channel(cause)
+}
+
+/// [`read_side_end`] for the write side. Its record refusal is this node's
+/// own encoder failing, not the far end's record, so it is this node's own
+/// close.
+pub(crate) fn write_side_end(cause: CloseCause) -> DialEnd {
+    after_channel(cause)
+}
+
+/// An end after the channel, with the D12 cause it was recorded with.
+fn after_channel(cause: CloseCause) -> DialEnd {
+    match StreamEnd::observed(cause.kind()) {
+        Some(end) => DialEnd::new(stamp_stream_end(end), cause),
+        None => DialEnd::new(
+            DialFailure::local(Retry::Again, Reached::StreamOpened),
+            cause,
+        ),
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use std::io::ErrorKind;
 
-    use shekyl_transport_layer::{CloseKind, Evidence, Proof, Reached, Retry, StreamEnd};
+    use shekyl_transport_layer::{
+        CloseCause, CloseKind, Evidence, Proof, Reached, Retry, StreamEnd,
+    };
 
-    use super::{stamp_stream_end, Observed};
+    use super::{read_side_end, stamp_stream_end, write_side_end, Observed};
 
     const DESTINATION: Evidence = Evidence::Destination(Proof::ABSENT);
 
@@ -287,6 +324,13 @@ mod tests {
                 Retry::Again,
                 none,
                 CloseKind::LocalClose,
+            ),
+            (
+                Observed::RefusedHere(CloseCause::new(CloseKind::AdmissionRefused)),
+                Evidence::Local,
+                Retry::Again,
+                none,
+                CloseKind::AdmissionRefused,
             ),
             (
                 Observed::HandshakeUnverified,
@@ -392,6 +436,40 @@ mod tests {
             assert_eq!(failure.evidence(), evidence, "{end:?}");
             assert_eq!(failure.retry(), Retry::Again, "{end:?}");
             assert_eq!(failure.reached(), Reached::StreamOpened, "{end:?}");
+        }
+    }
+
+    /// After the channel, each side's end carries the cause it was
+    /// recorded with. The read side's record refusal is the far end's
+    /// (Destination, Final); the write side's is this node's encoder
+    /// (Local). A stream end shared code observed is this connector's
+    /// table row; this node's own close is Local. The edit that makes this
+    /// red is stamping the write side's record refusal as the far end's.
+    #[test]
+    fn each_sides_end_after_the_channel_is_stamped_by_this_connector() {
+        let rejected = CloseCause::new(CloseKind::RecordRejected);
+        assert_eq!(read_side_end(rejected), Observed::RecordRejected.end());
+        let own_encoder = write_side_end(rejected);
+        assert_eq!(own_encoder.failure().evidence(), Evidence::Local);
+        assert_eq!(own_encoder.cause(), rejected);
+        for side in [read_side_end, write_side_end] {
+            for end in [
+                StreamEnd::PeerClosed,
+                StreamEnd::IoError,
+                StreamEnd::SendQueueFull,
+            ] {
+                let kind = match end {
+                    StreamEnd::PeerClosed => CloseKind::PeerClosed,
+                    StreamEnd::IoError => CloseKind::IoError,
+                    StreamEnd::SendQueueFull => CloseKind::SendQueueFull,
+                };
+                let stamped = side(CloseCause::new(kind));
+                assert_eq!(stamped.failure(), stamp_stream_end(end), "{end:?}");
+                assert_eq!(stamped.cause().kind(), kind, "{end:?}");
+            }
+            let own = side(CloseCause::new(CloseKind::LocalClose));
+            assert_eq!(own.failure().evidence(), Evidence::Local);
+            assert_eq!(own.failure().reached(), Reached::StreamOpened);
         }
     }
 }

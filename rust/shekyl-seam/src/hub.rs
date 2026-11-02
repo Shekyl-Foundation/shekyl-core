@@ -22,14 +22,15 @@ use shekyl_capped_stream::{SendHalf, Session};
 use shekyl_peer_policy::InboundCeiling;
 use shekyl_timing_engine::{Clock, MonotonicClock, Tick};
 use shekyl_transport_layer::{
-    BanFeed, BanLeft, CloseCause, CloseKind, CloseResult, ConnectorId, Direction, Ipv4Subnet,
-    Links, ListedBan, OpenSocket, SocketId, Sockets,
+    BanFeed, BanLeft, CloseCause, CloseKind, CloseResult, ConnectorId, DialEnd, DialFailure,
+    Direction, Ipv4Subnet, Links, ListedBan, OpenSocket, Reached, Retry, SocketId, Sockets,
+    StreamEnd,
 };
 
 use crate::connection::{
     AdvertisedEndpoint, ChainLength, Connection, HeightMessage, RedialRefusal,
 };
-use crate::dial::{AttemptTask, Channel, ConnectFuture, Dial};
+use crate::dial::{AttemptTask, Channel, ConnectFuture, Dial, StampStreamEnd};
 use crate::endpoint::Endpoint;
 use crate::loopback::Loopback;
 use crate::post::{Post, SyncPayload};
@@ -59,7 +60,8 @@ enum Phase {
 struct Conn {
     open: Option<OpenSocket>,
     send: Option<SendHalf>,
-    cause: Option<CloseCause>,
+    /// The first end recorded on this row: the one the dialer reads.
+    end: Option<DialEnd>,
     phase: Phase,
     /// The session. Adoption fixes the endpoint. A claim does not replace
     /// it. A clone of this value is not the row.
@@ -203,9 +205,10 @@ impl Hub {
 
     /// Install the in-memory harness dialer. Zone bind installs a connector
     /// dialer instead, on the same [`Sockets`] this hub already holds.
-    pub fn install_loopback(&self, send_cap: usize) {
+    /// `stamp` is the connectors' own tables ([`StampStreamEnd`]).
+    pub fn install_loopback(&self, send_cap: usize, stamp: StampStreamEnd) {
         let sockets = self.lock().sockets.clone();
-        self.install_dial(Arc::new(Loopback::new(sockets, send_cap)));
+        self.install_dial(Arc::new(Loopback::new(sockets, send_cap, stamp)));
     }
 
     /// Close every row and join the dialer's threads.
@@ -216,7 +219,7 @@ impl Hub {
     pub fn shutdown(&self) {
         let ids: Vec<SocketId> = self.lock().conns.keys().copied().collect();
         for id in ids {
-            self.finish(id, CloseCause::new(CloseKind::LocalClose));
+            self.finish(id, DialEnd::local_close_after_channel());
         }
         let previous = {
             let mut slot = self.dial.write().expect("seam dial");
@@ -247,11 +250,9 @@ impl Hub {
     /// kept response. A confirm closes the channel unadopted. A channel
     /// that is never adopted leaves no trace in the registry.
     ///
-    /// No dialer is [`CloseKind::LocalClose`].
-    pub fn dial_channel(&self, endpoint: &Endpoint) -> Result<Channel, CloseCause> {
-        let dial = self
-            .current_dial()
-            .ok_or_else(|| CloseCause::new(CloseKind::LocalClose))?;
+    /// No dialer is this node's own failure before any I/O.
+    pub fn dial_channel(&self, endpoint: &Endpoint) -> Result<Channel, DialEnd> {
+        let dial = self.current_dial().ok_or_else(DialEnd::local_close)?;
         let ceiling = self.lock().ceiling;
         let now = self.now();
         dial.connect(endpoint, ceiling, now)
@@ -260,12 +261,10 @@ impl Hub {
     /// [`Self::dial_channel`] without blocking the caller: the outbound
     /// dialer's attempt task awaits it. The ceiling and the clock are read
     /// here, before the future is returned, so the connect holds no table
-    /// lock. With no dialer installed it is a ready `LocalClose`.
+    /// lock. With no dialer installed it is a ready [`DialEnd::local_close`].
     pub fn dial_channel_async(&self, endpoint: &Endpoint) -> ConnectFuture {
         let Some(dial) = self.current_dial() else {
-            return Box::pin(std::future::ready(Err(CloseCause::new(
-                CloseKind::LocalClose,
-            ))));
+            return Box::pin(std::future::ready(Err(DialEnd::local_close())));
         };
         let ceiling = self.lock().ceiling;
         let now = self.now();
@@ -288,7 +287,7 @@ impl Hub {
     /// The seam tests and the harness use this. The outbound dialer does
     /// not: it runs the handshake between the two. The caller starts the
     /// returned session's pump with [`Self::drive`].
-    pub fn connect(&self, endpoint: &Endpoint) -> Result<Attached, CloseCause> {
+    pub fn connect(&self, endpoint: &Endpoint) -> Result<Attached, DialEnd> {
         let channel = self.dial_channel(endpoint)?;
         self.adopt(channel.open, channel.session, channel.endpoint, channel.gap)
     }
@@ -317,7 +316,7 @@ impl Hub {
         session: Session,
         endpoint: Endpoint,
         gap: Option<oneshot::Sender<()>>,
-    ) -> Result<Attached, CloseCause> {
+    ) -> Result<Attached, DialEnd> {
         let id = open.id();
         let connection = Connection::open(id, endpoint, self.now());
         self.place(connection, open, session, gap)
@@ -412,19 +411,25 @@ impl Hub {
 
     /// Insert `connection` when its id is free.
     ///
-    /// A duplicate id releases `open` and is [`CloseKind::LocalClose`].
+    /// A duplicate id releases `open` and is this node's own close: two
+    /// channels on one socket id is a defect here, so it is also logged at
+    /// error.
     fn place(
         &self,
         connection: Connection,
         open: OpenSocket,
         session: Session,
         gap: Option<oneshot::Sender<()>>,
-    ) -> Result<Attached, CloseCause> {
+    ) -> Result<Attached, DialEnd> {
         let mut inner = self.lock();
         if inner.conns.contains_key(&connection.id()) {
             drop(inner);
             drop(open);
-            return Err(CloseCause::new(CloseKind::LocalClose));
+            tracing::error!(
+                id = connection.id().get(),
+                "a channel was adopted on a socket id the table already holds"
+            );
+            return Err(DialEnd::local_close_after_channel());
         }
         Ok(Self::write_row(
             &mut inner, &self.post, connection, open, session, gap,
@@ -447,7 +452,7 @@ impl Hub {
             Conn {
                 open: Some(open),
                 send: Some(send),
-                cause: None,
+                end: None,
                 phase: Phase::Arming,
                 connection,
                 established: false,
@@ -548,12 +553,12 @@ impl Hub {
     /// [`CloseKind::LocalClose`] and wakes the waiter.
     pub fn handler_armed(&self, id: SocketId, armed: bool) {
         if !armed {
-            self.finish(id, CloseCause::new(CloseKind::LocalClose));
+            self.finish(id, DialEnd::local_close_after_channel());
             return;
         }
         let mut inner = self.lock();
         if let Some(conn) = inner.conns.get_mut(&id) {
-            if conn.cause.is_none() && matches!(conn.phase, Phase::Arming) {
+            if conn.end.is_none() && matches!(conn.phase, Phase::Arming) {
                 conn.phase = Phase::Open;
             }
             Self::wake_row(conn);
@@ -603,7 +608,7 @@ impl Hub {
             Some(dial) => dial.drive(self, id, session),
             None => {
                 drop(session);
-                let _ = self.finish(id, CloseCause::new(CloseKind::LocalClose));
+                let _ = self.finish(id, DialEnd::local_close_after_channel());
             }
         }
     }
@@ -672,7 +677,7 @@ impl Hub {
             (Phase::Closed, _) => DeliverStep::Done(false),
             (Phase::Open, false) => DeliverStep::Done(true),
             (Phase::Open, true) => {
-                if conn.cause.is_some() {
+                if conn.end.is_some() {
                     return DeliverStep::Done(false);
                 }
                 conn.phase = Phase::Delivering;
@@ -702,10 +707,17 @@ impl Hub {
                 inner
                     .conns
                     .get(&id)
-                    .is_some_and(|conn| conn.cause.is_none() && !conn.strand_closed)
+                    .is_some_and(|conn| conn.end.is_none() && !conn.strand_closed)
             };
             if record_refusal {
-                self.finish(id, CloseCause::new(CloseKind::SessionRefused));
+                // This node's strand refused the session: its own act.
+                self.finish(
+                    id,
+                    DialEnd::new(
+                        DialFailure::local(Retry::Again, Reached::StreamOpened),
+                        CloseCause::new(CloseKind::SessionRefused),
+                    ),
+                );
             } else {
                 self.wake();
             }
@@ -713,7 +725,7 @@ impl Hub {
         }
         let mut inner = self.lock();
         if let Some(conn) = inner.conns.get_mut(&id) {
-            if conn.cause.is_none() && matches!(conn.phase, Phase::Delivering) {
+            if conn.end.is_none() && matches!(conn.phase, Phase::Delivering) {
                 conn.phase = Phase::Open;
             }
             Self::wake_row(conn);
@@ -740,11 +752,11 @@ impl Hub {
                     cause: None,
                 };
             };
-            if let Some(cause) = conn.cause {
+            if let Some(end) = conn.end {
                 return SendReport {
                     accepted: false,
                     found: true,
-                    cause: Some(cause.kind()),
+                    cause: Some(end.cause().kind()),
                 };
             }
             let Some(send) = conn.send.as_ref() else {
@@ -763,7 +775,7 @@ impl Hub {
                 cause: None,
             },
             Err(CloseKind::SendQueueFull) => {
-                self.finish(id, CloseCause::new(CloseKind::SendQueueFull));
+                self.finish(id, self.stamped(id, StreamEnd::SendQueueFull));
                 SendReport {
                     accepted: false,
                     found: true,
@@ -778,17 +790,40 @@ impl Hub {
         }
     }
 
-    /// Record [`CloseKind::LocalClose`] when no cause is recorded yet.
+    /// Record this node's own close when no end is recorded yet.
     pub fn close(&self, id: SocketId) {
-        self.finish(id, CloseCause::new(CloseKind::LocalClose));
+        self.finish(id, DialEnd::local_close_after_channel());
     }
 
-    /// Record `cause` when no cause is recorded yet, and post `closed`.
+    /// Record `end` when no end is recorded yet, and post `closed`.
     ///
-    /// The connector calls this when its read or write side finishes.
-    /// A transport failure does not ban the host.
-    pub fn finish(&self, id: SocketId, cause: CloseCause) -> CloseResult {
-        self.record(id, cause)
+    /// The seam's pump calls this with the end the connector stamped when
+    /// its read or write side finishes. The first end recorded on a row is
+    /// the one the dialer reads; a later one is logged and dropped. A
+    /// transport failure does not ban the host.
+    pub fn finish(&self, id: SocketId, end: DialEnd) -> CloseResult {
+        self.record(id, end)
+    }
+
+    /// `observed` on row `id`, stamped by the installed dialer from the
+    /// row's connector's own table. With no dialer installed there is no
+    /// table to read, so it is this node's own close.
+    fn stamped(&self, id: SocketId, observed: StreamEnd) -> DialEnd {
+        let cause = CloseCause::new(CloseKind::SendQueueFull);
+        let connector = self
+            .lock()
+            .conns
+            .get(&id)
+            .map(|conn| conn.connection.endpoint().connector());
+        match (self.current_dial(), connector) {
+            (Some(dial), Some(connector)) => {
+                DialEnd::new(dial.stamp_stream_end(connector, observed), cause)
+            }
+            _ => DialEnd::new(
+                DialFailure::local(Retry::Again, Reached::StreamOpened),
+                cause,
+            ),
+        }
     }
 
     /// The Levin handshake finished. Fires this row's gap sender, if it
@@ -857,10 +892,18 @@ impl Hub {
         }
     }
 
-    /// The cause that won, if the row is still here.
+    /// The D12 cause of the end that won, if the row is still here: for the
+    /// log and the C side.
     #[must_use]
     pub fn cause(&self, id: SocketId) -> Option<CloseCause> {
-        self.lock().conns.get(&id).and_then(|conn| conn.cause)
+        self.end(id).map(DialEnd::cause)
+    }
+
+    /// The first end recorded on row `id`, if the row is still here: the
+    /// one the dialer reads.
+    #[must_use]
+    pub fn end(&self, id: SocketId) -> Option<DialEnd> {
+        self.lock().conns.get(&id).and_then(|conn| conn.end)
     }
 
     /// Ban `host` until `until` and post `closed` for each live socket the
@@ -869,7 +912,7 @@ impl Hub {
         let now = self.now();
         let ids = self.lock().sockets.ban_host(host, until, now);
         for id in &ids {
-            self.finish(*id, CloseCause::new(CloseKind::LocalClose));
+            self.finish(*id, DialEnd::local_close_after_channel());
         }
         ids
     }
@@ -879,7 +922,7 @@ impl Hub {
         let now = self.now();
         let ids = self.lock().sockets.ban_subnet(subnet, until, now);
         for id in &ids {
-            self.finish(*id, CloseCause::new(CloseKind::LocalClose));
+            self.finish(*id, DialEnd::local_close_after_channel());
         }
         ids
     }
@@ -889,7 +932,7 @@ impl Hub {
     pub fn ban_host_permanent(&self, host: IpAddr) -> Vec<SocketId> {
         let ids = self.lock().sockets.ban_host_permanent(host);
         for id in &ids {
-            self.finish(*id, CloseCause::new(CloseKind::LocalClose));
+            self.finish(*id, DialEnd::local_close_after_channel());
         }
         ids
     }
@@ -899,7 +942,7 @@ impl Hub {
     pub fn ban_subnet_permanent(&self, subnet: Ipv4Subnet) -> Vec<SocketId> {
         let ids = self.lock().sockets.ban_subnet_permanent(subnet);
         for id in &ids {
-            self.finish(*id, CloseCause::new(CloseKind::LocalClose));
+            self.finish(*id, DialEnd::local_close_after_channel());
         }
         ids
     }
@@ -956,18 +999,27 @@ impl Hub {
         self.lock().sockets.listed(now)
     }
 
-    fn record(&self, id: SocketId, cause: CloseCause) -> CloseResult {
+    fn record(&self, id: SocketId, end: DialEnd) -> CloseResult {
         let poster = Arc::clone(&self.post);
         let dial = self.current_dial();
+        let cause = end.cause();
         let (open, send, gap, connector) = {
             let mut inner = self.lock();
             let Some(conn) = inner.conns.get_mut(&id) else {
                 return CloseResult::AlreadyClosed;
             };
-            if conn.cause.is_some() {
+            // Decided under the table lock: whichever end reaches this
+            // point first is the row's, and the dialer reads that one.
+            if let Some(first) = conn.end {
+                tracing::debug!(
+                    id = id.get(),
+                    recorded = ?first.cause().kind(),
+                    later = ?cause.kind(),
+                    "a later end on a closed row is not recorded"
+                );
                 return CloseResult::AlreadyClosed;
             }
-            conn.cause = Some(cause);
+            conn.end = Some(end);
             conn.phase = Phase::Closed;
             let open = conn.open.take();
             let send = conn.send.take();
