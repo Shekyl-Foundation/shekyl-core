@@ -17,6 +17,8 @@ import os
 import re
 from typing import NamedTuple, Optional
 
+import fsync_probe
+
 ROOT = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 DESIGN_DOC = os.path.join(ROOT, "docs/design/DAEMON_REDB_STORE.md")
 ARTIFACT_GLOB = os.path.join(ROOT, "docs/benchmarks/drs_bench_ibd_*.json")
@@ -30,8 +32,6 @@ ARTIFACT_GLOB = os.path.join(ROOT, "docs/benchmarks/drs_bench_ibd_*.json")
 SCHEMA_V1 = "shekyl_drs_bench_v1"
 SCHEMA = "shekyl_drs_bench_v2"
 ACCEPTED_SCHEMAS = (SCHEMA_V1, SCHEMA)
-# The share of a row's seconds the probe must have sampled (fsync_probe.MIN_COVERAGE).
-PROBE_MIN_COVERAGE = 0.95
 
 # A block hash and a sha256 of a binary are the same spelling: 32 bytes,
 # lowercase hex. One pattern, so neither site grows its own 64.
@@ -478,9 +478,10 @@ def probe_refusals(probe):
         r.append(f"probe.window_s is {window!r}: the row's window is not recorded")
     if not isinstance(samples, int) or samples <= 0:
         r.append(f"probe.samples is {samples!r}: the probe did not watch the row")
-    elif isinstance(window, (int, float)) and window >= 1 and samples < PROBE_MIN_COVERAGE * int(window):
-        r.append(f"probe took {samples} sample(s) in a {window} s window, under "
-                 f"{PROBE_MIN_COVERAGE:.0%}: it did not watch the row")
+    elif isinstance(window, (int, float)) and not isinstance(window, bool) \
+            and not fsync_probe.covers_window(samples, window):
+        r.append(f"probe took {samples} sample(s) in a {window:g} s window, under "
+                 f"{fsync_probe.MIN_COVERAGE:.0%}: it did not watch the row")
     stalls = probe.get("stalls")
     if not isinstance(stalls, int):
         r.append(f"probe.stalls is {stalls!r}, not a count")

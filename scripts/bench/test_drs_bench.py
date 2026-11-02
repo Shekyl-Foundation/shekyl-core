@@ -117,6 +117,17 @@ class ArtifactRefusals(unittest.TestCase):
     def test_refuses_a_probe_that_did_not_watch_the_row(self):
         self._refuse(lambda a: a["probe"].update(samples=10), "did not watch the row")
 
+    def test_a_fractional_probe_window_is_not_truncated_into_a_pass(self):
+        """10 samples in 10.9s is under 95% of the seconds. int(10.9) is 10
+        and would accept them."""
+        self._refuse(lambda a: a["probe"].update(window_s=10.9, samples=10),
+                     "did not watch the row")
+
+    def test_eleven_samples_cover_a_fractional_window(self):
+        a = valid_artifact()
+        a["probe"].update(window_s=10.9, samples=11)
+        self.assertEqual(D.artifact_refusals(a), [])
+
     def test_a_v1_record_is_read_without_the_probe(self):
         a = valid_artifact(schema_version=D.SCHEMA_V1)
         a.pop("probe")

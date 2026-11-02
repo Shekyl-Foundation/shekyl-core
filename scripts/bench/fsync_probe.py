@@ -45,6 +45,19 @@ POSTURE_MEDIAN_MS = 1.0
 # could not keep its cadence (a host too loaded to schedule it) has not
 # observed the window it claims to.
 MIN_COVERAGE = 0.95
+
+
+def covers_window(samples, window_s):
+    """Whether `samples` is at least [`MIN_COVERAGE`] of one sample per second
+    of `window_s`.
+
+    The debt is the window's length in seconds. Truncating that length
+    accepts a probe that missed more than the allowed share of a fractional
+    window; rounding it up demands a sample the window does not have.
+    """
+    return window_s > 0 and samples >= MIN_COVERAGE * window_s
+
+
 BLOCK = b"x" * 4096
 SLOTS = 1024
 
@@ -122,9 +135,9 @@ def row_refusal(samples, start, end):
     if end <= start:
         return f"the row's window [{start}, {end}] is empty"
     w = window(samples, start, end)
-    expected = int(end - start)
-    if expected > 0 and len(w) < MIN_COVERAGE * expected:
-        return (f"the probe took {len(w)} sample(s) in a {expected} s window "
+    owed = end - start
+    if owed > 0 and not covers_window(len(w), owed):
+        return (f"the probe took {len(w)} sample(s) in a {owed:g} s window "
                 f"(under {MIN_COVERAGE:.0%}): it did not watch the row")
     s = summary(w)
     if s["stalls"]:
@@ -139,10 +152,10 @@ def qualify(samples, minutes=QUALIFY_MINUTES):
     notes a reader must act on."""
     s = summary(samples)
     notes = []
-    expected = minutes * 60
-    if s["samples"] < MIN_COVERAGE * expected:
+    owed = minutes * 60
+    if not covers_window(s["samples"], owed):
         notes.append(f"{s['samples']} sample(s) for a {minutes}-minute soak "
-                     f"(under {MIN_COVERAGE:.0%} of {expected}): not qualified")
+                     f"(under {MIN_COVERAGE:.0%} of {owed}): not qualified")
     if s["stalls"]:
         notes.append(f"{s['stalls']} stall(s) above {STALL_MS:.0f} ms at rest: not qualified")
     qualified = not notes
@@ -154,10 +167,14 @@ def qualify(samples, minutes=QUALIFY_MINUTES):
 
 def _selftest():
     fails = []
+    passed = 0
 
     def check(name, got, want):
+        nonlocal passed
         if got != want:
             fails.append(f"{name}: got {got!r}, want {want!r}")
+        else:
+            passed += 1
 
     calm = [(1000.0 + i, 2.0) for i in range(60)]
     check("a calm window counts", row_refusal(calm, 1000.0, 1059.0), None)
@@ -169,6 +186,14 @@ def _selftest():
     r = row_refusal(sparse, 1000.0, 1059.0)
     check("a probe that missed the window refuses the row", r is not None and "watch" in r, True)
     check("an empty window refuses", row_refusal(calm, 5.0, 5.0) is not None, True)
+    # Ten samples in 10.9s is under 95% of the seconds. int(10.9) is 10 and
+    # would have accepted them.
+    short = [(float(i), 1.0) for i in range(10)]
+    check("a fractional second counts in the window",
+          row_refusal(short, 0.0, 10.9) is not None and "watch" in row_refusal(short, 0.0, 10.9),
+          True)
+    check("eleven samples cover a 10.9s window",
+          row_refusal([(float(i), 1.0) for i in range(11)], 0.0, 10.9), None)
 
     soak = [(float(i), 2.0) for i in range(QUALIFY_MINUTES * 60)]
     q = qualify(soak)
@@ -190,7 +215,7 @@ def _selftest():
         for f in fails:
             print("FAIL", f, file=sys.stderr)
         sys.exit(1)
-    print("fsync probe selftest: 12 cases OK")
+    print(f"fsync probe selftest: {passed} cases OK")
 
 
 def main(argv=None):
