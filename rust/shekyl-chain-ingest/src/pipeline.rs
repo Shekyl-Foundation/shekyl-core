@@ -89,6 +89,12 @@ pub struct PipelineConfig {
     pub window: NonZeroUsize,
     /// `form` workers hashing at once.
     pub hashers: NonZeroUsize,
+    /// Record [`crate::trace::Digest`] at every committed height. Legal
+    /// only when each [`Apply`] connects one block: a wider commit writes
+    /// the batch in one transaction, and a digest read after it names only
+    /// the batch tip. The baseline that asks for a row per height sets this
+    /// and a window of one. A normal run leaves it off and pays no scan.
+    pub digest_each_commit: bool,
 }
 
 impl PipelineConfig {
@@ -117,6 +123,7 @@ impl Default for PipelineConfig {
         Self {
             window: Self::DEFAULT_WINDOW,
             hashers: Self::default_hashers(),
+            digest_each_commit: false,
         }
     }
 }
@@ -126,6 +133,13 @@ impl Default for PipelineConfig {
 pub struct RunReport {
     /// Blocks connected, in order.
     pub connected: Vec<(BlockHeight, BlockHash)>,
+    /// `logical_state_digest_v0` at every height committed one block at a
+    /// time, and at each rewind's `to`. Empty unless
+    /// [`PipelineConfig::digest_each_commit`]: the scan is the store's own
+    /// read, and a run that did not ask for the table does not take it.
+    /// Keyed by height so a rewind drops the branch it popped and a
+    /// re-extension replaces those rows.
+    pub digests: BTreeMap<BlockHeight, crate::trace::Digest>,
     /// The census rows the connected blocks' verdicts exercised — the union
     /// of every `ChainValid`'s coverage.
     pub exercised: BTreeSet<&'static str>,
@@ -641,6 +655,18 @@ pub enum PipelineFault<SrcF, SubF> {
         /// The lowest poppable height.
         floor: BlockHeight,
     },
+    /// [`PipelineConfig::digest_each_commit`] needs one block per commit.
+    /// A wider window can put several blocks in one transaction, and a
+    /// digest read after that transaction names only the batch tip. The
+    /// run refuses that window before it connects anything, and refuses
+    /// again if an apply still covers more than one block.
+    #[error(
+        "a digest at every height needs one block per commit; {connected} blocks would share one"
+    )]
+    DigestWindow {
+        /// How many blocks one commit would cover.
+        connected: usize,
+    },
 }
 
 /// A barrier event waiting for the stage ahead of it to drain: no `Extend`
@@ -705,6 +731,14 @@ where
     S: Substrate + Send + Sync + 'static,
     S::Fault: Send + 'static,
 {
+    // A per-height digest is the digest after that height's own commit.
+    // Refusing a wider window here leaves the store untouched: the check
+    // inside the apply is the backstop if a one-block window still batches.
+    if cfg.digest_each_commit && cfg.window != NonZeroUsize::MIN {
+        return Err(PipelineFault::DigestWindow {
+            connected: cfg.window.get(),
+        });
+    }
     let form_at = next_height(store.begin_read()?.tip()?.recorded.map(|t| t.height));
     if source.first_height() != form_at {
         return Err(PipelineFault::Misaligned {
@@ -1128,6 +1162,31 @@ where
         if let Some(refused) = applied.refused {
             self.report.refused = Some(refused);
         }
+        if self.cfg.digest_each_commit {
+            self.record_commit_digest(&applied.connected).await?;
+        }
+        Ok(())
+    }
+
+    /// The digest at the one height `connected` names. An empty connect
+    /// committed nothing (a refusal) and records nothing. More than one
+    /// block in the commit is [`PipelineFault::DigestWindow`]: those
+    /// heights were not committed on their own.
+    async fn record_commit_digest(
+        &mut self,
+        connected: &[(BlockHeight, BlockHash)],
+    ) -> Result<(), PipelineFault<Src::Fault, S::Fault>> {
+        let height = match connected {
+            [(height, _)] => *height,
+            [] => return Ok(()),
+            several => {
+                return Err(PipelineFault::DigestWindow {
+                    connected: several.len(),
+                });
+            }
+        };
+        let digest = self.connector.ask(Digest).await.map_err(collapse)?;
+        self.report.digests.insert(height, digest);
         Ok(())
     }
 
@@ -1234,6 +1293,10 @@ where
             popped: rewound.popped(),
             digest,
         });
+        if self.cfg.digest_each_commit {
+            self.report.digests.retain(|height, _| *height <= to);
+            self.report.digests.insert(to, digest);
+        }
         // The popped heights' root comparisons were against the trace's
         // rows for a branch the chain has now left; the re-extension will
         // compare the canonical blocks at those heights.

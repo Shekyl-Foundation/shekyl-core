@@ -22,7 +22,7 @@ use shekyl_chain_store::lmdb_order::LmdbHashKey;
 use shekyl_chain_store::schema::{BLOCK_INFO, CURVE_TREE_ROOTS, SPENT_KEYS};
 use shekyl_chain_store::store::{ConnectState, StoreError, StoreInvariant};
 use shekyl_difficulty::{CumulativeDifficulty, SEEDHASH_EPOCH_BLOCKS, SEEDHASH_EPOCH_LAG};
-use shekyl_types::{BlockHash, CurveTreeRoot};
+use shekyl_types::{BlockHash, BlockHeight, CurveTreeRoot};
 use shekyl_units::AtomicUnits;
 
 use crate::connector::{Apply, Connector, ConnectorArgs, Digest, HashAt, RunEnd, RunFault};
@@ -54,6 +54,7 @@ fn cfg(window: usize) -> PipelineConfig {
     PipelineConfig {
         window: nz(window),
         hashers: nz(2),
+        digest_each_commit: false,
     }
 }
 
@@ -384,6 +385,61 @@ async fn a_corpus_replays_end_to_end_and_the_redb_digest_matches_the_trace_check
     );
     assert_eq!(report.metrics.blocks_formed, 5);
     assert_eq!(tip_of(&path).map(|t| t.0), Some(h(4)));
+    cleanup(&path);
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn a_one_block_window_records_the_store_digest_at_every_height() {
+    let path = tmp("pipeline-height-digests");
+    let chain = chain(5);
+    let bytes = corpus_of(&chain);
+    let mut source = CorpusReader::open(std::io::Cursor::new(&bytes)).expect("open");
+    let mut config = cfg(1);
+    config.digest_each_commit = true;
+    let report = run(
+        &mut source,
+        substrate(),
+        Arc::new(Metrics::new()),
+        GENESIS_RULES,
+        open_store(&path),
+        Arc::new(crate::trace::Trace::empty()),
+        config,
+    )
+    .await
+    .expect("the corpus replays one block per commit");
+    let block_heights: Vec<BlockHeight> = report.digests.keys().copied().collect();
+    assert_eq!(block_heights, vec![h(0), h(1), h(2), h(3), h(4)]);
+    assert_eq!(
+        report.digests[&h(4)],
+        expected_state(&chain),
+        "the last row is the store's digest of the whole chain"
+    );
+    cleanup(&path);
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn a_wider_commit_refuses_to_invent_a_digest_per_height() {
+    let path = tmp("pipeline-digest-window");
+    let chain = chain(5);
+    let bytes = corpus_of(&chain);
+    let mut source = CorpusReader::open(std::io::Cursor::new(&bytes)).expect("open");
+    let mut config = cfg(2);
+    config.digest_each_commit = true;
+    let fault = run(
+        &mut source,
+        substrate(),
+        Arc::new(Metrics::new()),
+        GENESIS_RULES,
+        open_store(&path),
+        Arc::new(crate::trace::Trace::empty()),
+        config,
+    )
+    .await
+    .expect_err("two blocks in one commit have one digest");
+    assert!(
+        matches!(fault, PipelineFault::DigestWindow { connected: 2 }),
+        "{fault:?}"
+    );
     cleanup(&path);
 }
 
@@ -1014,6 +1070,7 @@ async fn a_rewind_across_a_seed_epoch_step_claims_the_seed_from_the_store() {
         PipelineConfig {
             window: PipelineConfig::DEFAULT_WINDOW,
             hashers: nz(4),
+            digest_each_commit: false,
         },
     )
     .await

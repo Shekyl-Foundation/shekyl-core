@@ -338,6 +338,52 @@ jobs:
         if: '!cancelled()'
         run: python3 scripts/bench/test_drs_readback.py
 
+      - name: Run the fsync probe selftest
+        # The budget's control channel (DAEMON_REDB_STORE.md §1.3a rule 2):
+        # a stall inside a row's window refuses the row, a probe that missed
+        # the window refuses it, and the 30-minute soak's verdict asks for the
+        # write-cache posture on a microsecond median rather than failing it.
+        if: '!cancelled()'
+        run: python3 scripts/bench/fsync_probe.py --selftest
+
+      - name: Run the regtest session selftest
+        # The durability harnesses compose one session: a published tip is
+        # the chain length minus one, and a header range is read in chunks
+        # of the restricted listener's cap.
+        if: '!cancelled()'
+        run: python3 scripts/bench/drs_regtest.py --selftest
+
+      - name: Run the catch-up harness selftest
+        # PB-D2 / PB-D3's mode: a catch-up artifact needs its probe window
+        # with no stall, the subject at the seed's tip, the week's block
+        # count at the row's transaction load, and a proof-of-work share,
+        # so a miss at a release cut can name its cause.
+        if: '!cancelled()'
+        run: python3 scripts/bench/drs_catchup.py --selftest
+
+      - name: Run the crash harness selftest
+        # PB-S1's judge: a reopened tip below the last acknowledged one, a
+        # digest off a clean replay to that tip, or a tip on no known chain
+        # fails the trial. A run under 200 trials or missing one of PB-S1's
+        # points is written and exits non-zero; row_refusals names the gap.
+        if: '!cancelled()'
+        run: python3 scripts/bench/drs_crash.py --selftest
+
+      - name: Run the transaction source selftest
+        # The bench reads the source's lines: an accept, the depth gate and a
+        # stop are each one event, the test runner's own lines are none, and
+        # a pool missing an accepted submit names it.
+        if: '!cancelled()'
+        run: python3 scripts/bench/drs_txsource.py --selftest
+
+      - name: Run the power-loss harness selftest
+        # The replay reads replay-log's find answers, rebuilds the device at
+        # every flush and FUA boundary and between them, attributes each
+        # point the flush that had already committed when the tip was
+        # published, and judges it as PB-S1.
+        if: '!cancelled()'
+        run: python3 scripts/bench/drs_powerloss.py --selftest
+
       - name: Run RPC column capture selftest
         # `rpc_capture.py` writes one file per chain read and reserves the
         # loopback port the kept-chain capture binds. The capture's own

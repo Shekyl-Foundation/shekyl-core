@@ -151,8 +151,9 @@ fn trace_parent(path: &Path) -> &Path {
 /// The destination is not opened until the sibling is complete. The sibling
 /// is created with `create_new`, so this attempt never truncates a file
 /// another attempt already holds, and the cleanup below removes only the
-/// sibling this attempt created.
-fn publish_bytes(path: &Path, bytes: &[u8]) -> std::io::Result<()> {
+/// sibling this attempt created. The height-digest table publishes through
+/// this same rename.
+pub(crate) fn publish_bytes(path: &Path, bytes: &[u8]) -> std::io::Result<()> {
     let sibling = sibling_path(path)?;
     let mut file = std::fs::OpenOptions::new()
         .write(true)
