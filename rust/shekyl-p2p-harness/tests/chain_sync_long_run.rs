@@ -46,18 +46,16 @@ const LIMIT: Duration = Duration::from_secs(48 * 60 * 60);
 /// Proofs per slot in one timed job.
 const PROOFS_PER_SLOT: usize = 32;
 
-/// The captured corpora, smallest first, and the last height read when
-/// not the tip. A block at 98 in `bond-post` and in `emission-claim`
-/// carries a transaction kind that is retired, which the reader refuses:
-/// `bond-post` is read through 97, as the loopback suite reads it, and
-/// `emission-claim` is left out, since its first 97 blocks add nothing the
-/// others do not.
-const CORPORA: [(&str, Option<u64>); 5] = [
-    ("spend-1in-2out", None),
-    ("bond-post", Some(97)),
-    ("limit-full", None),
-    ("median-full", None),
-    ("spend-depth3", None),
+/// The captured corpora, smallest first, each read to its tip. The block
+/// at 98 in `emission-claim`, still the C++ daemon's capture, carries a
+/// transaction kind that is retired, which the reader refuses; the chain
+/// is left out, since its first 97 blocks add nothing the others do not.
+const CORPORA: [&str; 5] = [
+    "spend-1in-2out",
+    "bond-post",
+    "limit-full",
+    "median-full",
+    "spend-depth3",
 ];
 
 /// The node's draw source: seeded, so a run repeats.
@@ -176,9 +174,9 @@ async fn body_phase_on_the_captured_corpora() {
         .with_env_filter(tracing_subscriber::EnvFilter::from_default_env())
         .with_test_writer()
         .try_init();
-    for (shape, last) in CORPORA {
+    for shape in CORPORA {
         let corpus = Corpus::open(shape);
-        let steps = last.map_or_else(|| corpus.steps(), |last| corpus.steps_through(last));
+        let steps = corpus.steps();
         let held = source(&corpus, &steps).await;
         let (count, _, _) = held.tip().expect("a chain");
         let bytes: usize = steps

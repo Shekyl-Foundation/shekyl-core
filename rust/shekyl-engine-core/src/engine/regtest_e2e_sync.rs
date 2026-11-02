@@ -332,18 +332,24 @@ async fn a_node_and_an_alpha_11_node_refuse_each_other_cleanly() {
     );
 }
 
-/// **An offline testnet node is synced at open, and mines** (CS-Q2 step 8,
-/// Rick 2026-11-01). Both connectors off is the operator's declaration
-/// that the node has no network to be behind: it reads `Synced` from open
-/// on every network, and `generateblocks` drives the built-in miner at the
-/// network's own difficulty (testnet has no fixed one; one block takes
-/// real proof of work).
+/// **An offline testnet node is synced at open** (CS-Q2 step 8, Rick
+/// 2026-11-01). Both connectors off is the operator's declaration that the
+/// node has no network to be behind: it reads `Synced` from open on every
+/// network, so a testnet node with no peer reports synchronized and posts
+/// a template for its miner. Testnet, because its default is the open
+/// network: on it the declaration is the only thing that makes a lone
+/// node synced.
 ///
-/// Red before the declaration was built: the node read `NoView` forever
-/// and `generateblocks` was refused `mine.not_synced`.
+/// The mining half is `an_offline_regtest_node_mines`: testnet mines at
+/// the network's own difficulty, real proof of work whose time is a draw
+/// (5 s, 123 s and past 180 s on one 2-CPU runner, 2026-11-02), so one
+/// block there is not a test with a deadline.
+///
+/// Red before the declaration was built: the node read `NoView` forever,
+/// `get_info` reported it unsynchronized and it posted no template.
 #[tokio::test(flavor = "multi_thread")]
-#[ignore = "Track-2 regtest: requires SHEKYLD_BIN; one testnet daemon, real proof of work"]
-async fn an_offline_testnet_node_is_synced_and_mines() {
+#[ignore = "Track-2 regtest: requires SHEKYLD_BIN; one testnet daemon"]
+async fn an_offline_testnet_node_is_synced_at_open() {
     let daemon = RegtestDaemon::start_on_testnet().await;
     let info = daemon
         .rpc
@@ -354,6 +360,29 @@ async fn an_offline_testnet_node_is_synced_and_mines() {
         info.health.synchronized,
         "an offline node is not synchronized at open"
     );
+    // Readiness waited for this post; the test states it as its own
+    // subject: a synced node's follower posts a job, an unsynced one's
+    // answers `mine.not_synced` here.
+    daemon
+        .rpc
+        .json_rpc_call::<GetMinerDataResponse>("get_miner_data", None)
+        .await
+        .expect("an offline node posts a template at open");
+}
+
+/// **An offline regtest node mines** (CS-Q2 step 8, Rick 2026-11-01): the
+/// other half of the test above, on the network whose `dev-difficulty`
+/// makes one block a few milliseconds of work. The declaration is read by
+/// network-independent code (`Declaration::state_without_sessions`), so
+/// what this proves of `generateblocks` on an offline node holds on
+/// testnet too.
+///
+/// Red before the declaration was built: `generateblocks` was refused
+/// `mine.not_synced` past the window.
+#[tokio::test(flavor = "multi_thread")]
+#[ignore = "Track-2 regtest: requires SHEKYLD_BIN; one regtest daemon"]
+async fn an_offline_regtest_node_mines() {
+    let daemon = RegtestDaemon::start().await;
     let before = daemon.height().await;
     // The follower posts its first job one pass after the state at open is
     // published, so the first answers can be `starting` or `not_synced`; a
@@ -371,7 +400,7 @@ async fn an_offline_testnet_node_is_synced_and_mines() {
                 tokio::time::sleep(Duration::from_millis(250)).await;
             }
             Err(e) => daemon.panic_with_log(
-                "generateblocks on an offline testnet node",
+                "generateblocks on an offline regtest node",
                 format!("{e:?}"),
             ),
         }

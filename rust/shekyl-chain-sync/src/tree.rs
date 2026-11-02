@@ -138,6 +138,11 @@ impl HeaderTree {
         if self.invalid.contains(&hash) {
             return;
         }
+        // A header already in `T` is not inserted again: a second insert
+        // would make it a tip above the children it already has.
+        if self.nodes.contains_key(&hash) {
+            return;
+        }
         let parent = judged.previous();
         let height = judged.connecting().to_raw();
         let parent_in_tree = self.nodes.contains_key(&parent);
@@ -178,10 +183,76 @@ impl HeaderTree {
         if parent_in_tree {
             self.tips.remove(&parent);
         }
-        self.tips.insert(hash, work);
+        // Children that reached `T` before this header each head a branch
+        // anchored at it. They are this header's branch now, and a header
+        // with a valid child is not a tip. Until 2026-11-02 the parent was
+        // made a tip over them: the children's branch stayed anchored at
+        // a hash not on main, so `select` could never reach them, and the
+        // parent, selected as `H*`, drew the same headers again and again.
+        let live = self.adopt_children(hash, height, branch);
+        if !live {
+            self.tips.insert(hash, work);
+        }
         if excluded {
             self.mark_invalid(hash);
         }
+    }
+
+    /// `hash` has just entered `T` at `height`. Each child already in `T`
+    /// opened a branch anchored at `hash` while it was absent: that
+    /// branch's headers move to `branch`, its record goes, and their skip
+    /// pointers are set now that the ancestors below them are in `T`. The
+    /// children are read from the height above, by parent: the children
+    /// index has no entry for a header that left `T` when main connected
+    /// it, which is how an orphan is made. `true` when a child not marked
+    /// invalid remains, so `hash` is not a tip.
+    fn adopt_children(&mut self, hash: BlockHash, height: u64, branch: u64) -> bool {
+        let kids: Vec<BlockHash> = self
+            .by_height
+            .get(&height.saturating_add(1))
+            .map(|above| {
+                above
+                    .iter()
+                    .copied()
+                    .filter(|kid| self.nodes.get(kid).is_some_and(|node| node.parent == hash))
+                    .collect()
+            })
+            .unwrap_or_default();
+        let mut live = false;
+        for kid in kids {
+            let Some(orphaned) = self.nodes.get(&kid).map(|node| node.branch) else {
+                continue;
+            };
+            self.children.entry(hash).or_default().insert(kid);
+            if !self.invalid.contains(&kid) {
+                live = true;
+            }
+            if orphaned == branch {
+                continue;
+            }
+            self.branches.remove(&orphaned);
+            // Parents before children, so each skip lookup walks ancestors
+            // whose own skips are already set.
+            let mut stack = vec![kid];
+            while let Some(at) = stack.pop() {
+                let Some((parent, height)) = self
+                    .nodes
+                    .get(&at)
+                    .map(|node| (node.parent, node.judged.connecting().to_raw()))
+                else {
+                    continue;
+                };
+                let skip = self.ancestor_at(parent, BlockHeight::from_raw(skip_height(height)));
+                if let Some(node) = self.nodes.get_mut(&at) {
+                    node.branch = branch;
+                    node.skip = skip;
+                }
+                if let Some(below) = self.children.get(&at) {
+                    stack.extend(below.iter().copied());
+                }
+            }
+        }
+        live
     }
 
     /// Connecting height of the first header of `hash`'s branch still in `T`.

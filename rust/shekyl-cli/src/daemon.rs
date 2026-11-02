@@ -15,6 +15,7 @@ use serde_json::Value;
 use std::fmt;
 
 use shekyl_rpc_transport::network_posture::{host_of, is_loopback_host};
+use shekyl_rpc_types::mining::MineSpeed;
 use shekyl_rpc_types::GetInfoResponse;
 
 /// Errors from the daemon RPC client with differentiated failure modes.
@@ -98,7 +99,7 @@ impl std::error::Error for DaemonError {}
 #[derive(Debug, Deserialize)]
 pub struct MiningStatus {
     pub active: bool,
-    pub speed: u64,
+    pub speed: MineSpeed,
     pub threads_count: u64,
     #[serde(default)]
     pub address: String,

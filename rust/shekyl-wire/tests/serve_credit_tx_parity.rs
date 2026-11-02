@@ -28,7 +28,7 @@ use std::path::PathBuf;
 
 use serde_json::Value;
 use shekyl_types::{ArchivalLength, BlockHash, PrunableHash};
-use shekyl_wire::{Ct, CtBase, Input, Prunable, Transaction, TxPrefix};
+use shekyl_wire::{Ct, CtBase, Input, Prunable, SkeletonTx, Transaction, TxPrefix};
 
 const GATE2_FIXTURE: &str =
     "../shekyl-archival-retention/tests/fixtures/gate2_serve_credit_kat_v1.json";
@@ -149,14 +149,15 @@ fn serve_credit_tx_serializes_to_the_pinned_bytes() {
     let back = Transaction::from_bytes(&bytes).expect("parse");
     assert_eq!(back, tx);
 
-    // The PRUNED identity on the arm with no `pqc_auths` component: the
+    // The SKELETON identity on the arm with no `pqc_auths` component: the
     // prunable region is the full form's tail after the pruned prefix, and
-    // mixing its digest and the archival length back in via
-    // `hash_with_supplied_prunable` must reproduce the pinned hash — the same
-    // recomputation the engine performs on a pruned reply, against the txid
-    // the C++ leg also asserts (same fixture). With no `pqc_auths`, the
-    // archival length is the region's own length. The spend arm has its own
-    // pin (`pruned_tx_hash_parity_v1.json`).
+    // mixing its digest and the archival length back in — with no third
+    // operand — via `SkeletonTx::bind` must reproduce the pinned hash: the
+    // same recomputation the engine performs on a pruned reply, against the
+    // txid the C++ leg also asserts (same fixture). With no `pqc_auths`, the
+    // archival length is the region's own length, and the pruned prefix IS
+    // the skeleton's pruned segment. The spend arm has its own pin
+    // (`pruned_tx_hash_parity_v1.json`).
     let pruned_form = {
         let mut t = build_tx(kept, pruned);
         let Ct::Fcmp { prunable, .. } = &mut t.ct else {
@@ -208,9 +209,21 @@ fn serve_credit_tx_serializes_to_the_pinned_bytes() {
         "the txid is not the four-word mix"
     );
 
+    // A carrying prefix with no `pqc_auths` hashes 3-part, so the skeleton's
+    // third operand is `None` and the binding accepts it as such (the
+    // serve-credit form is why the arity check is one-directional).
+    let served = SkeletonTx {
+        unprunable: pruned_form,
+        prunable_hash: PrunableHash::from_bytes(digest),
+        pqc_auth_hash: None,
+        archival_len,
+    };
     assert_eq!(
-        hex_str(tx.hash_with_supplied_prunable(PrunableHash::from_bytes(digest), archival_len)),
+        hex_str(served.txid().expect("the skeleton parses")),
         pin["tx_hash_hex"].as_str().unwrap(),
-        "pruned identity (supplied digest and length) diverged from the pinned hash"
+        "skeleton identity (supplied digest and length) diverged from the pinned hash"
     );
+    served
+        .bind(tx.hash())
+        .expect("the serve-credit skeleton binds to its pinned txid");
 }

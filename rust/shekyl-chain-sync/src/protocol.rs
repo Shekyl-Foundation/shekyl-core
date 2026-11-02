@@ -236,6 +236,34 @@ pub enum Command<K> {
         /// The missing indices.
         indices: Vec<u64>,
     },
+    /// This session's headers from `H*` yielded nothing, and it is not
+    /// drawn to extend `H*` again until its claim or `H*` changes. A
+    /// record: the owner logs it, and nothing is sent.
+    HeadersSpent {
+        /// The session.
+        session: K,
+        /// What the response, or its proof, came to.
+        cause: Spent,
+    },
+}
+
+/// Why a session's headers from `H*` yielded nothing
+/// ([`Command::HeadersSpent`]). Each is an answer that asking again, from
+/// the same `H*`, would repeat.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Spent {
+    /// The response named no header `T` lacked, and the peer said its
+    /// chain ends there.
+    Exhausted,
+    /// The run ended, at the peer's word, without beating `H*`.
+    BelowStar,
+    /// The headers could not be judged where they were placed: the view
+    /// moved under them, or the run's own record did not line up.
+    Stale,
+    /// The proof's cache was not held.
+    CacheAbsent,
+    /// The run's headers were gone when the proof answered.
+    Gone,
 }
 
 /// Which hasher class a [`Command::Prove`] runs under. The executor maps

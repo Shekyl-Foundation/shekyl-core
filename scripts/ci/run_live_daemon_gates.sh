@@ -160,8 +160,14 @@ ARMED=(
   # 2026-11-01 on the #1237 head before it (a95bc9afa5): the offline
   # testnet node posted no template at open, refused mine.not_synced
   # (no_view); the closed node whose last peer left refused
-  # mine.not_synced. Green 106 s and 49 s, local Release daemon.
-  engine::regtest_e2e::sync::an_offline_testnet_node_is_synced_and_mines
+  # mine.not_synced. Green 106 s and 49 s, local Release daemon. The
+  # testnet gate mined one block then, real proof of work at the
+  # network's difficulty: 5 s, 123 s and past the 180 s HTTP timeout on
+  # one 2-CPU runner (2026-11-02), so it was split: the testnet half
+  # reads synced and a posted template at open, the regtest half mines
+  # under dev-difficulty.
+  engine::regtest_e2e::sync::an_offline_testnet_node_is_synced_at_open
+  engine::regtest_e2e::sync::an_offline_regtest_node_mines
   engine::regtest_e2e::sync::a_closed_node_whose_peer_is_down_mines_and_opens_when_it_arrives
 )
 
@@ -256,7 +262,14 @@ ARMED_SLOW=(
 #     linked; alpha.11 never takes the chain and both stay up. Needs the
 #     released binary as SHEKYLD_ALPHA11_BIN, which CI does not have; run
 #     by hand before a release that changes the wire.
+#   bench_source::bench_tx_source — the performance budget's transaction
+#     source (DAEMON_REDB_STORE.md §1.3a, PB-S1's pool point). A load
+#     generator driven by scripts/bench/drs_crash.py against a daemon it
+#     did not start (SHEKYL_BENCH_DAEMON_RPC); without that daemon it has
+#     nothing to do. Not a pass/fail proposition: the crash harness judges
+#     the subject, and the source only feeds it.
 DECIDED_DARK=(
+  engine::regtest_e2e::bench_source::bench_tx_source
   engine::regtest_e2e::capture_chain_keeps_its_datadir
   engine::regtest_e2e::sync::a_node_and_an_alpha_11_node_refuse_each_other_cleanly
   engine::regtest_e2e::generate_ct2_tier_b_fixture

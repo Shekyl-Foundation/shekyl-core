@@ -1140,7 +1140,7 @@ at `c72048125560c11112daaf464a6acfa65cc3e1da`     curve-tree root CEN-B5 compare
     `insert`/`upsert` writes; Q7 `RuleSet` an explicit input, `AdmissionPolicy`
     separate; Q8 one validation crate with no store handle, replay-that-
     validates as D11's mechanism, the C++ oracle *graded* through
-    `rust/shekyl-chain-store/src/conformance.rs`, a negative fixture per rule (replay catches
+    (at `43fadfb65e6d191cb3606e8ea1177c6c6942cd22`) `rust/shekyl-chain-store/src/conformance.rs`, a negative fixture per rule (replay catches
     over-rejection only), `RuleCoverage` persisted so a partial validator
     cannot mint parity evidence, and a completeness gate that **partitions
     by flag first** (`implemented / 130` would have counted five relay-policy

@@ -38,7 +38,10 @@ use shekyl_wire::{Block, PowBlob};
 #[path = "chain_sync/support.rs"]
 mod support;
 
-use support::{claim, claim_of, logs, rng, source, spend, wait_synced, CLOSES, LIMIT, PROFILES};
+use support::{
+    claim, claim_of, logs, rng, source, spend, wait_synced, CLOSES, LIMIT, PROFILES, RESPONSES,
+    SEATED,
+};
 
 /// The model's closes on node `tag`, by session.
 fn model_closes(tag: &str) -> HashMap<u64, String> {
@@ -145,6 +148,21 @@ async fn a_fresh_node_syncs_a_corpus_from_two_honest_peers_hashing_headers_only(
 /// The owner logs this sink once the sync reaches the best chain, which is
 /// the line the per-block profile is read from. Red edit: the owner does
 /// not time a body response's transit.
+///
+/// **And records each response and each seated span** (CS-5 §10, the
+/// measurement the constants are read from): the sink holds every
+/// response's bytes, the header responses' count, bytes and round trip,
+/// and the spans the door seated; the owner logs each response and each
+/// seated span at debug, which the fleet's per-response reading needs.
+/// Red edits, one record at a time: the owner passes no body bytes, times
+/// no header response, counts no seated span, or logs neither line.
+///
+/// The seat wait itself is not red-checkable here: the model offers only
+/// what the door last reported room for, and on loopback with 64 seats
+/// nothing else takes one, so no span is refused for room. The sink's
+/// `seat_waits` is asserted to be consistent with that (every seated span
+/// is counted, and a wait is never more than a seated span), not to be
+/// non-zero.
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn a_sync_times_every_phase_of_each_block() {
     logs();
@@ -195,6 +213,85 @@ async fn a_sync_times_every_phase_of_each_block() {
         "apply: {} blocks over {} runs for {fetched} blocks",
         profile.applied_blocks,
         profile.applies
+    );
+    // The responses' bytes: every body response carried its blocks.
+    assert!(
+        profile.transit_bytes > 0,
+        "transit: {} bytes over {} spans",
+        profile.transit_bytes,
+        profile.transit_spans
+    );
+    // The header responses: the chain fits one, and it was timed.
+    assert!(
+        profile.header_responses > 0 && profile.header_bytes > 0 && profile.header_ns_total > 0,
+        "headers: {} responses, {} bytes, {} ns",
+        profile.header_responses,
+        profile.header_bytes,
+        profile.header_ns_total
+    );
+    // The door seated every span the model offered, and no more spans
+    // waited for a seat than were seated.
+    assert!(
+        profile.seated_spans >= profile.transit_spans && profile.seated_spans > 0,
+        "seats: {} spans seated for {} fetched",
+        profile.seated_spans,
+        profile.transit_spans
+    );
+    assert!(
+        profile.seat_waits <= profile.seated_spans,
+        "seats: {} waits over {} seated spans",
+        profile.seat_waits,
+        profile.seated_spans
+    );
+    // The per-response lines, one per header and body response, each
+    // carrying its bytes: the fleet reads the rate floor off these. The
+    // lines are read after the snapshot, and a response may land between
+    // the two, so a line count is at least the snapshot's.
+    let responses: Vec<_> = RESPONSES
+        .lock()
+        .expect("responses")
+        .iter()
+        .filter(|(tag, _)| tag == "profile")
+        .map(|(_, response)| response.clone())
+        .collect();
+    let (headers, bodies): (Vec<_>, Vec<_>) = responses
+        .iter()
+        .partition(|response| response.kind == "headers");
+    assert!(
+        headers.len() >= usize::try_from(profile.header_responses).expect("small")
+            && headers.iter().all(|response| response.bytes > 0),
+        "header response lines: {headers:?} for {} responses",
+        profile.header_responses
+    );
+    assert!(
+        bodies.len() >= usize::try_from(profile.transit_spans).expect("small")
+            && bodies
+                .iter()
+                .all(|response| response.kind == "bodies" && response.bytes > 0)
+            && bodies
+                .iter()
+                .map(|response| response.items.unwrap_or(0))
+                .sum::<u64>()
+                >= profile.transit_blocks,
+        "body response lines: {bodies:?} for {} spans",
+        profile.transit_spans
+    );
+    // The seated lines, one per span the door admitted.
+    let seated: Vec<_> = SEATED
+        .lock()
+        .expect("seated")
+        .iter()
+        .filter(|(tag, _)| tag == "profile")
+        .map(|(_, seated)| seated.clone())
+        .collect();
+    assert!(
+        seated.len() >= usize::try_from(profile.seated_spans).expect("small")
+            && seated.iter().map(|seated| seated.blocks).sum::<u64>() >= fetched
+            && seated.iter().filter(|seated| seated.waited).count()
+                >= usize::try_from(profile.seat_waits).expect("small"),
+        "seated lines: {seated:?} for {} seated spans, {} waits",
+        profile.seated_spans,
+        profile.seat_waits
     );
     // The line the profile is read from: logged as the sync reached the
     // best chain, carrying the fetched blocks' transit.

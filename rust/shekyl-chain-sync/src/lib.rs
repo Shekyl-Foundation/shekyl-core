@@ -18,6 +18,8 @@
 #![deny(unsafe_code)]
 
 #[cfg(test)]
+mod announce_connected_tests;
+#[cfg(test)]
 mod announce_tests;
 #[cfg(test)]
 mod continuation_tests;
@@ -30,6 +32,8 @@ mod long_run;
 #[cfg(test)]
 mod offer_tests;
 #[cfg(test)]
+mod page_overlap_tests;
+#[cfg(test)]
 mod proof;
 #[cfg(test)]
 mod relay_tests;
@@ -39,6 +43,8 @@ mod scaling_tests;
 mod scenarios;
 #[cfg(test)]
 mod select_tests;
+#[cfg(test)]
+mod spent_tests;
 #[cfg(test)]
 mod stall_tests;
 
@@ -58,7 +64,7 @@ pub use claim::{PayloadRefused, PeerClaim};
 pub use locator::locator;
 pub use model::{
     BoundArrival, CachePlan, ClaimError, CloseCause, Command, Event, HashClass, Job, OfferedBody,
-    Outcome, ProveItem, Proved, Requesting, Sync, BODY_REQUESTS_IN_FLIGHT, SYNC_RATE_FLOOR,
+    Outcome, ProveItem, Proved, Requesting, Spent, Sync, BODY_REQUESTS_IN_FLIGHT, SYNC_RATE_FLOOR,
 };
 pub use shekyl_chain_rules::HeaderView;
 pub use state::{Declaration, SyncState};

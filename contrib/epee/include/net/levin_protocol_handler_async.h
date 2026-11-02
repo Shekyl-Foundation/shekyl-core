@@ -34,9 +34,11 @@
 #include <boost/smart_ptr/make_shared.hpp>
 
 #include <atomic>
+#include <chrono>
 #include <cstdint>
 #include <deque>
 #include <memory>
+#include <thread>
 
 #include "levin_base.h"
 #include "buffer.h"
@@ -402,9 +404,17 @@ public:
       m_config.del_connection(this);
     }
 
-    for (size_t i = 0; i < 60 * 1000 / 100 && 0 != m_wait_count; ++i)
+    // Monotonic. Past this bound the connection is released with a handler
+    // still counted. A wall-clock deadline would stretch by a clock set back.
+    constexpr std::chrono::seconds handler_wait{60};
+    constexpr std::chrono::milliseconds handler_wait_step{100};
+    static_assert(handler_wait % handler_wait_step == std::chrono::milliseconds::zero(),
+      "the handler wait is a whole number of steps");
+    constexpr size_t handler_wait_steps =
+      static_cast<size_t>(handler_wait / handler_wait_step);
+    for (size_t step = 0; step < handler_wait_steps && 0 != m_wait_count; ++step)
     {
-      misc_utils::sleep_no_w(100);
+      std::this_thread::sleep_for(handler_wait_step);
     }
     CHECK_AND_ASSERT_MES_NO_RET(0 == m_wait_count, "Failed to wait for operation completion. m_wait_count = " << m_wait_count.load());
 

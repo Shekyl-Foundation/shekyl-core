@@ -150,7 +150,8 @@ pub async fn get_height(State(state): State<Arc<AppState>>, _body: String) -> im
     }
 }
 /// `GET|POST /get_transactions` (alias `/gettransactions`) over the store
-/// and the pool. `decode_as_json` is refused: epee's rendering is gone.
+/// and the pool: the skeleton under `prune`, else the whole body with a
+/// discarded one answered `archived` (`SB-Q2`).
 pub async fn get_transactions(
     State(state): State<Arc<AppState>>,
     Extension(authority): Extension<Authority>,

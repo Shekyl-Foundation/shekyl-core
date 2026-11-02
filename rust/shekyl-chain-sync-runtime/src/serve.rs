@@ -18,10 +18,11 @@
 //! A body request names hashes. Each one on the main chain is answered with
 //! its block, its listed transactions and its attestation witness, and
 //! [`BodyPlanner`] decides what is sent, deferred and missed; a body the
-//! budget defers is never read. Until DRS-SB's
-//! discard lands every transaction is held whole and is served
-//! [`TxBody::Full`]. One whose prunable region, or `pqc_auths` region, this
-//! node no longer holds is served as a [`SkeletonTx`].
+//! budget defers is never read. A transaction whose archival good this
+//! node holds is served [`TxBody::Full`]; one whose good the retention
+//! prune has discarded is served as its skeleton
+//! ([`shekyl_chain_store::store::TxRecord::skeleton_of`], the store's one
+//! constructor), which the requester rebinds by `SkeletonTx::txid`.
 //!
 //! A request for an announced block's missing transactions (2009, CS-5 §6)
 //! names the block and indices into its transaction list. It is answered
@@ -32,16 +33,14 @@
 //! fault, and it is not answered.
 
 use shekyl_chain_rules::AtHeight;
-use shekyl_chain_store::store::{
-    AtIndex, ChainStore, Prunable, ReadSnapshot, StoreError, TxRecord,
-};
+use shekyl_chain_store::store::{ArchivalGood, AtIndex, ChainStore, ReadSnapshot, StoreError};
 use shekyl_levin::{
     body_budget_bytes, BlockCompleteEntry, BodyPlanner, NewCompactBlock, RequestBodies,
     RequestCompactMissingTx, RequestHeaders, ResponseBodies, ResponseHeaders, TxBlobEntry,
     HASH_SIZE, HEADERS_RESPONSE_BYTES,
 };
 use shekyl_types::{BlockCount, BlockHash, BlockHeight, TxHash};
-use shekyl_wire::{BlockBody, SkeletonTx, TxBody};
+use shekyl_wire::{BlockBody, TxBody};
 
 /// Answer a header request from `store`.
 ///
@@ -211,15 +210,14 @@ fn tx_body(snap: &ReadSnapshot<'_>, txid: &TxHash) -> Result<Option<TxBody>, Sto
     let Some(record) = snap.tx_record(txid)? else {
         return Ok(None);
     };
-    Ok(match snap.tx_prunable(record.location.id)? {
-        AtIndex::Recorded(Prunable::Retained(prunable)) => {
-            let skeleton = skeleton_of(&record);
-            Some(match record.wire_bytes(prunable) {
-                Some(bytes) => TxBody::Full(bytes),
-                None => TxBody::Skeleton(skeleton),
-            })
-        }
-        AtIndex::Recorded(Prunable::Discarded) => Some(TxBody::Skeleton(skeleton_of(&record))),
+    Ok(match snap.tx_archival_good(record.location.id)? {
+        AtIndex::Recorded(ArchivalGood::Retained {
+            prunable,
+            pqc_auths,
+        }) => Some(TxBody::Full(
+            record.wire_bytes(&prunable, pqc_auths.as_ref()),
+        )),
+        AtIndex::Recorded(ArchivalGood::Discarded) => Some(TxBody::Skeleton(record.skeleton_of())),
         AtIndex::BeyondCount => None,
     })
 }
@@ -341,17 +339,6 @@ pub fn serve_missing_txs(
         },
         current_blockchain_height: request.current_blockchain_height,
     }))
-}
-
-/// The skeleton of a recorded transaction: its pruned segment and the three
-/// operands its txid binds (`PDM-Q-F28`).
-fn skeleton_of(record: &TxRecord) -> SkeletonTx {
-    SkeletonTx {
-        unprunable: record.pruned.clone().into_wire_bytes(),
-        prunable_hash: record.prunable_hash,
-        pqc_auth_hash: record.pqc_auth_hash,
-        archival_len: record.archival_len,
-    }
 }
 
 #[cfg(test)]

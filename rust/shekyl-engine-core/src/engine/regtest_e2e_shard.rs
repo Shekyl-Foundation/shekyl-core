@@ -77,11 +77,12 @@ pub(super) struct ClosedShard {
 /// discards a closed shard's bodies — the prunable regions and the hybrid
 /// auths, the archival good itself — at the epoch boundary two epochs
 /// after the shard's close epoch, `(close_epoch + 2) · SEB`, and this
-/// node then refuses `/get_transactions` for them in every form
-/// (`tx.pruned_here`). A wallet opened after that cannot scan the fill
-/// from this node: its refresh is refused at the first fill block
-/// (observed 2026-10-29 under a two-block epoch), and the P-scan reads
-/// full bodies (SP-6) that no pruned node can serve. So the wallet that
+/// node then answers `/get_transactions` for them as `archived` in the
+/// full form and as a skeleton under `prune` (`SB-Q2`). Until the wallet
+/// fetches with `prune` and binds the skeleton (`SB-Q2` item 8), a wallet
+/// opened after that cannot scan the fill from this node: its refresh is
+/// refused at the first fill block (observed 2026-10-29 under a two-block
+/// epoch), and the P-scan reads full bodies (SP-6). So the wallet that
 /// will stake is the wallet that fills: its refresh follows the fill
 /// block by block, and once the shard is closed the helper runs its
 /// P-scan over the fill before mining on — the chain stands still while

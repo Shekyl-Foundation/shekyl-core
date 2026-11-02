@@ -2134,11 +2134,11 @@ Each commit builds, `fmt`/`clippy` clean, tests green (rule 26 B5).
   `25-rust-architecture.mdc` does **not** enumerate crates (verified) — no edit.
   `rust/Cargo.toml`'s member comment said `build.yml`; corrected to the
   `rust-audit-test.yml` belt script (same correction as §6.5).
-- Crate `//!`: staging note (STAGED; consumer S-CHAIN-W), the graded-oracle
-  hook (E2's replay harness routes disagreement through
-  `shekyl_chain_store::conformance::grade` keyed by `CenRow::as_str()`; this
-  crate never imports it), the consumer map (connect, pool via `PoolView`), the
-  fault channel.
+- Crate `//!`: staging note (STAGED; consumer S-CHAIN-W), the replay hook
+  (E2's replay holds every captured block to the chain's Rust baseline; the
+  graded oracle through `shekyl_chain_store::conformance::grade` it first
+  named left with the C++ side, `DAEMON_REDB_STORE.md` §12.1), the consumer
+  map (connect, pool via `PoolView`), the fault channel.
 
 ---
 
@@ -2283,10 +2283,10 @@ state-shaped enum), but a third relocation in a scaffold PR, not proposed here.
   `TxIdentity`, populated from `Transaction::txid_parts()` (one
   construction: each discardable region hashed once, the txid mixed from
   those values); and, in `shekyl-wire`, `Transaction::pqc_auth_hash()`
-  (`None` ⇔ the txid is 3-part) plus the two-supplied form
-  `hash_with_supplied_components(pqc_auth, prunable)`, of which `hash()`
-  is `txid_parts().hash` as bytes and `hash_with_supplied_prunable` is the
-  one-supplied mixer. The mixer's arity is the `Option` after
+  (`None` ⇔ the txid is 3-part) plus the one supplied form
+  `hash_with_supplied_components(pqc_auth, prunable, archival_len)`, of
+  which `hash()` is `txid_parts().hash` as bytes; there is no
+  one-supplied form. The mixer's arity is the `Option` after
   `prefix_carries_pqc_component` drops a `Some` the prefix cannot carry,
   so a supplied component on a 3-part prefix is dropped, not mixed, and
   the skeleton (`PDM-Q-F28`: neither region held)

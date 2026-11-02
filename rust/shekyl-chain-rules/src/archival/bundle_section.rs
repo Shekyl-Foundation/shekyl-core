@@ -6,9 +6,11 @@
 //! The section half of the bundle rule: form, the window, then the budget.
 //!
 //! [`check_section`] and [`check_section_until_switch`] are the only
-//! admission results. The charge arithmetic is [`SectionCharge`]; a cap
-//! compared there is not a section result. The per-bundle verifier asks
-//! the same window through [`inside_window`].
+//! admission results. [`fill_section`] is the template's selection, and
+//! the references it returns are a section [`check_section`] admits. The
+//! charge arithmetic is [`SectionCharge`]; a cap compared there is not a
+//! section result. The per-bundle verifier asks the same window through
+//! [`inside_window`].
 //!
 //! Staged with the parent module: nothing on the connect path calls this.
 //! The disposition is the parent module's.
@@ -16,10 +18,10 @@
 use core::fmt;
 
 use shekyl_archival_retention::{
-    bundle_root, section_budget, section_d_max, BundleRef, BundleWireError, DrawableEpoch,
-    SettlementSchedule, TooManyReferences,
+    bundle_root, section_budget, section_d_max, ArchivalParams, BundleRef, BundleWireError,
+    DrawableEpoch, SectionBudget, SettlementEpochBlocks, SettlementSchedule, TooManyReferences,
 };
-use shekyl_types::BlockHeight;
+use shekyl_types::{BlockHeight, SettlementEpoch};
 
 use super::BundleView;
 use crate::census::CenRow;
@@ -140,14 +142,25 @@ impl std::error::Error for SectionRefused {}
 pub struct SectionCharge(u64);
 
 impl SectionCharge {
+    /// The charge of no references: the identity of [`Self::and_reference`].
+    const ZERO: Self = Self(0);
+
     /// The charge of `refs`: one addition per bundle
     /// (`shekyl_archival_retention::bundle_charge`), saturating.
     #[must_use]
     pub fn of(refs: &[BundleRef]) -> Self {
-        Self(
-            refs.iter()
-                .fold(0u64, |sum, r| sum.saturating_add(r.charge())),
-        )
+        refs.iter().fold(Self::ZERO, Self::and_reference)
+    }
+
+    /// [`Self::of`]'s addition: this charge plus `reference`'s draws, saturating.
+    fn and_reference(self, reference: &BundleRef) -> Self {
+        self.and_draws(reference.charge())
+    }
+
+    /// This charge plus `draws`, saturating. The same addition as
+    /// [`Self::and_reference`], for room held open for a witness.
+    fn and_draws(self, draws: u64) -> Self {
+        Self(self.0.saturating_add(draws))
     }
 
     /// The charge, in draws.
@@ -302,6 +315,52 @@ pub fn check_section_until_switch(
     }
 }
 
+/// The references a template puts in the next block's section.
+///
+/// `queued` is walked in ascending `h` — the bundle queue's order. A
+/// reference that repeats or precedes a height already walked is passed
+/// over, whether or not that height was kept. Of what remains, every
+/// reference inside the window of `h_incl` whose epoch's `D` the view
+/// holds is a candidate. A candidate whose `D` is unknown is passed over:
+/// its bundle could not be judged, so a section holding it would wait
+/// (`SCS-P23`). Each epoch is read once.
+///
+/// The candidates span at most two epochs, because the window is shorter
+/// than an epoch (`W₂ < SEB`). They are packed oldest-first under the
+/// budget the epochs actually kept earn: [`section_budget`] of the largest
+/// `D` among those epochs, the cap [`check_section`] applies. A reference
+/// that would exceed that budget is passed over. When the two epochs differ
+/// in `D`, the pack is the oldest of the three shapes that cap allows — the
+/// earlier epoch, the later epoch, and both — and a reference is also
+/// passed over when keeping it would crowd out the epoch that earns the
+/// larger `D`.
+///
+/// The result is a section [`check_section`] admits at `h_incl` under the
+/// root [`bundle_root`] computes over it.
+///
+/// **STAGED** (`SO-D12` 4b prep, `ARCHIVAL_SETTLEMENT_WRITER.md` §16.3
+/// item 4): the block template (`shekyl-chain-ingest`'s `template.rs`)
+/// calls it at the switch, over the bundle queue's references and the
+/// store's bundle view of the template's snapshot. Nothing calls it before
+/// then.
+///
+/// # Errors
+///
+/// The view's fault, when reading an epoch's `D` faults. Nothing is selected.
+pub fn fill_section<V: BundleView>(
+    queued: &[BundleRef],
+    h_incl: BlockHeight,
+    view: &V,
+    rule_set: &RuleSet,
+) -> Result<Vec<BundleRef>, V::Fault> {
+    let schedule = rule_set.settlement_schedule();
+    let mut walk = CandidateWalk::default();
+    for reference in queued {
+        walk.see(reference, h_incl, view, schedule)?;
+    }
+    Ok(walk.finish(schedule))
+}
+
 /// §9.1 step 1 and the section's window: [`section_shape`], then every
 /// reference inside the window.
 ///
@@ -361,4 +420,338 @@ pub(super) fn inside_window(
         h_incl.to_raw().checked_sub(h.to_raw()),
         Some(distance) if distance >= 1 && distance <= window.get()
     )
+}
+
+/// The queue walk: heights already seen, one `D` per epoch, and the
+/// candidates those reads admit. Packing is [`CandidateWalk::finish`],
+/// after the walk, so a reference is not judged under a `D` the walk has
+/// not finished opening.
+#[derive(Default)]
+struct CandidateWalk<'a> {
+    refs: Vec<&'a BundleRef>,
+    span: SpannedEpochs,
+    last_seen: Option<BlockHeight>,
+    /// The epoch last asked. A second reference of it is not a second read.
+    asked: Option<AskedEpoch>,
+}
+
+/// The epochs one window can hold. The window is shorter than an epoch
+/// (`W₂ < SEB`), so it crosses at most one boundary. A later epoch is
+/// opened only from [`Self::One`], so a later epoch with no earlier one
+/// cannot be named.
+#[derive(Clone, Copy, Default)]
+enum SpannedEpochs {
+    #[default]
+    None,
+    One(OpenedEpoch),
+    Two {
+        earlier: OpenedEpoch,
+        later: OpenedEpoch,
+        /// Index of `later`'s first candidate in the walk's references.
+        split: usize,
+    },
+}
+
+/// An epoch the walk opened, and the `D` the view held for it.
+#[derive(Clone, Copy)]
+struct OpenedEpoch {
+    epoch: SettlementEpoch,
+    /// `D`: the drawable pairs filed for [`Self::epoch`].
+    d: u64,
+}
+
+/// The view's answer for one epoch.
+#[derive(Clone, Copy)]
+enum EpochDraws {
+    /// The view holds this epoch's `D`.
+    Known(u64),
+    /// The view has no `D` for this epoch. A reference of it is passed over.
+    Unknown,
+}
+
+/// The epoch last asked, and the answer, so the walk reads each epoch once.
+#[derive(Clone, Copy)]
+struct AskedEpoch {
+    epoch: SettlementEpoch,
+    draws: EpochDraws,
+}
+
+/// One end of a two-epoch window: where a candidate sits, and which epoch
+/// a larger `D` belongs to.
+#[derive(Clone, Copy)]
+enum WindowEnd {
+    Earlier,
+    Later,
+}
+
+/// Draws held open while earlier references are chosen, so the epoch that
+/// earns a larger budget can still be kept.
+///
+/// [`Self::NONE`] holds nothing open. That is the reservation when the
+/// budget does not depend on a later reference: one epoch, equal `D`, or
+/// the earlier epoch's `D` being the larger one.
+#[derive(Clone, Copy)]
+struct ReservedDraws(u64);
+
+impl ReservedDraws {
+    /// No draws held open.
+    const NONE: Self = Self(0);
+
+    fn of(draws: u64) -> Self {
+        Self(draws)
+    }
+
+    fn get(self) -> u64 {
+        self.0
+    }
+}
+
+impl<'a> CandidateWalk<'a> {
+    /// Account for `reference`. A height already walked is passed over
+    /// before the window and before any read.
+    ///
+    /// # Errors
+    ///
+    /// The view's fault, when this reference's epoch is asked and the read
+    /// faults. An epoch already asked is not read again.
+    fn see<V: BundleView>(
+        &mut self,
+        reference: &'a BundleRef,
+        h_incl: BlockHeight,
+        view: &V,
+        schedule: SettlementSchedule,
+    ) -> Result<(), V::Fault> {
+        if self.last_seen.is_some_and(|seen| reference.h() <= seen) {
+            return Ok(());
+        }
+        self.last_seen = Some(reference.h());
+        if !inside_window(reference.h(), h_incl, schedule) {
+            return Ok(());
+        }
+        let epoch = schedule.epoch_at(reference.h());
+        if let EpochDraws::Known(d) = self.epoch_draws(view, epoch)? {
+            self.accept(reference, epoch, d);
+        }
+        Ok(())
+    }
+
+    fn epoch_draws<V: BundleView>(
+        &mut self,
+        view: &V,
+        epoch: SettlementEpoch,
+    ) -> Result<EpochDraws, V::Fault> {
+        if let Some(asked) = self.asked {
+            if asked.epoch == epoch {
+                return Ok(asked.draws);
+            }
+        }
+        let draws = match super::drawable_for(view, epoch)?.map(DrawableEpoch::len) {
+            Some(d) => EpochDraws::Known(d),
+            None => EpochDraws::Unknown,
+        };
+        self.asked = Some(AskedEpoch { epoch, draws });
+        Ok(draws)
+    }
+
+    /// Keep `reference` on the epoch it opens. A third epoch inside one
+    /// window would cross `W₂ < SEB`, so the reference is passed over.
+    fn accept(&mut self, reference: &'a BundleRef, epoch: SettlementEpoch, d: u64) {
+        match self.span {
+            SpannedEpochs::Two { later, .. } if later.epoch != epoch => return,
+            SpannedEpochs::One(earlier) if earlier.epoch != epoch => {
+                self.span = SpannedEpochs::Two {
+                    earlier,
+                    later: OpenedEpoch { epoch, d },
+                    split: self.refs.len(),
+                };
+            }
+            SpannedEpochs::None => {
+                self.span = SpannedEpochs::One(OpenedEpoch { epoch, d });
+            }
+            SpannedEpochs::One(_) | SpannedEpochs::Two { .. } => {}
+        }
+        self.refs.push(reference);
+    }
+
+    /// The oldest pack the candidates' epochs earn.
+    fn finish(self, schedule: SettlementSchedule) -> Vec<BundleRef> {
+        let params = shekyl_archival_retention::archival_params();
+        let seb = schedule.blocks();
+        match self.span {
+            SpannedEpochs::None => Vec::new(),
+            SpannedEpochs::One(opened) => {
+                keep_within(
+                    &self.refs,
+                    &[],
+                    section_budget(params, opened.d, seb),
+                    ReservedDraws::NONE,
+                )
+                .refs
+            }
+            SpannedEpochs::Two {
+                earlier,
+                later,
+                split,
+            } => pack_two(&self.refs, split, earlier.d, later.d, params, seb),
+        }
+    }
+}
+
+/// The references kept under one budget, in walk order, and which end of
+/// the window contributed one.
+struct Pack {
+    refs: Vec<BundleRef>,
+    charge: SectionCharge,
+    kept_earlier: bool,
+    kept_later: bool,
+}
+
+impl Pack {
+    fn new() -> Self {
+        Self {
+            refs: Vec::new(),
+            charge: SectionCharge::ZERO,
+            kept_earlier: false,
+            kept_later: false,
+        }
+    }
+
+    /// Keep each reference that fits `budget` with `reserved` draws still
+    /// free. A reference that does not fit is passed over, and the charge
+    /// stays where it was, so a later smaller one can still be taken.
+    fn take(
+        &mut self,
+        refs: &[&BundleRef],
+        budget: SectionBudget,
+        reserved: ReservedDraws,
+        end: WindowEnd,
+    ) {
+        for reference in refs {
+            let added = self.charge.and_reference(reference);
+            if !added.and_draws(reserved.get()).within(budget) {
+                continue;
+            }
+            self.refs.push((*reference).clone());
+            self.charge = added;
+            self.mark(end);
+        }
+    }
+
+    fn mark(&mut self, end: WindowEnd) {
+        match end {
+            WindowEnd::Earlier => self.kept_earlier = true,
+            WindowEnd::Later => self.kept_later = true,
+        }
+    }
+
+    fn kept(&self, end: WindowEnd) -> bool {
+        match end {
+            WindowEnd::Earlier => self.kept_earlier,
+            WindowEnd::Later => self.kept_later,
+        }
+    }
+}
+
+/// Oldest-first under one budget. `reserved` draws stay free while the
+/// earlier references are chosen. The later references then spend that
+/// room: their reservation is [`ReservedDraws::NONE`].
+fn keep_within(
+    earlier: &[&BundleRef],
+    later: &[&BundleRef],
+    budget: SectionBudget,
+    reserved: ReservedDraws,
+) -> Pack {
+    let mut pack = Pack::new();
+    pack.take(earlier, budget, reserved, WindowEnd::Earlier);
+    pack.take(later, budget, ReservedDraws::NONE, WindowEnd::Later);
+    pack
+}
+
+/// The smallest later charge that fits `budget` on its own.
+///
+/// Holding that much back leaves the most room for older references while
+/// still letting the later epoch earn `budget`. After the earlier
+/// references are chosen, the room left is at least this charge, so either
+/// the reference that costs it, or an earlier reference of the later epoch
+/// that fits in the same room, is kept.
+fn reserved_for(later: &[&BundleRef], budget: SectionBudget) -> Option<ReservedDraws> {
+    later
+        .iter()
+        .map(|reference| reference.charge())
+        .filter(|draws| SectionCharge::ZERO.and_draws(*draws).within(budget))
+        .min()
+        .map(ReservedDraws::of)
+}
+
+/// Two epochs, oldest-first, under the budget the kept epochs earn.
+///
+/// Equal `D` is one budget over the whole queue: the section does not have
+/// to represent either epoch. When the `D`s differ, the section is the
+/// oldest of three shapes — the earlier epoch under its own budget, the
+/// later epoch under its own, or both under the larger one. Both keeps a
+/// reference of the epoch whose `D` is the larger one, which is what earns
+/// that budget.
+fn pack_two(
+    refs: &[&BundleRef],
+    split: usize,
+    earlier_d: u64,
+    later_d: u64,
+    params: &ArchivalParams,
+    seb: SettlementEpochBlocks,
+) -> Vec<BundleRef> {
+    // `split` is the index the later epoch's first reference was pushed at.
+    debug_assert!(split < refs.len(), "the later epoch opened on a candidate");
+    let earlier_budget = section_budget(params, earlier_d, seb);
+    let later_budget = section_budget(params, later_d, seb);
+    let (earlier, later) = refs.split_at(split);
+    if earlier_d == later_d {
+        return keep_within(earlier, later, earlier_budget, ReservedDraws::NONE).refs;
+    }
+    let earlier_only = keep_within(earlier, &[], earlier_budget, ReservedDraws::NONE).refs;
+    let later_only = keep_within(&[], later, later_budget, ReservedDraws::NONE).refs;
+    let both = if later_d > earlier_d {
+        pack_both(earlier, later, later_budget, WindowEnd::Later)
+    } else {
+        pack_both(earlier, later, earlier_budget, WindowEnd::Earlier)
+    };
+    older(older(earlier_only, later_only), both)
+}
+
+/// Both epochs under `budget`, which `earned_by`'s `D` sets. The pack is
+/// empty when no reference of that end was kept: the budget was not earned,
+/// and a shape under an epoch's own `D` is what remains.
+fn pack_both(
+    earlier: &[&BundleRef],
+    later: &[&BundleRef],
+    budget: SectionBudget,
+    earned_by: WindowEnd,
+) -> Vec<BundleRef> {
+    let reserved = match earned_by {
+        WindowEnd::Later => {
+            let Some(reserved) = reserved_for(later, budget) else {
+                return Vec::new();
+            };
+            reserved
+        }
+        WindowEnd::Earlier => ReservedDraws::NONE,
+    };
+    let pack = keep_within(earlier, later, budget, reserved);
+    if !pack.kept(earned_by) {
+        return Vec::new();
+    }
+    pack.refs
+}
+
+/// `right`, when it keeps an older bundle than `left` or the same prefix
+/// and then more. Otherwise `left`. An empty pack is older than nothing.
+fn older(left: Vec<BundleRef>, right: Vec<BundleRef>) -> Vec<BundleRef> {
+    let right_is_older = match right.iter().zip(&left).find(|(a, b)| a.h() != b.h()) {
+        Some((a, b)) => a.h() < b.h(),
+        None => right.len() > left.len(),
+    };
+    if right_is_older {
+        right
+    } else {
+        left
+    }
 }

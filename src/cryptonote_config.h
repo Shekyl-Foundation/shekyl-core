@@ -192,8 +192,6 @@
 #define P2P_DEFAULT_INVOKE_TIMEOUT                      60*2*1000  //2 minutes
 #define P2P_DEFAULT_HANDSHAKE_INVOKE_TIMEOUT            5000       //5 seconds
 
-#define P2P_IP_BLOCKTIME                                (60*60*24)  //24 hour
-#define P2P_IP_FAILS_BEFORE_BLOCK                       10
 
 // The protocol version is `shekyl_version::PROTOCOL_VERSION`, a Rust
 // constant (DAEMON_CONFIG_CUTOVER.md DC-Q20); no C++ reads it.
