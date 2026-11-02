@@ -68,7 +68,6 @@ set(unit_tests_sources
   serialization.cpp
   sha256.cpp
   stall_detection_calibration.cpp
-  stack_trace.cpp
   test_tx_utils.cpp
   threadpool.cpp
   util.cpp
@@ -132,12 +131,6 @@ target_link_libraries(unit_tests
     ${EXTRA_LIBRARIES})
 if(UNIX AND NOT APPLE)
   target_link_libraries(unit_tests PRIVATE pthread dl)
-endif()
-# stack_trace.cpp tests the `__cxa_throw` hook, which is no longer a member
-# of `common` (src/common/CMakeLists.txt): this binary links it on purpose
-# so the test runs rather than skips.
-if(STACK_TRACE)
-  target_link_libraries(unit_tests PRIVATE stack_trace)
 endif()
 set_property(TARGET unit_tests
   PROPERTY

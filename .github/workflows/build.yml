@@ -44,7 +44,7 @@ env:
   # "stdbool.h file not found" otherwise). GitHub-hosted runners ship clang,
   # which is why the Rust workflow never needed this; these jobs run in bare
   # ubuntu containers, which do not.
-  APT_INSTALL_LINUX: 'apt -y install build-essential cmake libboost-all-dev graphviz doxygen libunwind8-dev pkg-config libssl-dev libsodium-dev ccache git curl clang libclang-dev'
+  APT_INSTALL_LINUX: 'apt -y install build-essential cmake libboost-all-dev graphviz doxygen pkg-config libssl-dev libsodium-dev ccache git curl clang libclang-dev'
   APT_SET_CONF: |
     tee -a /etc/apt/apt.conf.d/80-custom << EOF
     Acquire::Retries "3";
@@ -238,7 +238,7 @@ jobs:
         run: |
           brew uninstall cmake
           brew update
-          brew install --quiet cmake boost openssl libpgm libunwind-headers ccache
+          brew install --quiet cmake boost openssl libpgm ccache
       # Pinned to match rust/rust-toolchain.toml (avoids a parallel-cargo
       # auto-install race in the daemon build). Bump both together.
       - uses: dtolnay/rust-toolchain@1.94.0
@@ -385,7 +385,7 @@ jobs:
       # (CMakeLists.txt refuses BUILD_SHARED_LIBS), so test binaries are
       # statically linked against in-tree libraries and the tar can drop
       # *.o / *.a / CMakeFiles.
-      # They still need SYSTEM libraries (boost, ssl, sodium, unwind)
+      # They still need SYSTEM libraries (boost, ssl, sodium)
       # that the test job installs. CMake bakes absolute paths into
       # CTestTestfile.cmake; both jobs use container ubuntu:24.04 +
       # actions/checkout, so github.workspace is `/__w/shekyl-core/shekyl-core`
@@ -756,7 +756,6 @@ jobs:
             -DSTATIC=ON `
             -DBUILD_SHARED_LIBS=OFF `
             -DBUILD_TESTS=ON `
-            -DSTACK_TRACE=OFF `
             -DCMAKE_TOOLCHAIN_FILE="$env:VCPKG_INSTALLATION_ROOT\scripts\buildsystems\vcpkg.cmake" `
             -DVCPKG_TARGET_TRIPLET=x64-windows-static
       # Daemon only. The C++ wallet stack was deleted at Phase 5, and the

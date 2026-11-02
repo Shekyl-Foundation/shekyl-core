@@ -34,10 +34,9 @@
 # and cmake/BuildRust.cmake's `shekyl_rust_link_cxx_closure` hands this
 # library and everything it links to the Rust binary's link (DC-Q23).
 #
-# Not `shekyl_add_executable`: there is no C++ executable here, so none
-# of what that helper attaches — `STACK_TRACE` and its `--wrap=__cxa_throw`
-# among them (DC-Q22: the Rust side owns the process's signals and its
-# panic hook; a C++ crash handler would be a second owner, DC-F17).
+# Not `shekyl_add_executable`: there is no C++ executable here (DC-Q22:
+# the Rust side owns the process's signals and its panic hook; a C++
+# crash handler would be a second owner, DC-F17).
 set(shekyld_remnant_sources
   command_parser_executor.cpp
   command_server.cpp
