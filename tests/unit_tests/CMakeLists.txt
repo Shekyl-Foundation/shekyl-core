@@ -118,11 +118,6 @@ target_link_libraries(unit_tests
     # shekyl-ffi; the server is kept out of the archive on purpose
     # (DAEMON_CONFIG_CUTOVER.md DC-F30).
     ${SHEKYL_FFI_LINK_LIBS}
-    # rpc after the Rust archive. Since DC-F30 the archive imports nothing
-    # from rpc (the daemon-image era's core_rpc_ffi_* importers are no
-    # longer members), so this occurrence resolves nothing the earlier one
-    # did not; it is left as found pending a separate ruling (rule 15).
-    rpc
     version
     ${Boost_CHRONO_LIBRARY}
     ${Boost_THREAD_LIBRARY}
