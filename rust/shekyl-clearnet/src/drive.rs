@@ -274,10 +274,24 @@ where
     };
     let dest = SocketAddr::new(ip, port);
     let target = proxy.as_ref().map_or(dest, Proxy::at);
+    // Admission before the connect: a host banned between the draw and
+    // here is refused with no SYN sent, and the socket's slot is held for
+    // the connect as its descriptor is.
+    let reserved = match sockets.open_clearnet(ip) {
+        Ok(open) => open,
+        Err(OpenError::Refused(cause)) => {
+            on_end(Observed::RefusedHere(cause).end());
+            return;
+        }
+        Err(OpenError::Exhausted) => {
+            on_end(Observed::OwnFailure.end());
+            return;
+        }
+    };
     // The engine refused. That is the host, not the peer, so it does not
     // feed the address forget the way DialFailed does.
     let Ok(owner) = engine.register(OwnerClass::Transport) else {
-        on_end(Observed::OwnFailure.end());
+        settle_dial(reserved, Observed::OwnFailure.end(), &on_end);
         return;
     };
     let now = owner.clock().now();
@@ -293,7 +307,7 @@ where
     let deadline = Tick::new(now.get().saturating_add(within.get()));
     if owner.arm(deadline).is_err() {
         ignore(owner.deregister());
-        on_end(Observed::OwnFailure.end());
+        settle_dial(reserved, Observed::OwnFailure.end(), &on_end);
         return;
     }
     tracing::debug!(
@@ -342,23 +356,10 @@ where
         result = &mut connect => result,
     };
     ignore(owner.deregister());
-    let (mut stream, connect_ns) = match connected {
+    let (stream, connect_ns) = match connected {
         Ok(pair) => pair,
         Err(observed) => {
-            on_end(observed.end());
-            return;
-        }
-    };
-    let reserved = match sockets.open_clearnet(ip) {
-        Ok(open) => open,
-        Err(OpenError::Refused(cause)) => {
-            drop(stream.shutdown().await);
-            on_end(Observed::RefusedHere(cause).end());
-            return;
-        }
-        Err(OpenError::Exhausted) => {
-            close_before_channel(stream).await;
-            on_end(Observed::OwnFailure.end());
+            settle_dial(reserved, observed.end(), &on_end);
             return;
         }
     };
@@ -385,7 +386,11 @@ where
         },
     )
     .await;
-    settle(reserved, end.cause());
+    settle_dial(reserved, end, &on_end);
+}
+
+fn settle_dial(open: OpenSocket, end: DialEnd, on_end: &Arc<dyn Fn(DialEnd) + Send + Sync>) {
+    settle(open, end.cause());
     on_end(end);
 }
 
