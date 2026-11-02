@@ -1161,12 +1161,17 @@ clearnet off; shekyl-dev `data/tsr-acceptance/2026-10-30-linux-vm-clock/`):
   `epee::misc_utils::sleep_no_w`, a 100 ms sleep to a deadline on the wall
   clock, and `Daemon::run` joined that poller: with the clock a day back,
   the poll slept a day. The hung threads waited in `futex` with
-  `FUTEX_CLOCK_REALTIME`. Now the stop signals the running daemon directly
-  and nothing in `src/` or `contrib/` waits on the wall clock
-  (`scripts/ci/check_wall_clock_waits.py`). On the VM, before: 3 untouched
-  stops exited in 3.1 to 12.0 s and 3 of 3 after the clock was set back a
-  day hung past 120 s. After: 3 untouched stops took 1.0 to 2.0 s and 5 of
-  5 set-back stops 1.0 to 4.0 s, inside the unit's 90 s stop timeout.
+  `FUTEX_CLOCK_REALTIME`. Now the stop signals the one daemon `run` has
+  registered, and that registration is dropped on every exit before the
+  daemon is destroyed. No thread under `src/` or `contrib/` sleeps until a
+  wall-clock deadline: `scripts/ci/check_wall_clock_waits.py` fails on
+  `sleep_no_w`, `get_system_time`, `deadline_timer`, and `timed_wait`.
+  Elapsed-time comparisons still read `universal_time` (FOLLOWUPS); a clock
+  set back stalls those comparisons and does not block a thread. On the VM,
+  before: 3 untouched stops exited in 3.1 to 12.0 s and 3 of 3 after the
+  clock was set back a day hung past 120 s. After: 3 untouched stops took
+  1.0 to 2.0 s and 5 of 5 set-back stops 1.0 to 4.0 s, inside the unit's
+  90 s stop timeout.
 
 **Slow link and silent drop, the floor device, 2026-10-31** (Pi 4, Ubuntu
 26.04.1 aarch64; `shekyld` built natively at `ffb7259051`, the build the
