@@ -374,6 +374,10 @@ pub enum Input {
     OnionPublished,
     /// `ADD_ONION` failed. The process stays up.
     OnionRejected,
+    /// The driver was asked to publish the onion again and did not. A
+    /// liveness sample since the ask named a cause a republish cannot get
+    /// past (§4.5). The anchor that ask moved is put back.
+    RepublishWithheld,
     /// The zone host is up and the forward listener is bound.
     EndpointReady,
     /// Outbound to the Tor network is blocked.
@@ -667,11 +671,19 @@ pub struct Core {
     /// Rounds that stayed open past `Policy::round_stuck_after`, this boot.
     stuck_rounds: u32,
     /// Where the descriptor's lifetime is counted from (§4.5, "Overdue"):
-    /// the last round's first upload, or the last overdue republish. Only an
-    /// upload shows the descriptor's age. None before the first upload and
-    /// after the probe is dropped. Standing down because a republish cannot
-    /// help does not move it.
+    /// the last round's first upload, or the moment a republish was handed
+    /// to the driver. A probe's arrival does not move it. None before the
+    /// first of those and after the probe is dropped. Standing down because
+    /// a republish cannot help does not move it, and a hand-over the driver
+    /// then withholds puts back the anchor it moved.
     lifetime_from: Option<u64>,
+    /// The anchor and hold to restore if the remedial send in
+    /// [`clock::QueuedSend`] is withheld before it is published.
+    queued_send: Option<clock::QueuedSend>,
+    /// The probe in hand was scheduled from a republish's own upload round,
+    /// so its Reachable confirms that republish. A clock-jump probe and a
+    /// probe scheduled before the republish do not.
+    probe_confirms: bool,
     /// More than half of the latest round's directories refused its upload.
     uploads_refused: bool,
     /// The republish backoff (§4.5).
@@ -715,6 +727,8 @@ impl Core {
             round: None,
             stuck_rounds: 0,
             lifetime_from: None,
+            queued_send: None,
+            probe_confirms: false,
             uploads_refused: false,
             republish: clock::RepublishHold::new(duration_ns(policy.republish_after)),
             jump: clock_jump::JumpWatch::new(now),
@@ -785,6 +799,7 @@ impl Core {
                 arrived_at,
             } => self.probe_arrived(now, minted_at, arrived_at),
             Input::OnionRejected => self.onion_refused(now),
+            Input::RepublishWithheld => self.republish_withheld(),
             Input::EndpointReady => self.endpoint_ready(),
             Input::ExternalBlocked => self.blocked(now),
             Input::DirectoryUnreachable => self.external(now, Cause::DirectoryUnreachable),
@@ -807,6 +822,36 @@ impl Core {
             Input::ExternalCleared => self.external_cleared(now),
         };
         self.step(now, actions)
+    }
+
+    /// Whether `action` still names work this core is waiting on.
+    ///
+    /// A deadline can queue a republish, a probe, or a directory fetch and
+    /// also a liveness sample. The driver folds the sample first. Once that
+    /// sample has named a cause a republish cannot get past, the later
+    /// actions no longer stand: sending them would replace introduction
+    /// points the directories still advertise, or judge a copy a republish
+    /// cannot replace (§4.5). A Tor's first publish still stands. The clock
+    /// names this machine, and the first descriptor has to be uploaded
+    /// before a directory can refuse it.
+    #[must_use]
+    pub fn action_stands(&self, action: &Action) -> bool {
+        match action {
+            Action::RepublishOnion => !self.service_republish || !self.republish_cannot_help(),
+            Action::Probe => matches!(self.probe, probe::Probe::InFlight { .. }),
+            Action::CheckDirectories => {
+                matches!(
+                    self.directories,
+                    Some(directories::DirectoryHalf::AwaitingDraw)
+                )
+            }
+            Action::FetchFromDirectory { .. } => {
+                matches!(self.directories, Some(directories::DirectoryHalf::Open(_)))
+                    && !self.republish_cannot_help()
+            }
+            Action::RefetchDescriptor => matches!(self.probe, probe::Probe::Refetching),
+            _ => true,
+        }
     }
 
     /// The deadline fired. Each armed time is its own kind of work: a pin
@@ -845,10 +890,9 @@ impl Core {
                 actions.push(Action::CheckPin);
             }
         }
-        if self.sample_at.is_some_and(|at| now >= at) {
-            self.sample_at = None;
-            actions.extend(self.on_sample_deadline(now));
-        }
+        // The liveness sample is first. The driver folds it before the
+        // republish, probe, and directory actions this same deadline queues,
+        // and a clock that sample names stands those down (§4.5).
         if self.alive_at.is_some_and(|at| now >= at) {
             self.alive_at = None;
             match self.phase {
@@ -872,6 +916,10 @@ impl Core {
                 _ => {}
             }
         }
+        if self.sample_at.is_some_and(|at| now >= at) {
+            self.sample_at = None;
+            actions.extend(self.on_sample_deadline(now));
+        }
         if self.round_due().is_some_and(|at| now >= at) {
             actions.extend(self.on_round_deadline(now));
         }
@@ -884,7 +932,7 @@ impl Core {
         if self.directories_due().is_some_and(|at| now >= at) {
             actions.extend(self.on_directories_deadline(now));
         }
-        if self.republish.due().is_some_and(|at| now >= at) {
+        if self.republish_due().is_some_and(|at| now >= at) {
             actions.extend(self.on_republish_deadline(now));
         }
         self.step(now, actions)
@@ -939,7 +987,7 @@ impl Core {
             self.round_due(),
             self.overdue_due(),
             self.directories_due(),
-            self.republish.due(),
+            self.republish_due(),
         ]
         .into_iter()
         .flatten()
@@ -1068,6 +1116,9 @@ impl Core {
         if let Phase::Running { onion, .. } = &mut self.phase {
             *onion = Duty::Done;
             self.service_republish = false;
+            // The send happened. The anchor it moved stays; a later withhold
+            // has nothing to put back.
+            self.queued_send = None;
             if self.inbound == Inbound::NotOffered {
                 self.inbound = Inbound::Publishing;
             }

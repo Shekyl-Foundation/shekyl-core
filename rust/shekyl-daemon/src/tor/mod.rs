@@ -7,7 +7,8 @@
 //!
 //! [`Drive`] is the manager's hands. The [`Core`] decides. This driver
 //! performs each [`Action`] and reports what happened, including a publish
-//! the endpoint was not ready for. It keeps no second schedule.
+//! the endpoint was not ready for and a republish a liveness sample has
+//! since ruled out. It keeps no second schedule.
 //!
 //! The Tor connector is not this driver. It reads the route a publish
 //! installs and dials. Questions to Tor stay on the owning control
@@ -506,7 +507,27 @@ impl Drive {
         self.step = Step { actions, deadline };
     }
 
+    /// An action this core no longer wants. A remedial republish becomes
+    /// [`Input::RepublishWithheld`], which puts the lifetime it started
+    /// back. A probe or directory fetch already handed over is dropped.
+    fn withheld(&self, action: &Action) -> Option<Vec<Input>> {
+        if self.core.action_stands(action) {
+            return None;
+        }
+        match action {
+            Action::RepublishOnion => Some(vec![Input::RepublishWithheld]),
+            Action::Probe
+            | Action::CheckDirectories
+            | Action::FetchFromDirectory { .. }
+            | Action::RefetchDescriptor => Some(Vec::new()),
+            _ => None,
+        }
+    }
+
     async fn act(&mut self, action: Action, halt: &mut bool) -> Vec<Input> {
+        if let Some(instead) = self.withheld(&action) {
+            return instead;
+        }
         match action {
             Action::Announce => {
                 let status = self.core.status();
@@ -898,26 +919,41 @@ impl Drive {
             }
             inputs.push(Input::NetworkView(view));
         }
-        inputs.extend(self.consensus_clock().await);
+        match self.consensus_clock().await {
+            Ok(Some(clock)) => inputs.push(clock),
+            Ok(None) => {}
+            Err(fault) => {
+                // The directory sample already read is still folded. The
+                // fault ends the incarnation after it.
+                inputs.push(fault);
+                return inputs;
+            }
+        }
         inputs
     }
 
     /// The consensus's `valid-after` against this machine's wall time
-    /// (§4.2). The core reads it only while Bootstrapping or Running. No
-    /// consensus yet, or no answer, is no input. The wall time is read here
-    /// and passed as a value: the core's own clock is monotonic.
-    async fn consensus_clock(&mut self) -> Option<Input> {
-        let control = self.control.as_mut()?;
-        let reply = control
+    /// (§4.2). The core reads it only while Bootstrapping or Running. Tor
+    /// having no consensus yet is no input. An ask that fails is a process
+    /// fault, the same as the sample's own ask: it is not "no consensus".
+    /// The wall time is read here and passed as a value: the core's own
+    /// clock is monotonic.
+    async fn consensus_clock(&mut self) -> Result<Option<Input>, Input> {
+        let Some(control) = self.control.as_mut() else {
+            return Ok(None);
+        };
+        let asked = control
             .ask(Command::GetInfo(vec![CONSENSUS_VALID_AFTER.to_owned()]))
-            .await
-            .ok()?;
-        let valid_after = parse_consensus_valid_after(&reply)?;
+            .await;
+        let parsed = match &asked {
+            Ok(reply) => Ok(parse_consensus_valid_after(reply)),
+            Err(error) => Err(error),
+        };
         let wall = std::time::SystemTime::now()
             .duration_since(std::time::UNIX_EPOCH)
-            .ok()?
-            .as_secs();
-        Some(Input::ConsensusClock { valid_after, wall })
+            .ok()
+            .map(|elapsed| elapsed.as_secs());
+        consensus_sample(parsed, wall)
     }
 
     fn watch_state(&self) -> Option<Input> {
@@ -1103,6 +1139,19 @@ fn input_of_ask(error: &DaemonTorStartError) -> Input {
     }
 }
 
+/// A consensus ask beside the wall time it is compared with. `Ok(None)` is
+/// Tor with no `valid-after` yet, or no wall time to compare. An ask that
+/// failed is the process fault [`input_of_ask`] names.
+fn consensus_sample(
+    asked: Result<Option<u64>, &DaemonTorStartError>,
+    wall: Option<u64>,
+) -> Result<Option<Input>, Input> {
+    let valid_after = asked.map_err(input_of_ask)?;
+    Ok(valid_after
+        .zip(wall)
+        .map(|(valid_after, wall)| Input::ConsensusClock { valid_after, wall }))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -1117,6 +1166,34 @@ mod tests {
         assert!(running.iter().any(|key| key == NETWORK_LIVENESS));
         assert!(running.iter().any(|key| key == CIRCUIT_ESTABLISHED));
         assert!(running.starts_with(&bootstrap));
+    }
+
+    /// A consensus ask that fails is a process fault. Tor having no
+    /// `valid-after` yet, or no wall time to compare, is no clock input.
+    /// Fails if `consensus_sample` turns a timeout into `Ok(None)`: the
+    /// supervisor would keep a dead control connection and never name the
+    /// clock.
+    #[test]
+    fn a_failed_consensus_ask_is_a_process_fault_and_a_missing_consensus_is_not() {
+        let timeout = DaemonTorStartError::Control(ControlError::Timeout);
+        let closed = DaemonTorStartError::Control(ControlError::ConnectionClosed);
+        assert_eq!(
+            consensus_sample(Err(&timeout), Some(1)),
+            Err(Input::ReplyLate)
+        );
+        assert_eq!(
+            consensus_sample(Err(&closed), Some(1)),
+            Err(Input::ControlEnded)
+        );
+        assert_eq!(consensus_sample(Ok(None), Some(1)), Ok(None));
+        assert_eq!(consensus_sample(Ok(Some(10)), None), Ok(None));
+        assert_eq!(
+            consensus_sample(Ok(Some(10)), Some(20)),
+            Ok(Some(Input::ConsensusClock {
+                valid_after: 10,
+                wall: 20,
+            }))
+        );
     }
 
     /// The posture line's `quiet_after` is the Tor connector's span S, read

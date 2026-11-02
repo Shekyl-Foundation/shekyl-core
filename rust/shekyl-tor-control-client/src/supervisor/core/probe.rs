@@ -166,7 +166,7 @@ impl Core {
         self.uploads_accepted();
         let mut actions = self.onion_published();
         if !track.is_some_and(|track| track.triggered) {
-            actions.extend(self.trigger(now, draw));
+            actions.extend(self.trigger(now, draw, self.republish_is_judging()));
         }
         actions
     }
@@ -174,12 +174,14 @@ impl Core {
     /// The round's one probe, or the jump's: scheduled while Running with
     /// none in hand, and not while a republish cannot help: its directory
     /// fetches would go out before the probe's own gate drops the check.
-    fn trigger(&mut self, now: u64, draw: u64) -> Vec<Action> {
+    /// `confirms` is set only for a round's probe scheduled while a
+    /// republish is waiting on that round.
+    fn trigger(&mut self, now: u64, draw: u64, confirms: bool) -> Vec<Action> {
         if matches!(self.phase, Phase::Running { .. })
             && self.probe == Probe::Idle
             && !self.republish_cannot_help()
         {
-            self.schedule(now, draw, Attempt::First)
+            self.schedule(now, draw, Attempt::First, confirms)
         } else {
             Vec::new()
         }
@@ -237,18 +239,20 @@ impl Core {
         if self.republish_cannot_help() {
             return Vec::new();
         }
-        self.lifetime_from = Some(now);
         self.republish_failed(now);
         let mut actions = vec![Action::DescriptorOverdue];
         let republished = self.republish(now);
-        if republished.is_empty() {
+        if !republished
+            .iter()
+            .any(|action| matches!(action, Action::RepublishOnion))
+        {
+            // The check ran and the send is held, or this phase cannot
+            // send. The next lifetime starts now so the check does not fire
+            // on every tick. A send moves the anchor itself, and a withheld
+            // send puts that anchor back.
+            self.lifetime_from = Some(now);
             return actions;
         }
-        if matches!(self.probe, Probe::InFlight { .. }) {
-            actions.push(Action::CancelProbe);
-        }
-        self.probe = Probe::Idle;
-        self.directories = None;
         actions.extend(republished);
         actions
     }
@@ -273,7 +277,8 @@ impl Core {
     /// it waits at least the delay's floor and takes the same miss path
     /// (`HSFETCH`, a second probe, then a republish).
     pub(super) fn jump_probe_drawn(&mut self, now: u64, draw: u64) -> Vec<Action> {
-        self.trigger(now, draw)
+        // Not the republish's round: its arrival does not confirm one.
+        self.trigger(now, draw, false)
     }
 
     /// The machine slept (§5, "Resumed from suspend"). A probe in flight
@@ -319,8 +324,16 @@ impl Core {
         let mut actions = Vec::new();
         if let Some((at, draw)) = track.first {
             if !track.triggered && now >= at.saturating_add(duration_ns(self.policy.round_wait)) {
-                track.triggered = true;
-                actions.extend(self.trigger(now, draw));
+                let scheduled = self.trigger(now, draw, self.republish_is_judging());
+                // Standing down schedules nothing. The round's end can still
+                // schedule once it has cleared. A probe already in hand is
+                // this round's one probe.
+                if !scheduled.is_empty()
+                    || (self.probe != Probe::Idle && !self.republish_cannot_help())
+                {
+                    track.triggered = true;
+                }
+                actions.extend(scheduled);
             }
         }
         if !track.stuck
@@ -341,7 +354,8 @@ impl Core {
     /// scheduled after a fresh delay.
     pub(super) fn refetched(&mut self, now: u64, draw: u64) -> Vec<Action> {
         if self.probe == Probe::Refetching && matches!(self.phase, Phase::Running { .. }) {
-            self.schedule(now, draw, Attempt::AfterRefetch)
+            let confirms = self.probe_confirms;
+            self.schedule(now, draw, Attempt::AfterRefetch, confirms)
         } else {
             Vec::new()
         }
@@ -350,7 +364,8 @@ impl Core {
     /// A probe's check begins: the rendezvous probe, and the directories
     /// the driver names next ([`Action::CheckDirectories`]). The list is
     /// not in yet ([`DirectoryHalf::AwaitingDraw`]); the verdict waits for it.
-    fn schedule(&mut self, now: u64, draw: u64, attempt: Attempt) -> Vec<Action> {
+    fn schedule(&mut self, now: u64, draw: u64, attempt: Attempt, confirms: bool) -> Vec<Action> {
+        self.probe_confirms = confirms;
         self.probe = Probe::Scheduled {
             at: now.saturating_add(self.probe_delay(draw)),
             attempt,
@@ -392,8 +407,14 @@ impl Core {
         }
     }
 
-    /// A fetch came due, or one fetch's answer window elapsed.
+    /// A fetch came due, or one fetch's answer window elapsed. Nothing is
+    /// sent while a republish cannot help: the facet already says what the
+    /// fetch cannot change, and a fetch this deadline would have sent is
+    /// dropped with the check.
     pub(super) fn on_directories_deadline(&mut self, now: u64) -> Vec<Action> {
+        if self.republish_cannot_help() {
+            return self.stand_down_probe();
+        }
         let Some(DirectoryHalf::Open(check)) = &mut self.directories else {
             return Vec::new();
         };
@@ -465,15 +486,19 @@ impl Core {
             Some(DirectoryHalf::Open(check)) => check.verdict(),
             None => {
                 self.probe = Probe::Idle;
+                self.probe_confirms = false;
                 return Vec::new();
             }
         };
         if !self.probe_may_run() {
             self.probe = Probe::Idle;
+            self.probe_confirms = false;
             self.directories = None;
             return Vec::new();
         }
         self.directories = None;
+        // Idle for the moment. A first miss becomes `Refetching` and keeps
+        // `probe_confirms`, so the second probe is still this republish's.
         self.probe = Probe::Idle;
         let mut actions = Vec::new();
         if verdict == DirectoryVerdict::Unmatched {
@@ -483,7 +508,14 @@ impl Core {
             (Some(evidence_at), DirectoryVerdict::Held | DirectoryVerdict::Unmatched) => {
                 let recovered = matches!(self.inbound, Inbound::Unreachable { .. });
                 self.inbound = Inbound::Reachable { evidence_at };
-                self.republish_confirmed();
+                // A Reachable while nothing is waiting on a round resets the
+                // backoff. While a republish is waiting, only the probe its
+                // own round scheduled confirms it: a jump probe, or one
+                // scheduled before the republish, can still prove the onion.
+                if self.probe_confirms || !self.republish_is_judging() {
+                    self.republish_confirmed();
+                }
+                self.probe_confirms = false;
                 if recovered {
                     actions.extend(self.say(now, Cadence::Now));
                 }
@@ -496,6 +528,7 @@ impl Core {
                     actions.push(Action::RefetchDescriptor);
                 }
                 Attempt::AfterRefetch => {
+                    self.probe_confirms = false;
                     let cause = if arrived.is_some() {
                         InboundCause::DescriptorNotFound
                     } else {
@@ -523,6 +556,7 @@ impl Core {
     pub(super) fn probe_not_dialed(&mut self) -> Vec<Action> {
         if matches!(self.probe, Probe::InFlight { .. }) {
             self.probe = Probe::Idle;
+            self.probe_confirms = false;
             self.directories = None;
         }
         Vec::new()
@@ -566,6 +600,7 @@ impl Core {
                     // Suppressed: outbound is not usable, or the onion is
                     // owed. The next round schedules the next one.
                     self.probe = Probe::Idle;
+                    self.probe_confirms = false;
                     self.directories = None;
                     return Vec::new();
                 }
@@ -579,9 +614,13 @@ impl Core {
             Probe::InFlight {
                 bound_at, attempt, ..
             } if now >= bound_at => {
+                // Idle only until the miss is judged. Clearing
+                // `probe_confirms` here would drop it before `Refetching`
+                // copies it onto the second probe.
                 self.probe = Probe::Idle;
                 let mut actions = vec![Action::CancelProbe];
                 if !self.probe_may_run() {
+                    self.probe_confirms = false;
                     self.directories = None;
                     return actions;
                 }
@@ -651,14 +690,41 @@ impl Core {
         self.onion_rejected(now)
     }
 
+    /// Drop a probe a republish is replacing. An open round keeps its
+    /// `triggered` bit: that round is not this republish's.
+    pub(super) fn disarm_probe(&mut self) -> Vec<Action> {
+        let cancel = matches!(self.probe, Probe::InFlight { .. });
+        self.probe = Probe::Idle;
+        self.probe_confirms = false;
+        self.directories = None;
+        if cancel {
+            vec![Action::CancelProbe]
+        } else {
+            Vec::new()
+        }
+    }
+
+    /// Drop the probe because a republish cannot help. The open round can
+    /// schedule its probe once standing down has cleared.
+    pub(super) fn stand_down_probe(&mut self) -> Vec<Action> {
+        if let Some(track) = &mut self.round {
+            track.triggered = false;
+        }
+        self.disarm_probe()
+    }
+
     /// Drop the probe at a fault, a hold or a stop. The driver aborts the
-    /// dial; the nonce leaves the set with it.
+    /// dial; the nonce leaves the set with it. A remedial send that had not
+    /// been published is dropped with the anchor: this Tor is gone, and
+    /// there is nothing to put back.
     pub(super) fn drop_probe(&mut self) -> Option<Action> {
         let in_flight = matches!(self.probe, Probe::InFlight { .. });
         self.probe = Probe::Idle;
+        self.probe_confirms = false;
         self.directories = None;
         self.round = None;
         self.lifetime_from = None;
+        self.queued_send = None;
         self.service_republish = false;
         in_flight.then_some(Action::CancelProbe)
     }

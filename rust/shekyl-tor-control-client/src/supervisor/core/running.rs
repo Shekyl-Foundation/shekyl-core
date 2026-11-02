@@ -35,6 +35,7 @@ impl Core {
             self.inbound = Inbound::Publishing;
         }
         self.probe = Probe::Idle;
+        self.probe_confirms = false;
         self.directories = None;
         self.round = None;
         self.service_republish = false;

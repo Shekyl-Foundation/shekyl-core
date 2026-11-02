@@ -398,7 +398,15 @@ fn a_new_tor_keeps_a_named_clock() {
         },
         due,
     );
-    core.on(Input::BootstrapComplete, due);
+    let running = core.on(Input::BootstrapComplete, due);
+    assert!(
+        running.actions.contains(&Action::RepublishOnion),
+        "a new Tor still publishes"
+    );
+    assert!(
+        core.action_stands(&Action::RepublishOnion),
+        "that first publish is not a republish the clock can withhold"
+    );
     assert!(matches!(
         core.status().inbound,
         Inbound::Unreachable {
@@ -448,4 +456,243 @@ fn a_named_clock_does_not_postpone_the_overdue_check() {
     let step = core.on_deadline(clear_at);
     assert_eq!(overdues(&step), 1, "the check that came due while named");
     assert_eq!(republishes(&step), 1);
+}
+
+/// **The liveness sample is ahead of a republish the same deadline queues.**
+/// Folding a clock that sample names withholds the send and puts the
+/// lifetime back. Fails if `on_deadline` queues `RepublishOnion` first
+/// (the driver would publish before it could know), or if
+/// `republish_withheld` keeps the anchor the send moved.
+#[test]
+fn a_sample_names_the_clock_before_the_republish_it_queues() {
+    let mut core = reachable();
+    let anchor = core
+        .lifetime_from
+        .expect("the upload numbered the descriptor");
+    let due = anchor + super::super::duration_ns(policy().descriptor_lifetime);
+    core.alive_at = Some(due);
+    let step = core.on_deadline(due);
+    let sample = step
+        .actions
+        .iter()
+        .position(|action| matches!(action, Action::Sample))
+        .expect("the liveness sample");
+    let republish = step
+        .actions
+        .iter()
+        .position(|action| matches!(action, Action::RepublishOnion))
+        .expect("the overdue republish");
+    assert!(
+        sample < republish,
+        "the sample is folded before the republish: {step:?}"
+    );
+    assert!(core.action_stands(&Action::RepublishOnion));
+    assert_eq!(
+        core.lifetime_from,
+        Some(due),
+        "the hand-over starts its lifetime"
+    );
+    core.on(clock(VALID_AFTER, VALID_AFTER - DAY), due);
+    assert!(
+        !core.action_stands(&Action::RepublishOnion),
+        "a named clock withholds the send already handed over"
+    );
+    core.on(Input::RepublishWithheld, due);
+    assert_eq!(core.lifetime_from, Some(anchor), "the anchor is put back");
+    assert!(!core.service_republish);
+    assert!(!core.republish_is_judging(), "the send was not published");
+    assert_eq!(core.republish(due), [], "a named clock does not send it");
+    core.on(clock(VALID_AFTER, VALID_AFTER), due);
+    let again = core.deadline().expect("the restored anchor is due");
+    assert!(
+        again <= due,
+        "the anchor was put back, not started again: due at {again}"
+    );
+}
+
+/// **A hold that expires while a republish cannot help stays owed.** The
+/// deadline is hidden, and it is not cleared. Once the clock clears, that
+/// same instant sends. Fails if `on_republish_deadline` clears `until`
+/// while standing down: the owed republish would never run.
+#[test]
+fn a_republish_held_while_suppressed_stays_owed() {
+    let mut core = reachable();
+    let at = secs(100);
+    assert_eq!(core.republish(at), [Action::RepublishOnion]);
+    core.on(Input::OnionPublished, at);
+    core.republish_failed(at);
+    assert_eq!(core.republish(at), [], "held");
+    let due = core.republish.due().expect("the owed republish");
+    core.on(clock(VALID_AFTER, VALID_AFTER - DAY), at + 1);
+    assert_eq!(
+        core.republish_due(),
+        None,
+        "hidden while the clock is named"
+    );
+    let served = core.on_deadline(due + secs(1));
+    assert_eq!(republishes(&served), 0, "the past hold does not spin");
+    assert_eq!(core.republish.due(), Some(due), "the hold was not cleared");
+    core.on(clock(VALID_AFTER, VALID_AFTER), due + secs(2));
+    assert_eq!(core.republish_due(), Some(due));
+    let step = core.on_deadline(due + secs(2));
+    assert_eq!(republishes(&step), 1, "it runs once a republish can help");
+}
+
+/// **A republish's lifetime starts when it is handed over**, not at the
+/// previous upload's remainder, and a descriptor that was never uploaded
+/// still starts one. Fails if `republish` leaves `lifetime_from` where it
+/// was: the no-round timeout would be the old descriptor's, or none.
+#[test]
+fn a_republish_counts_its_lifetime_from_the_send() {
+    let lifetime = super::super::duration_ns(policy().descriptor_lifetime);
+    let mut core = published();
+    assert_eq!(core.lifetime_from, None);
+    let at = secs(50);
+    assert_eq!(core.republish(at), [Action::RepublishOnion]);
+    assert_eq!(core.overdue_due(), Some(at + lifetime));
+
+    let mut core = reachable();
+    assert_eq!(core.lifetime_from, Some(0));
+    let at = secs(100);
+    assert_eq!(core.republish(at), [Action::RepublishOnion]);
+    assert_eq!(
+        core.overdue_due(),
+        Some(at + lifetime),
+        "not the previous upload's remainder"
+    );
+}
+
+/// **A probe already in hand is cancelled when the republish is handed
+/// over**, so that probe cannot confirm it. An idle probe adds no cancel.
+/// Fails if `republish` leaves the dial running.
+#[test]
+fn a_republish_cancels_the_probe_in_hand() {
+    let mut core = published();
+    core.on(Input::UploadRoundStarted, 0);
+    core.on(Input::FirstUploaded { draw: 0 }, 0);
+    core.on(uploaded(0), secs(5));
+    let (probe_at, step) = run_timed(&mut core, secs(20));
+    assert_eq!(probes(&step), 1);
+    core.on(
+        Input::ProbeDialed {
+            minted_at: probe_at,
+        },
+        probe_at,
+    );
+    assert_eq!(
+        core.republish(probe_at + 1),
+        [Action::CancelProbe, Action::RepublishOnion]
+    );
+}
+
+/// **Naming the clock drops a probe already in hand.** Its dial is
+/// cancelled, and a directory check queued beside it no longer stands.
+/// Fails if `consensus_clock` leaves the probe to judge the copy a
+/// republish cannot replace.
+#[test]
+fn a_named_clock_drops_the_probe_in_hand() {
+    let mut core = published();
+    core.on(Input::UploadRoundStarted, 0);
+    core.on(Input::FirstUploaded { draw: 0 }, 0);
+    core.on(uploaded(0), secs(5));
+    let (probe_at, step) = run_timed(&mut core, secs(20));
+    assert_eq!(probes(&step), 1);
+    core.on(
+        Input::ProbeDialed {
+            minted_at: probe_at,
+        },
+        probe_at,
+    );
+    let named = core.on(clock(VALID_AFTER, VALID_AFTER - DAY), probe_at + 1);
+    assert!(
+        named.actions.contains(&Action::CancelProbe),
+        "the probe in hand is dropped: {named:?}"
+    );
+    assert!(!core.action_stands(&Action::Probe));
+    assert!(!core.action_stands(&Action::CheckDirectories));
+}
+
+/// **A round's wait that runs out while standing down does not spend the
+/// round's one probe.** The round's end, once the clock has cleared,
+/// schedules it. Fails if `on_round_deadline` sets `triggered` when
+/// `trigger` scheduled nothing.
+#[test]
+fn a_round_wait_while_suppressed_can_still_schedule() {
+    let mut core = reachable();
+    core.on(clock(VALID_AFTER, VALID_AFTER - DAY), secs(30));
+    core.on(Input::UploadRoundStarted, secs(40));
+    core.on(Input::FirstUploaded { draw: 0 }, secs(40));
+    let waited = core.on_deadline(secs(40) + super::super::duration_ns(policy().round_wait));
+    assert_eq!(checks(&waited), 0, "standing down schedules nothing");
+    let clear = secs(40) + super::super::duration_ns(policy().round_wait) + secs(1);
+    core.on(clock(VALID_AFTER, VALID_AFTER), clear);
+    let ended = core.on(uploaded(0), clear);
+    assert_eq!(
+        checks(&ended),
+        1,
+        "the round's end still schedules its probe"
+    );
+}
+
+/// **A jump probe does not confirm a republish waiting on its own round.**
+/// It can still find the onion reachable. The round's own probe does
+/// confirm it (the backoff test). Fails if `judge` calls
+/// `republish_confirmed` for every Reachable.
+#[test]
+fn a_jump_probe_does_not_confirm_a_republish_waiting_on_its_round() {
+    let mut core = published();
+    let at = secs(1_000);
+    assert_eq!(core.republish(at), [Action::RepublishOnion]);
+    core.on(Input::OnionPublished, at);
+    assert!(core.republish_is_judging());
+    let jumped = core.on(Input::ClockJumped, at + 1);
+    assert!(jumped.actions.contains(&Action::ProbeAfterJump));
+    core.on(Input::JumpProbeDrawn { draw: 0 }, at + 1);
+    let (probe_at, step) = run_timed(&mut core, at + secs(20));
+    assert_eq!(probes(&step), 1, "the jump probe");
+    core.on(
+        Input::ProbeDialed {
+            minted_at: probe_at,
+        },
+        probe_at,
+    );
+    core.on(arrival(probe_at, probe_at + secs(1)), probe_at + secs(1));
+    assert!(matches!(core.status().inbound, Inbound::Reachable { .. }));
+    assert!(core.republish_is_judging(), "the wait stands");
+    assert_eq!(
+        core.republish(probe_at + secs(2)),
+        [],
+        "the jump probe does not reset the backoff"
+    );
+}
+
+/// **A round in which no upload succeeded leaves refused uploads standing.**
+/// It is not a round of uploads, so it does not clear the cause and it does
+/// not republish. Fails if `round_ended` clears `uploads_refused` whenever
+/// the round was not a majority refusal.
+#[test]
+fn a_round_with_no_upload_leaves_refused_uploads_standing() {
+    let mut core = reachable();
+    core.on(round_tally(2, 14, 16), secs(30));
+    assert!(matches!(
+        core.status().inbound,
+        Inbound::Unreachable {
+            cause: InboundCause::UploadsRefused,
+            ..
+        }
+    ));
+    core.on(Input::UploadRoundStarted, secs(40));
+    let ended = core.on(round_tally(0, 0, 16), secs(50));
+    assert_eq!(republishes(&ended), 0);
+    assert!(
+        matches!(
+            core.status().inbound,
+            Inbound::Unreachable {
+                cause: InboundCause::UploadsRefused,
+                ..
+            }
+        ),
+        "a round with no upload is not a round of uploads: {:?}",
+        core.status().inbound
+    );
 }

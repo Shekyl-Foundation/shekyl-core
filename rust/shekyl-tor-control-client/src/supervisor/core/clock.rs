@@ -24,13 +24,16 @@
 //! **No republish while it cannot help:** while the clock is named, or while
 //! more than half of the latest round's directories refused its upload. A
 //! republish replaces the introduction points, and the directories would
-//! keep advertising the old ones (the VM run's loop, 36 republishes).
+//! keep advertising the old ones (the VM run's loop, 36 republishes). One
+//! already handed to the driver is withheld, and the lifetime it started
+//! is put back.
 //!
 //! **The backoff.** A republish waits for its own round to end and its probe,
 //! with the directory check, to judge it. A failed judgment holds the next
 //! republish for a wait that doubles each time, from
 //! `Policy::republish_after` up to the descriptor's lifetime; a confirmed
-//! Reachable resets it. This gap stood with a correct clock as well.
+//! Reachable resets it. While a republish is waiting on its own round, only
+//! that round's probe confirms it. This gap stood with a correct clock as well.
 
 use std::time::Duration;
 
@@ -61,10 +64,24 @@ impl RepublishHold {
         }
     }
 
-    /// When an owed republish may run.
+    /// When an owed republish may run. Hidden while a republish cannot help,
+    /// by [`Core::republish_due`]: a past hold must not spin, and it runs
+    /// once standing down clears.
     pub(super) fn due(&self) -> Option<u64> {
         self.until.filter(|_| self.owed)
     }
+}
+
+/// A remedial republish handed to the driver and not yet published. If the
+/// driver withholds it, these are what the core puts back.
+#[derive(Clone, Copy, Debug)]
+pub(super) struct QueuedSend {
+    /// `lifetime_from` before the hand-over moved it.
+    anchor: Option<u64>,
+    /// The hold's `until` before the hand-over cleared it.
+    until: Option<u64>,
+    /// The hold's `owed` before the hand-over cleared it.
+    owed: bool,
 }
 
 impl Core {
@@ -80,10 +97,15 @@ impl Core {
         let behind = valid_after.saturating_sub(wall);
         if behind > self.policy.clock_behind_after.as_secs() {
             let behind = Duration::from_secs(behind);
-            if !self.note_clock_behind(now, behind) {
-                return Vec::new();
+            let newly = self.note_clock_behind(now, behind);
+            // A probe already in hand would judge the copy a republish
+            // cannot replace. Drop it, including one this same deadline
+            // armed before the sample was folded.
+            let mut actions = self.stand_down_probe();
+            if newly {
+                actions.extend(self.say(now, Cadence::Due));
             }
-            return self.say(now, Cadence::Due);
+            return actions;
         }
         if !self.clock_is_behind() {
             return Vec::new();
@@ -111,11 +133,13 @@ impl Core {
         if self.republish.judging {
             self.republish_failed(now);
         }
+        let mut actions = self.stand_down_probe();
         if self.clock_is_behind() || !newly {
-            return Vec::new();
+            return actions;
         }
         self.inbound_unreachable(now, InboundCause::UploadsRefused);
-        self.say(now, Cadence::Due)
+        actions.extend(self.say(now, Cadence::Due));
+        actions
     }
 
     /// A round that was not refused clears refused uploads. The facet is
@@ -139,6 +163,22 @@ impl Core {
     /// republish cannot help.
     pub(super) fn republish_cannot_help(&self) -> bool {
         self.clock_is_behind() || self.uploads_refused
+    }
+
+    /// The republish is waiting on its own round's probe.
+    pub(super) fn republish_is_judging(&self) -> bool {
+        self.republish.judging
+    }
+
+    /// When an owed republish may run. None while one cannot help, so a
+    /// hold that expired during standing down does not spin; the original
+    /// instant is still there and fires once standing down clears.
+    pub(super) fn republish_due(&self) -> Option<u64> {
+        if self.republish_cannot_help() {
+            None
+        } else {
+            self.republish.due()
+        }
     }
 
     /// How far behind the consensus this computer's clock is, while the
@@ -178,6 +218,11 @@ impl Core {
     /// cannot help or the backoff holds it; a held one is owed and runs when
     /// the hold ends. Refused, it is a process fault, as the Service remedy's
     /// is.
+    ///
+    /// The hand-over starts this republish's own lifetime and drops a probe
+    /// already in hand, so that probe cannot confirm the republish. The
+    /// driver may still withhold the send: a liveness sample queued ahead of
+    /// it can name the clock first ([`Self::republish_withheld`]).
     pub(super) fn republish(&mut self, now: u64) -> Vec<Action> {
         if self.republish_cannot_help() {
             return Vec::new();
@@ -189,12 +234,50 @@ impl Core {
         let Phase::Running { onion, .. } = &mut self.phase else {
             return Vec::new();
         };
+        self.queued_send = Some(QueuedSend {
+            anchor: self.lifetime_from,
+            until: self.republish.until,
+            owed: self.republish.owed,
+        });
+        // The republish's own lifetime, not the remainder of the descriptor
+        // the previous upload numbered (§4.5). A withhold puts `anchor` back.
+        self.lifetime_from = Some(now);
         *onion = Duty::Owed;
         self.service_republish = true;
         self.republish.judging = true;
         self.republish.until = None;
         self.republish.owed = false;
-        vec![Action::RepublishOnion]
+        let mut actions = self.disarm_probe();
+        actions.push(Action::RepublishOnion);
+        actions
+    }
+
+    /// The driver did not send the remedial republish: standing down was
+    /// named after the hand-over. The anchor goes back. A hold started
+    /// since the hand-over (a refused round failing the judgment) stays;
+    /// otherwise the hold the hand-over cleared is restored, still due when
+    /// a republish can help, and not spinning while one cannot.
+    pub(super) fn republish_withheld(&mut self) -> Vec<Action> {
+        let Some(queued) = self.queued_send.take() else {
+            return Vec::new();
+        };
+        self.lifetime_from = queued.anchor;
+        self.service_republish = false;
+        // The send did not happen, so the onion already published is still
+        // the one in service. `Waiting` is that same hand-over after the
+        // forward listener was absent; leaving it would publish again when
+        // the listener returns.
+        if let Phase::Running { onion, .. } = &mut self.phase {
+            if *onion != Duty::Done {
+                *onion = Duty::Done;
+            }
+        }
+        if self.republish.until.is_none() {
+            self.republish.judging = false;
+            self.republish.owed = queued.owed;
+            self.republish.until = queued.until;
+        }
+        Vec::new()
     }
 
     /// The republish's round was judged unreachable, or ended with nothing
@@ -215,13 +298,24 @@ impl Core {
         self.republish = RepublishHold::new(duration_ns(self.policy.republish_after));
     }
 
-    /// The hold ended with a republish owed.
+    /// The hold ended with a republish owed. While one cannot help the hold
+    /// stays where it is (and [`Self::republish_due`] does not arm it, so
+    /// this does not spin). A phase that can no longer send drops the debt
+    /// rather than arming a past instant forever.
     pub(super) fn on_republish_deadline(&mut self, now: u64) -> Vec<Action> {
-        self.republish.until = None;
-        if !std::mem::take(&mut self.republish.owed) {
+        if self.republish_cannot_help() {
             return Vec::new();
         }
-        self.republish(now)
+        let actions = self.republish(now);
+        if !actions
+            .iter()
+            .any(|action| matches!(action, Action::RepublishOnion))
+            && !matches!(self.phase, Phase::Running { .. })
+        {
+            self.republish.until = None;
+            self.republish.owed = false;
+        }
+        actions
     }
 
     /// A Tor reached Running: its first publish is not a republish, and
@@ -230,6 +324,7 @@ impl Core {
         self.republish.judging = false;
         self.republish.until = None;
         self.republish.owed = false;
+        self.queued_send = None;
     }
 
     fn inbound_unreachable(&mut self, now: u64, cause: InboundCause) {

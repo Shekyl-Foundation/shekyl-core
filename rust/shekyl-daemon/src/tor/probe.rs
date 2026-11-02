@@ -215,7 +215,10 @@ impl Drive {
 /// not give.
 impl Drive {
     pub(super) async fn directories_drawn(&self) -> Input {
-        let ours = self.our_descriptor().await;
+        let ours = match self.our_descriptor().await {
+            Ok(ours) => ours,
+            Err(fault) => return fault,
+        };
         let fetches = self
             .rounds
             .as_ref()
@@ -238,12 +241,15 @@ impl Drive {
     /// (tor 0.4.9.14 `control_getinfo.c:569`, `hs_service.c:4222-4242`), its
     /// blinded key and counter. A copy of that descriptor must carry that
     /// counter; from 12:00 to 00:00 UTC clients ask for `desc_next` instead,
-    /// whose counter Tor does not give.
-    async fn our_descriptor(&self) -> Option<ServiceDescriptor> {
-        let (control, service) = (self.control.as_ref()?, self.service.as_ref()?);
+    /// whose counter Tor does not give. No control connection, or no
+    /// service yet, is no descriptor. An ask that fails is a process fault:
+    /// the check must not go on as if Tor had said the descriptor was absent.
+    async fn our_descriptor(&self) -> Result<Option<ServiceDescriptor>, Input> {
+        let (Some(control), Some(service)) = (self.control.as_ref(), self.service.as_ref()) else {
+            return Ok(None);
+        };
         let key = format!("hs/service/desc/id/{}", service.as_str());
-        let reply = control.ask(Command::GetInfo(vec![key])).await;
-        match reply {
+        match control.ask(Command::GetInfo(vec![key])).await {
             Ok(reply) => {
                 let ours = parse_service_descriptor(&reply);
                 match &ours {
@@ -259,11 +265,11 @@ impl Drive {
                         "Tor gave no descriptor for this onion; the check counts nothing and the probe alone decides"
                     ),
                 }
-                ours
+                Ok(ours)
             }
             Err(error) => {
                 tracing::debug!(target: "tor", "this onion's descriptor was not asked ({error})");
-                None
+                Err(super::input_of_ask(&error))
             }
         }
     }

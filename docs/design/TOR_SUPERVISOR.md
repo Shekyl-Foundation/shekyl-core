@@ -674,9 +674,13 @@ has broken its own lifetime, and repairing that is not second-guessing Tor.
   supervisor's clock (awake time; a resume restarts it from the wake, §5),
   and is disarmed while a round is open. A round that ends with no upload
   leaves the old anchor standing, so the republish can be due at once. The
-  next lifetime counts from the republish, so one that brings no round does
-  not ask again at every tick; a republish still waiting for its round a
-  whole lifetime later never got one, which is its failed judgment, and the
+  next lifetime counts from the republish, from the moment it is handed to
+  the driver, including one the overdue check did not ask for, so the
+  previous descriptor's remaining life does not judge it. No upload ever
+  having succeeded still starts that count. A hand-over the driver then
+  does not send puts the anchor back. One that brings no round does not
+  ask again at every tick; a republish still waiting for its round a whole
+  lifetime later never got one, which is its failed judgment, and the
   backoff holds the next. Only an upload shows how old the descriptor is,
   so no probe's arrival moves the anchor. Not while a republish cannot help
   (below): the overdue check then stands down and says nothing.
@@ -800,8 +804,10 @@ schedule that stalled. The facet is then unknown until a probe judges it.
 refused (§4.2) is the clock's signature even when the clock reads inside
 the tolerance: inbound is `Unreachable` with `UploadsRefused`, said as "The
 Tor network is not accepting this node's address right now. Others may not
-be able to reach this node." A round that is not refused clears it, and its
-probe judges the facet.
+be able to reach this node." A round in which an upload succeeded, and which
+was not refused, clears it, and its probe judges the facet. A round in which
+no upload succeeded leaves refused uploads standing: it is not a round of
+uploads, and Tor retries its own.
 
 **No republish while it cannot help.** While the clock is named, or the
 latest round was refused, nothing is republished: a republish replaces the
@@ -811,7 +817,12 @@ named, so every stranger's dial failed at introduction). The overdue check
 stands down, and no probe is scheduled or judged: the facet already says
 what a probe could not change, and a probe's verdict would overwrite it.
 Standing down does not move the descriptor's lifetime anchor, so a check
-that came due while a republish could not help runs when one can.
+that came due while a republish could not help runs when one can. A
+remedial republish already handed to the driver is not sent once standing
+down; the anchor it moved is put back, and a hold it cleared stays due
+when a republish can help. A probe or directory fetch already handed over
+is dropped, and the open round can still schedule its probe once standing
+down has cleared.
 A republish has two triggers only: the overdue upload and the two-miss
 rule.
 
@@ -821,7 +832,10 @@ owed, not sent. A failed judgment (the two-miss rule again, a round with no
 upload, a refused round, or no round within a lifetime) holds the next
 republish for the current wait, which then doubles, from §10 `TSR-M14`
 (300 s) up to the descriptor's lifetime (3 h). A confirmed Reachable resets
-it. A republish owed while held runs when the hold ends. The gap stood with
+it. While a republish is waiting for its own round, only that round's probe
+confirms it; an older probe, or the probe after a clock jump, can still find
+the onion reachable and does not clear the republish's wait. A republish
+owed while held runs when the hold ends. The gap stood with
 a correct clock too: two misses republished at once, every time.
 
 **Stated costs.** A failure Tor does not notice, and that causes no re-upload,
@@ -1071,7 +1085,7 @@ that detail, not variants of `ManagedTorFix`.
 | Stranded after a clock jump | `CLOCK_JUMPED` during the bootstrap, then neither the percent nor a known `traffic/read` moving for `Policy::jump_stall_after` (5 min), judged at a sample (a count Tor did not give is unknown, not a stall) | Restarting | Tor stopped making progress after this computer's clock changed, and is being started again | none | respawn into the kept directory (§4.4) |
 | Onion unreachable | two consecutive probes past their bound, the second after `HSFETCH`, or a directory check that misses twice (§4.5) | Degraded (inbound) | peers cannot reach this node through Tor right now, and its address is being published again; no fix, after the outbound cause and its fix when one stands | none | republish (`DEL_ONION`, then `ADD_ONION`) when the backoff allows; a refused republish is a process fault |
 | Clock behind the network | `consensus/valid-after` ahead of the wall time by more than `TSR-M13` (360 s), at a liveness sample, Bootstrapping or Running (§4.2) | Degraded (inbound) | this computer's clock is at least N behind the Tor network's; others may not be able to reach this node; check this computer's date and time (N from `Status::clock_behind`) | none | none: no republish and no probe until it clears |
-| Uploads refused | a round in which more than half of the uploads ended `UPLOAD_REJECTED` (§4.2) | Degraded (inbound) | the Tor network is not accepting this node's address right now; others may not be able to reach this node | none | none: no republish and no probe until a round is not refused |
+| Uploads refused | a round in which more than half of the uploads ended `UPLOAD_REJECTED` (§4.2) | Degraded (inbound) | the Tor network is not accepting this node's address right now; others may not be able to reach this node | none | none: no republish and no probe until a round in which an upload succeeded is not refused |
 | Tor exited or wedged | exit, EOF, reply bound | Restarting | none unless repeated; then the count and the last exit, and where the previous log is | none | respawn |
 | Tor install defect | the pin gate at spawn | Restarting (held) | the file that failed the pin. The binary is not executed | `RestoreManaged`, plus the fixes the posture table offers | retry at the cap; the message repeats once per cap |
 | No Tor installed | discovery finding nothing | Restarting (held) | none was found. `tor-file` may name a bundle that passes the pin | `RestoreManaged`, plus the fixes the posture table offers | retry at the cap; the message repeats once per cap |
