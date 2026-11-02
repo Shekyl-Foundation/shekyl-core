@@ -5944,6 +5944,75 @@ fn capture_build_identity(daemon_version: &str) -> String {
     head
 }
 
+/// `YYYY-MM-DD <rationale>`: the shape rule 50 requires of
+/// [`CAPTURE_REGEN_DECISION_ENV`]. A date with no rationale, and a rationale
+/// with no date, are both silence.
+fn cited_regen_decision(decision: &str) -> bool {
+    let bytes = decision.as_bytes();
+    bytes.len() > 11
+        && bytes[..10].iter().enumerate().all(|(i, byte)| match i {
+            4 | 7 => *byte == b'-',
+            _ => byte.is_ascii_digit(),
+        })
+        && bytes[10] == b' '
+}
+
+/// The variable that arms this capture. The same name the wallet
+/// regenerators use; the citation this one records is
+/// `docs/design/DAEMON_REDB_STORE.md` §12.1, so the refusal is local rather
+/// than the wallet log's.
+const CAPTURE_REGEN_DECISION_ENV: &str = "SHEKYL_PINNED_REGEN_DECISION";
+
+/// The decision that authorizes rewriting the E2 corpus. Called before the
+/// committed vector is deleted.
+fn capture_regen_decision() -> String {
+    let decision = std::env::var(CAPTURE_REGEN_DECISION_ENV).unwrap_or_default();
+    assert!(
+        cited_regen_decision(&decision),
+        "refusing to regenerate the E2 corpus: set \
+         {CAPTURE_REGEN_DECISION_ENV}=\"YYYY-MM-DD <rationale>\" citing the \
+         docs/design/DAEMON_REDB_STORE.md §12.1 entry that authorizes the move \
+         (got: {decision:?}). Moving a pinned vector is a decision, not a test \
+         fix — see 50-testing.mdc."
+    );
+    decision
+}
+
+/// The commit a `shekyl-chain-replay --version` line names: its last
+/// whitespace-separated token, when that token is nine hex digits.
+fn commit_named_by_version(version: &str) -> Option<&str> {
+    let token = version.split_whitespace().next_back()?;
+    (token.len() == 9 && token.bytes().all(|b| b.is_ascii_hexdigit())).then_some(token)
+}
+
+/// The replay binary's own build, held to the checkout the daemon was
+/// built at. A binary that names no commit, or another commit, is refused
+/// before the committed vector is touched.
+fn replay_build_identity(replay_bin: &Path, head: &str) -> String {
+    let out =
+        shekyl_tor_control_client::spawn_lock::output(Command::new(replay_bin).arg("--version"))
+            .expect("spawn shekyl-chain-replay --version");
+    assert!(
+        out.status.success(),
+        "shekyl-chain-replay --version failed: {}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+    let reported = String::from_utf8_lossy(&out.stdout);
+    let named = commit_named_by_version(&reported).unwrap_or_else(|| {
+        panic!(
+            "SHEKYL_CHAIN_REPLAY_BIN reports `{reported}`, which names no commit; rebuild \
+             shekyl-chain-replay at HEAD before capturing, so the trace names the code that \
+             wrote it"
+        )
+    });
+    assert_eq!(
+        named, head,
+        "SHEKYL_CHAIN_REPLAY_BIN was built at {named} but the checkout is at {head}: rebuild \
+         the replay binary at HEAD before capturing, so the trace names the code that wrote it"
+    );
+    named.to_owned()
+}
+
 /// A daemon whose version names no commit cannot vouch for a capture. No
 /// daemon needed: the refusal precedes every probe of the checkout.
 #[test]
@@ -5960,6 +6029,26 @@ fn a_capture_refuses_a_daemon_built_at_another_commit() {
     capture_build_identity("3.1.0-000000000");
 }
 
+#[test]
+fn a_cited_decision_is_a_date_then_a_rationale() {
+    assert!(cited_regen_decision("2026-11-01 the E2 corpus moves"));
+    assert!(!cited_regen_decision(""));
+    assert!(!cited_regen_decision("2026-11-01"));
+    assert!(!cited_regen_decision("2026-11-1 the E2 corpus moves"));
+}
+
+#[test]
+fn a_version_line_names_its_last_nine_hex_digits() {
+    assert_eq!(
+        commit_named_by_version("shekyl-chain-replay aad0d0c7e\n"),
+        Some("aad0d0c7e")
+    );
+    assert_eq!(
+        commit_named_by_version("shekyl-chain-replay unknown\n"),
+        None
+    );
+}
+
 /// Capture the regtest chain as the **E2 replay pair** — a corpus and a
 /// trace — for the consensus validator's verification-era fixtures
 /// (`CHAIN_RULES_SLICE_6.md` §5.2, Q1 (ii)), under
@@ -5972,21 +6061,24 @@ fn a_capture_refuses_a_daemon_built_at_another_commit() {
 /// a binary; RD-F15: the corpus writer verifies every body against its
 /// header). `shekyl-chain-replay fetch` builds the corpus from the live
 /// daemon over `/get_blocks_by_height.bin` — every block and every listed
-/// transaction's **full** bytes. `shekyl-e2-trace-export` harvests the
-/// trace — the passed-through facts (weights, `coins_generated`, the
-/// curve-tree root after each block, cumulative difficulty) and the
-/// daemon's own logical-state digest at the tip — from the daemon's LMDB
-/// under one read snapshot, **while the daemon is alive**: the harness
-/// removes the data dir on drop. Both tools are located by env var, like
-/// the daemon itself.
+/// transaction's **full** bytes. `shekyl-chain-replay baseline` replays
+/// that corpus against a fresh store and writes the trace from the rows
+/// the store recorded (`DAEMON_REDB_STORE.md` §12.1). The binary is located
+/// by env var, like the daemon itself, and its `--version` must name the
+/// same commit the daemon was built at: a stale replay binary would stamp
+/// the daemon's sha onto a trace it did not write.
+///
+/// A capture rewrites pinned vectors, so it is a decision (rule 50).
+/// `SHEKYL_PINNED_REGEN_DECISION` must cite the §12.1 entry that authorizes
+/// the move, in the `YYYY-MM-DD <rationale>` shape, before the committed
+/// vector is touched. The citation is recorded on the new manifest.
 ///
 /// Blocks, not transactions, because the consumer is a **replay**:
 /// `shekyl-chain-ingest` connects the chain against a real store, so the
 /// spent set and the reference heights the 4.I rules read are derived by
 /// the code that derives them in production (`50-testing.mdc`: *a fixture
 /// that constructs the state a rule reads back is not a test of the
-/// rule*). The root is the one passed-through fact until E3 makes the store
-/// derive it — recorded as such in the slice doc, not hidden here.
+/// rule*).
 ///
 /// `spend_txid` is recorded when the generator knows it; the archival
 /// shapes are located by their vin class at load, so it is `None` there.
@@ -6047,17 +6139,17 @@ async fn maybe_capture_chain_vector(
     let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
         .join("../shekyl-chain-ingest/tests/vectors")
         .join(shape);
-    // The LMDB harvest that wrote trace.e2 is gone. A capture replaces the
-    // corpus and leaves that file as it was.
-    let kept_trace = root.join("trace.e2");
-    let kept_trace_bytes = std::fs::read(&kept_trace).ok();
+    // The decision and both build identities, before the committed vector
+    // is touched: a missing citation, a daemon that names no commit, or a
+    // replay binary built at another commit leaves the old capture whole.
+    let regen_decision = capture_regen_decision();
+    let daemon_version = daemon.version().await;
+    let built_at_dev_sha = capture_build_identity(&daemon_version);
+    let baseline_built_at_dev_sha = replay_build_identity(&replay_bin, &built_at_dev_sha);
     if root.exists() {
         std::fs::remove_dir_all(&root).expect("clear a stale capture");
     }
     std::fs::create_dir_all(&root).expect("create capture dir");
-    if let Some(bytes) = &kept_trace_bytes {
-        std::fs::write(&kept_trace, bytes).expect("keep the pre-flip trace");
-    }
     let corpus = root.join("corpus.e2");
 
     let mut fetch = Command::new(&replay_bin);
@@ -6141,8 +6233,6 @@ async fn maybe_capture_chain_vector(
         .as_str()
         .expect("block 0's hash")
         .to_owned();
-    let daemon_version = daemon.version().await;
-    let built_at_dev_sha = capture_build_identity(&daemon_version);
 
     // The schedule the chain was mined under — the daemon's levers when the
     // harness pulled them, the genesis pair otherwise. The replay opens
@@ -6157,6 +6247,44 @@ async fn maybe_capture_chain_vector(
         ),
     };
 
+    // The trace is the Rust baseline (`DAEMON_REDB_STORE.md` §12.1): the
+    // corpus replayed against a fresh store under the production substrate
+    // and the rules this chain was mined under, then the store's chain
+    // written out. A chain the replay refuses is no baseline, and the
+    // capture fails here rather than pinning a half-chain.
+    let trace = root.join("trace.e2");
+    let baseline_store = std::env::temp_dir().join(format!(
+        "shekyl-capture-baseline-{shape}-{}",
+        std::process::id()
+    ));
+    // A redb store is one file.
+    if baseline_store.exists() {
+        std::fs::remove_file(&baseline_store).expect("clear a stale baseline store");
+    }
+    let mut baseline = Command::new(&replay_bin);
+    baseline
+        .args(["baseline", "--chain", "regtest", "--fixed-difficulty", "1"])
+        .arg("--corpus")
+        .arg(&corpus)
+        .arg("--store")
+        .arg(&baseline_store)
+        .arg("--settlement-epoch-blocks")
+        .arg(settlement_epoch_blocks.to_string())
+        .arg("--reorg-cap")
+        .arg(reorg_cap_blocks.to_string())
+        .arg("--out")
+        .arg(&trace);
+    let baseline = shekyl_tor_control_client::spawn_lock::output(&mut baseline)
+        .expect("spawn shekyl-chain-replay baseline");
+    assert!(
+        baseline.status.success(),
+        "shekyl-chain-replay baseline failed (its store is kept at {}): {}\n{}",
+        baseline_store.display(),
+        String::from_utf8_lossy(&baseline.stdout),
+        String::from_utf8_lossy(&baseline.stderr)
+    );
+    std::fs::remove_file(&baseline_store).expect("remove the baseline store");
+
     // Format 4 (DRS-E4 commit 7): `out_of_band_writes` rows are structured
     // — the kind and the injector's receipt in the corpus's one spelling —
     // where format 3 carried prose.
@@ -6166,19 +6294,26 @@ async fn maybe_capture_chain_vector(
         "genesis_hash": genesis_hash,
         "built_at_dev_sha": built_at_dev_sha,
         "description":
-            "A regtest chain captured as corpus.e2: every block 0..=tip_height \
-             with the FULL bytes of every listed transaction \
-             (shekyl-chain-replay fetch, RD-F15-verified). The LMDB harvest \
-             that wrote trace.e2 is gone with the daemon store; a trace.e2 \
-             beside this corpus is the pre-flip file and is not rewritten. \
-             Consumed by replay: shekyl-chain-ingest connects the chain \
-             against a real store, so the state the 4.I rules read is \
-             derived, not asserted. Regenerate with \
-             SHEKYL_CAPTURE_CHAIN_VECTORS=1, SHEKYLD_BIN and \
-             SHEKYL_CHAIN_REPLAY_BIN set, running the named generator --ignored.",
+            "A regtest chain captured whole as the DRS-E2 replay pair. \
+             corpus.e2: every block 0..=tip_height with the FULL bytes of \
+             every listed transaction (shekyl-chain-replay fetch, \
+             RD-F15-verified). trace.e2: the Rust baseline \
+             (shekyl-chain-replay baseline): the corpus replayed against a \
+             fresh store, then each height's facts and the tip's digest and \
+             archival rows read off it, pinned at built_at_dev_sha. A \
+             regression gate, not a conformance oracle. Consumed by replay: \
+             shekyl-chain-ingest connects the chain against a real store, so \
+             the state the 4.I rules read is derived, not asserted. \
+             Regenerate with SHEKYL_CAPTURE_CHAIN_VECTORS=1, \
+             SHEKYL_PINNED_REGEN_DECISION=\"YYYY-MM-DD <rationale>\" citing \
+             DAEMON_REDB_STORE.md §12.1, SHEKYLD_BIN and SHEKYL_CHAIN_REPLAY_BIN \
+             set to binaries built at that same HEAD, running the named \
+             generator --ignored.",
         "shape": shape,
         "generator": generator,
         "captured_by_daemon_version": daemon_version,
+        "regen_decision": regen_decision,
+        "baseline_built_at_dev_sha": baseline_built_at_dev_sha,
         "tip_height": tip,
         "block_count": count,
         "spend_txid": spend_txid.map(|h| h.to_string()),
@@ -6214,7 +6349,7 @@ async fn maybe_capture_chain_vector(
         "captured chain vector `{shape}` -> {} ({count} blocks; corpus {} B, trace {} B)",
         root.display(),
         std::fs::metadata(&corpus).map(|m| m.len()).unwrap_or(0),
-        std::fs::metadata(&kept_trace).map(|m| m.len()).unwrap_or(0),
+        std::fs::metadata(&trace).map(|m| m.len()).unwrap_or(0),
     );
 }
 

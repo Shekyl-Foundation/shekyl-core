@@ -202,6 +202,8 @@ fn every_mutation_names_a_row_and_the_pending_ones_are_those_the_plan_lists() {
             (Mutation::ReferenceTooRecent, ExpectedPlace::Listed),
             // Slice 6 commit 8: the signature names its input, as I7 does.
             (Mutation::ForgedSignature, ExpectedPlace::Input),
+            // CEN-I4 names the transaction whose vin is over the cap.
+            (Mutation::TooManyInputs, ExpectedPlace::Listed),
         ]
     );
 }
@@ -351,4 +353,25 @@ fn the_last_representable_height_is_yielded_and_another_event_is_a_fault() {
     );
     assert!(source.next().expect("yielded").is_some());
     assert!(source.next().expect("clean end").is_none());
+}
+
+/// [`EXTRA_KEY_IMAGES`] are what they claim: `k·G` for `k` in `2..=9`,
+/// each canonical, torsion-free and not the identity, all distinct.
+#[test]
+fn the_extra_images_are_k_times_g() {
+    use curve25519_dalek::constants::ED25519_BASEPOINT_POINT;
+    use curve25519_dalek::edwards::CompressedEdwardsY;
+    use curve25519_dalek::scalar::Scalar;
+    for (k, bytes) in (2u64..).zip(crate::mutation::EXTRA_KEY_IMAGES) {
+        let point = CompressedEdwardsY(bytes)
+            .decompress()
+            .unwrap_or_else(|| panic!("{k}·G decodes"));
+        assert_eq!(point, ED25519_BASEPOINT_POINT * Scalar::from(k), "{k}·G");
+        assert_eq!(point.compress().to_bytes(), bytes, "{k}·G is canonical");
+        assert!(point.is_torsion_free(), "{k}·G is torsion-free");
+    }
+    let mut seen = crate::mutation::EXTRA_KEY_IMAGES.to_vec();
+    seen.sort_unstable();
+    seen.dedup();
+    assert_eq!(seen.len(), crate::mutation::EXTRA_KEY_IMAGES.len());
 }

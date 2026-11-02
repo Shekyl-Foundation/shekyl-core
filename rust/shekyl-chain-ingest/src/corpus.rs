@@ -13,7 +13,7 @@
 //! blob and the bodies of its listed transactions in header order —
 //! [`Candidate`]'s two fields. No facts, no verdicts, no digests; those are
 //! the **trace**'s (RD-Q2), and the two artifacts have different doors into
-//! the pipeline so a grader can never read a borrowed fact as evidence.
+//! the pipeline so a comparison input can never be read as evidence.
 //!
 //! # The format is minted here, not inherited
 //!

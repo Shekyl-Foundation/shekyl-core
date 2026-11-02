@@ -6,32 +6,34 @@
 //! The DRS-E2 replay driver — the ingest pipeline's first source, as a
 //! binary (`DRS_E2_REPLAY_DRIVER.md` §1.1, RD-Q1, RD-Q7).
 //!
-//! Two commands, matching the two artifacts:
+//! Three commands, the two artifacts and the baseline between them:
 //!
 //! - `fetch` — build a corpus from an **unpruned** daemon over
 //!   `/get_blocks_by_height.bin` (zero C++; the writer verifies every
 //!   record and refuses a pruned answer by height, RD-F15);
 //! - `replay` — run a corpus through `form → validate → connect` against a
-//!   redb store, borrowing the passed-through facts from a trace and
-//!   digesting at its checkpoint; `--fixed-difficulty n` and the schedule
-//!   pair `--settlement-epoch-blocks n --reorg-cap m` are accepted with
-//!   `--chain regtest` only, exactly as `shekyld --regtest` binds its
-//!   levers (RD-Q7, DRS-E4 `ARW-15`; refused elsewhere by construction,
-//!   `ChainRules::new`).
+//!   redb store and hold it to the baseline trace; `--fixed-difficulty n`
+//!   and the schedule pair `--settlement-epoch-blocks n --reorg-cap m` are
+//!   accepted with `--chain regtest` only, exactly as `shekyld --regtest`
+//!   binds its levers (RD-Q7, DRS-E4 `ARW-15`; refused elsewhere by
+//!   construction, `ChainRules::new`).
 //!
-//! The trace comes from `shekyl-e2-trace-export` (the C++ harvest shim).
+//! - `baseline` — the same run with nothing to compare, then write the
+//!   store's chain as the trace later replays must reproduce
+//!   (`shekyl_chain_ingest::rebaseline`): the E2 corpus re-baselined from
+//!   Rust (`DAEMON_REDB_STORE.md` §12.1).
+//!
+//! `replay` and `baseline` are one drive. The trace comes from `baseline`.
 //! Everything this binary composes is library code in
 //! `shekyl-chain-ingest`; nothing lives only here (RD-Q1).
 //!
 //! # Exit status
 //!
 //! Non-zero on any fault, and on any **disagreement** the run itself
-//! reports — a refusal, a DIVERGE at the checkpoint, a derived root that
-//! differs from the trace — unless a register was given, in which case the
-//! grade decides (§1.3: the success condition is *no unadjudicated
-//! disagreement*, and the root oracle failing the grade on its own). With
-//! no register nothing is adjudicated. The metrics artifact is written on
-//! every path that ran
+//! reports — a refusal, a DIVERGE at the checkpoint, a derived value that
+//! differs from the trace: the trace is the Rust baseline, so any
+//! disagreement is a change in what the Rust derives. The metrics artifact
+//! is written on every path that ran
 //! the pipeline, a late fault included: hours of hashing are the
 //! measurement RD-F11 asked for whether or not the run finished.
 
@@ -44,12 +46,12 @@ use std::path::PathBuf;
 use std::process::ExitCode;
 use std::sync::Arc;
 
-use clap::{Parser, Subcommand};
+use clap::{Args, Parser, Subcommand};
 use shekyl_chain_ingest::corpus::{CorpusNet, CorpusReader, CorpusWriter};
 use shekyl_chain_ingest::fetch::fetch_corpus;
-use shekyl_chain_ingest::grader::{grade_run, Register};
 use shekyl_chain_ingest::metrics::Metrics;
 use shekyl_chain_ingest::pipeline::{run, Disagreement, PipelineConfig, RunReport};
+use shekyl_chain_ingest::rebaseline::write_trace_file;
 use shekyl_chain_ingest::schedule::ChainRules;
 use shekyl_chain_ingest::source::Injection;
 use shekyl_chain_ingest::substrate::ProductionSubstrate;
@@ -72,6 +74,7 @@ const DEFAULT_FETCH_BATCH: NonZeroUsize = match NonZeroUsize::new(100) {
 #[derive(Parser, Debug)]
 #[command(
     name = "shekyl-chain-replay",
+    version = env!("SHEKYL_REPLAY_GIT_SHA"),
     about = "DRS-E2 replay driver: fetch a corpus, replay it through the ingest pipeline"
 )]
 struct Cli {
@@ -110,58 +113,68 @@ enum Command {
         #[arg(long = "inject")]
         injections: Vec<Injection>,
     },
-    /// Replay a corpus against a store, grading the digest at the trace's
-    /// checkpoint.
+    /// Replay a corpus against a store and hold it to the baseline trace.
     Replay {
-        /// The corpus (`fetch`'s output).
-        #[arg(long)]
-        corpus: PathBuf,
-        /// The trace (`shekyl-e2-trace-export`'s output).
+        #[command(flatten)]
+        flags: RunFlags,
+        /// The trace `baseline` wrote.
         #[arg(long)]
         trace: PathBuf,
-        /// The redb store directory (created if absent, appended to if not).
-        #[arg(long)]
-        store: PathBuf,
-        /// Which chain's rules the corpus is judged under; must be the
-        /// chain the corpus is tagged with.
-        #[arg(long, value_enum)]
-        chain: CorpusNet,
-        /// Fix the difficulty target, as `shekyld --regtest --fixed-difficulty n`
-        /// does. Accepted with `--chain regtest` only.
-        #[arg(long)]
-        fixed_difficulty: Option<NonZeroU128>,
-        /// Blocks per settlement epoch the corpus's daemon ran
-        /// (`SHEKYL_SETTLEMENT_EPOCH_BLOCKS`). Given with `--reorg-cap`,
-        /// and accepted with `--chain regtest` only; the production
-        /// schedule when absent.
-        #[arg(long, requires = "reorg_cap")]
-        settlement_epoch_blocks: Option<NonZeroU64>,
-        /// The reorg cap that daemon ran (`SHEKYL_ARCHIVAL_REORG_DEPTH_BLOCKS`),
-        /// strictly inside the epoch. Given with `--settlement-epoch-blocks`.
-        #[arg(long, requires = "settlement_epoch_blocks")]
-        reorg_cap: Option<NonZeroU64>,
-        /// Blocks formed ahead of the writer at once (non-zero).
-        #[arg(long, default_value_t = PipelineConfig::DEFAULT_WINDOW)]
-        window: NonZeroUsize,
-        /// `form` workers hashing at once (non-zero). Defaults to the host's
-        /// parallelism; more than that thrashes RandomX's scratchpads and
-        /// inflates the per-hash figure the metrics artifact records.
-        #[arg(long, default_value_t = PipelineConfig::default_hashers())]
-        hashers: NonZeroUsize,
-        /// The CSR-3a register as `scripts/ci/export_conformance_register.py`
-        /// emits it. With it, the run is graded (RD-Q6) and the grade decides
-        /// the exit status; without it, any disagreement the run reports
-        /// does.
-        #[arg(long)]
-        register: Option<PathBuf>,
-        /// Where to write the graded-run artifact (JSON). Requires `--register`.
-        #[arg(long, requires = "register")]
-        grade_out: Option<PathBuf>,
-        /// Where to write the RandomX measurement (JSON; RD-F11). Written
-        /// even when the run faults.
-        #[arg(long)]
-        metrics_out: Option<PathBuf>,
     },
+    /// Replay a corpus against a fresh store with nothing to compare, then
+    /// write the store's chain as the trace a replay must reproduce.
+    Baseline {
+        #[command(flatten)]
+        flags: RunFlags,
+        /// Where to write the trace. Replaced as a whole after the store
+        /// connects; a refusal leaves any previous file untouched.
+        #[arg(long)]
+        out: PathBuf,
+    },
+}
+
+/// The flags `replay` and `baseline` share: one corpus, one store file, one
+/// rule set, one window.
+#[derive(Args, Debug)]
+struct RunFlags {
+    /// The corpus (`fetch`'s output).
+    #[arg(long)]
+    corpus: PathBuf,
+    /// The redb store file. Created when absent; reopened when it is already
+    /// a store under these horizons. `baseline` refuses one that exists.
+    #[arg(long)]
+    store: PathBuf,
+    /// Which chain's rules the corpus is judged under; must be the chain
+    /// the corpus is tagged with.
+    #[arg(long, value_enum)]
+    chain: CorpusNet,
+    /// Fix the difficulty target, as `shekyld --regtest --fixed-difficulty n`
+    /// does. Accepted with `--chain regtest` only.
+    #[arg(long)]
+    fixed_difficulty: Option<NonZeroU128>,
+    /// Blocks per settlement epoch the corpus's daemon ran
+    /// (`SHEKYL_SETTLEMENT_EPOCH_BLOCKS`). Given with `--reorg-cap`, and
+    /// accepted with `--chain regtest` only; the production schedule when
+    /// absent.
+    #[arg(long, requires = "reorg_cap")]
+    settlement_epoch_blocks: Option<NonZeroU64>,
+    /// The reorg cap that daemon ran (`SHEKYL_ARCHIVAL_REORG_DEPTH_BLOCKS`),
+    /// strictly inside the epoch. Given with `--settlement-epoch-blocks`.
+    #[arg(long, requires = "settlement_epoch_blocks")]
+    reorg_cap: Option<NonZeroU64>,
+    /// Blocks formed ahead of the writer at once (non-zero).
+    #[arg(long, default_value_t = PipelineConfig::DEFAULT_WINDOW)]
+    window: NonZeroUsize,
+    /// `form` workers hashing at once (non-zero). Defaults to the host's
+    /// parallelism; more than that thrashes RandomX's scratchpads and
+    /// inflates the per-hash figure the metrics artifact records.
+    #[arg(long, default_value_t = PipelineConfig::default_hashers())]
+    hashers: NonZeroUsize,
+    /// Where to write the RandomX measurement (JSON; RD-F11). Written even
+    /// when the run faults. The per-hash mean is what the budget's
+    /// proof-of-work share reads (`DAEMON_REDB_STORE.md` §1.3a.6 item 8).
+    #[arg(long)]
+    metrics_out: Option<PathBuf>,
 }
 
 #[tokio::main(flavor = "multi_thread")]
@@ -188,35 +201,121 @@ async fn real_main(cli: Cli) -> Result<(), Failure> {
             out,
             injections,
         } => fetch(daemon, chain, from..to, batch, &injections, &out).await,
-        Command::Replay {
-            corpus,
-            trace,
-            store,
-            chain,
-            fixed_difficulty,
-            settlement_epoch_blocks,
-            reorg_cap,
-            window,
-            hashers,
-            register,
-            grade_out,
-            metrics_out,
-        } => {
-            let schedule = schedule_flags(settlement_epoch_blocks, reorg_cap)?;
-            replay(Replay {
-                corpus,
-                trace,
-                store,
-                chain,
-                rules: ChainRules::new(chain.into(), fixed_difficulty, schedule)?,
-                cfg: PipelineConfig { window, hashers },
-                register,
-                grade_out,
-                metrics_out,
-            })
-            .await
-        }
+        Command::Replay { flags, trace } => replay(flags, trace).await,
+        Command::Baseline { flags, out } => baseline(flags, out).await,
     }
+}
+
+/// The rule set and the window a [`RunFlags`] names, resolved once for both
+/// commands.
+struct Prepared {
+    rules: ChainRules,
+    cfg: PipelineConfig,
+    horizons: Horizons,
+}
+
+fn prepare(flags: &RunFlags) -> Result<Prepared, Failure> {
+    let schedule = schedule_flags(flags.settlement_epoch_blocks, flags.reorg_cap)?;
+    let rules = ChainRules::new(flags.chain.into(), flags.fixed_difficulty, schedule)?;
+    let horizons = Horizons::under(&rules.in_force(BlockHeight::from_raw(0)))?;
+    Ok(Prepared {
+        rules,
+        cfg: PipelineConfig {
+            window: flags.window,
+            hashers: flags.hashers,
+        },
+        horizons,
+    })
+}
+
+/// Connect the corpus under the production substrate and `trace`.
+///
+/// The measurement is printed and, when asked, written whether or not the
+/// run finished: hours of hashing are the measurement whether or not the
+/// chain agreed. The connected summary is printed when the run itself
+/// returned.
+async fn drive(
+    flags: &RunFlags,
+    prepared: &Prepared,
+    trace: Arc<Trace>,
+) -> Result<RunReport, Failure> {
+    let mut source = CorpusReader::open(BufReader::new(File::open(&flags.corpus)?))?;
+    if source.net() != flags.chain {
+        return Err(format!(
+            "the corpus is tagged {:?} but --chain says {:?}",
+            source.net(),
+            flags.chain
+        )
+        .into());
+    }
+    let store = ChainStore::with_horizons(&flags.store, ApplyPolicy::default(), prepared.horizons)?;
+    let metrics = Arc::new(Metrics::new());
+    let substrate = Arc::new(ProductionSubstrate::new(
+        Arc::new(CacheStore::new()),
+        Arc::clone(&metrics),
+    ));
+    let outcome = run(
+        &mut source,
+        substrate,
+        Arc::clone(&metrics),
+        prepared.rules,
+        store,
+        trace,
+        prepared.cfg,
+    )
+    .await;
+
+    let measured = metrics.snapshot();
+    eprintln!(
+        "randomx light mode: {} hash(es), mean {:?} ns; {} derive(s), mean {:?} ns; {} block(s) formed, mean {:?} ns; {:?}",
+        measured.hashes,
+        measured.hash_ns_mean,
+        measured.cache_derives,
+        measured.derive_ns_mean,
+        measured.blocks_formed,
+        measured.form_ns_mean,
+        measured.concurrency,
+    );
+    if let Some(out) = &flags.metrics_out {
+        std::fs::write(out, measured.to_json()?)?;
+        eprintln!("metrics artifact → {}", out.display());
+    }
+    let report = outcome?;
+    eprintln!(
+        "connected {} block(s), popped {}, {} checkpoint digested, {} root(s) compared, \
+         {} weight row(s) compared, {} accumulator(s) compared",
+        report.connected.len(),
+        report.popped(),
+        usize::from(report.checkpoint.is_some()),
+        report.roots.compared(),
+        report.weights.compared(),
+        report.emission.compared(),
+    );
+    Ok(report)
+}
+
+/// Connect the whole corpus against a fresh store with nothing to compare,
+/// and write the store's chain as the trace. A chain the rules refuse
+/// anywhere is no baseline: the tool fails and the destination is not
+/// opened.
+async fn baseline(flags: RunFlags, out: PathBuf) -> Result<(), Failure> {
+    if flags.store.exists() {
+        return Err(format!(
+            "{} exists; a baseline is written from a fresh store",
+            flags.store.display()
+        )
+        .into());
+    }
+    let prepared = prepare(&flags)?;
+    let report = drive(&flags, &prepared, Arc::new(Trace::empty())).await?;
+    if let Some((height, verdict)) = report.refused {
+        return Err(format!("the corpus does not replay: refused at {height}: {verdict:?}").into());
+    }
+    let store = ChainStore::open_read_only(&flags.store, prepared.horizons)?;
+    let snap = store.begin_read()?;
+    write_trace_file(&snap, &out)?;
+    eprintln!("trace → {}", out.display());
+    Ok(())
 }
 
 /// The schedule pair from its two flags: both or neither (clap holds that),
@@ -269,91 +368,17 @@ async fn fetch(
     Ok(())
 }
 
-/// A replay's inputs, resolved from the command line.
-struct Replay {
-    corpus: PathBuf,
-    trace: PathBuf,
-    store: PathBuf,
-    chain: CorpusNet,
-    rules: ChainRules,
-    cfg: PipelineConfig,
-    register: Option<PathBuf>,
-    grade_out: Option<PathBuf>,
-    metrics_out: Option<PathBuf>,
-}
-
-/// The register is read and checked **before** the run: a register that
-/// does not parse is discovered in milliseconds, not after every block has
-/// connected.
-fn register_first(path: Option<&std::path::Path>) -> Result<Option<Register>, Failure> {
-    path.map(|p| Ok(Register::from_json(&std::fs::read_to_string(p)?)?))
-        .transpose()
-}
-
-async fn replay(replay: Replay) -> Result<(), Failure> {
-    let register = register_first(replay.register.as_deref())?;
+/// Hold the corpus to `trace`. Any disagreement fails the run.
+async fn replay(flags: RunFlags, trace: PathBuf) -> Result<(), Failure> {
     // The store runs the `(SEB, cap)` pair of the rule set that judges the
     // chain — the production pair, or the regtest daemon's levers — read
     // off that set, not off a second copy (`Horizons::under`). A store
     // sealed under another epoch would be another chain: `connect` refuses
     // the first block (SCW-2, `ARW-15`), and an existing file pinned to a
     // different epoch is refused at open.
-    let horizons = Horizons::under(&replay.rules.in_force(BlockHeight::from_raw(0)))?;
-    let trace = Arc::new(Trace::read(BufReader::new(File::open(&replay.trace)?))?);
-    let mut source = CorpusReader::open(BufReader::new(File::open(&replay.corpus)?))?;
-    if source.net() != replay.chain {
-        return Err(format!(
-            "the corpus is tagged {:?} but --chain says {:?}",
-            source.net(),
-            replay.chain
-        )
-        .into());
-    }
-    let store = ChainStore::with_horizons(&replay.store, ApplyPolicy::default(), horizons)?;
-    let metrics = Arc::new(Metrics::new());
-    let substrate = Arc::new(ProductionSubstrate::new(
-        Arc::new(CacheStore::new()),
-        Arc::clone(&metrics),
-    ));
-    let outcome = run(
-        &mut source,
-        substrate,
-        Arc::clone(&metrics),
-        replay.rules,
-        store,
-        trace,
-        replay.cfg,
-    )
-    .await;
-
-    // The measurement is written whether or not the run finished.
-    let measured = metrics.snapshot();
-    eprintln!(
-        "randomx light mode: {} hash(es), mean {:?} ns; {} derive(s), mean {:?} ns; {} block(s) formed, mean {:?} ns; {:?}",
-        measured.hashes,
-        measured.hash_ns_mean,
-        measured.cache_derives,
-        measured.derive_ns_mean,
-        measured.blocks_formed,
-        measured.form_ns_mean,
-        measured.concurrency,
-    );
-    if let Some(out) = &replay.metrics_out {
-        std::fs::write(out, measured.to_json()?)?;
-        eprintln!("metrics artifact → {}", out.display());
-    }
-    let report = outcome?;
-
-    eprintln!(
-        "connected {} block(s), popped {}, {} checkpoint digested, {} root(s) compared, \
-         {} weight row(s) compared, {} accumulator(s) compared",
-        report.connected.len(),
-        report.popped(),
-        usize::from(report.checkpoint.is_some()),
-        report.roots.compared(),
-        report.weights.compared(),
-        report.emission.compared(),
-    );
+    let prepared = prepare(&flags)?;
+    let trace = Arc::new(Trace::read(BufReader::new(File::open(&trace)?))?);
+    let report = drive(&flags, &prepared, trace).await?;
     for disagreement in report.disagreements() {
         match disagreement {
             Disagreement::Refused { height, verdict } => {
@@ -391,69 +416,15 @@ async fn replay(replay: Replay) -> Result<(), Failure> {
         }
     }
 
-    match register {
-        Some(register) => grade(&register, &report, replay.grade_out.as_deref()),
-        None => ungraded(&report),
-    }
+    agreed(&report)
 }
 
-/// Graded: the register adjudicates, and the grade decides.
-fn grade(
-    register: &Register,
-    report: &RunReport,
-    grade_out: Option<&std::path::Path>,
-) -> Result<(), Failure> {
-    let graded = grade_run(register, &report.observations());
-    eprintln!(
-        "graded: {} row(s); {} derived-and-conformant, {} not exercised, \
-         {} owed reviewed-divergence, {} unadjudicated",
-        graded.rows.len(),
-        graded.derived_and_conformant,
-        graded.not_exercised,
-        graded.owed_reviewed_divergence.len(),
-        graded.unadjudicated.len(),
-    );
-    if let Some(out) = grade_out {
-        std::fs::write(out, graded.to_json()?)?;
-        eprintln!("graded artifact → {}", out.display());
-    }
-    for u in &graded.unadjudicated {
-        eprintln!(
-            "UNADJUDICATED {} ({:?}): {:?}",
-            u.id, u.clause, u.acceptance
-        );
-    }
-    for family in &graded.archival_oracle.diverged {
-        eprintln!(
-            "ARCHIVAL DIVERGED {}: {} unequal, {} only redb, {} only trace",
-            family.family,
-            family.unequal.len(),
-            family.only_ours.len(),
-            family.only_theirs.len()
-        );
-    }
-    if !graded.passes() {
-        if graded.unadjudicated.is_empty() {
-            let roots = graded.root_oracle.diverged_at.len();
-            let families = graded.archival_oracle.diverged.len();
-            return Err(format!(
-                "root oracle diverged at {roots} height(s); archival oracle diverged in \
-                 {families} family(ies) (§1.3)"
-            )
-            .into());
-        }
-        return Err("the run has unadjudicated disagreements (§1.3)".into());
-    }
-    Ok(())
-}
-
-/// Ungraded: nothing adjudicates, so any disagreement is open.
-fn ungraded(report: &RunReport) -> Result<(), Failure> {
+/// The run against the baseline: any disagreement is a change in what the
+/// Rust derives, and fails the run.
+fn agreed(report: &RunReport) -> Result<(), Failure> {
     let open = report.disagreements().count();
     if open > 0 {
-        return Err(
-            format!("{open} disagreement(s) and no --register to adjudicate them (§1.3)").into(),
-        );
+        return Err(format!("{open} disagreement(s) with the baseline trace").into());
     }
     Ok(())
 }
@@ -485,23 +456,21 @@ mod tests {
             "7",
         ])
         .expect("parses");
-        let Command::Replay {
-            chain,
-            fixed_difficulty,
-            window,
-            hashers,
-            ..
-        } = cli.command
-        else {
+        let Command::Replay { flags, .. } = cli.command else {
             panic!("replay");
         };
-        assert_eq!(chain, CorpusNet::Fakechain, "--chain regtest is the tag");
-        assert_eq!(Chain::from(chain), Chain::Regtest);
-        assert_eq!(fixed_difficulty, NonZeroU128::new(7));
-        assert_eq!(window, PipelineConfig::DEFAULT_WINDOW);
-        assert_eq!(hashers, PipelineConfig::default_hashers());
+        assert_eq!(
+            flags.chain,
+            CorpusNet::Fakechain,
+            "--chain regtest is the tag"
+        );
+        assert_eq!(Chain::from(flags.chain), Chain::Regtest);
+        assert_eq!(flags.fixed_difficulty, NonZeroU128::new(7));
+        assert_eq!(flags.window, PipelineConfig::DEFAULT_WINDOW);
+        assert_eq!(flags.hashers, PipelineConfig::default_hashers());
         // Zero is not a difficulty, a window, a hasher count or a batch:
-        // the types refuse each at parse time.
+        // the types refuse each at parse time, on both commands that share
+        // the flags.
         for (flag, value) in [
             ("--fixed-difficulty", "0"),
             ("--window", "0"),
@@ -513,7 +482,15 @@ mod tests {
                     "regtest", flag, value,
                 ])
                 .is_err(),
-                "{flag} {value}"
+                "replay {flag} {value}"
+            );
+            assert!(
+                parse(&[
+                    "baseline", "--corpus", "c", "--out", "o", "--store", "s", "--chain",
+                    "regtest", flag, value,
+                ])
+                .is_err(),
+                "baseline {flag} {value}"
             );
         }
         assert!(parse(&[
@@ -647,15 +624,11 @@ mod tests {
             .concat(),
         )
         .expect("parses");
-        let Command::Replay {
-            settlement_epoch_blocks,
-            reorg_cap,
-            ..
-        } = cli.command
-        else {
+        let Command::Replay { flags, .. } = cli.command else {
             panic!("replay");
         };
-        let schedule = schedule_flags(settlement_epoch_blocks, reorg_cap).expect("inside");
+        let schedule =
+            schedule_flags(flags.settlement_epoch_blocks, flags.reorg_cap).expect("inside");
         assert_eq!(schedule.settlement().blocks().get(), 512);
         assert_eq!(schedule.reorg_cap(), BlockCount::from_raw(64));
         let rules = ChainRules::new(Chain::Regtest, None, schedule).expect("regtest");
@@ -692,15 +665,57 @@ mod tests {
         assert!(schedule_flags(NonZeroU64::new(512), NonZeroU64::new(512)).is_err());
     }
 
+    /// `baseline` is the same run flags plus the trace it writes.
     #[test]
-    fn an_unparseable_register_is_refused_before_anything_runs() {
-        let dir =
-            std::env::temp_dir().join(format!("shekyl-replay-preflight-{}", std::process::id()));
-        std::fs::create_dir_all(&dir).expect("dir");
-        let register = dir.join("register.json");
-        std::fs::write(&register, "{\"schema_version\": \"nope\"}").expect("write");
-        assert!(register_first(Some(&register)).is_err());
-        assert!(register_first(None).expect("absent is fine").is_none());
-        let _gone = std::fs::remove_dir_all(&dir);
+    fn baseline_parses_the_same_run_flags() {
+        let cli = parse(&[
+            "baseline",
+            "--corpus",
+            "c",
+            "--store",
+            "s",
+            "--chain",
+            "regtest",
+            "--fixed-difficulty",
+            "7",
+            "--settlement-epoch-blocks",
+            "512",
+            "--reorg-cap",
+            "64",
+            "--out",
+            "trace.e2",
+            "--metrics-out",
+            "m.json",
+        ])
+        .expect("parses");
+        let Command::Baseline { flags, out } = cli.command else {
+            panic!("baseline");
+        };
+        assert_eq!(flags.chain, CorpusNet::Fakechain);
+        assert_eq!(flags.fixed_difficulty, NonZeroU128::new(7));
+        assert_eq!(flags.settlement_epoch_blocks, NonZeroU64::new(512));
+        assert_eq!(flags.reorg_cap, NonZeroU64::new(64));
+        assert_eq!(flags.window, PipelineConfig::DEFAULT_WINDOW);
+        assert_eq!(
+            flags.metrics_out.as_deref(),
+            Some(std::path::Path::new("m.json"))
+        );
+        assert_eq!(out, PathBuf::from("trace.e2"));
+        assert!(
+            parse(&["baseline", "--corpus", "c", "--store", "s", "--chain", "regtest"]).is_err(),
+            "a baseline names the trace it writes"
+        );
+    }
+
+    /// `--version` names the commit `build.rs` stamped, or `unknown` when
+    /// that commit could not be read. Nine hex digits is the daemon's shape.
+    #[test]
+    fn the_version_names_a_commit_or_unknown() {
+        let sha = env!("SHEKYL_REPLAY_GIT_SHA");
+        let nine_hex = sha.len() == 9 && sha.bytes().all(|b| b.is_ascii_hexdigit());
+        assert!(
+            nine_hex || sha == "unknown",
+            "the replay binary's version is a 9-digit commit or \"unknown\", got {sha}"
+        );
     }
 }
