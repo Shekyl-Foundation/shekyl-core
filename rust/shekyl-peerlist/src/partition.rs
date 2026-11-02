@@ -946,7 +946,8 @@ impl Partition {
     /// Drop gray seats until the gray population is within [`GRAY_CAP`],
     /// never `keep` and never an outstanding draw. Barred seats go first,
     /// a uniform pick among them: none can be dialled while its ban holds,
-    /// and no peer can make a ban, so the order cannot be steered (Rick,
+    /// and no peer can make a ban (#1250 deleted the C++ automatic ban, the
+    /// only peer-driven writer), so the order cannot be steered (Rick,
     /// 2026-11-01). Then a uniform pick over the drawable and the cooling
     /// seats alike: a cooldown is a delay, not protection (Rick,
     /// 2026-10-24), or dead addresses fed within D-S1 would accumulate
