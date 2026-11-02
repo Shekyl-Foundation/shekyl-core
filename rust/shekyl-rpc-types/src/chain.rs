@@ -224,10 +224,20 @@ pub const CORE_RPC_VERSION_MAJOR: u32 = 3;
 /// `send_raw_transaction` reject-cause set: the Rust daemon admits a
 /// JoinMarket bond post, and no daemon authors the cause. `get_version`
 /// gains nothing.
-/// 3.64: `mining_status.speed` is the hash count over its window of
+/// 3.64: a transaction's body has two forms and both bind (`SB-Q2`,
+/// `PDM-Q10`). A `get_transactions` entry carries `pqc_auth_hash`
+/// (nullable) beside `prunable_hash` and `archival_len`; under `prune` its
+/// `pruned_as_hex` is the pruned segment only, never with `pqc_auths`
+/// appended. A full body this node has discarded is listed under
+/// `archived` as `{ tx_hash, shard }`, not failed. `split`,
+/// `decode_as_json`, `prunable_as_hex`, `as_json` and `pruned` retire
+/// (IG-Q55). `get_blocks_by_height.bin` takes `prune` and carries each
+/// archived body as a per-slot state rather than failing the height.
+/// `get_version` gains nothing.
+/// 3.65: `mining_status.speed` is the hash count over its window of
 /// complete seconds. A whole-hash quotient read `0` for a miner below
 /// one hash a second. `get_version` gains nothing.
-pub const CORE_RPC_VERSION_MINOR: u32 = 64;
+pub const CORE_RPC_VERSION_MINOR: u32 = 65;
 /// `MAKE_CORE_RPC_VERSION(major, minor)` = `(major << 16) | minor`.
 pub const CORE_RPC_VERSION: u32 = (CORE_RPC_VERSION_MAJOR << 16) | CORE_RPC_VERSION_MINOR;
 
@@ -652,12 +662,17 @@ mod tests {
         // refusal the error object (RT-W10 step 1). 3.63 is the flip's
         // client shapes: `start_mining` takes threads and no address,
         // `generateblocks` takes a count (FLIP-Q4), and the reject cause
-        // `join_market_unsupported` leaves the set. 3.64 makes
-        // `mining_status.speed` the hash count over its window.
-        assert_eq!(CORE_RPC_VERSION, 196_672);
-        assert_eq!(CORE_RPC_VERSION, (3 << 16) | 64);
+        // `join_market_unsupported` leaves the set. 3.64 makes a
+        // `get_transactions` entry the skeleton (`pqc_auth_hash`; `split`,
+        // `as_json`, `pruned`, `prunable_as_hex` retire), lists a discarded
+        // full body under `archived`, and gives `get_blocks_by_height.bin`
+        // its `prune` switch (SB-Q2, PDM-Q10). Both branches had written
+        // 64, so `mining_status.speed` carrying the hash count over its
+        // window took the next minor, as 3.44 did.
+        assert_eq!(CORE_RPC_VERSION, 196_673);
+        assert_eq!(CORE_RPC_VERSION, (3 << 16) | 65);
         assert_eq!(CORE_RPC_VERSION_MAJOR, 3);
-        assert_eq!(CORE_RPC_VERSION_MINOR, 64);
+        assert_eq!(CORE_RPC_VERSION_MINOR, 65);
     }
 
     #[test]

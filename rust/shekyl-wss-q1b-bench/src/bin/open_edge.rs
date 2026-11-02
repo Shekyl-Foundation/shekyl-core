@@ -383,9 +383,7 @@ async fn measure_bytes(client: &DaemonClient, height: u64) -> Result<(u64, u64),
     if !hashes.is_empty() {
         let req = GetTransactionsRequest {
             txs_hashes: hashes,
-            decode_as_json: false,
             prune: true,
-            split: false,
         };
         let params = serde_json::to_value(req).map_err(|e| format!("encode tx request: {e}"))?;
         let txs: GetTransactionsResponse = client

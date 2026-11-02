@@ -53,6 +53,7 @@ use crate::schedule::ChainRules;
 use crate::source::{IngestEvent, Source};
 use crate::test_support::{cleanup, open_store, open_store_under, tmp};
 
+mod below_horizon;
 mod reads;
 
 // ---------------------------------------------------------------------------

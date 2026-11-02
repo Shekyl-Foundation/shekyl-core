@@ -619,12 +619,22 @@ fn prunable_state(store: &ChainStore, id: u64) -> Option<bool> {
     match store
         .begin_read()
         .expect("read")
-        .tx_prunable(TxStorageId::from_raw(id))
+        .tx_archival_good(TxStorageId::from_raw(id))
         .expect("read")
     {
-        AtIndex::Recorded(Prunable::Retained(_)) => Some(true),
-        AtIndex::Recorded(Prunable::Discarded) => Some(false),
+        AtIndex::Recorded(ArchivalGood::Retained { .. }) => Some(true),
+        AtIndex::Recorded(ArchivalGood::Discarded) => Some(false),
         AtIndex::BeyondCount => None,
+    }
+}
+
+/// The archival good of the recorded transaction `hash` — one read, so a
+/// prune that took the prunable region and not the `pqc_auths` region (or
+/// the reverse) is SI-42 here, not a `Discarded` that hides the half.
+fn good_of(snap: &ReadSnapshot<'_>, record: &TxRecord) -> ArchivalGood {
+    match snap.tx_archival_good(record.location.id).expect("read") {
+        AtIndex::Recorded(good) => good,
+        AtIndex::BeyondCount => panic!("a recorded id is within the count"),
     }
 }
 
@@ -748,9 +758,9 @@ fn the_boundary_batch_discards_closed_shards_and_retires_undo_rows() {
             .expect("read")
             .expect("recorded");
         assert_eq!(
-            early.pqc_auths,
-            Some(PqcAuths::Discarded),
-            "shard 0's pqc region went with it"
+            good_of(&snap, &early),
+            ArchivalGood::Discarded,
+            "shard 0's pqc region went with its prunable one"
         );
         assert!(early.pqc_auth_hash.is_some(), "the hash row is permanent");
         // Block `BASE + 250`'s credit is 3-part (CEN-H20): no pqc region to
@@ -760,7 +770,16 @@ fn the_boundary_batch_discards_closed_shards_and_retires_undo_rows() {
             .tx_record(&b.listed[at(BlockHeight::from_raw(BASE + 250))][0].hash())
             .expect("read")
             .expect("recorded");
-        assert_eq!(late.pqc_auths, None, "a credit carries no pqc region");
+        assert!(
+            matches!(
+                good_of(&snap, &late),
+                ArchivalGood::Retained {
+                    pqc_auths: None,
+                    ..
+                }
+            ),
+            "a credit carries no pqc region"
+        );
         assert_eq!(late.pqc_auth_hash, None, "and no hash row for one");
         assert_eq!(late.archival_len.to_raw(), 100_000, "as asked");
     }
@@ -917,7 +936,7 @@ fn the_boundary_batch_discards_closed_shards_on_real_spends() {
                 .tx_record(&spend.hash())
                 .expect("read")
                 .expect("recorded");
-            assert_eq!(record.pqc_auths, Some(PqcAuths::Discarded));
+            assert_eq!(good_of(&snap, &record), ArchivalGood::Discarded);
             assert!(record.pqc_auth_hash.is_some(), "the hash row is permanent");
             assert_eq!(record.archival_len.to_raw(), spend.archival_len().to_raw());
         }
@@ -1999,8 +2018,8 @@ fn horizons_under_a_set_are_the_ones_its_connect_accepts() {
 /// the digests it reads are the ones **recorded at ingest**. The store keeps both
 /// permanently — `txs_prunable_hash` and `txs_pqc_auth_hash` — and a prune
 /// deletes the *regions*, never the rows. So a node that has discarded a shard
-/// must still place its transactions **inside** the domain, exactly as an
-/// archival node does.
+/// must still place its transactions **inside** the domain, exactly as it did
+/// while it held them.
 ///
 /// The hazard this pins is the opposite: recomputing the digests from a pruned
 /// body yields `keccak256("")` and no component, which would place a node's own
@@ -2068,8 +2087,8 @@ fn the_predicate_survives_a_prune_on_the_stored_rows() {
     let after: Vec<Option<bool>> = (0..count).map(|id| good_state(&store, id)).collect();
     assert_eq!(
         before, after,
-        "the domain answer moved across a prune — pruned and archival nodes would \
-         disagree on shard boundaries"
+        "the domain answer moved across a prune — nodes either side of the boundary \
+         would disagree on shard boundaries"
     );
     assert_eq!(
         good_state(&store, BASE + 6),
@@ -2091,8 +2110,8 @@ fn the_predicate_survives_a_prune_on_the_stored_rows() {
             .expect("read")
             .expect("recorded");
         assert_eq!(
-            discarded.pqc_auths,
-            Some(PqcAuths::Discarded),
+            good_of(&snap, &discarded),
+            ArchivalGood::Discarded,
             "the region went with the shard"
         );
         assert!(
