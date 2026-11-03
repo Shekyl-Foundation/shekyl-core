@@ -131,12 +131,12 @@ handlers `/start_mining`, `/stop_mining`, `/mining_status`
 
 REPL verbs:
 
-- `mine start [threads|auto]` — payout address from this wallet's
-  `get_primary_address`; default and `auto` threads =
+- `mine start [threads|auto]` — default and `auto` threads =
   `min(available_parallelism, 4)` (a wallet convenience default, not a
   tuned miner — operators who care pass a count or use `shekyld`
-  directly). Sends the address and the count alone: the daemon has no
-  background mining (deleted with the daemon-configuration cutover).
+  directly). Sends the thread count. The daemon mines to its
+  `mine-address`. The daemon has no background mining (deleted with
+  the daemon-configuration cutover).
 - `mine stop`.
 - `mine status` — active/idle, threads, hash rate in H/s, payout
   address (short form per CU-4), difficulty. The daemon's

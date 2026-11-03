@@ -494,8 +494,9 @@ supplies, with no FFI (RT-O26):
   under it. Each applied set writes one audit line: the caller, each row,
   its old and new value. A table gate holds that no row is both runtime
   and secret (RT-O27).
-- **`mine start` and `mine stop`** build `mine-address` and `mine-threads`
-  through their constructors and act on the running node; `mine = on`
+- **`mine start` and `mine stop`** build `mine-threads` through its
+  constructor and act on the running node. `mine-address` is the config
+  row, not an argument of `mine start`. `mine = on`
   (IG-Q21's 2026-11-02 amendment) is the row that starts the miner at
   open, and a restart returns to the configuration.
 

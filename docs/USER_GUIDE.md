@@ -782,10 +782,9 @@ paste an address the way the daemon-console form requires.
 
 `mine` requires an open wallet, the unrestricted RPC listener, and a
 daemon on the same network as the CLI. The silent default is a daemon
-on this machine — the recommended posture. A remote `--daemon-address`
-(for example a node on your own network) is allowed: `mine start`
-reminds you that mining control is admin RPC, then continues. If the
-daemon is still syncing, `mine start` refuses — the daemon will not
+on this machine. A remote `--daemon-address` is allowed: `mine start`
+reminds you that mining will run on that machine's CPU, then continues.
+If the daemon is still syncing, `mine start` refuses — the daemon will not
 mine until it has caught up.
 
 ### Mining from start

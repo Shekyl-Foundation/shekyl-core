@@ -267,8 +267,9 @@ is [`docs/CLI_PARITY_MATRIX.md`](CLI_PARITY_MATRIX.md).
 The retired spellings `start_mining`, `stop_mining` and `mining_status`
 do not run; each names its `mine` replacement. Requires an open wallet,
 the unrestricted RPC listener, and a daemon on the same network as the
-CLI. The default daemon is loopback (the recommended posture); a remote
-`--daemon-address` is allowed and `mine start` reminds you of the risk.
+CLI. The default daemon is loopback. A remote `--daemon-address` is
+allowed, and `mine start` reminds you that mining will run on that
+machine's CPU.
 A still-syncing daemon refuses `mine start` until it is caught up.
 
 **Proofs and message signing**
