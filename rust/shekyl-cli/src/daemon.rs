@@ -139,9 +139,9 @@ pub fn daemon_url(daemon_address: &str) -> String {
 /// This is the one loopback predicate: [`host_of`] + [`is_loopback_host`],
 /// the same classification the startup disclosure uses. A substring match
 /// on `127.0.0.1` would both miss `127.0.0.0/8` / mapped IPv6 and accept
-/// `127.0.0.1.evil.com`. Loopback is the **silent default and the
-/// recommended posture**, not a force — a remote `--daemon-address` is a
-/// valid advanced configuration (CLI_USABILITY.md §CU-3 F4).
+/// `127.0.0.1.evil.com`. Loopback is the silent default, not a force — a
+/// remote `--daemon-address` is a valid configuration
+/// (CLI_USABILITY.md §CU-3 F4).
 #[must_use]
 pub fn is_loopback_endpoint(address: &str) -> bool {
     is_loopback_host(host_of(address))

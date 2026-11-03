@@ -6,11 +6,8 @@
 //! `tx show` (Rick, 2026-11-03). One report of one transaction.
 //!
 //! An open wallet that holds the id is the report, and the daemon is not
-//! asked: the wallet's scan already has the chain facts, and asking a
-//! remote daemon would tell it which transactions are this wallet's.
-//! Otherwise the report is the daemon's view. `--body` always fetches the
-//! bytes from the daemon; when the wallet holds the id and that daemon is
-//! not on loopback, the report says the daemon now knows the request.
+//! asked. Otherwise the report is the daemon's view. `--body` fetches the
+//! bytes from the daemon. A failed wallet read stops the command.
 
 use std::sync::Arc;
 use std::time::Duration;
@@ -25,10 +22,6 @@ use crate::daemon::DaemonClient;
 use crate::outcome::{failed, refusal, CommandResult};
 use crate::rpc_client::RpcSession;
 
-/// The line appended when a wallet-held id's bytes were fetched from a
-/// daemon that is not on loopback.
-const DAEMON_LEARNED: &str = "The daemon now knows you asked for this transaction.";
-
 const NOT_CONFIGURED: &str =
     "Daemon not configured. Use --daemon-address to set the daemon endpoint.";
 
@@ -40,7 +33,6 @@ pub(crate) struct DaemonEndpoint<'a> {
     pub url: &'a str,
     pub proxy: Option<String>,
     pub network: DaemonNetwork,
-    pub loopback: bool,
     pub down_hint: Option<&'a str>,
 }
 
@@ -102,7 +94,7 @@ pub(crate) fn report(show: &TxShow<'_>) -> Result<String, String> {
             ));
         };
         return match fetch(daemon, &id, true) {
-            Ok(render) => Ok(held_with_body(records, &id, &render, daemon.loopback)),
+            Ok(render) => Ok(held_with_body(records, &id, &render)),
             Err(detail) => Ok(format!(
                 "{records}\n\nThe serialized bytes could not be fetched from the daemon: {detail}"
             )),
@@ -185,7 +177,7 @@ fn format_record(row: &Value) -> String {
     lines.join("\n")
 }
 
-fn held_with_body(records: &str, id: &str, render: &TxRender, loopback: bool) -> String {
+fn held_with_body(records: &str, id: &str, render: &TxRender) -> String {
     let section = match render {
         TxRender::Unknown => format!("The daemon has no serialized bytes for {id}."),
         TxRender::Shown {
@@ -193,12 +185,7 @@ fn held_with_body(records: &str, id: &str, render: &TxRender, loopback: bool) ->
         } => body.clone(),
         TxRender::Shown { text, body: None } => text.clone(),
     };
-    let mut out = format!("{records}\n\n{section}");
-    if !loopback {
-        out.push('\n');
-        out.push_str(DAEMON_LEARNED);
-    }
-    out
+    format!("{records}\n\n{section}")
 }
 
 fn wallet_clause(wallet_open: bool, id: &str) -> String {
@@ -221,8 +208,7 @@ fn not_configured(wallet_open: bool, id: &str) -> String {
     format!("{} {NOT_CONFIGURED}", wallet_clause(wallet_open, id))
 }
 
-/// The daemon endpoint `command` builds. `loopback` is
-/// [`DaemonClient::is_loopback`], not a flag the caller sets.
+/// The daemon endpoint `command` builds.
 pub(crate) fn endpoint_for<'a>(
     daemon: &'a DaemonClient,
     network: &str,
@@ -231,7 +217,6 @@ pub(crate) fn endpoint_for<'a>(
         url: daemon.url(),
         proxy: daemon.proxy().map(str::to_owned),
         network: session_network(network)?,
-        loopback: daemon.is_loopback(),
         down_hint: daemon.down_hint(),
     })
 }
@@ -326,35 +311,22 @@ mod tests {
     }
 
     #[test]
-    fn body_from_a_remote_daemon_says_the_daemon_learned_the_request() {
+    fn the_bytes_are_the_body_not_the_daemons_narrative() {
         let records = "wallet holds it";
-        let remote = held_with_body(
+        let text = held_with_body(
             records,
             &id(),
             &TxRender::Shown {
                 text: "view".to_owned(),
                 body: Some("abcd".repeat(20)),
             },
-            false,
         );
-        assert!(remote.starts_with(records), "{remote}");
-        assert!(remote.contains(&"abcd".repeat(20)), "{remote}");
-        assert!(remote.contains(DAEMON_LEARNED), "{remote}");
+        assert!(text.starts_with(records), "{text}");
+        assert!(text.contains(&"abcd".repeat(20)), "{text}");
         assert!(
-            !remote.contains("view"),
-            "the bytes, not the daemon's narrative: {remote}"
+            !text.contains("view"),
+            "the bytes, not the daemon's narrative: {text}"
         );
-
-        let local = held_with_body(
-            records,
-            &id(),
-            &TxRender::Shown {
-                text: "view".to_owned(),
-                body: Some("ee".repeat(40)),
-            },
-            true,
-        );
-        assert!(!local.contains(DAEMON_LEARNED), "{local}");
     }
 
     #[test]
@@ -428,30 +400,6 @@ mod tests {
             "the listed id did not show the transaction: {text}"
         );
         assert!(!text.contains(":0"), "the transfer id is not shown: {text}");
-    }
-
-    /// `command` classifies loopback from the daemon address.
-    ///
-    /// Red edit: `endpoint_for` sets `loopback: true` for every address.
-    /// The line then disappears.
-    #[test]
-    fn a_remote_daemon_address_adds_the_line_command_would_add() {
-        let daemon = crate::daemon::DaemonClient::new("http://203.0.113.5:18081", None, None, None)
-            .expect("the address parses");
-        let endpoint = endpoint_for(&daemon, "mainnet").expect("mainnet");
-        assert!(!endpoint.loopback, "203.0.113.5 is not loopback");
-        let records = "wallet holds it";
-        let text = held_with_body(
-            records,
-            &id(),
-            &TxRender::Shown {
-                text: "view".to_owned(),
-                body: Some("AQID".to_owned()),
-            },
-            endpoint.loopback,
-        );
-        assert!(text.contains(DAEMON_LEARNED), "{text}");
-        assert!(text.contains("AQID"), "{text}");
     }
 }
 

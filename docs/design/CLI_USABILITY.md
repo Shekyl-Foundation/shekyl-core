@@ -58,10 +58,9 @@ does not run RandomX") is unchanged and this doc re-pins it:
   path RPCs, the same class of work `chain_health` already does through
   the independent `DaemonClient`
   ([`../../rust/shekyl-cli/src/daemon.rs`](../../rust/shekyl-cli/src/daemon.rs)).
-  The silent default is a loopback daemon (the recommended posture). A
-  named remote `--daemon-address` is a valid advanced configuration
-  (a node on the same network boundary, for example); the CLI reminds,
-  it does not refuse.
+  The silent default is a loopback daemon. A named remote
+  `--daemon-address` is a valid configuration; `mine start` reminds
+  that mining will run on that machine's CPU, and does not refuse.
 - `wallet_rpc.yaml` gains **no** mining methods: control is daemon RPC,
   not a spend/scan concern, and the wallet-RPC server never proxies it.
   Parity rows 72/74 (`start_mining_for_rpc` / `stop_mining_for_rpc`)
@@ -155,10 +154,9 @@ Gates, all fail-closed before any daemon call:
    verbs here; the daemon console is the wallet-less path.)
 2. **Loopback is the silent default, not a force.** The default
    `--daemon-address` is this machine. A non-loopback endpoint is a
-   valid advanced configuration (a node on the same network boundary,
-   for example). `mine start` reminds the operator that mining control
-   is admin RPC and that a local daemon is the recommended posture,
-   then continues. Classification uses the canonical
+   valid configuration. `mine start` reminds the operator that mining
+   will run on that machine's CPU, then continues. It does not refuse.
+   Classification uses the canonical
    `network_posture::is_loopback_host` (not a substring check).
 3. **Unrestricted RPC** — a restricted listener refuses admin RPCs;
    the CLI surfaces that as "restricted RPC" copy (§4), not a raw
@@ -196,7 +194,7 @@ Enumerated here before code (rule 82); each path says what to run next.
 | F1 | Daemon down / connection refused | `mine`, `chain_health`, `status`, startup disclosure | The network-matched daemon invocation: `shekyld` / `shekyld --testnet` / `shekyld --stagenet` and the port it would answer on |
 | F2 | Wrong network vs daemon (wallet testnet, daemon mainnet) | `mine start` preflight: `get_version`'s identity vs `--network`, read before `get_info` (RK-Q6; the same read refuses a daemon on another RPC version, rule set or genesis) | Name both networks and the flag to fix (restart CLI or daemon with the matching flag) |
 | F3 | Restricted RPC | `mine *` | "The daemon's RPC listener is restricted (view-only); mining control needs the unrestricted RPC listener" |
-| F4 | Remote (non-loopback) daemon | `mine start` | Reminder that the recommended posture is a local daemon; **does not refuse**. A named remote endpoint (own-network node, etc.) is a valid advanced configuration. Startup already discloses non-loopback (RT-W7). |
+| F4 | Remote (non-loopback) daemon | `mine start` | Reminder that mining will run on that machine's CPU; **does not refuse**. Startup already discloses a remote daemon (RT-W7). |
 | F5 | No wallet open | `mine *` (and existing `require_open` sites) | `open <name>` / `create <name>` |
 | F6 | Already mining | `mine start` | Current thread count + `mine stop` first (daemon reports the state; the CLI relays it, no error tone) |
 | F7 | Daemon not synced | `mine start` | Refuse with height copy. The daemon will not mine until it is caught up (`CHECK_CORE_READY` / `BUSY`); there is no confirmation that can succeed. |

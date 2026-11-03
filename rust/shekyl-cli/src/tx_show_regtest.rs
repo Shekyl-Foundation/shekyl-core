@@ -98,10 +98,6 @@ fn tx_show_reads_the_wallet_or_the_daemon() {
         body_delta.contains(&request_line(transactions_method())),
         "--body is a daemon request:\n{body_delta}"
     );
-    assert!(
-        !body.contains("The daemon now knows you asked for this transaction."),
-        "a loopback daemon is not announced: the operator asked a daemon on this machine:\n{body}"
-    );
 }
 
 /// A wallet read that fails does not ask the daemon.
@@ -290,7 +286,6 @@ impl Regtest {
             url: &self.url,
             proxy: None,
             network: DaemonNetwork::Fakechain,
-            loopback: true,
             down_hint: None,
         }
     }
