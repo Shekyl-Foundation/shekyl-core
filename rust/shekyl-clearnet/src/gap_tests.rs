@@ -18,7 +18,7 @@ use shekyl_net_address::NetworkAddress;
 use shekyl_peer_policy::InboundCeiling;
 use shekyl_runtime::runtime;
 use shekyl_timing_engine::{EngineService, MonotonicClock, Tick};
-use shekyl_transport_layer::{CloseCause, CloseKind, Sockets};
+use shekyl_transport_layer::{CloseCause, CloseKind, DialEnd, Sockets};
 use tokio::net::TcpListener;
 use tokio::sync::mpsc;
 
@@ -69,7 +69,10 @@ where
         handshake_within: Tick::new(2_000_000_000),
         gap_within: Some(gap),
         tally: Arc::new(super::super::zero_tally()),
-        on_cause: Arc::clone(&recorded.sink),
+        on_end: {
+            let sink = Arc::clone(&recorded.sink);
+            Arc::new(move |end: DialEnd| sink(end.cause()))
+        },
         send_queue_bytes: 65_536,
         admitted: admitted_tx,
     };

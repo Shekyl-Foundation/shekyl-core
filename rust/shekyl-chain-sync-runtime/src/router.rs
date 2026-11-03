@@ -186,17 +186,9 @@ impl Router {
                 });
                 let _gone = owner.send(Routed::Claim { id, sync });
             }
-            Post::Closed {
-                id,
-                connector,
-                cause,
-            } => {
+            Post::Closed { id, connector, end } => {
                 self.splits().remove(&id);
-                (self.forward)(Post::Closed {
-                    id,
-                    connector,
-                    cause,
-                });
+                (self.forward)(Post::Closed { id, connector, end });
                 let _gone = owner.send(Routed::Closed { id });
             }
             Post::Deliver {
@@ -295,17 +287,9 @@ impl Router {
                     bytes,
                 });
             }
-            Post::Closed {
-                id,
-                connector,
-                cause,
-            } => {
+            Post::Closed { id, connector, end } => {
                 self.splits().remove(&id);
-                (self.forward)(Post::Closed {
-                    id,
-                    connector,
-                    cause,
-                });
+                (self.forward)(Post::Closed { id, connector, end });
             }
             other => (self.forward)(other),
         }

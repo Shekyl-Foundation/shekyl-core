@@ -10,10 +10,14 @@
 //! the caller. Revision 4's tests 12 to 16: a Tor timeout at or after the
 //! managed Tor's window is final within its test (Rick, 2026-10-26).
 
+#[path = "../support/life.rs"]
+mod life;
 #[path = "../support/log_capture.rs"]
 mod log_capture;
+#[path = "../support/tables.rs"]
+mod tables;
 
-mod quiet;
+mod judge;
 mod white;
 
 use log_capture::log_text;
@@ -21,7 +25,7 @@ use std::collections::{HashMap, VecDeque};
 use std::future::Future;
 use std::net::Ipv4Addr;
 use std::pin::Pin;
-use std::sync::atomic::{AtomicUsize, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex};
 use std::task::{Context, Poll};
 use std::thread;
@@ -35,13 +39,13 @@ use shekyl_levin::{
     PeerlistEntry, PortableMap, Received, COMMAND_HANDSHAKE,
 };
 use shekyl_peer_policy::InboundCeiling;
-use shekyl_peerlist::{CloseCause, CloseKind, ConnectorId, NetworkAddress, RefusedSet, Tick};
+use shekyl_peerlist::{ConnectorId, NetworkAddress, RefusedSet, Tick};
 use shekyl_seam::{
     admit, drive_inbound, Channel, ConnectFuture, Dial, Endpoint, Hub, Route, RoutePublish,
     SocketId, SyncPayload,
 };
 use shekyl_timing_engine::{Clock, EngineService, ManualClock, OwnerClass};
-use shekyl_transport_layer::Sockets;
+use shekyl_transport_layer::{DialEnd, DialFailure, Reached, Retry, Sockets, StreamEnd};
 
 const CLEARNET: ConnectorId = ConnectorId::Clearnet;
 const TOR: ConnectorId = ConnectorId::Tor;
@@ -98,6 +102,7 @@ fn wait_until(what: &str, mut condition: impl FnMut() -> bool) {
 
 /// The ends of one channel the held dial opened.
 struct Held {
+    connector: ConnectorId,
     inbound: InboundEnd,
     writer: ByteQueue,
     _hold: QueueHold,
@@ -112,11 +117,13 @@ struct HeldDial {
     held: Mutex<HashMap<SocketId, Held>>,
     /// Causes the next connects fail with, in order, before any answer: the
     /// connector refusing the dial, after the nanoseconds it took.
-    refusals: Mutex<VecDeque<(CloseCause, u64)>>,
+    refusals: Mutex<VecDeque<(DialEnd, u64)>>,
     /// The clock a refusal moves by the time it took.
     clock: Mutex<Option<ManualClock>>,
     /// Every connect, refused or not.
     connects: AtomicUsize,
+    /// The peer closes each channel as soon as it opens.
+    close_on_open: AtomicBool,
 }
 
 impl HeldDial {
@@ -128,11 +135,18 @@ impl HeldDial {
             refusals: Mutex::new(VecDeque::new()),
             clock: Mutex::new(None),
             connects: AtomicUsize::new(0),
+            close_on_open: AtomicBool::new(false),
         }
     }
 
+    /// From now on the peer closes each channel as soon as it opens: a
+    /// stream that opened, then the peer's end.
+    fn close_on_open(&self) {
+        self.close_on_open.store(true, Ordering::Release);
+    }
+
     /// The next connect fails with `cause` after `took` on `clock`.
-    fn refuse_after(&self, clock: &ManualClock, cause: CloseCause, took: Duration) {
+    fn refuse_after(&self, clock: &ManualClock, cause: DialEnd, took: Duration) {
         *self.clock.lock().expect("clock") = Some(clock.clone());
         let took = u64::try_from(took.as_nanos()).expect("a short wait");
         self.refusals
@@ -144,7 +158,7 @@ impl HeldDial {
     /// The peer closes `id`'s session: the connector stores its cause.
     fn close_as_peer(&self, id: SocketId) {
         if let Some(held) = self.held.lock().expect("held").get(&id) {
-            held.inbound.close(CloseCause::new(CloseKind::PeerClosed));
+            held.inbound.close(tables::peer_closed(held.connector));
         }
     }
 
@@ -178,7 +192,7 @@ impl Dial for HeldDial {
         endpoint: &Endpoint,
         ceiling: InboundCeiling,
         now: Tick,
-    ) -> Result<Channel, CloseCause> {
+    ) -> Result<Channel, DialEnd> {
         self.connects.fetch_add(1, Ordering::AcqRel);
         let refusal = self.refusals.lock().expect("refusals").pop_front();
         if let Some((cause, took)) = refusal {
@@ -187,16 +201,31 @@ impl Dial for HeldDial {
             }
             return Err(cause);
         }
-        let open = admit(&self.sockets, endpoint, now, ceiling)?;
+        let open = admit(&self.sockets, endpoint, now, ceiling).map_err(|cause| {
+            DialEnd::new(DialFailure::local(Retry::Again, Reached::NoStream), cause)
+        })?;
         let ends = StreamEnds::open(SEND_CAP);
         if let Some(answer) = self.answers.lock().expect("answers").pop_front() {
             ends.inbound
                 .blocking_send(answer)
                 .expect("room for the answer");
         }
+        if self.close_on_open.load(Ordering::Acquire) {
+            // The peer's end: recorded, and no sender or queue kept, so the
+            // session's reads end at once.
+            ends.inbound
+                .close(tables::peer_closed(endpoint.connector()));
+            return Ok(Channel {
+                open,
+                session: ends.session,
+                endpoint: *endpoint,
+                gap: None,
+            });
+        }
         self.held.lock().expect("held").insert(
             open.id(),
             Held {
+                connector: endpoint.connector(),
                 inbound: ends.inbound.clone(),
                 writer: ends.writer_queue,
                 _hold: ends.hold,
@@ -208,6 +237,10 @@ impl Dial for HeldDial {
             endpoint: *endpoint,
             gap: None,
         })
+    }
+
+    fn stamp_stream_end(&self, connector: ConnectorId, end: StreamEnd) -> DialFailure {
+        tables::tables(connector, end)
     }
 
     fn retired(&self, id: SocketId) {
@@ -226,7 +259,7 @@ struct Stalled {
 }
 
 impl Future for Stalled {
-    type Output = Result<Channel, CloseCause>;
+    type Output = Result<Channel, DialEnd>;
 
     fn poll(self: Pin<&mut Self>, _cx: &mut Context<'_>) -> Poll<Self::Output> {
         Poll::Pending
@@ -265,8 +298,12 @@ impl Dial for StallDial {
         endpoint: &Endpoint,
         ceiling: InboundCeiling,
         now: Tick,
-    ) -> Result<Channel, CloseCause> {
+    ) -> Result<Channel, DialEnd> {
         self.held.connect(endpoint, ceiling, now)
+    }
+
+    fn stamp_stream_end(&self, connector: ConnectorId, end: StreamEnd) -> DialFailure {
+        self.held.stamp_stream_end(connector, end)
     }
 
     fn connect_async(
@@ -733,7 +770,7 @@ fn a_due_keep_retry_does_not_take_the_connector_past_its_target() {
         sockets.clone(),
         std::iter::repeat_n(reply(NETWORK), gray.len()).collect(),
     ));
-    dial.refuse_after(&clock, shekyl_tor::refused(0xF0), Duration::ZERO);
+    dial.refuse_after(&clock, shekyl_tor::reply_end(0xF0), Duration::ZERO);
     let (_hub, dialer) = dialer_on(&clock, &sockets, Arc::clone(&dial) as Arc<dyn Dial>);
     let mut rng = SplitMix64::new(31);
     dialer.set_in_flight_bound(TOR, 2);
@@ -779,7 +816,7 @@ const TOR_WINDOW: Duration = Duration::from_secs(104);
 /// One Tor attempt at one gray onion, refused with `cause` after `took`,
 /// on a dialer that knows the Tor window. Returns the dialer, the dial and
 /// the onion, after the attempt's result is applied.
-fn one_tor_attempt(seed: u64, cause: CloseCause, took: Duration) -> TorAttempt {
+fn one_tor_attempt(seed: u64, cause: DialEnd, took: Duration) -> TorAttempt {
     one_tor_attempt_under(seed, cause, took, Some(TOR_WINDOW))
 }
 
@@ -787,16 +824,22 @@ fn one_tor_attempt(seed: u64, cause: CloseCause, took: Duration) -> TorAttempt {
 /// published: `None` for an operator's Tor, whose timeout is unknown.
 fn one_tor_attempt_under(
     seed: u64,
-    cause: CloseCause,
+    cause: DialEnd,
     took: Duration,
     window: Option<Duration>,
 ) -> TorAttempt {
     let clock = ManualClock::new(Tick::new(1_000_000_000));
     let sockets = Sockets::new();
     let dial = Arc::new(HeldDial::answering(sockets.clone(), Vec::new()));
-    dial.refuse_after(&clock, cause, took);
-    let (_hub, dialer) = dialer_on(&clock, &sockets, Arc::clone(&dial) as Arc<dyn Dial>);
+    let (hub, dialer) = dialer_on(&clock, &sockets, Arc::clone(&dial) as Arc<dyn Dial>);
     dialer.set_window(TOR, window);
+    // The link works: an inbound Tor session receives throughout, so the
+    // judge counts the attempt's failure once its bracket closes.
+    let held = hub.connect(&Endpoint::TorInbound).expect("accepted");
+    hub.session_established(held.id);
+    dial.connects.store(0, Ordering::Release);
+    life::Life::install(&dialer, &clock).keep_alive();
+    dial.refuse_after(&clock, cause, took);
     let mut rng = SplitMix64::new(seed);
     let onion = onions(1).remove(0);
     dialer
@@ -822,9 +865,23 @@ struct TorAttempt {
 }
 
 impl TorAttempt {
-    /// The test ended on its first attempt: the onion cools, its ladder
-    /// stepped once, and no wake after any retry wait dials it again.
+    /// The test ended on its first attempt: once its bracket closes the
+    /// onion cools, its ladder stepped once, and no wake after any retry
+    /// wait dials it again.
     fn assert_final(mut self) {
+        assert_eq!(
+            self.dialer.pending_verdicts(TOR),
+            1,
+            "the verdict waits for its bracket"
+        );
+        // A wake inside the bracket sees the live link and counts it; the
+        // rest of the bracket then passes.
+        let bracket = shekyl_peerlist::dial_profile(TOR).judging.bracket_nanos;
+        self.clock
+            .set(Tick::new(self.clock.now().get() + 1_000_000_000));
+        self.dialer.apply_verdicts(&mut self.rng);
+        self.clock.set(Tick::new(self.clock.now().get() + bracket));
+        self.dialer.apply_verdicts(&mut self.rng);
         assert!(
             self.dialer.shared().lists.is_cooling(&self.onion),
             "the onion cools"
@@ -845,6 +902,7 @@ impl TorAttempt {
             !self.dialer.shared().lists.is_cooling(&self.onion),
             "a deferred attempt records no outcome"
         );
+        assert_eq!(self.dialer.pending_verdicts(TOR), 0, "nor a verdict");
         assert_eq!(self.dialer.shared().lists.failed_tests(&self.onion), 0);
         self.wake_after_every_wait();
         assert_eq!(
@@ -861,7 +919,7 @@ impl TorAttempt {
         self.clock
             .set(Tick::new(self.clock.now().get() + 11 * 1_000_000_000));
         self.dial
-            .refuse_after(&self.clock, shekyl_tor::refused(0xF0), Duration::ZERO);
+            .refuse_after(&self.clock, shekyl_tor::reply_end(0xF0), Duration::ZERO);
         self.dialer.wake(TOR, &mut self.rng);
     }
 }
@@ -874,10 +932,10 @@ impl TorAttempt {
 /// `0x06` arrive (2026-10-26).
 #[test]
 fn a_ttl_expiry_at_the_tor_window_cools_after_one_attempt() {
-    one_tor_attempt(41, shekyl_tor::refused(0x06), TOR_WINDOW).assert_final();
+    one_tor_attempt(41, shekyl_tor::reply_end(0x06), TOR_WINDOW).assert_final();
     one_tor_attempt(
         48,
-        shekyl_tor::refused(0x06),
+        shekyl_tor::reply_end(0x06),
         Duration::from_millis(104_970),
     )
     .assert_final();
@@ -888,14 +946,14 @@ fn a_ttl_expiry_at_the_tor_window_cools_after_one_attempt() {
 /// the test keeps its attempts.
 #[test]
 fn an_early_ttl_expiry_keeps_its_retries() {
-    one_tor_attempt(42, shekyl_tor::refused(0x06), Duration::from_secs(30)).assert_retries();
+    one_tor_attempt(42, shekyl_tor::reply_end(0x06), Duration::from_secs(30)).assert_retries();
 }
 
 /// **An early `0xF0` retries** (test 14): a descriptor not found on this
 /// try, inside the window.
 #[test]
 fn an_early_descriptor_not_found_keeps_its_retries() {
-    one_tor_attempt(43, shekyl_tor::refused(0xF0), Duration::from_secs(5)).assert_retries();
+    one_tor_attempt(43, shekyl_tor::reply_end(0xF0), Duration::from_secs(5)).assert_retries();
 }
 
 /// **An `0xF0` at the window is final** (the short floor series,
@@ -909,7 +967,7 @@ fn an_onion_code_at_the_window_is_final() {
     for (seed, reply) in [(58, 0xF0), (59, 0xF2), (60, 0xF3), (61, 0xF7)] {
         one_tor_attempt(
             seed,
-            shekyl_tor::refused(reply),
+            shekyl_tor::reply_end(reply),
             Duration::from_millis(104_740),
         )
         .assert_final();
@@ -921,7 +979,7 @@ fn an_onion_code_at_the_window_is_final() {
 /// whole window. A gap timeout inside the window keeps its retries.
 #[test]
 fn a_transport_timeout_past_the_window_is_final_and_one_inside_retries() {
-    let timeout = CloseCause::new(CloseKind::TransportTimeout);
+    let timeout = shekyl_tor::Observed::Deadline.end();
     one_tor_attempt(44, timeout, Duration::from_secs(120)).assert_final();
     one_tor_attempt(45, timeout, Duration::from_secs(20)).assert_retries();
 }
@@ -930,7 +988,7 @@ fn a_transport_timeout_past_the_window_is_final_and_one_inside_retries() {
 /// The attempt ended without a stream whether or not its test goes on.
 #[test]
 fn the_tally_counts_a_failed_attempt_deferred_for_a_retry() {
-    let attempt = one_tor_attempt(46, shekyl_tor::refused(0xF0), Duration::ZERO);
+    let attempt = one_tor_attempt(46, shekyl_tor::reply_end(0xF0), Duration::ZERO);
     assert_eq!(attempt.dialer.tor_link_tally().unopened, 1);
     attempt.assert_retries();
 }
@@ -945,7 +1003,11 @@ fn a_timeout_inside_the_window_retries_however_late_it_is_applied() {
     let clock = ManualClock::new(Tick::new(1_000_000_000));
     let sockets = Sockets::new();
     let dial = Arc::new(HeldDial::answering(sockets.clone(), Vec::new()));
-    dial.refuse_after(&clock, shekyl_tor::refused(0x06), Duration::from_secs(103));
+    dial.refuse_after(
+        &clock,
+        shekyl_tor::reply_end(0x06),
+        Duration::from_secs(103),
+    );
     let (_hub, dialer) = dialer_on(&clock, &sockets, Arc::clone(&dial) as Arc<dyn Dial>);
     dialer.set_window(TOR, Some(TOR_WINDOW));
     let mut rng = SplitMix64::new(47);
@@ -973,7 +1035,7 @@ fn a_timeout_inside_the_window_retries_however_late_it_is_applied() {
 fn with_no_window_published_a_tor_timeout_keeps_its_retries() {
     one_tor_attempt_under(
         66,
-        shekyl_tor::refused(0x06),
+        shekyl_tor::reply_end(0x06),
         Duration::from_secs(110),
         None,
     )

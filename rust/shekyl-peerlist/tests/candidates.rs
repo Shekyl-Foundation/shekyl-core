@@ -12,8 +12,8 @@ use std::net::Ipv4Addr;
 
 use shekyl_draw_rng::SplitMix64;
 use shekyl_peerlist::{
-    ConnectorId, DialOutcome, Ladder, NetworkAddress, NoBans, NoSessions, Peerlist, RefusedSet,
-    Source, Tick, GRAY_CAP,
+    ConnectorId, DialOutcome, NetworkAddress, NoSessions, Peerlist, RefusedSet, Source, Tick,
+    Verdict, GRAY_CAP,
 };
 
 const C: ConnectorId = ConnectorId::Clearnet;
@@ -32,7 +32,7 @@ fn host(n: u16, port: u16) -> NetworkAddress {
 fn gray_list(addresses: &[NetworkAddress], rng: &mut SplitMix64) -> Peerlist {
     let mut list = Peerlist::new(RefusedSet::NON_GLOBAL);
     for address in addresses {
-        list.admit_gray(address, Source::Operator, now(), &mut NoBans, rng)
+        list.admit_gray(address, Source::Operator, now(), rng)
             .expect("admitted");
     }
     list
@@ -48,7 +48,7 @@ fn draw_and_return(
     list.apply(
         &DialOutcome::PayloadRefused(drawn.clone()),
         now(),
-        Ladder::Climb,
+        Verdict::Counted,
         rng,
     );
     Some(drawn)
@@ -203,33 +203,19 @@ fn the_white_draw_takes_white_only_and_counts_hosts() {
         list.apply(
             &DialOutcome::Confirmed(address.clone()),
             now(),
-            Ladder::Climb,
+            Verdict::Counted,
             &mut rng,
         );
         white.push(address);
     }
     assert_eq!(
-        list.white_candidates(
-            C,
-            now(),
-            &mut NoBans,
-            &mut NoSessions,
-            &mut |_| true,
-            &mut rng
-        ),
+        list.white_candidates(C, now(), &mut NoSessions, &mut |_| true, &mut rng),
         4
     );
     assert_eq!(list.gray_candidates(C, &mut |_| true), 4);
     for _ in 0..200 {
         let drawn = list
-            .draw_white_where(
-                C,
-                now(),
-                &mut NoBans,
-                &mut NoSessions,
-                &mut |_| true,
-                &mut rng,
-            )
+            .draw_white_where(C, now(), &mut NoSessions, &mut |_| true, &mut rng)
             .expect("white");
         assert!(
             white.contains(&drawn),
@@ -240,26 +226,12 @@ fn the_white_draw_takes_white_only_and_counts_hosts() {
     let live = white[0].clone();
     for _ in 0..200 {
         let drawn = list
-            .draw_white_where(
-                C,
-                now(),
-                &mut NoBans,
-                &mut NoSessions,
-                &mut |a| *a != live,
-                &mut rng,
-            )
+            .draw_white_where(C, now(), &mut NoSessions, &mut |a| *a != live, &mut rng)
             .expect("three remain");
         assert_ne!(drawn, live);
     }
     assert_eq!(
-        list.draw_white_where(
-            C,
-            now(),
-            &mut NoBans,
-            &mut NoSessions,
-            &mut |_| false,
-            &mut rng
-        ),
+        list.draw_white_where(C, now(), &mut NoSessions, &mut |_| false, &mut rng),
         None
     );
 }

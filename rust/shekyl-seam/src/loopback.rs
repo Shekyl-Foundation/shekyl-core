@@ -18,9 +18,11 @@ use std::thread::{self, JoinHandle};
 use shekyl_capped_stream::{QueueHold, Session, StreamEnds};
 use shekyl_peer_policy::InboundCeiling;
 use shekyl_timing_engine::Tick;
-use shekyl_transport_layer::{CloseCause, SocketId, Sockets};
+use shekyl_transport_layer::{
+    ConnectorId, DialEnd, DialFailure, Reached, Retry, SocketId, Sockets, StreamEnd,
+};
 
-use crate::dial::{Channel, Dial};
+use crate::dial::{Channel, Dial, StampStreamEnd};
 use crate::drive::drive_inbound;
 use crate::endpoint::{admit, Endpoint};
 use crate::hub::Hub;
@@ -36,16 +38,20 @@ struct Slot {
 pub struct Loopback {
     sockets: Sockets,
     send_cap: usize,
+    stamp: StampStreamEnd,
     slots: Mutex<HashMap<SocketId, Slot>>,
 }
 
 impl Loopback {
-    /// `send_cap` is the outbound byte cap of each harness channel.
+    /// `send_cap` is the outbound byte cap of each harness channel. `stamp`
+    /// is the connectors' own tables, which the harness channel stands in
+    /// for.
     #[must_use]
-    pub fn new(sockets: Sockets, send_cap: usize) -> Self {
+    pub fn new(sockets: Sockets, send_cap: usize, stamp: StampStreamEnd) -> Self {
         Self {
             sockets,
             send_cap,
+            stamp,
             slots: Mutex::new(HashMap::new()),
         }
     }
@@ -61,8 +67,11 @@ impl Dial for Loopback {
         endpoint: &Endpoint,
         ceiling: InboundCeiling,
         now: Tick,
-    ) -> Result<Channel, CloseCause> {
-        let open = admit(&self.sockets, endpoint, now, ceiling)?;
+    ) -> Result<Channel, DialEnd> {
+        // A refusal here is this node's own admission, before any I/O.
+        let open = admit(&self.sockets, endpoint, now, ceiling).map_err(|cause| {
+            DialEnd::new(DialFailure::local(Retry::Again, Reached::NoStream), cause)
+        })?;
         let id = open.id();
         let ends = StreamEnds::open(self.send_cap);
         let writer_queue = ends.writer_queue.clone();
@@ -89,6 +98,10 @@ impl Dial for Loopback {
             endpoint: *endpoint,
             gap: None,
         })
+    }
+
+    fn stamp_stream_end(&self, connector: ConnectorId, end: StreamEnd) -> DialFailure {
+        (self.stamp)(connector, end)
     }
 
     fn inject(&self, id: SocketId, frame: Vec<u8>) -> bool {

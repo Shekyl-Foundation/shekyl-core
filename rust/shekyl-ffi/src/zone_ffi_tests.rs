@@ -9,7 +9,8 @@ use std::ffi::c_void;
 
 use shekyl_timing_engine::OwnerClass;
 
-use shekyl_seam::Outbound;
+use shekyl_seam::{CloseKind, Outbound};
+use shekyl_transport_layer::StreamEnd;
 
 use super::*;
 use crate::inbound_ceiling_ffi::ShekylInboundCeiling;
@@ -444,12 +445,12 @@ fn a_closed_admission_keeps_the_dial_cause() {
     rt.block_on(async {
         let (tx, rx) = mpsc::unbounded_channel::<u8>();
         let (fail_tx, fail_rx) = oneshot::channel();
-        fail_tx
-            .send(CloseCause::new(CloseKind::DialFailed))
-            .expect("cause");
+        let refused = shekyl_clearnet::Observed::ConnectRefused.end();
+        fail_tx.send(refused).expect("end");
         drop(tx);
         let err = recv_admitted(rx, fail_rx).await.expect_err("dial failed");
-        assert_eq!(err.kind(), CloseKind::DialFailed);
+        assert_eq!(err, refused);
+        assert_eq!(err.cause().kind(), CloseKind::DialFailed);
     });
 }
 
@@ -658,4 +659,51 @@ fn the_linger_reservation_is_the_process_gate_s_cap() {
         crate::clearnet_linger_descriptors(),
         u64::try_from(process_sockets().clearnet_linger_cap(span)).expect("small")
     );
+}
+
+/// Zone bind's dialer stamps a stream end shared code observed from the
+/// row's connector's own table, for every end on every connector: no meaning
+/// of its own. The edit that makes this red is dispatching to the wrong
+/// connector's table, or answering without reading one.
+#[test]
+fn the_zone_dialer_stamps_each_stream_end_from_the_connectors_table() {
+    let _bind = crate::seam_ffi::seam_bind_lock().lock();
+    let mut executor = 0u8;
+    let ceiling = ShekylInboundCeiling {
+        kind: SHEKYL_INBOUND_CEILING_UNLIMITED,
+        ceiling: 0,
+        soft_limit: 0,
+        held: 0,
+    };
+    let bound = unsafe {
+        shekyl_seam_bind(
+            std::ptr::addr_of_mut!(executor).cast::<c_void>(),
+            Some(discard),
+        )
+    };
+    assert_eq!(bound, 0);
+    assert_eq!(unsafe { shekyl_seam_set_ceiling(&raw const ceiling) }, 0);
+    let host = ensure([7u8; 16]).expect("zone host");
+    let dial = ZoneDial { host };
+    for end in [
+        StreamEnd::PeerClosed,
+        StreamEnd::IoError,
+        StreamEnd::SendQueueFull,
+    ] {
+        assert_eq!(
+            dial.stamp_stream_end(ConnectorId::Clearnet, end),
+            shekyl_clearnet::stamp_stream_end(end),
+            "clearnet {end:?}"
+        );
+        assert_eq!(
+            dial.stamp_stream_end(ConnectorId::Tor, end),
+            shekyl_tor::stamp_stream_end(end),
+            "tor {end:?}"
+        );
+    }
+    drop(dial);
+    shutdown();
+    unsafe {
+        shekyl_seam_bind(std::ptr::null_mut(), None);
+    }
 }

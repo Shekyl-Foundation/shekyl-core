@@ -2509,17 +2509,39 @@ not change with its address:
 - (a) is `store/header.rs`: `seal` writes `schema_version` (and the
   `apply_policy` provenance cell — §7.1.1's sufficiency control, specified in
   [`ARCHIVAL_FORCING_CORPUS.md`](ARCHIVAL_FORCING_CORPUS.md) §"ApplyPolicy")
-  in a fresh file's **first** transaction, before any batch; `verify` runs on every writable and read-only
-  open and returns `SchemaVersionAbsent` / `SchemaVersionMismatch { found,
-  expected }` / `CellCorrupt` — never a default. A writable reopen runs it on a
-  **read-only** open first and opens writable only a file it accepted: a writable
-  open writes into the file even with nothing committed (redb records its
-  allocator state when it closes), so the file the read-only open refused is
-  left byte for byte. The two opens are by path: redb opens read-only only by
-  path, and a directory entry replaced between them is a different file, which
-  a later refusal has already marked for recovery. The
-  one exception is a file redb must repair, which a read-only open refuses
-  (`RepairAborted`): it is opened writable, repaired by redb, and judged after. The key bytes are pinned by a
+  in a fresh file's **first** transaction, before any batch. Creation is three
+  durable steps (`create_new`, the engine's initialization, the seal), and a
+  power loss between any two leaves a file nothing was committed to: empty, the
+  engine's header flushed before its magic (redb writes the magic last; the
+  pre-magic image is the page size, the two-phase god byte, and two slots that
+  have never committed, at the length that flush writes — pinned flush by flush
+  against the engine in `Cargo.lock`), or a valid database with **no table at
+  all**. A reopen judges an existing file on a **read-only** open first, and
+  opens writable only a file it accepted: a writable open writes into the file
+  even with nothing committed (redb records its allocator state when it
+  closes), so a refused file is left byte for byte. The two opens are by path:
+  redb opens read-only only by path, and a directory entry replaced between
+  them is a different file, which a later refusal has already marked for
+  recovery. The writable open holds `<name>.creation-lock` from before the
+  decision until the engine holds the store file, shared by the chain and the
+  pool, so a second open cannot move a file the first one just sealed.
+  Accepted are a sealed file `verify` passes and a database with no table,
+  which the writable open then **seals in place** under the engine's exclusive
+  lock. A file the engine never finished initializing — empty, or that
+  pre-magic image — is moved aside as `<name>.unfinished-<unix seconds>`
+  (never deleted; the node logs where) and a fresh store created. A zero-filled
+  file of that length, a sealed file whose magic was cleared, and any other
+  bytes are not ones the node can prove it made and stay refused. The one
+  exception to judging read-only is a file
+  redb must repair, which a read-only open refuses (`RepairAborted`): it is
+  opened writable, repaired by redb, and judged after. A read-only open of the
+  store never seals and refuses an unsealed file. Found by PB-S2's power-loss
+  replay (2026-11-01, one capture of a first start, a sync and a switch: 9 of
+  58 rebuilt points, then 2 of 166, would not start again, all before the
+  first acknowledgement; the pool file the same way). `verify` returns
+  `SchemaVersionAbsent` / `SchemaVersionMismatch { found, expected }` /
+  `CellCorrupt` — never a default: a file with any table and no seal is not
+  one this binary wrote. The key bytes are pinned by a
   test on `codec::SchemaVersionCell::KEY`.
 - (b) is `codec::Canonical`: one fixed-width, strict encoding per stored value
   type, used both to store and to digest. Types are `u8`, `u64` (LE, matching

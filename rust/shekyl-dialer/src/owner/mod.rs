@@ -34,7 +34,7 @@
 mod address;
 mod flight;
 mod handshake;
-mod quiet;
+mod judging;
 mod ready;
 mod recovery;
 mod tor_tally;
@@ -48,11 +48,12 @@ use std::sync::{Arc, Condvar, Mutex, MutexGuard};
 
 use shekyl_draw_rng::RelayRng;
 use shekyl_peerlist::{
-    dial_profile, white_diversity_floor, CloseCause, CloseKind, ConnectionId, ConnectorId,
-    DialOutcome, Ladder, ListName, NetworkAddress, Peerlist, Refusal, RefusedSet, Source, Tick,
+    dial_profile, white_diversity_floor, ConnectionId, ConnectorId, DialOutcome, ListName,
+    NetworkAddress, Peerlist, Refusal, RefusedSet, Source, Tick, Verdict,
 };
-use shekyl_seam::{Hub, SocketId, Subscription, SyncPayload};
+use shekyl_seam::{BanEvent, BanFeed, Hub, SocketId, Subscription, SyncPayload};
 use shekyl_timing_engine::{Clock, OwnerHandle};
+use shekyl_transport_layer::{CloseKind, DialEnd, Retry};
 
 use self::address::live_sessions;
 pub use self::flight::{Applied, Launch};
@@ -62,7 +63,6 @@ pub use self::ready::NotReady;
 use self::ready::{park, wait_wake_or_bell, Bell, Waited};
 use self::wake::{plan_wake, Wake};
 use crate::attempts::Attempts;
-use crate::bans::BanSnapshot;
 use crate::fill::DialAim;
 use crate::link_tally::{LinkFold, TallySink, TorLinkTally};
 use crate::nonce::{HandshakeNonce, HandshakeNonceSet, InFlightNonce, NonceTake};
@@ -89,7 +89,7 @@ pub struct Shared {
     /// Kept dials from just before `adopt` until their kept row is written,
     /// by socket id. A close in that window finds no kept row; it records
     /// its cause here instead, and the kept row is never written for it.
-    adopting: BTreeMap<u64, Option<CloseCause>>,
+    adopting: BTreeMap<u64, Option<DialEnd>>,
     /// Under-target wakes that dialed nothing, one slot per connector.
     idle: [Option<wake::IdleWatch>; ConnectorId::COUNT],
     /// A closed network (`--add-exclusive-node`): the candidate
@@ -136,12 +136,12 @@ pub struct Shared {
     /// calls it while holding the table lock. The seam's close poster
     /// refreshes this first.
     inbound: [usize; ConnectorId::COUNT],
-    /// When an attempt on each connector last opened a stream, or when the
-    /// dialer was built: the start of its quiet stretch ([`quiet`]).
-    last_opened: [Tick; ConnectorId::COUNT],
-    /// Each connector's attempts ended without opening a stream since one
-    /// last opened there ([`quiet`]).
-    unopened: [u32; ConnectorId::COUNT],
+    /// What the judge has seen of each connector's link ([`judging`]).
+    evidence: [judging::LinkEvidence; ConnectorId::COUNT],
+    /// Failed tests whose verdict waits for its bracket to close.
+    pending: Vec<judging::PendingVerdict>,
+    /// The clock the judge reads, and the sessions' received bytes on it.
+    life_clock: judging::LifeClock,
 }
 
 impl Shared {
@@ -218,6 +218,10 @@ pub struct Dialer {
     /// The hub's links ring [`Self::bell`] while this is held. Dropped with
     /// the dialer, so a dialer rebuilt on the same hub leaves no watcher.
     _links_watch: Subscription,
+    /// The ban list's events, starting with every entry in force when the
+    /// dialer was built; each rings [`Self::bell`]. Drained in order under
+    /// the dialer's lock, by every [`Self::shared`]. Dropped with the dialer.
+    bans: BanFeed,
     /// The results the attempt tasks posted; each also rings the bell.
     completions: Arc<Completions>,
     /// Wakes [`Self::stop`] when the last application that started before
@@ -251,7 +255,8 @@ impl Dialer {
         let bell = Arc::new(Bell::new());
         let ringing = Arc::clone(&bell);
         let links_watch = hub.links().subscribe(Arc::new(move |_| ringing.ring()));
-        let started = hub.now();
+        let ringing = Arc::clone(&bell);
+        let bans = hub.subscribe_bans(Arc::new(move || ringing.ring()));
         Self {
             hub,
             shared: Arc::new(Mutex::new(Shared {
@@ -275,8 +280,9 @@ impl Dialer {
                 published_windows: [None; ConnectorId::COUNT],
                 tor_link: LinkFold::new(),
                 inbound: [0; ConnectorId::COUNT],
-                last_opened: [started; ConnectorId::COUNT],
-                unopened: [0; ConnectorId::COUNT],
+                evidence: [judging::LinkEvidence::default(); ConnectorId::COUNT],
+                pending: Vec::new(),
+                life_clock: judging::LifeClock::production(),
             })),
             nonces: HandshakeNonceSet::new(),
             stop: Arc::new(AtomicBool::new(false)),
@@ -286,6 +292,7 @@ impl Dialer {
             owners: Mutex::new([false; ConnectorId::COUNT]),
             bell,
             _links_watch: links_watch,
+            bans,
             completions: Arc::new(Completions::default()),
             apply_idle: Condvar::new(),
         }
@@ -375,9 +382,26 @@ impl Dialer {
         *self.network_id.lock().expect("network id")
     }
 
-    /// The shared state, for the calls that read or write the lists.
+    /// The shared state, for the calls that read or write the lists, with
+    /// the ban list's queued events applied first, in the order it made
+    /// them: a ban bars every seat its entry covers, a lift frees those no
+    /// remaining entry covers (Rick, 2026-10-31). Every caller takes the
+    /// lists through here, so whatever it reads reflects every ban and
+    /// lift posted before it, and the queue is taken under the lock, so
+    /// the owner loops apply one order between them.
     pub fn shared(&self) -> MutexGuard<'_, Shared> {
-        self.shared.lock().expect("dialer state")
+        let mut shared = self.shared.lock().expect("dialer state");
+        for event in self.bans.take() {
+            match event {
+                BanEvent::Banned(entry) => {
+                    shared.lists.ban(entry);
+                }
+                BanEvent::Lifted(entry) => {
+                    shared.lists.lift(entry);
+                }
+            }
+        }
+        shared
     }
 
     /// The hub this dialer dials through.
@@ -471,16 +495,11 @@ impl Dialer {
         now: Tick,
         rng: &mut R,
     ) {
-        let mut bans = BanSnapshot::take(&self.hub);
         let mut shared = self.shared();
         for address in &addresses {
             // Already seated: the population is the declaration either way.
             // A refusal is not "already seated" and is said.
-            if let Err(refusal) =
-                shared
-                    .lists
-                    .admit_gray(address, Source::Operator, now, &mut bans, rng)
-            {
+            if let Err(refusal) = shared.lists.admit_gray(address, Source::Operator, now, rng) {
                 tracing::warn!("closed-network address {address:?} was not admitted: {refusal:?}");
             }
         }
@@ -511,14 +530,11 @@ impl Dialer {
         now: Tick,
         rng: &mut R,
     ) -> Result<bool, Refusal> {
-        let mut bans = BanSnapshot::take(&self.hub);
         let mut shared = self.shared();
         if !shared.configured.contains(address) {
             shared.configured.push(address.clone());
         }
-        shared
-            .lists
-            .admit_gray(address, Source::Operator, now, &mut bans, rng)
+        shared.lists.admit_gray(address, Source::Operator, now, rng)
     }
 
     /// The inbound handshake's question: is `nonce` one of ours in flight
@@ -570,27 +586,20 @@ impl Dialer {
     /// the inbound rows last read by [`Self::note_inbound_tor`]. The seam's
     /// close poster reads the board first
     /// ([`Self::session_closed_from_seam`]).
-    pub fn session_closed<R: RelayRng + ?Sized>(
-        &self,
-        id: SocketId,
-        cause: CloseCause,
-        rng: &mut R,
-    ) {
+    pub fn session_closed<R: RelayRng + ?Sized>(&self, id: SocketId, end: DialEnd, rng: &mut R) {
         let now = self.hub.now();
         let mut shared = self.shared();
         if let Some(adopting) = shared.adopting.get_mut(&id.get()) {
-            *adopting = Some(cause);
+            *adopting = Some(end);
         } else if let Some(address) = shared.kept.remove(&id.get()) {
             if let Some(connector) = Peerlist::connector_of(&address) {
-                if cause.kind() == CloseKind::SessionRefused {
+                if end.cause().kind() == CloseKind::SessionRefused {
                     // A payload refusal is not a dial. The stream was
                     // counted when the session was accepted, so this does
                     // not finish a test and does not fold the tally. It
-                    // settles an outstanding draw and leaves the ladder
-                    // unread. Climb is what a caller passes when the quiet
-                    // stretch is not the decision.
+                    // settles an outstanding draw; the verdict is not read.
                     let outcome = DialOutcome::PayloadRefused(address.clone());
-                    shared.lists.apply(&outcome, now, Ladder::Climb, rng);
+                    shared.lists.apply(&outcome, now, Verdict::Counted, rng);
                 }
                 // White expiry follows the connection (the gray lifecycle,
                 // item 1): the clock moves to the close.
@@ -678,22 +687,19 @@ impl Dialer {
     }
 
     /// Write the address file now: every list address, by range only,
-    /// less those under an active ban at this moment (the hub's bans, the
-    /// snapshot the draws read). `Ok(false)` when no file was named.
+    /// less those a ban covers. `Ok(false)` when no file was named.
     ///
-    /// The ban snapshot and the clock are read before the store lock, so no
-    /// hub call is made under it. Two stores that overlap may therefore
-    /// write in either order: the later write can carry the earlier
-    /// snapshot. Each is a whole file of the lists at its own moment, and
-    /// the next store, at most one interval later, replaces it.
+    /// The clock is read before the store lock, so no hub call is made
+    /// under it. Two stores that overlap may write in either order: each is
+    /// a whole file of the lists at its own moment, and the next store, at
+    /// most one interval later, replaces it.
     pub fn store_addresses(&self) -> io::Result<bool> {
-        let mut bans = BanSnapshot::take(&self.hub);
         let now = self.hub.now();
         let store = self.store.lock().expect("address store");
         let Some(store) = store.as_ref() else {
             return Ok(false);
         };
-        let addresses = self.shared().lists.persistable(&mut bans, now);
+        let addresses = self.shared().lists.persistable();
         store.write(&addresses)?;
         self.shared().last_store = Some(now);
         Ok(true)
@@ -713,19 +719,29 @@ impl Dialer {
         self.store_addresses()
     }
 
+    /// Record a test's outcome. `opened_ms` is when its final attempt's
+    /// stream opened, on the judge's clock, when one did. `ended_ms` is
+    /// when that attempt resolved, on the same clock: the failure is judged
+    /// then, not when this record runs. The stream is dated at its open,
+    /// and never later than `ended_ms`, so it is never after its own failure.
     fn record<R: RelayRng + ?Sized>(
         shared: &mut Shared,
         connector: ConnectorId,
         outcome: &DialOutcome,
+        opened_ms: Option<u64>,
+        ended_ms: u64,
         now: Tick,
         rng: &mut R,
     ) {
-        Self::note_attempt(shared, connector, outcome, now);
-        let ladder = Self::ladder(shared, connector, now);
+        Self::apply_due_verdicts(shared, now, rng);
+        // The attempt frees its slot whatever the verdict: a deferred one
+        // holds only the outstanding seat.
         shared.attempts(connector).finish(outcome);
-        shared.lists.apply(outcome, now, ladder, rng);
+        Self::judge_outcome(shared, connector, outcome, ended_ms, now, rng);
+        let opened = opened_ms.map_or(ended_ms, |opened| opened.min(ended_ms));
+        Self::note_stream(shared, connector, outcome, opened, now);
         let held = Self::tor_held(shared);
-        shared.tor_link.observe(connector, outcome, held);
+        shared.tor_link.observe(connector, outcome, held, now);
     }
 
     /// A finished attempt's outcome, or its deferral. A `DialFailed` whose
@@ -744,18 +760,25 @@ impl Dialer {
         connector: ConnectorId,
         outcome: &DialOutcome,
         ran_nanos: u64,
+        opened_ms: Option<u64>,
+        ended_ms: u64,
         rng: &mut R,
     ) {
         let now = self.hub.now();
         self.with_inbound(|shared| {
             let address = outcome.address();
-            if let DialOutcome::DialFailed(_, cause) = outcome {
+            if let DialOutcome::DialFailed(_, failure) = outcome {
                 let cutoff = dial_profile(connector)
                     .retry_cutoff_nanos(shared.published_windows[connector.index()]);
-                let outlasted =
-                    cause.window_timeout() && cutoff.is_some_and(|cutoff| ran_nanos >= cutoff);
-                if cause.retry_worthy() && !outlasted {
-                    let cause = *cause;
+                // Retry follows the failure's meaning (§3): a timeout of the
+                // dial's own window that ran to the cutoff ends its test.
+                let worth = match failure.retry() {
+                    Retry::Final => false,
+                    Retry::Again => true,
+                    Retry::AgainInsideWindow => cutoff.is_none_or(|cutoff| ran_nanos < cutoff),
+                };
+                if worth {
+                    let failure = *failure;
                     let list = if shared.lists.is_white(address) {
                         ListName::White
                     } else {
@@ -774,18 +797,19 @@ impl Dialer {
                         tracing::debug!(
                             "{connector:?} dial {address:?} attempt {} ended {:?} after {} ms; attempt {next} in {} ms",
                             next - 1,
-                            cause.kind(),
+                            failure.evidence(),
                             ran_nanos / 1_000_000,
                             wait / 1_000_000
                         );
-                        Self::note_attempt(shared, connector, outcome, now);
+                        let opened = opened_ms.map_or(ended_ms, |opened| opened.min(ended_ms));
+                        Self::note_stream(shared, connector, outcome, opened, now);
                         let held = Self::tor_held(shared);
-                        shared.tor_link.observe(connector, outcome, held);
+                        shared.tor_link.observe(connector, outcome, held, now);
                         return;
                     }
                 }
             }
-            Self::record(shared, connector, outcome, now, rng);
+            Self::record(shared, connector, outcome, opened_ms, ended_ms, now, rng);
         });
     }
 
@@ -806,25 +830,27 @@ impl Dialer {
         connector: ConnectorId,
         address: &NetworkAddress,
         kept: KeptDial,
+        opened_ms: Option<u64>,
+        ended_ms: u64,
         rng: &mut R,
     ) -> bool {
         let now = self.hub.now();
         let closed = self.with_inbound(|shared| {
             let closed = shared.adopting.remove(&kept.id.get()).flatten();
             let outcome = match closed {
-                Some(cause) => DialOutcome::DialFailed(address.clone(), cause),
+                Some(end) => DialOutcome::DialFailed(address.clone(), end.failure()),
                 None => DialOutcome::SessionAccepted(address.clone()),
             };
-            Self::record(shared, connector, &outcome, now, rng);
+            Self::record(shared, connector, &outcome, opened_ms, ended_ms, now, rng);
             if closed.is_none() {
                 shared.kept.insert(kept.id.get(), address.clone());
             }
             closed
         });
-        if let Some(cause) = closed {
+        if let Some(end) = closed {
             tracing::debug!(
                 "{connector:?} dial {address:?} closed before it was kept ({:?})",
-                cause.kind()
+                end.cause().kind()
             );
             return false;
         }
@@ -853,6 +879,7 @@ impl Dialer {
         rng: &mut R,
     ) {
         let mut parked: Option<NotReady> = None;
+        let mut dial_at: Option<Tick> = None;
         loop {
             // The bell first, then the stop, then readiness. `stop` sets its
             // flag before it rings, so a ring already counted in `seen` is a
@@ -879,13 +906,19 @@ impl Dialer {
                     }
                 }
             }
-            let deadline = Tick::new(
-                owner
-                    .clock()
-                    .now()
-                    .get()
-                    .saturating_add(next_wake_nanos(dial_profile(connector).wake, rng)),
-            );
+            let wake = *dial_at.get_or_insert_with(|| {
+                Tick::new(
+                    owner
+                        .clock()
+                        .now()
+                        .get()
+                        .saturating_add(next_wake_nanos(dial_profile(connector).wake, rng)),
+                )
+            });
+            // A deferred verdict due first wakes the loop for it alone.
+            let deadline = self
+                .next_verdict_due(connector)
+                .map_or(wake, |due| due.min(wake));
             if owner.arm(deadline).is_err() {
                 break;
             }
@@ -910,6 +943,11 @@ impl Dialer {
             if self.stop.load(Ordering::Acquire) {
                 break;
             }
+            self.apply_verdicts(rng);
+            if owner.clock().now() < wake {
+                continue;
+            }
+            dial_at = None;
             if let Err(err) = self.store_if_due(self.hub.now()) {
                 tracing::warn!("the address file was not written: {err}");
             }
@@ -943,14 +981,13 @@ impl Dialer {
             return None;
         }
         let live = live_sessions(&self.hub, connector);
-        let mut bans = BanSnapshot::take(&self.hub);
         let mut shared = self.shared();
-        let wake = plan_wake(&mut shared, &mut bans, connector, &live, now, rng);
+        let wake = plan_wake(&mut shared, connector, &live, now, rng);
         let (address, aim) = match wake {
             Wake::Recover => {
                 // `plan_wake` already reported this wake. A report that
                 // closed the episode opens the next one here.
-                recovery::re_admit(&mut shared, &mut bans, connector, now, rng);
+                recovery::re_admit(&mut shared, connector, now, rng);
                 return None;
             }
             Wake::Idle => return None,
