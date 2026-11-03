@@ -40,7 +40,7 @@ pub use run::{Host, EXIT_FAILED, EXIT_REFUSED};
 /// on standard error and exits [`EXIT_FAILED`].
 #[must_use]
 pub fn main(remnant: Remnant, args: &[std::ffi::OsString]) -> i32 {
-    if let Err(e) = shekyl_ffi::platform::harden_process() {
+    if let Err(e) = shekyl_ffi::harden::harden_process() {
         run::tell(
             &mut std::io::stderr(),
             &format!("shekyld: process hardening {e}; not starting"),

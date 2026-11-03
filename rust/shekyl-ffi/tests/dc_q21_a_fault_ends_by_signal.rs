@@ -14,7 +14,7 @@
 //! A binary of its own: the parent must not be hardened, so the child
 //! inherits the runner's core limit (raised to its hard bound before the
 //! exec) and the core it does not write is the hardening's doing. The
-//! in-process reads of the limit and the flags are `platform.rs`'s tests.
+//! in-process reads of the limit and the flags are `harden.rs`'s tests.
 //!
 //! `SHEKYL_HARDEN_CHILD` is this harness's re-exec marker, read by the
 //! test binary alone (the shape `shekyl-timing-engine`'s abort test uses);
@@ -26,7 +26,7 @@ use std::os::unix::process::{CommandExt, ExitStatusExt};
 use std::path::Path;
 use std::process::{Command, Output};
 
-use shekyl_ffi::platform::harden_process;
+use shekyl_ffi::harden::harden_process;
 
 const CHILD_MARKER: &str = "SHEKYL_HARDEN_CHILD";
 

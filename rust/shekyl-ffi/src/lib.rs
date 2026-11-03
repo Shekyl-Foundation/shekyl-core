@@ -212,6 +212,10 @@ pub mod peer_policy_ffi;
 /// The account's home from the operating system's account interface (IG-13).
 pub mod platform;
 
+/// Process hardening: no core, and a same-account process cannot attach
+/// (DC-Q21). The first statement of `shekyl_daemon::main`.
+pub mod harden;
+
 /// The daemon's panic hook: a panic is never silent under `panic = "abort"`.
 pub mod panic_hook;
 

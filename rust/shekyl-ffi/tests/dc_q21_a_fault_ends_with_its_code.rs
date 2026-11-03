@@ -50,7 +50,7 @@ use std::process::{Command, Output, Stdio};
 use std::sync::{Arc, Mutex, PoisonError, Weak};
 use std::time::{Duration, Instant};
 
-use shekyl_ffi::platform::harden_process;
+use shekyl_ffi::harden::harden_process;
 use windows_sys::Win32::Foundation::{
     STATUS_ACCESS_VIOLATION, STATUS_STACK_BUFFER_OVERRUN, STATUS_STACK_OVERFLOW,
 };

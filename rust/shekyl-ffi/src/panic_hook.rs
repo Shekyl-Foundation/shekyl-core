@@ -16,16 +16,12 @@
 //! refusal's 2 and the runtime failure's 1, so a supervisor tells the three
 //! apart.
 //!
-//! On Windows the hook does not return: it ends the process itself with
-//! `TerminateProcess` and `0xC0000409`, the code `abort` would report
-//! (DC-Q21, DC-F38). `abort` on MSVC is `__fastfail`, which passes no
-//! top-level exception filter, so the filter `harden_process` installed
-//! is not what stands between it and Windows Error Reporting; under the
-//! daemon's hardening a `__fastfail` wrote no dump in Rick's 2026-11-02
-//! control (DC-F44), which leaves the error-mode flag as what kept WER
-//! out, and that flag is process-wide state any library in the process can
-//! reset. `TerminateProcess` is an ordinary termination the fault path
-//! never sees, whatever the error mode is at the time.
+//! On Windows the hook does not return. It ends the process with
+//! `TerminateProcess` and `0xC0000409` (`STATUS_STACK_BUFFER_OVERRUN`),
+//! the status `abort` would report. `abort` on MSVC is `__fastfail`, which
+//! passes no top-level exception filter, so [`crate::harden`]'s filter is
+//! not on that path. `TerminateProcess` is an ordinary termination the
+//! fault-reporting path never sees.
 
 use std::panic::PanicHookInfo;
 
@@ -57,7 +53,7 @@ fn report(info: &PanicHookInfo<'_>) {
     // Queued sinks: this call hands the line to a writer thread and returns.
     tracing::error!(target: "daemon", "{}", line.trim_end());
     #[cfg(windows)]
-    crate::platform::end_process(windows_sys::Win32::Foundation::STATUS_STACK_BUFFER_OVERRUN);
+    crate::harden::end_process(windows_sys::Win32::Foundation::STATUS_STACK_BUFFER_OVERRUN);
 }
 
 /// A write that takes no lock: the panicking thread may hold the standard
