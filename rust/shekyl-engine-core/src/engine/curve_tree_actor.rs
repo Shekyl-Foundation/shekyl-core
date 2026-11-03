@@ -87,7 +87,7 @@ use kameo::message::{Context, Message};
 
 use shekyl_curve_tree::{
     AssembleInput, AssembledPath, BlockHeight, BlockLeaves, ClientError, CurveTreeClient,
-    PostureDeclaration, ReferenceBlock, SegmentPin, ServingReader, TxLeafInputs,
+    PostureDeclaration, ReferenceBlock, SegmentPin, TxLeafInputs,
 };
 
 use crate::scan::OwnedTxLeaves;
@@ -222,16 +222,15 @@ pub(crate) struct IngestedTipHeight;
 pub(crate) struct Recover;
 
 /// Actor message for the persona serving host's pin (SH-2): pin every shard
-/// in `shard_ids` and hand back a read-only handle on the store they landed
-/// in.
+/// in `shard_ids`, release `release_ids`, and report the pin set after.
 ///
-/// **Both halves in one message, deliberately.** `shekyl-p-host`'s
-/// `ServeSetPinner` contract is that the reader it receives is a handle on
-/// the store the pins were written to; splitting this into a pin call and a
-/// separate reader call would let the two answer about different clients
-/// if the actor were ever rebound onto a different store. One `ask`, one
-/// client, one answer. An in-place rebuild does not rebind the store either:
-/// it resumes over the store the actor owns.
+/// **The store the pins landed in is this actor's.** `shekyl-p-host`'s
+/// `ServeSetPinner` contract is that the report names the store the pins
+/// were written to, and every later reading names it too. This actor owns
+/// one store for its life ([`CurveTreeHandle::store_identity`]); an
+/// in-place rebuild resumes over that store and keeps the actor, so the
+/// pins and every later [`ReadStoreFacts`] through the same handle are
+/// about the same store. No handle on the store leaves the actor.
 ///
 /// The pin is a **store write**, which is why it lives here at all: the
 /// actor's message loop is what serializes writes on the single-writer redb
@@ -263,8 +262,6 @@ pub(crate) struct PinServeSet {
 pub(crate) struct PinServeSetReply {
     /// Per-member pin outcome, paired with its shard id, in caller order.
     pub outcomes: Vec<(u64, SegmentPin)>,
-    /// A reader on the store the pins landed in.
-    pub reader: ServingReader,
     /// Every shard id pinned in the store *after* this reconcile.
     pub pinned_now: Vec<u64>,
     /// How many pins this reconcile actually removed.
@@ -272,8 +269,8 @@ pub(crate) struct PinServeSetReply {
 }
 
 /// Actor message for the **CompleteTree prefix** serve-set: declare the
-/// prune-disabled posture, then read the freeze cursor and take a reader —
-/// one message, in that order (`COMPLETETREE_ACTIVATION.md` D-1/D-5, RR-2).
+/// prune-disabled posture, then read the freeze cursor — one message, in
+/// that order (`COMPLETETREE_ACTIVATION.md` D-1/D-5, RR-2).
 ///
 /// The corpus sibling of [`PinServeSet`], and deliberately a **separate
 /// message rather than a mode flag on it**: the two arms take and return
@@ -302,8 +299,8 @@ pub(crate) struct PinServeSetReply {
 /// that already governs every other write on this actor.
 pub(crate) struct PinCompleteTreePrefix;
 
-/// What [`PinCompleteTreePrefix`] reports: the declaration answer, the
-/// prefix length it vouches for, and a reader on the store both came from.
+/// What [`PinCompleteTreePrefix`] reports: the declaration answer and the
+/// prefix length it vouches for.
 pub(crate) struct PinCompleteTreePrefixReply {
     /// What the store found when this call declared the posture —
     /// `NewlyDeclared` from an already-serving wallet is the evidence a
@@ -312,9 +309,37 @@ pub(crate) struct PinCompleteTreePrefixReply {
     pub declaration: PostureDeclaration,
     /// The burial-gated freeze cursor: the obligation is `[0, frozen_count)`.
     pub frozen_count: u64,
-    /// A reader on the store the declaration landed in.
-    pub reader: ServingReader,
 }
+
+/// Actor message reading what the serving host's witness checks, in one
+/// handler invocation so the readings describe one moment of the store:
+/// the ingest tip, the posture flag, the freeze cursor, and which members
+/// of `claimed` have lost their pin rows.
+///
+/// These are the reads a `ServingReader` used to make from beside the
+/// actor (*records-was, until 2026-11-02*); asked by message, nothing
+/// outside the actor holds the store open (`CURVE_TREE_CLIENT.md` §11).
+pub(crate) struct ReadStoreFacts {
+    /// The members whose pin rows to check.
+    pub claimed: Vec<u64>,
+}
+
+/// What [`ReadStoreFacts`] reads.
+pub(crate) struct StoreFactsReply {
+    /// The store's ingest tip.
+    pub sync_tip_height: BlockHeight,
+    /// Whether the prune-disabled posture is declared.
+    pub prune_disabled: bool,
+    /// The burial-gated freeze cursor.
+    pub next_freeze_seg: u64,
+    /// The members of `claimed` whose pin row is gone.
+    pub members_missing_pins: Vec<u64>,
+}
+
+/// Actor message for the corpus integrity scan: the frozen segments the
+/// store has already pruned. O(D); the witness asks for it only where its
+/// policy runs the scan.
+pub(crate) struct ScanPrunedFrozenSegments;
 
 /// Actor message for the §3.3 ingest-time integrity verify (CT-5b): reconstruct
 /// the curve-tree root at `height` and require it to byte-equal the consensus
@@ -425,7 +450,6 @@ impl Message<PinServeSet> for CurveTreeActor {
         };
         Ok(PinServeSetReply {
             outcomes,
-            reader: self.client().serving_reader(),
             pinned_now: self.client().pinned_shard_ids()?,
             released,
         })
@@ -448,8 +472,37 @@ impl Message<PinCompleteTreePrefix> for CurveTreeActor {
         Ok(PinCompleteTreePrefixReply {
             declaration,
             frozen_count,
-            reader: self.client().serving_reader(),
         })
+    }
+}
+
+impl Message<ReadStoreFacts> for CurveTreeActor {
+    type Reply = Result<StoreFactsReply, ClientError>;
+
+    async fn handle(
+        &mut self,
+        msg: ReadStoreFacts,
+        _ctx: &mut Context<Self, Self::Reply>,
+    ) -> Self::Reply {
+        let client = self.client();
+        Ok(StoreFactsReply {
+            sync_tip_height: client.sync_tip_height()?,
+            prune_disabled: client.prune_disabled()?,
+            next_freeze_seg: client.next_freeze_seg()?,
+            members_missing_pins: client.members_missing_pins(&msg.claimed)?,
+        })
+    }
+}
+
+impl Message<ScanPrunedFrozenSegments> for CurveTreeActor {
+    type Reply = Result<Vec<u64>, ClientError>;
+
+    async fn handle(
+        &mut self,
+        _msg: ScanPrunedFrozenSegments,
+        _ctx: &mut Context<Self, Self::Reply>,
+    ) -> Self::Reply {
+        self.client().pruned_frozen_segments()
     }
 }
 
@@ -935,8 +988,8 @@ impl CurveTreeHandle {
             .map_err(collapse_send_error)
     }
 
-    /// Pin a persona's serve-set and take a reader on the store it landed in
-    /// (SH-2) — see [`PinServeSet`] for why both come back together.
+    /// Pin a persona's serve-set (SH-2) in this actor's store — see
+    /// [`PinServeSet`].
     ///
     /// # Errors
     ///
@@ -953,6 +1006,44 @@ impl CurveTreeHandle {
                 shard_ids,
                 release_ids,
             })
+            .await
+            .map_err(collapse_send_error)
+    }
+
+    /// Which store this handle's actor owns: the actor's id, fixed for its
+    /// life. An in-place rebuild keeps the actor and the store; a new store
+    /// would be a new actor. The serving host's witness checks every report
+    /// and reading against it.
+    pub(crate) fn store_identity(&self) -> u64 {
+        self.actor.id().sequence_id()
+    }
+
+    /// Read the store facts the serving host's witness checks — see
+    /// [`ReadStoreFacts`].
+    ///
+    /// # Errors
+    ///
+    /// [`CurveTreeHandleError::Client`] wrapping a store fault, and
+    /// [`CurveTreeHandleError::Unavailable`] on a stopped actor.
+    pub(crate) async fn store_facts(
+        &self,
+        claimed: Vec<u64>,
+    ) -> Result<StoreFactsReply, CurveTreeHandleError> {
+        self.actor_ref()
+            .ask(ReadStoreFacts { claimed })
+            .await
+            .map_err(collapse_send_error)
+    }
+
+    /// Run the corpus integrity scan — see [`ScanPrunedFrozenSegments`].
+    ///
+    /// # Errors
+    ///
+    /// [`CurveTreeHandleError::Client`] wrapping a store fault, and
+    /// [`CurveTreeHandleError::Unavailable`] on a stopped actor.
+    pub(crate) async fn pruned_frozen_segments(&self) -> Result<Vec<u64>, CurveTreeHandleError> {
+        self.actor_ref()
+            .ask(ScanPrunedFrozenSegments)
             .await
             .map_err(collapse_send_error)
     }

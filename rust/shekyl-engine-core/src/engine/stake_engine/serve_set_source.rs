@@ -25,11 +25,11 @@
 //! shard list that drifts from the record is the silent-slash path the whole
 //! serving arc is built to close.
 //!
-//! **The pins and the reader** come from one [`CurveTreeHandle::pin_serve_set`]
-//! round trip, because pinning is a store write and the curve-tree actor is
-//! the store's single writer. One `ask` returns both, so a respawn between two
-//! calls cannot hand back a reader for a different client than the one that
-//! pinned.
+//! **The pins and the store's readings** go through one curve-tree actor,
+//! because pinning is a store write and the actor is the store's one owner
+//! (`CURVE_TREE_CLIENT.md` §11). Every report and reading names that actor's
+//! store ([`CurveTreeHandle::store_identity`]), and the witness refuses a
+//! reading of any other.
 //!
 //! # Transport
 //!
@@ -50,8 +50,8 @@
 
 use kameo::actor::ActorRef;
 use shekyl_archival_retention::HoldingsKind;
-use shekyl_curve_tree::{BlockHeight, ServingReader};
-use shekyl_p_host::{PinReport, ServeSetPinner};
+use shekyl_curve_tree::BlockHeight;
+use shekyl_p_host::{PinReport, ServeSetPinner, StoreFacts, StoreIdentity};
 #[cfg(test)]
 use shekyl_p_store::BodyStore;
 #[cfg(test)]
@@ -222,26 +222,23 @@ impl<R: PersonaIsolatedTransport> EngineServeSetPinner<R> {
     /// accepts (the next refresh grows it — D-5); a rollback after the
     /// read makes it overstate, which the witness refuses loudly
     /// (`FrozenCountExceedsCursor`) so the caller re-acquires.
-    async fn report_prefix(&self) -> Result<(shekyl_p_host::ReportedSet, ServingReader), String> {
+    async fn report_prefix(&self) -> Result<shekyl_p_host::ReportedSet, String> {
         let reply = self
             .curve_tree
             .pin_complete_tree_prefix()
             .await
             // Names the whole operation, not its first step: this one
-            // round trip declares the posture, reads the freeze cursor
-            // and takes the reader, and it collapses a dead actor into
+            // round trip declares the posture and reads the freeze cursor,
+            // and it collapses a dead actor into
             // the same error. "posture declaration failed" would send
             // an operator to the prune-disabled flag for a fault that
             // never touched it (rule 82's misdiagnosis guard); the
             // cause rides along in `{e:?}`.
             .map_err(|e| format!("complete-tree prefix derivation failed: {e:?}"))?;
-        Ok((
-            shekyl_p_host::ReportedSet::CompleteTreePrefix {
-                frozen_count: reply.frozen_count,
-                declaration: reply.declaration,
-            },
-            reply.reader,
-        ))
+        Ok(shekyl_p_host::ReportedSet::CompleteTreePrefix {
+            frozen_count: reply.frozen_count,
+            declaration: reply.declaration,
+        })
     }
 
     /// Explicit-holdings list arm: pin the record's shard list, release
@@ -259,7 +256,7 @@ impl<R: PersonaIsolatedTransport> EngineServeSetPinner<R> {
         &self,
         shard_ids: &[u64],
         releasable: Vec<u64>,
-    ) -> Result<(shekyl_p_host::ReportedSet, ServingReader), String> {
+    ) -> Result<shekyl_p_host::ReportedSet, String> {
         let shard_ids = shard_ids.to_vec();
 
         // Erase before the pin is released. A failed erase leaves the pins
@@ -297,13 +294,10 @@ impl<R: PersonaIsolatedTransport> EngineServeSetPinner<R> {
                  their bytes"
             );
         }
-        Ok((
-            shekyl_p_host::ReportedSet::ShardList {
-                shard_ids,
-                outcomes: reply.outcomes,
-            },
-            reply.reader,
-        ))
+        Ok(shekyl_p_host::ReportedSet::ShardList {
+            shard_ids,
+            outcomes: reply.outcomes,
+        })
     }
 }
 
@@ -474,7 +468,7 @@ impl<R: PersonaIsolatedTransport + Sync> ServeSetPinner for EngineServeSetPinner
             // already applied at acquisition, on every path.
             None => Vec::new(),
         };
-        let (set, reader) = match source.bond.as_ref() {
+        let set = match source.bond.as_ref() {
             Some(bond) => match bond.holdings.kind {
                 // Owing everything releases nothing, by construction of the
                 // obligation; the prefix arm has no release to carry.
@@ -490,8 +484,40 @@ impl<R: PersonaIsolatedTransport + Sync> ServeSetPinner for EngineServeSetPinner
         Ok(PinReport {
             set,
             as_of_height,
-            reader,
+            store: self.store(),
         })
+    }
+
+    async fn store_facts(&self, claimed: Vec<u64>) -> Result<StoreFacts, String> {
+        let facts = self
+            .curve_tree
+            .store_facts(claimed)
+            .await
+            .map_err(|e| format!("curve-tree store read failed: {e:?}"))?;
+        Ok(StoreFacts {
+            store: self.store(),
+            sync_tip_height: facts.sync_tip_height,
+            prune_disabled: facts.prune_disabled,
+            next_freeze_seg: facts.next_freeze_seg,
+            members_missing_pins: facts.members_missing_pins,
+        })
+    }
+
+    async fn pruned_frozen_segments(&self) -> Result<(StoreIdentity, Vec<u64>), String> {
+        let pruned = self
+            .curve_tree
+            .pruned_frozen_segments()
+            .await
+            .map_err(|e| format!("corpus integrity scan failed: {e:?}"))?;
+        Ok((self.store(), pruned))
+    }
+}
+
+impl<R: PersonaIsolatedTransport> EngineServeSetPinner<R> {
+    /// The store every report and reading of this pinner is about: its
+    /// curve-tree actor's.
+    fn store(&self) -> StoreIdentity {
+        StoreIdentity::new(self.curve_tree.store_identity())
     }
 }
 

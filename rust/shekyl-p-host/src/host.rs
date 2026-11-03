@@ -299,11 +299,11 @@ impl BoundServe {
 ///
 /// # Custody (§7.2(iii))
 ///
-/// This host holds: an expanded [`OnionIdentity`], a **read-only**
-/// [`ServingReader`](shekyl_curve_tree::ServingReader) on the store (via
-/// the live witness), and the one [`ServeSetPinner`] taken at start. It
-/// holds no seed, no bond spend authority, and no body-store writer.
-/// Pinning writes go through the pinner to the curve-tree actor. A
+/// This host holds: an expanded [`OnionIdentity`], the live witness, and
+/// the one [`ServeSetPinner`] taken at start. It holds no seed, no bond
+/// spend authority, no body-store writer, and no handle on the curve-tree
+/// store. Pinning writes and the witness's reads go through the pinner to
+/// the curve-tree actor, the store's one owner. A
 /// pin-release erase goes through the pinner to the stake actor, which
 /// keeps the body-store key. The one assumption worth stating rather than leaving implicit:
 /// the design frames the custody boundary as *which secret crosses the
@@ -524,9 +524,9 @@ impl<P: ServeSetPinner> PersonaServingHost<P> {
     /// the safe direction: stale pins retain bytes, missing pins lose them.
     ///
     /// **Takes no pinner, and that is what keeps the pins in the store being
-    /// served.** `refreshed` builds the new witness with *this host's* reader,
-    /// because the endpoint never rebinds and so the served store cannot
-    /// change. If the refresh could be handed a different pinner, its pins
+    /// served.** `refreshed` keeps *this host's* store, refusing a report
+    /// that names another, because the endpoint never rebinds and so the
+    /// served store cannot change. If the refresh could be handed a different pinner, its pins
     /// could land in a different store while the witness claimed they were
     /// here — a witness asserting safety for a store nobody is serving, which
     /// is worse than no witness. One host, one pinner, taken at `start`.
@@ -592,18 +592,29 @@ impl<P: ServeSetPinner> PersonaServingHost<P> {
     /// A store read failure while refresh is failing therefore does not mask
     /// the reading: there is nothing to read.
     ///
+    /// The store is read through this host's pinner, outside the serve-set
+    /// lock: the witness is cloned out first, as [`Self::refresh`] does.
+    ///
     /// # Errors
     ///
-    /// Store failure reading the sync tip.
-    pub fn staleness(
-        &self,
-        bound: StalenessBound,
-    ) -> Result<Staleness, shekyl_curve_tree::StoreError> {
+    /// [`PinError`] as [`PinnedServeSet::staleness`].
+    pub async fn staleness(&self, bound: StalenessBound) -> Result<Staleness, PinError> {
         let consecutive = self.refresh_failures.load(Ordering::Relaxed);
         if consecutive > 0 {
             return Ok(Staleness::RefreshFailing { consecutive });
         }
-        self.lock_pinned().staleness(bound)
+        let pinned = self.pinned_serve_set();
+        pinned.staleness(&self.pinner, bound).await
+    }
+
+    /// The served store's ingest tip, read through this host's pinner.
+    ///
+    /// # Errors
+    ///
+    /// [`PinError`] as [`PinnedServeSet::ingested_tip`].
+    pub async fn ingested_tip(&self) -> Result<shekyl_curve_tree::BlockHeight, PinError> {
+        let pinned = self.pinned_serve_set();
+        pinned.ingested_tip(&self.pinner).await
     }
 
     /// The bound loopback address the onion targets.

@@ -449,9 +449,9 @@ async fn run_serving_task<P>(
     // which an operator reads "not serving" while the onion is published —
     // which is precisely the misreading this channel exists to prevent, and it
     // would have lasted a full refresh cadence. Read rather than refresh:
-    // `start` just pinned, so a refresh here would be a redundant actor round
-    // trip to re-derive what the witness already holds.
-    report(&alarms, read(&host, bound));
+    // `start` just pinned, so a refresh here would re-pin and re-derive what
+    // the witness already holds.
+    report(&alarms, read(&host, bound).await);
 
     // TJ-D's operator surface (`SF-D6`): the host's serve counters, windowed
     // per cadence so the board answers "is the key refusing *now*". Own
@@ -579,7 +579,7 @@ where
             },
         };
     }
-    read(host, bound)
+    read(host, bound).await
 }
 
 /// Read the current witness without refreshing.
@@ -587,13 +587,14 @@ where
 /// Split from [`observe`] for the post-start report: the host has just pinned,
 /// so the state is known and a refresh would only re-derive it. Keeping the two
 /// separate is also what stops "report the current state" from silently
-/// acquiring a network round trip later.
-fn read<P>(host: &PersonaServingHost<P>, bound: StalenessBound) -> ServeSetObservation
+/// acquiring a network round trip later. Its reads are of the local store,
+/// through the curve-tree actor.
+async fn read<P>(host: &PersonaServingHost<P>, bound: StalenessBound) -> ServeSetObservation
 where
     P: ServeSetPinner,
 {
     let pinned = host.pinned_serve_set();
-    match caught_up(&pinned) {
+    match caught_up(host, &pinned).await {
         Some(false) => return ServeSetObservation::CatchingUp,
         // The store could not be read at all. That is a refresh-side fault, not
         // a reason to report health.
@@ -605,7 +606,7 @@ where
         Some(true) => {}
     }
 
-    match host.staleness(bound) {
+    match host.staleness(bound).await {
         Ok(staleness) => ServeSetObservation::Refreshed {
             staleness,
             already_pruned: count(pinned.already_pruned().len()),
@@ -712,11 +713,15 @@ where
 /// Whether the wallet has ingested close enough to the chain for the staleness
 /// bound to mean anything. `None` when the store could not be read.
 ///
-/// Both operands come off the witness: `as_of_height` is the chain height the
-/// bond record was read at, `sync_tip_height` is what this wallet has ingested.
-fn caught_up(pinned: &PinnedServeSet) -> Option<bool> {
+/// `as_of_height` is the chain height the bond record was read at, off the
+/// witness; the ingest tip is what this wallet has ingested, read from the
+/// served store through the host's pinner.
+async fn caught_up<P: ServeSetPinner>(
+    host: &PersonaServingHost<P>,
+    pinned: &PinnedServeSet,
+) -> Option<bool> {
     let chain = pinned.serve_set().as_of_height().to_raw();
-    let ingested = pinned.reader().sync_tip_height().ok()?.to_raw();
+    let ingested = host.ingested_tip().await.ok()?.to_raw();
     Some(chain.saturating_sub(ingested) <= CAUGHT_UP_SLACK_BLOCKS)
 }
 

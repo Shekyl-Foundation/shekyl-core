@@ -189,7 +189,7 @@ fn handle_with_frozen_segment() -> (tempfile::TempDir, CurveTreeHandle) {
 /// **The production pinner's own KAT.** Every `shekyl-p-host` test drives
 /// a test-side pinner, so the mapping this function performs — record →
 /// `shard_ids`, `chain_height` → `as_of_height`, actor round trip →
-/// outcomes + reader — is the one part of the seam no host-side test can
+/// outcomes + store — is the one part of the seam no host-side test can
 /// reach. Without this it could be wrong in any of those four places
 /// while the whole suite stayed green.
 // The gate's pure semantics — the two-epoch window, the returning-shard
@@ -424,26 +424,49 @@ async fn an_empty_chain_stamps_height_zero() {
     assert_eq!(report.as_of_height, BlockHeight::from_raw(0));
 }
 
-/// The reader that comes back must be a handle on the store the pins
-/// landed in — the trait contract `PinnedServeSet::refreshed` enforces
-/// with `same_store`. One actor `ask` returns both, so they cannot
-/// diverge; this pins that they do not.
+/// Every report and reading must name the store the pins landed in — the
+/// trait contract `PinnedServeSet` enforces with `PinnerStoreMismatch`.
+/// The name is the curve-tree actor's, so it holds across pins, readings
+/// and an in-place recovery, and a pinner over another store names another.
 #[tokio::test]
-async fn the_reader_is_the_store_the_pins_landed_in() {
+async fn every_report_and_reading_names_the_store_the_pins_landed_in() {
     let (_dir, curve_tree) = handle();
     let pinner = EngineServeSetPinner::new(
-        curve_tree,
+        curve_tree.clone(),
         daemon(30_001, Some(vec![1])),
         [7; 32],
         ReleasedRows::Store(test_bodies()),
     );
 
     let first = pinner.pin_serve_set().await.expect("pin");
-    let second = pinner.pin_serve_set().await.expect("pin again");
+    let facts = pinner.store_facts(vec![1]).await.expect("read");
+    let (scanned, _) = pinner.pruned_frozen_segments().await.expect("scan");
+    curve_tree.poison_for_test().await;
+    curve_tree.recover().await.expect("rebuild in place");
+    let after_recovery = pinner.pin_serve_set().await.expect("pin after recovery");
 
+    assert_eq!(facts.store, first.store, "a reading names the pins' store");
+    assert_eq!(scanned, first.store, "so does the integrity scan");
+    assert_eq!(
+        after_recovery.store, first.store,
+        "an in-place recovery keeps the store, so it keeps its name"
+    );
     assert!(
-        first.reader.same_store(&second.reader),
-        "two pins through one handle are two pins in one store"
+        facts.members_missing_pins.is_empty(),
+        "the reading is of the store the pin went into"
+    );
+
+    let (_other_dir, other) = handle();
+    let other_pinner = EngineServeSetPinner::new(
+        other,
+        daemon(30_001, Some(vec![1])),
+        [7; 32],
+        ReleasedRows::Store(test_bodies()),
+    );
+    assert_ne!(
+        other_pinner.pin_serve_set().await.expect("pin").store,
+        first.store,
+        "a pinner over another store names another store"
     );
 }
 

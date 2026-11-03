@@ -6,9 +6,9 @@
 //! The serving task's lifecycle, driven against the operator alarm board.
 
 use super::*;
-use shekyl_curve_tree::{BlockHeight, LeafStore, ServingReader};
+use shekyl_curve_tree::{BlockHeight, LeafStore};
 use shekyl_operator_alarm::{AlarmCondition, Arming, ConditionState, DisarmedReason};
-use shekyl_p_host::PinReport as HostPinReport;
+use shekyl_p_host::{PinReport as HostPinReport, StoreFacts, StoreIdentity};
 use shekyl_tor_control_wallet::service::OnionIdentity;
 
 use crate::engine::refresh::RefreshSlot;
@@ -38,8 +38,40 @@ impl ServeSetPinner for EmptySetPinner {
                 outcomes: Vec::new(),
             },
             as_of_height: BlockHeight::from_raw(0),
-            reader: ServingReader::new(Arc::clone(&self.store)),
+            store: self.identity(),
         })
+    }
+
+    async fn store_facts(&self, claimed: Vec<u64>) -> Result<StoreFacts, String> {
+        if self.fail {
+            return Err("pinner is down".into());
+        }
+        let read = |e: shekyl_curve_tree::StoreError| format!("{e:?}");
+        Ok(StoreFacts {
+            store: self.identity(),
+            sync_tip_height: self.store.sync_tip_height().map_err(read)?,
+            prune_disabled: self.store.prune_disabled().map_err(read)?,
+            next_freeze_seg: self.store.next_freeze_seg().map_err(read)?,
+            members_missing_pins: self.store.members_missing_pins(&claimed).map_err(read)?,
+        })
+    }
+
+    async fn pruned_frozen_segments(&self) -> Result<(StoreIdentity, Vec<u64>), String> {
+        let pruned = self
+            .store
+            .pruned_frozen_segments()
+            .map_err(|e| format!("{e:?}"))?;
+        Ok((self.identity(), pruned))
+    }
+}
+
+impl EmptySetPinner {
+    /// The store's allocation: unique while it is open, which it is for the
+    /// pinner's whole life.
+    fn identity(&self) -> StoreIdentity {
+        StoreIdentity::new(
+            u64::try_from(Arc::as_ptr(&self.store).addr()).expect("address fits u64"),
+        )
     }
 }
 
@@ -52,9 +84,14 @@ fn pinner(fail: bool) -> EmptySetPinner {
 
 /// A pinner that answers the start pin and then never answers again — a
 /// store actor that has wedged after the host came up.
+///
+/// Its reads answer until the first refresh pin is asked and are wedged
+/// from then on, as a wedged actor's would be: the start's own reads and the
+/// post-start report run before any refresh.
 struct WedgingPinner {
     inner: EmptySetPinner,
     answered_start: std::sync::atomic::AtomicBool,
+    wedged: std::sync::atomic::AtomicBool,
 }
 
 impl ServeSetPinner for WedgingPinner {
@@ -63,9 +100,26 @@ impl ServeSetPinner for WedgingPinner {
             .answered_start
             .swap(true, std::sync::atomic::Ordering::SeqCst)
         {
+            self.wedged.store(true, std::sync::atomic::Ordering::SeqCst);
             std::future::pending().await
         } else {
             self.inner.pin_serve_set().await
+        }
+    }
+
+    async fn store_facts(&self, claimed: Vec<u64>) -> Result<StoreFacts, String> {
+        if self.wedged.load(std::sync::atomic::Ordering::SeqCst) {
+            std::future::pending().await
+        } else {
+            self.inner.store_facts(claimed).await
+        }
+    }
+
+    async fn pruned_frozen_segments(&self) -> Result<(StoreIdentity, Vec<u64>), String> {
+        if self.wedged.load(std::sync::atomic::Ordering::SeqCst) {
+            std::future::pending().await
+        } else {
+            self.inner.pruned_frozen_segments().await
         }
     }
 }
@@ -255,6 +309,7 @@ async fn shutdown_completes_while_a_refresh_is_wedged_on_the_actor() {
     let wedging = WedgingPinner {
         inner: pinner(false),
         answered_start: std::sync::atomic::AtomicBool::new(false),
+        wedged: std::sync::atomic::AtomicBool::new(false),
     };
     let handle = spawn_serving_task(
         churning_tor(&dir),
