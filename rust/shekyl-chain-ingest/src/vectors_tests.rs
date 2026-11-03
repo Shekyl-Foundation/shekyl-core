@@ -706,14 +706,14 @@ fn hold(dir: &Path, manifest: &Manifest, report: &RunReport) {
 /// failure would arrive as 1,979 blocks refusing at block 1 for a reason
 /// that reads as a validator bug. So the manifest carries the genesis the
 /// chain was built from, and this holds it — before any block is judged —
-/// to the genesis the **current build** pins: Fakechain shares mainnet's
-/// config, so the pin is `GenesisPin::MAINNET`'s. A regeneration fails
-/// HERE with
-/// "these vectors predate the current genesis", not at block 1.
+/// to the genesis the **current build** pins for regtest, the network
+/// these chains are captured on (`NETWORK_IDENTITY.md` NI-Q8). A
+/// regeneration fails HERE with "these vectors predate the current
+/// genesis", not at block 1.
 fn genesis_is_the_current_builds(manifest: &Manifest) {
-    let pinned = GenesisPin::for_network(shekyl_address::Network::Mainnet)
+    let pinned = GenesisPin::for_network(shekyl_address::Network::Regtest)
         .expected_at(BlockHeight::from_raw(0))
-        .expect("the release pins mainnet's genesis, which Fakechain shares");
+        .expect("the release pins regtest's genesis");
     assert_eq!(
         manifest.genesis_hash,
         hex_of(pinned.as_bytes()),
