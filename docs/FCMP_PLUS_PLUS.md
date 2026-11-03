@@ -889,23 +889,23 @@ the secret key — no secret material is returned.
 
 ### Wallet Restore from Seed
 
-Key derivation follows the frozen v1 pipeline implemented in
-`rust/shekyl-crypto-pq/src/account.rs` (the single source of truth; see
-the crate docstring for the full diagram and the
-`docs/V3_WALLET_DECISION_LOG.md` key-signature freeze entry for the
-rationale). In outline:
+Key derivation is implemented in `rust/shekyl-crypto-pq/src/account.rs`
+(the single source of truth; see the crate docstring for the full
+diagram, and [`NETWORK_IDENTITY.md`](design/NETWORK_IDENTITY.md) NI-R7 and
+NI-R10 for the rulings). It is pinned by the `ADDRESS_DERIVATION_V3`
+vector suite and its independent oracle. In outline:
 
 ```text
-seed input            mainnet/stagenet: BIP-39 24-word mnemonic
-                        (NFKD, PBKDF2-HMAC-SHA512 @ 2048 iters -> 64 B;
-                         passphrase opt-in, defaults to empty)
-                      testnet/fakechain: raw 32-byte seed
+seed                = 32 random bytes, on every network: the wallet's
+                      one secret, shown to the user as BIP-39's 24 words
+                      (the words spell the bytes; no PBKDF2 step, no
+                      passphrase)
 
 master_seed_64      = HKDF-SHA-512(salt="shekyl-seed-normalize-v1",
-                                   ikm=seed-input output, L=64)
-                      (the only secret the wallet file persists)
+                                   ikm=seed, L=64)
 
-salt                = "shekyl-master-derive-v1-<network>-<format>"
+salt                = "shekyl-master-derive-v2-" || tag
+                      (tag = the network's name, "shekyl/<network>")
 spend_wide          = HKDF-SHA-512(salt, ikm=master_seed_64,
                                    info="shekyl-ed25519-spend", L=64)
 view_wide           = HKDF-SHA-512(salt, ikm=master_seed_64,
@@ -919,22 +919,16 @@ ml_kem_768 (ek,dk)  = keygen(SeededRng::from_seed(
                       (those bytes are what ChaCha20Rng::from_seed produces)
 ```
 
-All key material — classical and PQC — is therefore a pure function of
-the master seed, the network, and the seed format. On wallet open the
-full keypair set is rederived from `master_seed_64` via
-`shekyl_account_rederive`, and the recomputed classical address is
-checked against the wallet file's expected-address bytes (see
-`docs/WALLET_FILE_FORMAT_V1.md` for the failure taxonomy).
+All key material, classical and PQC, is therefore a pure function of
+the seed and the network's name. The wallet file stores the 32-byte
+seed (`docs/WALLET_FILE_FORMAT_V1.md` §2.2); every open rederives the
+full key set from it and checks the recomputed classical address
+against the file's expected-address bytes.
 
 On restore, the wallet re-scans the chain for owned outputs. Per-output
 PQC shared secrets are recomputed during the scan by decapsulating with
 the account-level ML-KEM decapsulation key; nothing per-output needs to
-be present in the wallet file for restore to succeed. (The legacy C++
-`wallet2` scan path still caches a per-output combined shared secret in
-`transfer_details` as an implementation detail; that cache — and
-`wallet2.cpp` itself — is a deletion target at Phase 5 of
-`docs/design/WALLET_REWRITE_PLAN.md` and is not part of this
-specification.)
+be present in the wallet file for restore to succeed.
 
 ---
 

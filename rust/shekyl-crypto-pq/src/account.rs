@@ -3,7 +3,8 @@
 // All rights reserved.
 // BSD-3-Clause
 
-//! Shekyl wallet-account key derivation, stabilized and frozen at v1.
+//! Shekyl wallet-account key derivation: one secret, one derivation, on
+//! every network.
 //!
 //! This module is the **single source of truth** for how a Shekyl wallet's
 //! keys are derived from its seed, on every network. Every byte of every
@@ -76,8 +77,7 @@
 //! negligible (~2^-123) but shows up in careful audits. Expanding to 64 bytes
 //! and using `Scalar::from_bytes_mod_order_wide` produces a scalar whose
 //! distribution is statistically indistinguishable from uniform; we spend the
-//! extra 32 bytes per derivation to eliminate the caveat. This decision is
-//! frozen with the rest of the v1 pipeline.
+//! extra 32 bytes per derivation to eliminate the caveat.
 //!
 //! # One secret, one derivation (`NETWORK_IDENTITY.md` NI-R7, NI-R10)
 //!
