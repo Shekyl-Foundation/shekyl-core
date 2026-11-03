@@ -440,15 +440,12 @@ pub fn run(
                 chain::cmd_chain_health(daemon_client),
                 chain::show_chain,
             ),
-            ResolvedCommand::DaemonView { words } => {
-                let name = words.join(" ");
-                present(
-                    &presentation,
-                    &name,
-                    daemon_view::command(daemon_client, network, &words),
-                    |text| println!("{text}"),
-                )
-            }
+            ResolvedCommand::Daemon(view) => present(
+                &presentation,
+                view.label(),
+                daemon_view::command(daemon_client, network, &view),
+                |text| println!("{text}"),
+            ),
 
             ResolvedCommand::MineStart { threads } => present(
                 &presentation,

@@ -23,10 +23,10 @@ fn run(args: &[&str], address: Option<&str>) -> (i32, String) {
 }
 
 /// [`run`], as a console started for `network`.
-fn run_on(
+fn with_daemon(
     network: shekyl_rpc_types::DaemonNetwork,
-    args: &[&str],
     address: Option<&str>,
+    call: impl FnOnce(&Source) -> Result<String, String>,
 ) -> (i32, String) {
     let Some(address) = address else {
         return (SHEKYL_DAEMON_CONSOLE_ERR_REQUEST, "no daemon".to_owned());
@@ -43,11 +43,39 @@ fn run_on(
         );
     };
     let source = Source::new(Arc::new(rpc), network.to_cryptonote());
-    let words: Vec<String> = args.iter().map(|word| (*word).to_owned()).collect();
-    match render(&source, &words) {
+    match call(&source) {
         Ok(text) => (SHEKYL_DAEMON_CONSOLE_OK, text),
-        Err(ConsoleFault::Unknown) => (SHEKYL_DAEMON_CONSOLE_ERR_UNKNOWN, String::new()),
-        Err(ConsoleFault::Request(text)) => (SHEKYL_DAEMON_CONSOLE_ERR_REQUEST, text),
+        Err(text) => (SHEKYL_DAEMON_CONSOLE_ERR_REQUEST, text),
+    }
+}
+
+fn run_on(
+    network: shekyl_rpc_types::DaemonNetwork,
+    args: &[&str],
+    address: Option<&str>,
+) -> (i32, String) {
+    match crate::grammar::parse(&args.join(" ")) {
+        crate::resolve::ResolvedCommand::Daemon(view) => {
+            with_daemon(network, address, |source| execute(source, &view))
+        }
+        crate::resolve::ResolvedCommand::Version => {
+            with_daemon(network, address, super::node::version)
+        }
+        crate::resolve::ResolvedCommand::ShowTransfer { txid, body } => {
+            with_daemon(network, address, move |source| {
+                print_transaction(source, &txid, body)
+            })
+        }
+        crate::resolve::ResolvedCommand::Unknown { .. } => {
+            (SHEKYL_DAEMON_CONSOLE_ERR_UNKNOWN, String::new())
+        }
+        crate::resolve::ResolvedCommand::Diagnostic { message } => {
+            (SHEKYL_DAEMON_CONSOLE_ERR_REQUEST, message)
+        }
+        other => (
+            SHEKYL_DAEMON_CONSOLE_ERR_REQUEST,
+            format!("the console tests do not run {other:?}"),
+        ),
     }
 }
 
@@ -1274,84 +1302,56 @@ fn a_non_negative_start_needs_no_tip_read() {
     assert_eq!(params["params"]["end_height"], 3);
 }
 
-/// The negative form resolves its window against the tip, which is the
-/// only reason this command reads `/get_info`.
-///
-/// Height 100 with `-3` asks for the last three blocks: 97, 98, 99. The
-/// **request** is what this pins, read out of the server's log — a canned
-/// reply arrives whatever window was asked for, so asserting only on the
-/// output would pass a command that resolved the window wrongly.
+/// `--from` is a height. A sign is refused before any request.
 #[test]
 fn a_negative_start_counts_back_from_the_tip() {
-    let (address, log) = route_server_recording(vec![
-        ("/get_info", info_reply(100)),
-        (
-            "json_rpc:get_block_headers_range",
-            headers_range_reply(&[97, 98, 99]),
-        ),
-    ]);
+    let (address, log) = route_server_recording(vec![]);
     let (code, out) = run(
         &["block", "header", "list", "--from", "-3", "--to", "3"],
         Some(&address),
     );
-    assert_eq!(code, SHEKYL_DAEMON_CONSOLE_OK, "{out}");
-    assert!(out.contains("height: 97"), "{out}");
-    assert!(out.contains("height: 99"), "{out}");
-
-    // The identity handshake is a request too (VC-3), and it is not one of
-    // this command's legs — filter it out so the assertions stay about the
-    // work the command does, not about the handshake's presence.
-    let asked: Vec<(String, String)> = log
-        .lock()
-        .unwrap()
-        .iter()
-        .filter(|(_, body)| !body.contains("\"get_version\""))
-        .cloned()
-        .collect();
-    let (_, body) = asked
-        .iter()
-        .find(|(path, _)| path == "/json_rpc")
-        .expect("the range was asked for");
-    let params: serde_json::Value = serde_json::from_str(body).unwrap();
-    assert_eq!(params["params"]["start_height"], 97);
-    assert_eq!(params["params"]["end_height"], 99);
-    // And the tip read came first: resolving the window needs it.
-    assert_eq!(asked[0].0, "/get_info");
+    assert_eq!(code, SHEKYL_DAEMON_CONSOLE_ERR_REQUEST, "{out}");
+    assert!(out.contains("takes an integer"), "{out}");
+    assert!(
+        log.lock().unwrap().is_empty(),
+        "a signed height is refused before a request"
+    );
 }
 
-/// A window longer than the chain is refused by name.
-///
-/// The C++ said so and it is worth keeping: an operator who typed a
-/// number too large can act on "larger than blockchain height" and cannot
-/// act on an empty listing.
+/// `--from` after `--to` is refused by the grammar, before a request.
 #[test]
 fn a_window_longer_than_the_chain_is_refused_by_name() {
-    let address = route_server(vec![("/get_info", info_reply(3))]);
+    let (address, log) = route_server_recording(vec![]);
     let (code, out) = run(
-        &["block", "header", "list", "--from", "-10", "--to", "10"],
+        &["block", "header", "list", "--from", "5", "--to", "3"],
         Some(&address),
     );
     assert_eq!(code, SHEKYL_DAEMON_CONSOLE_ERR_REQUEST, "{out}");
-    assert!(out.contains("larger than blockchain height"), "{out}");
+    assert!(out.contains("--from is after --to"), "{out}");
+    assert!(
+        log.lock().unwrap().is_empty(),
+        "the refusal makes no request"
+    );
 }
 
-/// A `/get_info` reply missing a field the console reads is named.
-///
-/// The same assertion as `/get_limit`'s, on the leg RK-5c will actually
-/// move. Without it, a renamed `height` would make this command resolve
-/// its window against a tip of zero and report the chain as empty.
+/// A signed `--from` is a height refusal. The window is not resolved
+/// against the tip, so a missing `height` is never read.
 #[test]
 fn a_get_info_reply_missing_a_field_is_refused_rather_than_defaulted() {
-    let mut info: serde_json::Value = serde_json::from_str(&info_reply(100)).unwrap();
-    info.as_object_mut().unwrap().remove("height");
-    let address = route_server(vec![("/get_info", info.to_string())]);
+    let (address, log) = route_server_recording(vec![]);
     let (code, out) = run(
         &["block", "header", "list", "--from", "-3", "--to", "3"],
         Some(&address),
     );
     assert_eq!(code, SHEKYL_DAEMON_CONSOLE_ERR_REQUEST, "{out}");
-    assert!(out.contains("malformed get_info reply"), "{out}");
-    assert!(out.contains("height"), "{out}");
+    assert!(out.contains("takes an integer"), "{out}");
+    assert!(
+        log.lock()
+            .unwrap()
+            .iter()
+            .all(|(path, _)| path != "/get_info"),
+        "the window is not resolved against the tip"
+    );
 }
 
 fn fee_reply(fees: [u64; 3]) -> String {
@@ -2412,11 +2412,7 @@ fn an_unrecognised_network_code_refuses_rather_than_defaulting() {
     )
     .expect("client");
     let source = Source::new(Arc::new(rpc), 255);
-    let text =
-        render(&source, &["chain".to_owned(), "height".to_owned()]).expect_err("unknown network");
-    let ConsoleFault::Request(text) = text else {
-        panic!("expected a request failure");
-    };
+    let text = execute(&source, &crate::resolve::View::ChainHeight).expect_err("unknown network");
     let code = SHEKYL_DAEMON_CONSOLE_ERR_REQUEST;
     assert_eq!(code, SHEKYL_DAEMON_CONSOLE_ERR_REQUEST, "{text}");
     assert!(

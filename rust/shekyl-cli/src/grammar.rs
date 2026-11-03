@@ -13,7 +13,8 @@
 use crate::catalog::{self, split_flags, usage, CommandId, Split, Walk};
 use crate::resolve::{
     diag, parse_flag_str, parse_invoice_expiry, raw_remainder, reject_removed_command,
-    reject_removed_flags, unix_now, FeePriority, FlagValue, RequestFilter, ResolvedCommand,
+    reject_removed_flags, unix_now, BlockRef, FeePriority, FlagValue, RequestFilter,
+    ResolvedCommand, View,
 };
 
 /// How a free-form tail is recovered.
@@ -104,22 +105,20 @@ fn parse_ready(id: CommandId, tail: Tail<'_>, args: &[&str]) -> ResolvedCommand 
         Balance => bare(id, args, ResolvedCommand::Balance),
         Status => bare(id, args, ResolvedCommand::Status),
         Chain => bare(id, args, ResolvedCommand::ChainHealth),
-        ChainHeight => daemon_words(&["chain", "height"], args),
-        ChainDifficulty => daemon_words(&["chain", "difficulty"], args),
-        ChainStats => daemon_flagged(id, &["chain", "stats"], args, &["--last"]),
-        ChainAlt => daemon_words(&["chain", "alt"], args),
-        ChainSpent => daemon_one(id, &["chain", "spent"], args),
-        BlockShow => daemon_one(id, &["block", "show"], args),
-        BlockHeaderList => {
-            daemon_flagged(id, &["block", "header", "list"], args, &["--from", "--to"])
-        }
+        ChainHeight => bare(id, args, ResolvedCommand::Daemon(View::ChainHeight)),
+        ChainDifficulty => bare(id, args, ResolvedCommand::Daemon(View::ChainDifficulty)),
+        ChainStats => parse_chain_stats(args),
+        ChainAlt => bare(id, args, ResolvedCommand::Daemon(View::ChainAlt)),
+        ChainSpent => one_word(id, args, parse_chain_spent),
+        BlockShow => one_word(id, args, parse_block_show),
+        BlockHeaderList => parse_header_list(args),
         PeerList => parse_peer_list(args),
-        PeerStats => daemon_words(&["peer", "stats"], args),
-        PeerConnections => daemon_words(&["peer", "connections"], args),
-        P2pStats => daemon_words(&["p2p", "stats"], args),
-        SyncStatus => daemon_words(&["sync", "status"], args),
-        DaemonStatus => daemon_words(&["daemon", "status"], args),
-        TxpoolStats => daemon_words(&["txpool", "stats"], args),
+        PeerStats => bare(id, args, ResolvedCommand::Daemon(View::PeerStats)),
+        PeerConnections => bare(id, args, ResolvedCommand::Daemon(View::PeerConnections)),
+        P2pStats => bare(id, args, ResolvedCommand::Daemon(View::P2pStats)),
+        SyncStatus => bare(id, args, ResolvedCommand::Daemon(View::SyncStatus)),
+        DaemonStatus => bare(id, args, ResolvedCommand::Daemon(View::DaemonStatus)),
+        TxpoolStats => bare(id, args, ResolvedCommand::Daemon(View::TxpoolStats)),
         Version => bare(id, args, ResolvedCommand::Version),
         Wallet => bare(id, args, ResolvedCommand::Wallet),
         Stake => bare(id, args, ResolvedCommand::Stake),
@@ -184,55 +183,81 @@ fn parse_ready(id: CommandId, tail: Tail<'_>, args: &[&str]) -> ResolvedCommand 
     }
 }
 
-/// A §13 word with no arguments. `path` is what the renderer matches.
-fn daemon_words(path: &[&str], args: &[&str]) -> ResolvedCommand {
-    if args.is_empty() {
-        ResolvedCommand::DaemonView {
-            words: path.iter().map(|word| (*word).to_string()).collect(),
-        }
+/// 64 hexadecimal characters, the grammar's hash kind (IG-6).
+fn parse_hash(word: &str) -> Result<String, String> {
+    if word.len() == 64 && word.bytes().all(|byte| byte.is_ascii_hexdigit()) {
+        Ok(word.to_ascii_lowercase())
     } else {
-        diag(format!("{}: unexpected {}", path.join(" "), args[0]))
+        Err(format!("{word:?} is not a hash"))
     }
 }
 
-/// A §13 word with one positional.
-fn daemon_one(id: CommandId, path: &[&str], args: &[&str]) -> ResolvedCommand {
-    match args {
-        [word] => {
-            let mut words: Vec<String> = path.iter().map(|part| (*part).to_string()).collect();
-            words.push((*word).to_string());
-            ResolvedCommand::DaemonView { words }
-        }
-        _ => diag(usage(id)),
-    }
+/// A height or a count: a `u64`, with no sign.
+fn parse_u64(name: &str, word: &str) -> Result<u64, String> {
+    word.parse::<u64>()
+        .map_err(|_| format!("{name} takes an integer"))
 }
 
-/// A §13 word whose arguments are the named flags, each required.
-fn daemon_flagged(
-    id: CommandId,
-    path: &[&str],
-    args: &[&str],
-    required: &[&str],
-) -> ResolvedCommand {
-    let split = match flags(id, args) {
+fn parse_chain_stats(args: &[&str]) -> ResolvedCommand {
+    let split = match flags(CommandId::ChainStats, args) {
         Ok(split) => split,
         Err(command) => return command,
     };
     if !split.positional.is_empty() {
-        return diag(usage(id));
+        return diag(usage(CommandId::ChainStats));
     }
-    let mut words: Vec<String> = path.iter().map(|part| (*part).to_string()).collect();
-    for name in required {
-        let Some(value) = split.value(name) else {
-            return diag(usage(id));
+    let Some(value) = split.value("--last") else {
+        return diag(usage(CommandId::ChainStats));
+    };
+    match parse_u64("--last", value) {
+        Ok(last) => ResolvedCommand::Daemon(View::ChainStats { last }),
+        Err(message) => diag(message),
+    }
+}
+
+fn parse_chain_spent(word: &str) -> ResolvedCommand {
+    match parse_hash(word) {
+        Ok(hash) => ResolvedCommand::Daemon(View::ChainSpent { hash }),
+        Err(_) => diag(format!("{word:?} is not a hash")),
+    }
+}
+
+fn parse_block_show(word: &str) -> ResolvedCommand {
+    if word.len() == 64 {
+        return match parse_hash(word) {
+            Ok(hash) => ResolvedCommand::Daemon(View::BlockShow(BlockRef::Hash(hash))),
+            Err(_) => diag(format!("{word:?} is not a block hash or a height")),
         };
-        if value.parse::<u64>().is_err() {
-            return diag(format!("{name} takes an integer"));
-        }
-        words.push((*name).to_string());
-        words.push(value.to_string());
     }
-    ResolvedCommand::DaemonView { words }
+    match parse_u64("block show", word) {
+        Ok(height) => ResolvedCommand::Daemon(View::BlockShow(BlockRef::Height(height))),
+        Err(_) => diag(format!("{word:?} is not a block hash or a height")),
+    }
+}
+
+fn parse_header_list(args: &[&str]) -> ResolvedCommand {
+    let split = match flags(CommandId::BlockHeaderList, args) {
+        Ok(split) => split,
+        Err(command) => return command,
+    };
+    if !split.positional.is_empty() {
+        return diag(usage(CommandId::BlockHeaderList));
+    }
+    let (Some(from), Some(to)) = (split.value("--from"), split.value("--to")) else {
+        return diag(usage(CommandId::BlockHeaderList));
+    };
+    let from = match parse_u64("--from", from) {
+        Ok(height) => height,
+        Err(message) => return diag(message),
+    };
+    let to = match parse_u64("--to", to) {
+        Ok(height) => height,
+        Err(message) => return diag(message),
+    };
+    if from > to {
+        return diag("--from is after --to".to_owned());
+    }
+    ResolvedCommand::Daemon(View::BlockHeaderList { from, to })
 }
 
 fn parse_peer_list(args: &[&str]) -> ResolvedCommand {
@@ -243,21 +268,20 @@ fn parse_peer_list(args: &[&str]) -> ResolvedCommand {
     if !split.positional.is_empty() {
         return diag(usage(CommandId::PeerList));
     }
-    let mut words = vec!["peer".to_string(), "list".to_string()];
-    if split.has("--white") {
-        words.push("--white".to_string());
+    let mut white = split.has("--white");
+    let mut gray = split.has("--gray");
+    if !white && !gray {
+        white = true;
+        gray = true;
     }
-    if split.has("--gray") {
-        words.push("--gray".to_string());
-    }
-    if let Some(value) = split.value("--max") {
-        if value.parse::<u64>().is_err() {
-            return diag("peer list: --max takes an integer".to_string());
-        }
-        words.push("--max".to_string());
-        words.push(value.to_string());
-    }
-    ResolvedCommand::DaemonView { words }
+    let max = match split.value("--max") {
+        Some(value) => match parse_u64("--max", value) {
+            Ok(max) => Some(max),
+            Err(message) => return diag(message),
+        },
+        None => None,
+    };
+    ResolvedCommand::Daemon(View::PeerList { white, gray, max })
 }
 
 fn bare(id: CommandId, args: &[&str], command: ResolvedCommand) -> ResolvedCommand {
@@ -802,24 +826,19 @@ mod tests {
             other => panic!("bare chain is the wallet's report, got {other:?}"),
         }
         match parse("chain height") {
-            ResolvedCommand::DaemonView { words } => {
-                assert_eq!(words, ["chain", "height"]);
-            }
+            ResolvedCommand::Daemon(View::ChainHeight) => {}
             other => panic!("expected chain height, got {other:?}"),
         }
         match parse("block header list --to 3 --from 1") {
-            ResolvedCommand::DaemonView { words } => {
-                assert_eq!(
-                    words,
-                    ["block", "header", "list", "--from", "1", "--to", "3"]
-                );
-            }
+            ResolvedCommand::Daemon(View::BlockHeaderList { from: 1, to: 3 }) => {}
             other => panic!("expected the header list, got {other:?}"),
         }
         match parse("peer list --max 4") {
-            ResolvedCommand::DaemonView { words } => {
-                assert_eq!(words, ["peer", "list", "--max", "4"]);
-            }
+            ResolvedCommand::Daemon(View::PeerList {
+                white: true,
+                gray: true,
+                max: Some(4),
+            }) => {}
             other => panic!("expected peer list, got {other:?}"),
         }
         match parse("chain stats") {

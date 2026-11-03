@@ -14,9 +14,10 @@ use std::time::Duration;
 use shekyl_rpc_transport::SyncDaemon;
 use shekyl_rpc_types::DaemonNetwork;
 
-use crate::console::{self, ConsoleFault, Source};
+use crate::console::{self, Source};
 use crate::daemon::DaemonClient;
-use crate::outcome::{failed, refusal, CommandResult};
+use crate::outcome::{refusal, CommandResult};
+use crate::resolve::View;
 
 /// A view is a handful of requests. Long enough for a remote daemon,
 /// short enough that a dead one returns to the prompt.
@@ -25,7 +26,7 @@ const VIEW_TIMEOUT: Duration = Duration::from_secs(15);
 pub(crate) fn command(
     daemon: Option<&DaemonClient>,
     network: &str,
-    words: &[String],
+    view: &View,
 ) -> CommandResult<String> {
     let Some(daemon) = daemon else {
         return Err(refusal(
@@ -49,13 +50,7 @@ pub(crate) fn command(
     )
     .map_err(|error| refusal(error.to_string()))?;
     let source = Source::new(Arc::new(rpc), code.to_cryptonote());
-    match console::render(&source, words) {
-        Ok(text) => Ok(text),
-        Err(ConsoleFault::Unknown) => {
-            failed(format!("{} is not a daemon command", words.join(" ")))
-        }
-        Err(ConsoleFault::Request(message)) => failed(message),
-    }
+    console::execute(&source, view).map_err(refusal)
 }
 
 #[cfg(test)]
@@ -64,7 +59,7 @@ mod tests {
 
     #[test]
     fn a_daemon_word_without_a_daemon_is_refused_before_a_request() {
-        let error = command(None, "mainnet", &["chain".into(), "height".into()]).unwrap_err();
+        let error = command(None, "mainnet", &View::ChainHeight).unwrap_err();
         assert!(
             error.message.contains("Daemon not configured"),
             "{}",

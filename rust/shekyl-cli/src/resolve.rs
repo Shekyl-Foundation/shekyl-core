@@ -51,6 +51,91 @@ impl RequestFilter {
     }
 }
 
+/// A block named by its hash or by its height. A 64-character hex string is
+/// the hash; anything else that is a `u64` is the height.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum BlockRef {
+    /// 64 lowercase hexadecimal characters.
+    Hash(String),
+    /// A chain height.
+    Height(u64),
+}
+
+/// One daemon word (`INPUT_GRAMMAR.md` §13), with its arguments already
+/// checked. The renderer is called with this value; it does not parse again.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum View {
+    /// `chain height`.
+    ChainHeight,
+    /// `chain difficulty`.
+    ChainDifficulty,
+    /// `chain stats --last`.
+    ChainStats {
+        /// How many recent blocks the summary covers.
+        last: u64,
+    },
+    /// `chain alt`.
+    ChainAlt,
+    /// `chain spent <key-image>`. `hash` is 64 lowercase hex characters.
+    ChainSpent {
+        /// The key image.
+        hash: String,
+    },
+    /// `block show <hash|height>`.
+    BlockShow(BlockRef),
+    /// `block header list --from --to`, inclusive heights, `from` not after `to`.
+    BlockHeaderList {
+        /// First height.
+        from: u64,
+        /// Last height.
+        to: u64,
+    },
+    /// `peer list`. Neither switch means both lists.
+    PeerList {
+        /// Include the white list.
+        white: bool,
+        /// Include the gray list.
+        gray: bool,
+        /// Per-list cap. `None` is the whole list.
+        max: Option<u64>,
+    },
+    /// `peer stats`.
+    PeerStats,
+    /// `peer connections`.
+    PeerConnections,
+    /// `p2p stats`.
+    P2pStats,
+    /// `sync status`.
+    SyncStatus,
+    /// `daemon status`.
+    DaemonStatus,
+    /// `txpool stats`.
+    TxpoolStats,
+}
+
+impl View {
+    /// The word, for the command's displayed name.
+    #[must_use]
+    pub(crate) fn label(&self) -> &'static str {
+        match self {
+            Self::ChainHeight => "chain height",
+            Self::ChainDifficulty => "chain difficulty",
+            Self::ChainStats { .. } => "chain stats",
+            Self::ChainAlt => "chain alt",
+            Self::ChainSpent { .. } => "chain spent",
+            Self::BlockShow(_) => "block show",
+            Self::BlockHeaderList { .. } => "block header list",
+            Self::PeerList { .. } => "peer list",
+            Self::PeerStats => "peer stats",
+            Self::PeerConnections => "peer connections",
+            Self::P2pStats => "p2p stats",
+            Self::SyncStatus => "sync status",
+            Self::DaemonStatus => "daemon status",
+            Self::TxpoolStats => "txpool stats",
+        }
+    }
+}
+
 /// A fully-resolved command ready for execution.
 #[derive(Debug)]
 pub enum ResolvedCommand {
@@ -211,11 +296,8 @@ pub enum ResolvedCommand {
     },
 
     ChainHealth,
-    /// A daemon word (`INPUT_GRAMMAR.md` §13). `words` is what the moved
-    /// renderer matches, and the report is its text.
-    DaemonView {
-        words: Vec<String>,
-    },
+    /// A daemon word (`INPUT_GRAMMAR.md` §13). The arguments are typed.
+    Daemon(View),
 
     // -- Proofs (WI-RPC-3 surface) --
     GetTxProof {

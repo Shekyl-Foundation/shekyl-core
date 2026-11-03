@@ -44,9 +44,8 @@ pub const SHEKYL_DAEMON_CONSOLE_ERR_AMBIGUOUS_SOURCE: i32 = -4;
 /// The daemon a command renders from.
 ///
 /// The handshake verdict is computed on the first request and reused for
-/// the rest of the command (RK-Q6). It sits here rather than before
-/// dispatch so an unrecognised command refuses as unknown without opening
-/// a socket.
+/// the rest of the command (RK-Q6). An unrecognised word is refused by the
+/// grammar, before a `Source` exists.
 pub(crate) struct Source {
     rpc: Arc<shekyl_rpc_transport::SyncDaemon>,
     /// This process's network, for the identity handshake.
@@ -181,22 +180,14 @@ fn render_block_header(h: &shekyl_rpc_types::BlockHeader) -> String {
 /// `print_block_by_hash` / `print_block_by_height`: the two console commands
 /// that read `get_block` and nothing else, which is why they migrate with it
 /// (the design's console matrix, §2.1).
-fn print_block(
-    src: &Source,
-    by_hash: bool,
-    argument: &str,
-    include_hex: bool,
-) -> Result<String, String> {
+fn print_block(src: &Source, block: &crate::resolve::BlockRef) -> Result<String, String> {
     let mut request = shekyl_rpc_types::GetBlockRequest {
         fill_pow_hash: true,
         ..Default::default()
     };
-    if by_hash {
-        request.hash = argument.to_owned();
-    } else {
-        request.height = argument
-            .parse()
-            .map_err(|_| format!("not a block height: {argument}"))?;
+    match block {
+        crate::resolve::BlockRef::Hash(hash) => request.hash = hash.clone(),
+        crate::resolve::BlockRef::Height(height) => request.height = *height,
     }
 
     // In-process the console is the operator's own terminal, so the
@@ -208,10 +199,6 @@ fn print_block(
     // The C++ order: the blob (only with `+hex`) and a blank line, then the
     // header, then the block's json.
     let mut out = String::new();
-    if include_hex {
-        out.push_str(&reply.blob);
-        out.push_str("\n\n");
-    }
     out.push_str(&render_block_header(&reply.block_header));
     out.push('\n');
     if let Some(json) = &reply.json {
@@ -297,26 +284,15 @@ fn print_height(src: &Source) -> Result<String, String> {
 /// `get_transactions` and nothing else, which is why it migrates with it
 /// (§2.1). Its `+json` went with epee's rendering (IG-Q55; `tx show`'s
 /// `--json` is the session's).
-fn print_transaction(src: &Source, args: &[String]) -> Result<String, String> {
-    let Some(hash) = args.first() else {
-        return Err("Invalid syntax: At least one parameter expected. For more                     details, use the help command."
-            .to_owned());
-    };
-    let mut body_out = false;
-    for flag in &args[1..] {
-        match flag.as_str() {
-            "--body" => body_out = true,
-            other => {
-                return Err(format!(
-                    "Invalid syntax: Unexpected parameter: {other}. For more                      details, use the help command."
-                ))
-            }
-        }
-    }
+pub(crate) fn print_transaction(
+    src: &Source,
+    hash: &str,
+    body_out: bool,
+) -> Result<String, String> {
     // The full form: the whole body, or `archived` with the shard it went
     // in when this daemon discarded its archival good (`PDM-Q10`).
     let request = shekyl_rpc_types::GetTransactionsRequest {
-        txs_hashes: vec![hash.clone()],
+        txs_hashes: vec![hash.to_owned()],
         prune: false,
     };
     let reply = fetch_transactions(src, &request)?;
@@ -444,11 +420,7 @@ pub(crate) enum TxRender {
 /// is that answer. A transport failure, an identity refusal, or a body
 /// that does not hash to `id` is `Err`.
 pub(crate) fn show_transaction(src: &Source, id: &str, body: bool) -> Result<TxRender, String> {
-    let mut args = vec![id.to_owned()];
-    if body {
-        args.push("--body".to_owned());
-    }
-    match print_transaction(src, &args) {
+    match print_transaction(src, id, body) {
         Ok(text) => {
             let body = if body {
                 Some(body_line(&text).ok_or_else(|| {
@@ -480,13 +452,9 @@ fn body_line(text: &str) -> Option<String> {
 }
 
 /// `is_key_image_spent <key_image>` — RK-4c. Reads that method only.
-fn is_key_image_spent(src: &Source, args: &[String]) -> Result<String, String> {
-    let Some(ki) = args.first() else {
-        return Err("Invalid syntax: At least one parameter expected. For more                     details, use the help command."
-            .to_owned());
-    };
+fn is_key_image_spent(src: &Source, ki: &str) -> Result<String, String> {
     let request = shekyl_rpc_types::IsKeyImageSpentRequest {
-        key_images: vec![ki.clone()],
+        key_images: vec![ki.to_owned()],
     };
     let body = serde_json::to_vec(&request).map_err(|e| e.to_string())?;
     let raw = src.post_remote("/is_key_image_spent", body)?;
@@ -536,119 +504,32 @@ fn fetch_transactions(
     decode_reply::<shekyl_rpc_types::GetTransactionsResponse>(&raw, "get_transactions")
 }
 
-/// Why a command did not render.
-pub(crate) enum ConsoleFault {
-    /// `args` names no command.
-    Unknown,
-    /// The daemon refused, or the reply did not decode. The text is what
-    /// the operator reads.
-    Request(String),
-}
-
-/// Run one command against `source`.
+/// Run one already-parsed daemon word.
 ///
-/// `version` does not handshake first: it exists to show the operator what
-/// they reached. Every other command handshakes on its first request.
-pub(crate) fn render(source: &Source, args: &[String]) -> Result<String, ConsoleFault> {
-    if args.is_empty() {
-        return Err(ConsoleFault::Unknown);
+/// `now` is read once so a command's whole output describes one instant.
+pub(crate) fn execute(source: &Source, view: &crate::resolve::View) -> Result<String, String> {
+    let now = unix_now();
+    match view {
+        crate::resolve::View::ChainHeight => print_height(source),
+        crate::resolve::View::ChainDifficulty => node::show_difficulty(source),
+        crate::resolve::View::ChainStats { last } => print_blockchain_dynamic_stats(source, *last),
+        crate::resolve::View::ChainAlt => alt_chain_info(source, "", 0, 0, now),
+        crate::resolve::View::ChainSpent { hash } => is_key_image_spent(source, hash),
+        crate::resolve::View::BlockShow(block) => print_block(source, block),
+        crate::resolve::View::BlockHeaderList { from, to } => {
+            print_blockchain_info(source, *from, *to)
+        }
+        crate::resolve::View::PeerList { white, gray, max } => {
+            let limit = max.map_or(0, |n| usize::try_from(n).unwrap_or(usize::MAX));
+            print_peer_list(source, *white, *gray, limit)
+        }
+        crate::resolve::View::PeerStats => print_peer_list_stats(source),
+        crate::resolve::View::PeerConnections => print_connections(source),
+        crate::resolve::View::P2pStats => print_net_stats(source, now),
+        crate::resolve::View::SyncStatus => sync_info(source),
+        crate::resolve::View::DaemonStatus => show_status(source, now),
+        crate::resolve::View::TxpoolStats => node::print_transaction_pool_stats(source),
     }
-    // `now` is read once so a command's whole output describes one instant.
-    let result = match args {
-        [a, b] if a == "chain" && b == "height" => print_height(source),
-        [a, b, argument] if a == "block" && b == "show" => {
-            let by_hash = argument.len() == 64;
-            print_block(source, by_hash, argument, false)
-        }
-        [a, b, rest @ ..] if a == "tx" && b == "show" => print_transaction(source, rest),
-        [a, b, rest @ ..] if a == "chain" && b == "spent" => is_key_image_spent(source, rest),
-        [a, b, rest @ ..] if a == "peer" && b == "list" => {
-            let (white, gray, limit) = peer_list_flags(rest)?;
-            print_peer_list(source, white, gray, limit)
-        }
-        [a, b] if a == "peer" && b == "stats" => print_peer_list_stats(source),
-        [a, b] if a == "peer" && b == "connections" => print_connections(source),
-        [a, b] if a == "p2p" && b == "stats" => print_net_stats(source, unix_now()),
-        [a, b] if a == "sync" && b == "status" => sync_info(source),
-        [a, b, c, rest @ ..] if a == "block" && b == "header" && c == "list" => {
-            let (start, end) = from_to(rest)?;
-            print_blockchain_info(source, start, end)
-        }
-        [a, b, rest @ ..] if a == "chain" && b == "stats" => {
-            let nblocks = flag_u64(rest, "--last")?;
-            print_blockchain_dynamic_stats(source, nblocks)
-        }
-        // No argument (IG-Q44). The renderer still accepts the old parser's
-        // tip / above / last filters; the word does not.
-        [a, b] if a == "chain" && b == "alt" => alt_chain_info(source, "", 0, 0, unix_now()),
-        [a, b] if a == "daemon" && b == "status" => show_status(source, unix_now()),
-        [a, b] if a == "chain" && b == "difficulty" => node::show_difficulty(source),
-        [a] if a == "version" => node::version(source),
-        [a, b] if a == "txpool" && b == "stats" => node::print_transaction_pool_stats(source),
-        _ => return Err(ConsoleFault::Unknown),
-    };
-    result.map_err(ConsoleFault::Request)
-}
-
-/// `peer list [--white] [--gray] [--max N]`. Neither switch means both lists.
-fn peer_list_flags(args: &[String]) -> Result<(bool, bool, usize), ConsoleFault> {
-    let mut white = false;
-    let mut gray = false;
-    let mut limit = 0usize;
-    let mut i = 0;
-    while i < args.len() {
-        match args[i].as_str() {
-            "--white" => white = true,
-            "--gray" => gray = true,
-            "--max" => {
-                let Some(n) = args.get(i + 1).and_then(|n| n.parse().ok()) else {
-                    return Err(ConsoleFault::Request(
-                        "peer list --max takes an integer".to_owned(),
-                    ));
-                };
-                limit = n;
-                i += 1;
-            }
-            other => {
-                return Err(ConsoleFault::Request(format!(
-                    "peer list: unexpected {other}"
-                )))
-            }
-        }
-        i += 1;
-    }
-    if !white && !gray {
-        white = true;
-        gray = true;
-    }
-    Ok((white, gray, limit))
-}
-
-/// `--from <integer> --to <integer>`, in either order.
-fn from_to(args: &[String]) -> Result<(i64, u64), ConsoleFault> {
-    let from = flag_i64(args, "--from")?;
-    let to = flag_u64(args, "--to")?;
-    Ok((from, to))
-}
-
-fn flag_u64(args: &[String], name: &str) -> Result<u64, ConsoleFault> {
-    flag_text(args, name)?
-        .parse()
-        .map_err(|_| ConsoleFault::Request(format!("{name} takes an integer")))
-}
-
-fn flag_i64(args: &[String], name: &str) -> Result<i64, ConsoleFault> {
-    flag_text(args, name)?
-        .parse()
-        .map_err(|_| ConsoleFault::Request(format!("{name} takes an integer")))
-}
-
-fn flag_text<'a>(args: &'a [String], name: &str) -> Result<&'a str, ConsoleFault> {
-    args.iter()
-        .position(|arg| arg == name)
-        .and_then(|i| args.get(i + 1))
-        .map(String::as_str)
-        .ok_or_else(|| ConsoleFault::Request(format!("{name} is required")))
 }
 
 /// Unix seconds, read once per console command so a whole rendering
