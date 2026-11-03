@@ -54,6 +54,12 @@ pub(crate) struct Gates {
     /// the same answer, so it is not drawn to extend `H*` until its claim
     /// or `H*` changes.
     pub header_spent: bool,
+    /// The last header response from this session could not be proven:
+    /// the ingest window's slots did not hold its seed
+    /// (`Command::SeedNotHeld`). The window's state, not the peer's
+    /// answer: not drawn to extend `H*` until the slots change
+    /// (`Event::Seeds`) or the claim does.
+    pub seed_not_held: bool,
     /// Missed a body deadline. A source again when `H*` changes.
     pub body_excluded: bool,
     /// Already followed one past-cap run. Clears when the claim changes.
@@ -67,6 +73,7 @@ impl Gates {
         Self {
             header_quiet: false,
             header_spent: false,
+            seed_not_held: false,
             body_excluded: false,
             past_cap_followed: false,
             evidence_spent: false,
@@ -477,6 +484,11 @@ pub(crate) struct Peer<K> {
     /// this node does not hold. One is in flight. The coordinator's one
     /// frontier request is not stored here.
     pub follow_up: Option<HeaderRequest<K>>,
+    /// Ids of frontier requests to this peer that a new `H*` withdrew
+    /// (`reselect`): their locator went stale before they were answered.
+    /// Each is still owed its answer, which arrives in request order and
+    /// is discarded unjudged, or passes its deadline. Ascending.
+    pub withdrawn: Vec<u64>,
     /// The body span this peer is serving.
     pub span: Option<BodySpan>,
     /// Announces proving beside the run.
@@ -503,6 +515,7 @@ impl<K> Peer<K> {
             inventory: Inventory::default(),
             run: None,
             follow_up: None,
+            withdrawn: Vec::new(),
             span: None,
             announced: Vec::new(),
             rate: None,

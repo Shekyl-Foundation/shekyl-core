@@ -15,6 +15,8 @@
 //! counted draws and form a digest term are transforms and live in
 //! `shekyl-archival-retention`.
 
+use alloc::vec::Vec;
+
 use crate::{BlockHeight, PCanonicalId, ShardId};
 
 /// Draws counted for a pair at settlement. A pair with fewer issued draws
@@ -368,10 +370,109 @@ pub struct BlockDraws {
     pub revealed: bool,
 }
 
-/// A support-stream count: one tree's unissued draws in an epoch, or one
-/// block's issued support draws. Four little-endian bytes
+/// The complete trees a block seated on the support stream: persona ids,
+/// strictly increasing (`ARCHIVAL_SUPPORT_DRAW.md` §5; `SO-D12` S1,
+/// ruled 2026-11-01).
+///
+/// Seat `j` is bit `j` of the block's support bitmap, and the length is
+/// the number of support draws the block issued. The row is written when
+/// the block connects, so admission reads a past block's roster as it
+/// stood then, with the keys from its epoch's snapshot. The empty row is a
+/// value, a block that seated nobody; a height with no row was not
+/// connected.
+#[derive(Clone, Debug, Default, PartialEq, Eq, Hash)]
+pub struct SupportSeats(Vec<PCanonicalId>);
+
+/// [`SupportSeats::new`]'s refusal: the ids are not strictly increasing.
+/// `index` is the first id not above the one before it.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct SupportSeatsError {
+    /// Position of the first out-of-order or repeated id.
+    pub index: usize,
+}
+
+impl core::fmt::Display for SupportSeatsError {
+    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+        write!(
+            f,
+            "seated persona {} is not above the one before it",
+            self.index
+        )
+    }
+}
+
+impl SupportSeats {
+    /// A block that seated nobody.
+    pub const EMPTY: Self = Self(Vec::new());
+
+    /// The seats `ids`, which must be strictly increasing.
+    ///
+    /// # Errors
+    ///
+    /// [`SupportSeatsError`] at the first id that is not above its
+    /// predecessor.
+    pub fn new(ids: Vec<PCanonicalId>) -> Result<Self, SupportSeatsError> {
+        if let Some(index) = ids
+            .windows(2)
+            .position(|pair| pair[0] >= pair[1])
+            .map(|before| before + 1)
+        {
+            return Err(SupportSeatsError { index });
+        }
+        Ok(Self(ids))
+    }
+
+    /// The seated personas, ascending: seat `j` is entry `j`.
+    #[must_use]
+    pub fn as_slice(&self) -> &[PCanonicalId] {
+        &self.0
+    }
+
+    /// How many support draws the block issued.
+    #[must_use]
+    pub fn len(&self) -> usize {
+        self.0.len()
+    }
+
+    /// Whether the block seated nobody.
+    #[must_use]
+    pub fn is_empty(&self) -> bool {
+        self.0.is_empty()
+    }
+
+    /// The first persona, in persona order, that is on only one of this
+    /// row and `other`. [`None`] when the rows are equal.
+    ///
+    /// Both are strictly increasing ([`Self::new`]), so one merge decides,
+    /// and which row is `self` does not change the persona. A member one
+    /// row holds and the other does not is that persona.
+    pub fn first_one_sided(&self, other: &Self) -> Option<PCanonicalId> {
+        let mut here = self.0.iter().copied();
+        let mut there = other.0.iter().copied();
+        let mut left = here.next();
+        let mut right = there.next();
+        loop {
+            match (left, right) {
+                (None, None) => return None,
+                (Some(only), None) | (None, Some(only)) => return Some(only),
+                (Some(held), Some(wanted)) => match held.cmp(&wanted) {
+                    core::cmp::Ordering::Equal => {
+                        left = here.next();
+                        right = there.next();
+                    }
+                    core::cmp::Ordering::Less => return Some(held),
+                    core::cmp::Ordering::Greater => return Some(wanted),
+                },
+            }
+        }
+    }
+}
+
+/// A support-stream count: one tree's unissued draws in an epoch
+/// (`archival_support_unissued`). Four little-endian bytes
 /// (`ARCHIVAL_SUPPORT_DRAW.md` §5). Capped at `c` by the writer; the
-/// codec stores the number.
+/// codec stores the number. A block's issued support draws are its
+/// [`SupportSeats`], whose length is that count.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub struct SupportCount(u32);
 
@@ -407,7 +508,8 @@ impl SupportCount {
 /// one per tree, so the shard is not part of the key.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub struct SupportIssued {
-    /// The shard this draw selected, inside the archive at its block.
+    /// The shard this draw selected, below the archive width its epoch's
+    /// snapshot took at `h_open(E)` (pin 2; `SO-D12` S1).
     pub shard: ShardId,
     /// Whether a pass record for this draw has been admitted.
     pub passed: bool,
@@ -590,5 +692,28 @@ mod tests {
         b.fold(&top);
         assert_eq!(a, b);
         assert_eq!(a.as_bytes(), &[0xff; ISSUED_DIGEST_LEN]);
+    }
+
+    /// Two strictly increasing rows differ at the first persona only one
+    /// of them names. Which row is on the left does not change it. Red
+    /// edit: treat a superset as equal (the extra member disappears).
+    #[test]
+    fn two_seat_rows_name_the_first_persona_only_one_holds() {
+        use alloc::vec;
+
+        let persona = |byte: u8| crate::PCanonicalId::from_bytes([byte; 32]);
+        let tree_a = persona(0x11);
+        let tree_b = persona(0x77);
+        let both = SupportSeats::new(vec![tree_a, tree_b]).expect("ascending");
+        let only_a = SupportSeats::new(vec![tree_a]).expect("one");
+        let only_b = SupportSeats::new(vec![tree_b]).expect("one");
+        let empty = SupportSeats::EMPTY;
+        assert_eq!(both.first_one_sided(&both), None);
+        assert_eq!(empty.first_one_sided(&empty), None);
+        assert_eq!(both.first_one_sided(&only_a), Some(tree_b));
+        assert_eq!(only_a.first_one_sided(&both), Some(tree_b));
+        assert_eq!(only_b.first_one_sided(&only_a), Some(tree_a));
+        assert_eq!(empty.first_one_sided(&only_a), Some(tree_a));
+        assert_eq!(only_a.first_one_sided(&empty), Some(tree_a));
     }
 }

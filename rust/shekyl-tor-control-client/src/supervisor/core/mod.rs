@@ -60,12 +60,13 @@ pub struct Policy {
     /// Consecutive failed launches before the next one takes a fresh
     /// data directory. `TSR-M2` had no launch failure, so this stays 3.
     pub fresh_directory_after: u32,
-    /// How long no Tor connection is open and none opens, with Tor saying
-    /// nothing about its network, before the posture line says so (§4.2):
-    /// a neutral fact, never a cause. The daemon passes the Tor connector's
-    /// quiet span S from its dial profile
-    /// (`shekyl_transport_layer::dial_profile(ConnectorId::Tor).quiet().span_nanos`),
-    /// one number for this line and the dialer's quiet guard.
+    /// How long nothing comes through Tor, with a Tor dial failed since and
+    /// Tor saying nothing about its network, before the posture line says
+    /// so (§4.2): a neutral fact, never a cause. The daemon passes Tor's
+    /// `SocksTimeout` plus the Tor connector's judging bracket δ
+    /// (`DIALER_OUTAGE_EVIDENCE.md` §6): by then a dial started at the last
+    /// sign of life has used Tor's own retries and its bracket has closed
+    /// empty, so the judge has excused it as the link's.
     pub quiet_after: Duration,
     /// The probe's delay after a round's first upload is drawn uniformly
     /// from this to [`Self::probe_after_max`] (§4.5, §10): long enough for
@@ -124,9 +125,9 @@ impl Policy {
             // about a minute: the same order as `TSR-M2`'s 60 s bound.
             alive_every: Duration::from_secs(30),
             fresh_directory_after: 3,
-            // Wall time since the last opened stream, or since this Tor
-            // reached Running, with at least one unopened dial and nothing
-            // held. Not a count of dials.
+            // Time since the judge's last sign of life on Tor, or since this
+            // Tor reached Running, with a Tor dial failed since. Not a count
+            // of dials.
             quiet_after,
             // Upload p50 4.6 s (`TSR-M7`); the descriptor then has to reach
             // the directories the probe's own fetch asks (§10).

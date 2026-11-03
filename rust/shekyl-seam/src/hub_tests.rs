@@ -13,13 +13,22 @@ use shekyl_capped_stream::{InboundEnd, StreamEnds};
 use shekyl_peer_policy::InboundCeiling;
 use shekyl_timing_engine::{Clock, ManualClock, Tick};
 use shekyl_transport_layer::{
-    CloseCause, CloseKind, CloseResult, ConnectorId, Direction, Marks, SocketId, Sockets,
+    CloseCause, CloseKind, CloseResult, ConnectorId, DialEnd, DialFailure, Direction, Reached,
+    Retry, SocketId, Sockets, StreamEnd,
 };
 
 use super::{Hub, Phase, Post};
 use crate::connection::{AdvertisedEndpoint, ChainLength, HeightMessage, RedialRefusal};
 use crate::drive_inbound;
 use crate::endpoint::{admit, Endpoint};
+
+/// The connectors' own stream-end tables, as zone bind dispatches them.
+fn tables(connector: ConnectorId, end: StreamEnd) -> DialFailure {
+    match connector {
+        ConnectorId::Clearnet => shekyl_clearnet::stamp_stream_end(end),
+        ConnectorId::Tor => shekyl_tor::stamp_stream_end(end),
+    }
+}
 
 fn endpoint(ip: Ipv4Addr, direction: Direction) -> Endpoint {
     Endpoint::Clearnet {
@@ -31,6 +40,8 @@ fn endpoint(ip: Ipv4Addr, direction: Direction) -> Endpoint {
 
 struct Rig {
     hub: Hub,
+    /// The hub's table: the ban list's timing owner expires through it.
+    sockets: Sockets,
     posts: Arc<Mutex<VecDeque<Post>>>,
     clock: ManualClock,
 }
@@ -38,13 +49,19 @@ struct Rig {
 fn rig() -> Rig {
     let posts = Arc::new(Mutex::new(VecDeque::new()));
     let clock = ManualClock::new(Tick::new(1));
+    let sockets = Sockets::new();
     let hub = Hub::new(
-        Sockets::new(),
+        sockets.clone(),
         InboundCeiling::Bounded(8),
         queue_poster(&posts),
         Arc::new(clock.clone()),
     );
-    Rig { hub, posts, clock }
+    Rig {
+        hub,
+        sockets,
+        posts,
+        clock,
+    }
 }
 
 fn queue_poster(queue: &Arc<Mutex<VecDeque<Post>>>) -> Arc<dyn Fn(Post) + Send + Sync> {
@@ -276,6 +293,109 @@ fn a_message_that_does_not_fit_is_send_queue_full() {
     );
 }
 
+/// The hub observes a full send queue itself, so it asks the installed
+/// dialer what that is evidence of on the row's connector: the connector's
+/// own table row, never a meaning the hub assigns. The edit that makes
+/// this red is the hub building the failure itself.
+#[test]
+fn a_full_send_queue_is_stamped_from_the_rows_connector() {
+    let rig = rig();
+    rig.hub.install_loopback(4, tables);
+    let opened = adopt(&rig, Direction::Outbound, 4);
+    assert!(!rig.hub.send(opened.id, b"cdefg".to_vec()));
+    let end = rig.hub.end(opened.id).expect("recorded");
+    assert_eq!(
+        end.failure(),
+        shekyl_clearnet::stamp_stream_end(StreamEnd::SendQueueFull)
+    );
+    assert_eq!(end.cause().kind(), CloseKind::SendQueueFull);
+}
+
+/// The connector's end and this node's own close, for the race below.
+fn connector_end() -> DialEnd {
+    DialEnd::new(
+        shekyl_clearnet::stamp_stream_end(StreamEnd::PeerClosed),
+        CloseCause::new(CloseKind::PeerClosed),
+    )
+}
+
+/// The one `closed` post for `id`, and that there is exactly one.
+fn closed_cause(rig: &Rig, id: SocketId) -> CloseCause {
+    let posts = rig.posts.lock().expect("posts");
+    let causes: Vec<CloseCause> = posts
+        .iter()
+        .filter_map(|post| match post {
+            Post::Closed {
+                id: closed, end, ..
+            } if *closed == id => Some(end.cause()),
+            _ => None,
+        })
+        .collect();
+    assert_eq!(causes.len(), 1, "one closed post");
+    causes[0]
+}
+
+/// A hub close and a connector-recorded end on one row, in both orders:
+/// the first end recorded is the one the dialer reads and the one `closed`
+/// carries; the later call records nothing and changes nothing. The edit
+/// that makes this red is letting a later end replace the first.
+#[test]
+fn the_first_end_recorded_on_a_row_is_the_one_the_dialer_reads() {
+    let own = DialEnd::local_close_after_channel();
+    for (first, second) in [(own, connector_end()), (connector_end(), own)] {
+        let rig = rig();
+        let opened = adopt(&rig, Direction::Outbound, 32);
+        let finish = |end: DialEnd| {
+            if end == own {
+                rig.hub.close(opened.id);
+                CloseResult::Recorded(end.cause())
+            } else {
+                rig.hub.finish(opened.id, end)
+            }
+        };
+        assert!(matches!(finish(first), CloseResult::Recorded(_)));
+        assert_eq!(rig.hub.end(opened.id), Some(first));
+        assert!(matches!(
+            rig.hub.finish(opened.id, second),
+            CloseResult::AlreadyClosed
+        ));
+        assert_eq!(rig.hub.end(opened.id), Some(first), "the later end");
+        assert_eq!(closed_cause(&rig, opened.id), first.cause());
+    }
+}
+
+/// The same two ends from two threads at once, many times: exactly one is
+/// recorded, the row holds that one, and `closed` carries it. The choice is
+/// made under the table lock, so no interleaving records both or leaves
+/// the row holding one end while `closed` carries the other.
+#[test]
+fn a_hub_close_racing_a_connector_end_records_exactly_one() {
+    for _ in 0..200 {
+        let rig = rig();
+        let opened = adopt(&rig, Direction::Outbound, 32);
+        let start = Arc::new(std::sync::Barrier::new(2));
+        let (hub, id) = (rig.hub.clone(), opened.id);
+        let racer = {
+            let start = Arc::clone(&start);
+            thread::spawn(move || {
+                start.wait();
+                hub.finish(id, connector_end())
+            })
+        };
+        start.wait();
+        rig.hub.close(id);
+        let connector = racer.join().expect("racer");
+        let recorded = rig.hub.end(id).expect("recorded");
+        match connector {
+            CloseResult::Recorded(_) => assert_eq!(recorded, connector_end()),
+            CloseResult::AlreadyClosed => {
+                assert_eq!(recorded, DialEnd::local_close_after_channel());
+            }
+        }
+        assert_eq!(closed_cause(&rig, id), recorded.cause());
+    }
+}
+
 /// With no dialer installed the hub is shutting down, so a session handed to
 /// [`Hub::drive`] closes as a local close and no pump runs.
 #[test]
@@ -368,12 +488,12 @@ fn replacing_the_dialer_joins_the_pump_and_the_next_hub_keeps_the_id() {
         queue_poster(&posts),
         Arc::new(clock.clone()),
     );
-    first.install_loopback(32);
+    first.install_loopback(32, tables);
     let endpoint = endpoint(doc_ip(), Direction::Outbound);
     let attached = first.connect(&endpoint).expect("open");
     let id = attached.id;
     first.drive(id, attached.session);
-    first.install_loopback(32);
+    first.install_loopback(32, tables);
     first.shutdown();
     assert!(first.cause(id).is_none());
     let second = Hub::new(
@@ -382,7 +502,7 @@ fn replacing_the_dialer_joins_the_pump_and_the_next_hub_keeps_the_id() {
         queue_poster(&posts),
         Arc::new(clock),
     );
-    second.install_loopback(32);
+    second.install_loopback(32, tables);
     let again = second.connect(&endpoint).expect("next id");
     assert_ne!(again.id, id);
     drop(again);
@@ -390,9 +510,9 @@ fn replacing_the_dialer_joins_the_pump_and_the_next_hub_keeps_the_id() {
 }
 
 #[test]
-fn a_banned_clearnet_host_is_admission_refused_until_the_deadline() {
+fn a_banned_clearnet_host_is_admission_refused_until_its_ban_expires() {
     let rig = rig();
-    rig.hub.install_loopback(32);
+    rig.hub.install_loopback(32, tables);
     let endpoint = endpoint(doc_ip(), Direction::Outbound);
     let first = rig.hub.connect(&endpoint).expect("open");
     let closed = rig.hub.ban_host(IpAddr::V4(doc_ip()), Tick::new(50));
@@ -401,8 +521,13 @@ fn a_banned_clearnet_host_is_admission_refused_until_the_deadline() {
     let Err(banned) = rig.hub.connect(&endpoint) else {
         panic!("a banned host was admitted");
     };
-    assert_eq!(banned.kind(), CloseKind::AdmissionRefused);
+    assert_eq!(banned.cause().kind(), CloseKind::AdmissionRefused);
     rig.clock.set(Tick::new(50));
+    assert!(
+        rig.hub.connect(&endpoint).is_err(),
+        "past the deadline, the ban holds until the timer ends it"
+    );
+    assert_eq!(rig.sockets.expire_bans(Tick::new(50)), None);
     let again = rig.hub.connect(&endpoint).expect("expired");
     drop(again);
 }
@@ -414,7 +539,7 @@ fn a_banned_clearnet_host_is_admission_refused_until_the_deadline() {
 #[test]
 fn remaining_and_lift_round_trip_through_the_hub() {
     let rig = rig();
-    rig.hub.install_loopback(32);
+    rig.hub.install_loopback(32, tables);
     let host = IpAddr::V4(doc_ip());
     let _closed = rig.hub.ban_host(host, Tick::new(41));
     rig.clock.set(Tick::new(11));
@@ -439,7 +564,7 @@ fn remaining_and_lift_round_trip_through_the_hub() {
     let Err(refused) = rig.hub.connect(&endpoint) else {
         panic!("a host inside a banned subnet was admitted");
     };
-    assert_eq!(refused.kind(), CloseKind::AdmissionRefused);
+    assert_eq!(refused.cause().kind(), CloseKind::AdmissionRefused);
     assert!(rig.hub.lift_subnet(subnet));
     drop(rig.hub.connect(&endpoint).expect("the subnet is lifted"));
 }
@@ -451,12 +576,16 @@ fn a_transport_close_does_not_ban_the_host() {
         let rig = rig();
         let opened = adopt(&rig, Direction::Outbound, 32);
         let cause = if *kind == CloseKind::ProxyRefused {
-            CloseCause::proxy_refused(1, Marks::NONE)
+            CloseCause::proxy_refused(1)
         } else {
             CloseCause::new(*kind)
         };
+        let end = DialEnd::new(
+            DialFailure::local(Retry::Again, Reached::StreamOpened),
+            cause,
+        );
         assert!(matches!(
-            rig.hub.finish(opened.id, cause),
+            rig.hub.finish(opened.id, end),
             CloseResult::Recorded(_)
         ));
         assert!(
@@ -488,7 +617,7 @@ fn a_claim_lands_on_the_row_and_a_snapshot_does_not() {
     assert_eq!(row.accepted_chain_length(), Some(length));
     assert!(matches!(
         rig.hub
-            .finish(opened.id, CloseCause::new(CloseKind::LocalClose)),
+            .finish(opened.id, DialEnd::local_close_after_channel()),
         CloseResult::Recorded(_)
     ));
     assert!(!rig
@@ -667,7 +796,7 @@ fn reap_forgets_the_row() {
 #[test]
 fn a_dialed_channel_has_no_row_and_no_post_until_it_is_adopted() {
     let rig = rig();
-    rig.hub.install_loopback(32);
+    rig.hub.install_loopback(32, tables);
     let target = endpoint(doc_ip(), Direction::Outbound);
 
     let channel = rig.hub.dial_channel(&target).expect("loopback dials");
@@ -702,7 +831,7 @@ fn a_dialed_channel_has_no_row_and_no_post_until_it_is_adopted() {
 #[test]
 fn a_dialed_channel_that_is_never_adopted_leaves_no_trace() {
     let rig = rig();
-    rig.hub.install_loopback(32);
+    rig.hub.install_loopback(32, tables);
     let channel = rig
         .hub
         .dial_channel(&endpoint(doc_ip(), Direction::Outbound))
@@ -721,7 +850,7 @@ fn dial_channel_without_a_dialer_is_local() {
     else {
         panic!("dial_channel without a dialer admitted a channel");
     };
-    assert_eq!(err.kind(), CloseKind::LocalClose);
+    assert_eq!(err, DialEnd::local_close());
 }
 
 #[test]
@@ -730,8 +859,8 @@ fn connect_without_a_dialer_is_local() {
     let Err(err) = rig.hub.connect(&endpoint(doc_ip(), Direction::Outbound)) else {
         panic!("connect without a dialer admitted a channel");
     };
-    assert_eq!(err.kind(), CloseKind::LocalClose);
-    assert!(!err.proves_misbehaviour());
+    assert_eq!(err, DialEnd::local_close());
+    assert!(!err.failure().proves_misbehaviour());
 }
 
 #[test]
@@ -941,13 +1070,19 @@ fn an_inbound_open_is_posted_before_the_next_frame_is_delivered() {
         }
         recorded.lock().expect("posts").push_back(post);
     });
+    let sockets = Sockets::new();
     let hub = Hub::new(
-        Sockets::new(),
+        sockets.clone(),
         InboundCeiling::Bounded(8),
         poster,
         Arc::new(clock.clone()),
     );
-    let rig = Rig { hub, posts, clock };
+    let rig = Rig {
+        hub,
+        sockets,
+        posts,
+        clock,
+    };
     let mut opened = adopt(&rig, Direction::Inbound, 32);
     service(&rig, true);
     let session = opened.session.take().expect("session");

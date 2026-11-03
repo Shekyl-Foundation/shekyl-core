@@ -454,13 +454,13 @@ impl<'id> WriteBatch<'_, 'id> {
         Ok(())
     }
 
-    /// 9e. `archival_support_block[h] = count` at every connecting height,
-    /// insert-once: a block records its support count once, and a row
-    /// already there is SI-40 before any journal entry. The count is the
-    /// transition's. While the support schedule is not on the transition
-    /// the count is [`shekyl_types::archival::SupportCount::NONE`]: the
-    /// block issued none. A missing row is the hole, and this zero is not
-    /// that hole. No archival family governs it, for
+    /// 9e. `archival_support_block[h] = seats` at every connecting height,
+    /// insert-once: a block records its support seats once, and a row
+    /// already there is SI-40 before any journal entry. The seats are the
+    /// transition's: the epoch's support members its schedule puts on this
+    /// height, in persona order (`SO-D12` S1). A block that seated nobody
+    /// writes [`shekyl_types::archival::SupportSeats::EMPTY`]. A missing row
+    /// is the hole, and that empty row is not the hole. No archival family governs it, for
     /// [`Self::write_block_draws`]'s reason. `pop` removes it through the
     /// journal, and the boundary retires it on the draw rows' floor.
     fn write_support_block(
@@ -474,7 +474,7 @@ impl<'id> WriteBatch<'_, 'id> {
         )?
         .insert(
             connecting.to_raw(),
-            delta.support_count().encoded().as_encoded(),
+            delta.support_seats().encoded().as_encoded(),
         )?;
         Ok(())
     }

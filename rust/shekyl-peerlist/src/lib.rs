@@ -63,9 +63,7 @@ pub mod conformance;
 pub use outcome::{DialOutcome, ListName, Refusal, SessionRow, Source};
 
 pub use partition::{DiscloseEarly, DiscloseEarlyEnd};
-pub use peerlist::{
-    BanQuery, KeptSessions, NoBans, NoSessions, Peerlist, SeatCensus, Settled, Snapshot,
-};
+pub use peerlist::{KeptSessions, NoSessions, Peerlist, SeatCensus, Settled, Snapshot};
 pub use shekyl_net_address::{Host, NetworkAddress};
 /// A daemon connection. The type is `shekyl_relay_privacy::ConnectionId`;
 /// re-exported so a peerlist session and a stem source are one id. F4 moves
@@ -73,7 +71,8 @@ pub use shekyl_net_address::{Host, NetworkAddress};
 pub use shekyl_relay_privacy::ConnectionId;
 pub use shekyl_timing_engine::Tick;
 pub use shekyl_transport_layer::{
-    connector_for, dial_profile, CloseCause, CloseKind, ConnectorId, Cooldown, Direction, Marks,
+    connector_for, dial_profile, BanEntry, ConnectorId, Cooldown, DialFailure, Direction,
+    Ipv4Subnet,
 };
 pub use validity::{RangeV4, RangeV6, RefusedSet, REFUSED_V4, REFUSED_V6};
 
@@ -150,23 +149,22 @@ pub fn cooldown_nanos<R: shekyl_draw_rng::RelayRng + ?Sized>(
     base.saturating_add(shekyl_draw_rng::bounded_uniform(rng, base / 2))
 }
 
-/// Which cooldown a failed test takes. The dialer chooses: it is the
-/// dialer's judgement of its own evidence about addresses, not a verdict
-/// on the link (Rick, 2026-10-26; `P2P_3_SLICE_3_DIALER_BRIEF.md`, the gray
-/// lifecycle).
+/// What a failed test does to its address: the judge's verdict
+/// (`DIALER_OUTAGE_EVIDENCE.md` §4.1, `OE-D8`). The dialer decides it, once,
+/// when it records the test; the peer list only performs it.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub enum Ladder {
-    /// A failed gray test steps the consecutive count and cools for its
-    /// rung ([`cooldown_nanos`]); a failed white test moves the address to
+pub enum Verdict {
+    /// The failure counts: a gray test steps its consecutive count and
+    /// cools for that rung ([`cooldown_nanos`]); a white address moves to
     /// gray at the first rung (white is known-working, Rick 2026-10-26).
-    Climb,
-    /// A failed gray test cools for the first rung, and the count does not
-    /// climb: it is at least one, and a count already past one stays where
-    /// it was. A failed white test leaves the address white. The dialer
-    /// picks this while its connector holds no session and none has opened
-    /// for the quiet stretch, when every failure says as much about this
-    /// node's reach as about the address.
-    FirstStep,
+    Counted,
+    /// The failure is excused (`OE-D6`, hold the rung): the count neither
+    /// climbs nor descends. A gray address with counted failures cools at
+    /// its current rung; one with none, and a white address, wait the
+    /// connector's `outage_retry` and stay where they are.
+    Excused,
+    /// Authenticated proof of misbehaviour: the address leaves the lists.
+    Drop,
 }
 
 /// The white expiry: a white address with no contact this node initiated

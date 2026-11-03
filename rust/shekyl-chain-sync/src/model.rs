@@ -54,8 +54,8 @@ const _: () = assert!(HEADERS_RESPONSE_BYTES / SYNC_RATE_FLOOR == 256);
 const _: () = assert!(BODIES_RESPONSE_BYTES / SYNC_RATE_FLOOR == 1024);
 
 pub use crate::protocol::{
-    BoundArrival, CachePlan, CloseCause, Command, Event, HashClass, Job, OfferedBody, Outcome,
-    ProveItem, Proved, Spent,
+    BoundArrival, CachePlan, CloseCause, Command, Event, HashClass, HeadersFormFault, Job,
+    OfferedBody, Outcome, ProveItem, Proved, Spent,
 };
 
 /// The chain the model has observed.
@@ -252,6 +252,7 @@ where
             if changed {
                 open.gates.header_quiet = false;
                 open.gates.header_spent = false;
+                open.gates.seed_not_held = false;
                 open.gates.past_cap_followed = false;
             }
         } else {
@@ -718,6 +719,7 @@ where
             Event::Proven { job, results } => self.on_proven(main, job, &results, out)?,
             Event::Entry { tag, outcome } => self.on_entry(main, tag, outcome, now, out)?,
             Event::Room { seats } => self.on_room(seats, out),
+            Event::Seeds => self.seeds_changed(),
             Event::Announce { session, body } => {
                 self.on_announce(main, session, &body, now, out)?
             }
@@ -791,13 +793,23 @@ where
             self.tree
                 .select(main, Star::local(local.hash, local.work), local.height, cap)?;
         if self.star.hash != previous {
-            self.header_request = None;
+            // The request in flight carries the old locator. Its answer
+            // is still owed, and it is this node's doing, not the peer's:
+            // the session remembers the id so the answer is discarded
+            // rather than judged as unasked-for (defect 10, 2026-11-03).
+            if let Some(request) = self.header_request.take() {
+                if let Some(peer) = self.peers.get_mut(&request.session) {
+                    peer.withdrawn.push(request.id);
+                }
+            }
             for peer in self.peers.values_mut() {
                 peer.span = None;
                 peer.gates.body_excluded = false;
                 // A new `H*` is a new locator: an answer that yielded
-                // nothing from the old one says nothing about this one.
+                // nothing from the old one says nothing about this one,
+                // and the headers it fetches may hash under another seed.
                 peer.gates.header_spent = false;
+                peer.gates.seed_not_held = false;
             }
         }
         Ok(())
@@ -844,6 +856,7 @@ where
             .filter(|(_, peer)| {
                 !peer.gates.header_quiet
                     && !peer.gates.header_spent
+                    && !peer.gates.seed_not_held
                     && !peer.gates.past_cap_followed
                     && peer.follow_up.is_none()
                     && peer.claim.is_some_and(|claim| claim.work > self.star.work)

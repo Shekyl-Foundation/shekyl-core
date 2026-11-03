@@ -173,25 +173,40 @@ fn the_count_on_a_non_empty_set_matches_the_composition_and_ignores_the_memo() {
         "releasing the compact bond removes its pair from D"
     );
 
-    // The release sits above the open. Its pre-image is a complete tree,
-    // which is not in `D`, so rewriting that pre-image does not move the
-    // digest. A missing digest is still the digest's own row (SI-29).
+    // The release sits above the open. Its pre-image is a complete tree:
+    // not in `D`, but a support member of the epoch under the same digest
+    // (`SO-D12` S1, ruled 2026-11-01). Rewriting that pre-image drops the
+    // member from the rebuild, so the count's memo miss refuses it as
+    // drift. A missing digest is still the digest's own row (SI-29).
     pop_back(&mut chain, 2);
     connect_listed(&mut chain, &[], None);
     connect_listed(&mut chain, &release, None);
     let epoch = SettlementEpoch::from_raw(2);
-    let kept: Result<(), TestErr> = chain.store.write(|batch| {
+    let drifted: Result<(), TestErr> = chain.store.write(|batch| {
         let mut record = journaled(batch)?;
         record.holdings =
             shekyl_types::archival::Holdings::shard_set(Vec::new()).expect("the empty set");
         rewrite_journal(batch, &record)?;
         let view = batch.chain_view();
-        let Ok(_) = chain.grown.judge_empty_or_corrupt(&view, &RULES)? else {
-            panic!("the pass refused a complete tree's pre-image");
+        let Err(corrupt) = chain.grown.judge_empty_or_corrupt(&view, &RULES)? else {
+            panic!("the pass kept a rebuild without the complete tree's membership");
         };
-        Ok(())
+        assert_eq!(
+            corrupt,
+            shekyl_chain_rules::Corrupt::SettlementIntegrity {
+                epoch,
+                check: shekyl_chain_rules::SettlementCheck::DrawableDrift,
+            }
+        );
+        Err(batch.refuse_corrupt(corrupt).into())
     });
-    kept.expect("a complete tree's pre-image is not an operand of D");
+    let TestErr::Store(refused) = drifted.expect_err("a drifted member refuses") else {
+        panic!("aborted, not refused");
+    };
+    assert!(
+        refused.contains("does not digest to archival_drawable_digest"),
+        "{refused}"
+    );
 
     let far = h_open(3) + 2;
     assert_eq!(
@@ -357,7 +372,7 @@ fn connect_span(
     rows
 }
 
-fn pop_back(chain: &mut SlashedChain, n: u64) {
+pub(super) fn pop_back(chain: &mut SlashedChain, n: u64) {
     for _ in 0..n {
         let popped: Result<Popped, TestErr> = chain.store.write(|batch| Ok(batch.pop()?));
         popped.expect("pop");
@@ -369,7 +384,7 @@ fn pop_back(chain: &mut SlashedChain, n: u64) {
 /// `set_size` pairs and admits nothing. The unsettled shortfall is
 /// `max(0, visible − in flight)`, the same saturation [`draw_count`] is
 /// specified to take.
-fn compose(set_size: u64, h_open: u64, through: u64) -> Vec<BlockDraws> {
+pub(super) fn compose(set_size: u64, h_open: u64, through: u64) -> Vec<BlockDraws> {
     let schedule = RULES.settlement_schedule();
     let seb = schedule.blocks().get();
     let window = schedule

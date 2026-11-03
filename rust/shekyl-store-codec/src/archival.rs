@@ -65,9 +65,10 @@ use shekyl_types::archival::{
     BadInterval, BlockDraws, BondRecord, CompleteTreeSet, DrawableDigest, FirstPayingHeight,
     HeldShard, Holdings, HoldingsError, HoldingsKind, IssuedDigest, IssuedDraw, RMarket,
     ReceiptSignPk, SettlementRow, SettlementRowError, SigmaWorkMilli, SlashLogEntry,
-    SlashedHolding, SupportCount, SupportIssued, BLOCK_DRAWS_LEN, DRAWABLE_DIGEST_LEN,
-    ISSUED_DIGEST_LEN, MAX_BOND_BAD_INTERVALS, MAX_BOND_KEY_BYTES, MAX_CLAIMED_EPOCH_ENTRIES,
-    MAX_CLAIM_AGE_W_EPOCHS, MAX_HOLDINGS_SHARDS, RECEIPT_SIGN_PK_LEN, SETTLEMENT_ROW_LEN,
+    SlashedHolding, SupportCount, SupportIssued, SupportSeats, BLOCK_DRAWS_LEN,
+    DRAWABLE_DIGEST_LEN, ISSUED_DIGEST_LEN, MAX_BOND_BAD_INTERVALS, MAX_BOND_KEY_BYTES,
+    MAX_CLAIMED_EPOCH_ENTRIES, MAX_CLAIM_AGE_W_EPOCHS, MAX_HOLDINGS_SHARDS, RECEIPT_SIGN_PK_LEN,
+    SETTLEMENT_ROW_LEN,
 };
 use shekyl_types::{BlockHeight, PCanonicalId, SettlementEpoch, ShardId};
 use shekyl_units::AtomicUnits;
@@ -507,6 +508,37 @@ impl Canonical for SupportCount {
             return Err(r.invalid("trailing bytes after the support count"));
         }
         Ok(Self::new(n))
+    }
+}
+
+/// `archival_support_block`'s row: the seats a block's support stream
+/// issued. Layout: `count_le4 ‖ count × persona[32]`, the personas strictly
+/// increasing. A repeated or out-of-order persona, a short buffer, or
+/// trailing bytes are refused.
+impl Canonical for SupportSeats {
+    const NAME: &'static str = "support_seats";
+    const FIXED_WIDTH: Option<usize> = None;
+
+    fn encode_into(&self, out: &mut Vec<u8>) {
+        put_count(out, self.len());
+        for persona in self.as_slice() {
+            out.extend_from_slice(persona.as_bytes());
+        }
+    }
+
+    fn decode(bytes: &[u8]) -> Result<Self, CodecError> {
+        let mut r = Reader::new(Self::NAME, bytes);
+        let n = r.count_bounded(32, usize::MAX, "unreachable: usize::MAX cap")?;
+        let mut ids = Vec::with_capacity(n);
+        for _ in 0..n {
+            ids.push(PCanonicalId::from_bytes(
+                r.array::<32>("buffer ends inside a persona")?,
+            ));
+        }
+        if !r.is_empty() {
+            return Err(r.invalid("trailing bytes after the support seats"));
+        }
+        SupportSeats::new(ids).map_err(|_| r.invalid("personas are not strictly increasing"))
     }
 }
 

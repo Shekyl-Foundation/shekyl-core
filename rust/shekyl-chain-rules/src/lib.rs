@@ -168,6 +168,10 @@ pub use archival::{
     RecordWrite, RecordWriteKind, ReleasePreImage, ServeCreditKey, Settlement, Slash,
     SupportSettlement, WALK_BACK_EPOCHS,
 };
+// The support stream's schedule on the connect path (`SO-D12` S1): the
+// transition writes a block's seats with it, and the store's bundle view
+// requires the stored row to equal it (SI-43).
+pub use archival::scheduled_seats;
 // The serve-credit bundle rule (`archival/bundle.rs`): STAGED on the
 // connect path. The verifier and its view trait are exported for the
 // lanes that wire them (`SO-D12`'s cutover); the bundle queue runs the
@@ -176,9 +180,10 @@ pub use archival::{
 // the switch. `form` and `validate` do not call them.
 pub use archival::{
     check_section, check_section_until_switch, draw_targets, fill_section, judge_bundles,
-    open_body, open_reference, verify_bundle, AdmissionFault, Admitted, BundleInvalid,
-    BundleRefused, BundleUnanswered, BundleView, DerivedDraw, DrawOrigin, DrawTargets, Drawn,
-    SectionCharge, SectionCheckFailed, SectionRefused, SectionStanding, SupportSeat,
+    open_body, open_reference, seats_with_carry, verify_bundle, AdmissionFault, Admitted,
+    BundleInvalid, BundleRefused, BundleUnanswered, BundleView, DerivedDraw, DrawOrigin,
+    DrawTargets, Drawn, SectionCharge, SectionCheckFailed, SectionRefused, SectionStanding,
+    SupportCarry, SupportSeat, WindowClosed,
 };
 pub use block::{
     Candidate, ProvenPow, ReferenceClaim, ReferenceClaims, StructurallyValid, TxIdentity,

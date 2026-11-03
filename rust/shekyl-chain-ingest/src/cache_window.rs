@@ -59,9 +59,11 @@ fn reach_above(cap: BlockCount) -> BlockCount {
 }
 
 /// The seeds the two slots hold: the connecting height's, and the other
-/// endpoint of the serviceable window when it differs.
+/// endpoint of the serviceable window when it differs. Published on
+/// [`Door::seeds`](crate::service::Door::seeds) once pinned, so a reader
+/// that saw it holds a seed can look that seed up and find it.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub(crate) struct SeedPair {
+pub struct SeedPair {
     /// The seed a block connecting at the tip's successor hashes under.
     /// The canonical slot.
     pub(crate) canonical: BlockHash,
@@ -72,7 +74,7 @@ pub(crate) struct SeedPair {
 impl SeedPair {
     /// Whether `seed` is one of the two this pair holds.
     #[must_use]
-    pub(crate) fn holds(self, seed: &BlockHash) -> bool {
+    pub fn holds(self, seed: &BlockHash) -> bool {
         self.canonical == *seed || self.transient == Some(*seed)
     }
 }

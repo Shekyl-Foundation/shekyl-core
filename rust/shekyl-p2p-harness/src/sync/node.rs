@@ -500,11 +500,11 @@ fn run_stub(hub: &Hub, posts: &mpsc::Receiver<Option<Post>>, log: &Mutex<StubLog
             }
             // The owner's; the router keeps it.
             Post::Opened { .. } => {}
-            Post::Closed { id, cause, .. } => {
+            Post::Closed { id, end, .. } => {
                 log.lock()
                     .expect("stub log")
                     .closed
-                    .push((id, cause.kind()));
+                    .push((id, end.cause().kind()));
                 sessions.remove(&id);
                 hub.handler_gone(id);
                 hub.reap(id);

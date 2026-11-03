@@ -26,11 +26,14 @@ use shekyl_peer_policy::InboundCeiling;
 use shekyl_socks::{connect as socks_connect, Destination, Proxy, ProxyWarn, SocksError};
 use shekyl_timing_engine::{Clock, Handle, OwnerClass, Tick};
 use shekyl_transport_layer::{
-    check_dial, CloseCause, CloseKind, CloseResult, ConnectorId, OpenError, OpenSocket, Sockets,
+    check_dial, CloseCause, CloseKind, CloseResult, ConnectorId, DialEnd, OpenError, OpenSocket,
+    Sockets,
 };
 use tokio::io::AsyncWriteExt;
 use tokio::net::{TcpListener, TcpStream};
 use tokio::sync::{mpsc, oneshot};
+
+use crate::replies::{reply_end, stream_side_end, Observed};
 
 /// A measured span, in nanoseconds, for the D9 distributions. One line
 /// per connection at each anchor; nothing here changes what the
@@ -48,7 +51,7 @@ static AUTH_WARN: std::sync::Mutex<ProxyWarn> = std::sync::Mutex::new(ProxyWarn:
 /// The proxy refused this node's authentication (`DAEMON_CONFIG_CUTOVER.md`
 /// DC-Q7). It is this node's own proxy failing, as [`proxy_unavailable`] is,
 /// and it names the rows that fix it, never the onion.
-fn proxy_refused_authentication(proxy: &Proxy, error: &SocksError) -> CloseCause {
+fn proxy_refused_authentication(proxy: &Proxy, error: &SocksError) -> Observed {
     let due = AUTH_WARN
         .lock()
         .unwrap_or_else(std::sync::PoisonError::into_inner)
@@ -56,13 +59,13 @@ fn proxy_refused_authentication(proxy: &Proxy, error: &SocksError) -> CloseCause
     if let (Some(unnamed), Some(text)) = (due, proxy.authentication_refused(error, "tor-socks")) {
         tracing::warn!(failed_dials_since_last_warning = unnamed, "{text}");
     }
-    CloseCause::new(CloseKind::ProxyUnavailable)
+    Observed::ProxyUnavailable
 }
 
 /// This node's own Tor SOCKS proxy failed: the TCP connect to it, or an
 /// exchange it closed without a reply. Its own close kind, not
 /// `LocalClose`: it names the proxy, never the onion.
-fn proxy_unavailable(proxy: SocketAddr, why: &'static str) -> CloseCause {
+fn proxy_unavailable(proxy: SocketAddr, why: &'static str) -> Observed {
     let due = PROXY_WARN
         .lock()
         .unwrap_or_else(std::sync::PoisonError::into_inner)
@@ -75,7 +78,7 @@ fn proxy_unavailable(proxy: SocketAddr, why: &'static str) -> CloseCause {
             "tor's SOCKS proxy is unavailable; dials through it fail until it returns"
         );
     }
-    CloseCause::new(CloseKind::ProxyUnavailable)
+    Observed::ProxyUnavailable
 }
 
 /// A Tor channel. `onion` is the dialed host. Inbound has none: the zone
@@ -107,7 +110,9 @@ pub struct Dial {
     pub sockets: Sockets,
     pub dial_within: Tick,
     pub gap_within: Tick,
-    pub on_cause: Arc<dyn Fn(CloseCause) + Send + Sync>,
+    /// How the dial ended, stamped by this connector: the first call is the
+    /// dial's failure before the channel, or the session's end after it.
+    pub on_end: Arc<dyn Fn(DialEnd) + Send + Sync>,
     pub send_queue_bytes: usize,
     pub admitted: mpsc::UnboundedSender<Admitted>,
 }
@@ -182,7 +187,7 @@ where
             return;
         }
     };
-    let cause = run(
+    let end = run(
         stream,
         &engine,
         gap_within,
@@ -192,7 +197,8 @@ where
         None,
     )
     .await;
-    settle(reserved, cause, &on_cause);
+    settle(reserved, end.cause());
+    on_cause(end.cause());
 }
 
 pub async fn dial_one<C>(dial: Dial, engine: Handle<C>)
@@ -205,16 +211,17 @@ where
         sockets,
         dial_within,
         gap_within,
-        on_cause,
+        on_end,
         send_queue_bytes,
         admitted,
     } = dial;
+    // An address this connector cannot dial is this node's own failure.
     let NetworkAddress::Tor { host, port } = &address else {
-        on_cause(CloseCause::new(CloseKind::LocalClose));
+        on_end(Observed::OwnFailure.end());
         return;
     };
-    if let Err(cause) = check_dial(ConnectorId::Tor, &address) {
-        on_cause(cause);
+    if check_dial(ConnectorId::Tor, &address).is_err() {
+        on_end(Observed::OwnFailure.end());
         return;
     }
     let host = host.clone();
@@ -223,23 +230,23 @@ where
     let reserved = match sockets.open_tor(&address) {
         Ok(open) => open,
         Err(OpenError::Refused(cause)) => {
-            on_cause(cause);
+            on_end(Observed::RefusedHere(cause).end());
             return;
         }
         Err(OpenError::Exhausted) => {
-            on_cause(CloseCause::new(CloseKind::LocalClose));
+            on_end(Observed::OwnFailure.end());
             return;
         }
     };
     let Ok(owner) = engine.register(OwnerClass::Transport) else {
-        settle(reserved, CloseCause::new(CloseKind::LocalClose), &on_cause);
+        settle_dial(reserved, Observed::OwnFailure.end(), &on_end);
         return;
     };
     let now = owner.clock().now();
     let deadline = Tick::new(now.get().saturating_add(dial_within.get()));
     if owner.arm(deadline).is_err() {
         ignore(owner.deregister());
-        settle(reserved, CloseCause::new(CloseKind::LocalClose), &on_cause);
+        settle_dial(reserved, Observed::OwnFailure.end(), &on_end);
         return;
     }
     tracing::debug!(
@@ -253,10 +260,10 @@ where
     let connect = async move {
         let dialed = Instant::now();
         let Ok(mut stream) = TcpStream::connect(proxy.at()).await else {
-            return Err(proxy_unavailable(
+            return Err(Ended::Observed(proxy_unavailable(
                 proxy.at(),
                 "the TCP connect to it failed",
-            ));
+            )));
         };
         let proxy_connect_ns = span_ns(dialed.elapsed());
         match socks_connect(
@@ -275,22 +282,24 @@ where
                         "tor socks reply is this node's request, not the onion"
                     );
                 }
-                Err(crate::replies::refused(u16::from(reply)))
+                Err(Ended::Stamped(reply_end(u16::from(reply))))
             }
             Err(SocksError::Io(_)) => {
                 drop(stream.shutdown().await);
-                Err(proxy_unavailable(
+                Err(Ended::Observed(proxy_unavailable(
                     proxy.at(),
                     "it closed the SOCKS exchange without a reply",
-                ))
+                )))
             }
             Err(error @ (SocksError::AuthRejected { .. } | SocksError::AuthFailed { .. })) => {
                 drop(stream.shutdown().await);
-                Err(proxy_refused_authentication(&proxy, &error))
+                Err(Ended::Observed(proxy_refused_authentication(
+                    &proxy, &error,
+                )))
             }
             Err(SocksError::Malformed) => {
                 drop(stream.shutdown().await);
-                Err(CloseCause::new(CloseKind::LocalClose))
+                Err(Ended::Observed(Observed::ProxyUnavailable))
             }
         }
     };
@@ -298,12 +307,12 @@ where
     let stream = tokio::select! {
         biased;
         result = wake.as_mut() => {
-            let kind = match result {
-                Ok(_) => CloseKind::TransportTimeout,
-                Err(_) => CloseKind::LocalClose,
+            let observed = match result {
+                Ok(_) => Observed::Deadline,
+                Err(_) => Observed::OwnFailure,
             };
             ignore(owner.deregister());
-            settle(reserved, CloseCause::new(kind), &on_cause);
+            settle_dial(reserved, observed.end(), &on_end);
             return;
         }
         result = &mut connect => result,
@@ -319,12 +328,16 @@ where
             );
             stream
         }
-        Err(cause) => {
-            settle(reserved, cause, &on_cause);
+        Err(ended) => {
+            let end = match ended {
+                Ended::Observed(observed) => observed.end(),
+                Ended::Stamped(end) => end,
+            };
+            settle_dial(reserved, end, &on_end);
             return;
         }
     };
-    let cause = run(
+    let end = run(
         stream,
         &engine,
         gap_within,
@@ -334,14 +347,25 @@ where
         Some((onion_host, port)),
     )
     .await;
-    settle(reserved, cause, &on_cause);
+    settle_dial(reserved, end, &on_end);
 }
 
-fn settle(open: OpenSocket, cause: CloseCause, on_cause: &Arc<dyn Fn(CloseCause) + Send + Sync>) {
+/// How the SOCKS exchange failed: an observation of this connector's, or a
+/// reply already stamped from the reply table.
+enum Ended {
+    Observed(Observed),
+    Stamped(DialEnd),
+}
+
+fn settle(open: OpenSocket, cause: CloseCause) {
     match open.close(cause) {
         CloseResult::Recorded(_) | CloseResult::AlreadyClosed => {}
     }
-    on_cause(cause);
+}
+
+fn settle_dial(open: OpenSocket, end: DialEnd, on_end: &Arc<dyn Fn(DialEnd) + Send + Sync>) {
+    settle(open, end.cause());
+    on_end(end);
 }
 
 async fn run<C>(
@@ -352,7 +376,7 @@ async fn run<C>(
     open: &OpenSocket,
     admitted: &mpsc::UnboundedSender<Admitted>,
     onion: Option<(String, u16)>,
-) -> CloseCause
+) -> DialEnd
 where
     C: Clock + Clone + Send + Sync + 'static,
 {
@@ -361,13 +385,13 @@ where
     let channel_at = Instant::now();
     let (mut read, mut write) = stream.into_split();
     let Ok(owner) = engine.register(OwnerClass::Transport) else {
-        return CloseCause::new(CloseKind::LocalClose);
+        return Observed::OwnFailure.end();
     };
     let now = owner.clock().now();
     let deadline = Tick::new(now.get().saturating_add(gap_within.get()));
     if owner.arm(deadline).is_err() {
         ignore(owner.deregister());
-        return CloseCause::new(CloseKind::LocalClose);
+        return Observed::OwnFailure.end();
     }
     tracing::debug!(
         conn,
@@ -396,10 +420,10 @@ where
         .is_err()
     {
         ignore(owner.deregister());
-        let cause = CloseCause::new(CloseKind::LocalClose);
-        inbound.seal(&hold, cause);
+        let end = Observed::OwnFailure.end();
+        inbound.seal(&hold, end);
         drop(hold);
-        return cause;
+        return end;
     }
 
     let overfull_write = Arc::clone(&overfull);
@@ -489,7 +513,7 @@ where
                     &inbound_close,
                     hold.take(),
                     WriteJoin::Pending(&mut writer),
-                    read_cause,
+                    stream_side_end(read_cause),
                 )
                 .await;
             }
@@ -503,7 +527,7 @@ where
                         &inbound_close,
                         hold.take(),
                         WriteJoin::Pending(&mut writer),
-                        CloseCause::new(CloseKind::LocalClose),
+                        DialEnd::local_close_after_channel(),
                     )
                     .await;
                 }
@@ -520,16 +544,15 @@ where
                 let Some(result) = result else {
                     continue;
                 };
-                let kind = match result {
-                    Ok(_) => CloseKind::LevinHandshakeTimeout,
-                    Err(_) => CloseKind::LocalClose,
+                let end = match result {
+                    Ok(_) => DialEnd::levin_handshake_timeout(),
+                    Err(_) => DialEnd::local_close_after_channel(),
                 };
-                let cause = CloseCause::new(kind);
                 return stop(
                     &inbound_close,
                     hold.take(),
                     WriteJoin::Pending(&mut writer),
-                    cause,
+                    end,
                 )
                 .await;
             }
@@ -537,11 +560,11 @@ where
                 if gap_open {
                     ignore(owner.deregister());
                 }
-                let cause = match write_end {
-                    Ok(cause) => cause,
-                    Err(_) => CloseCause::new(CloseKind::LocalClose),
+                let end = match write_end {
+                    Ok(cause) => stream_side_end(cause),
+                    Err(_) => DialEnd::local_close_after_channel(),
                 };
-                return stop(&inbound_close, hold.take(), WriteJoin::Finished, cause).await;
+                return stop(&inbound_close, hold.take(), WriteJoin::Finished, end).await;
             }
         }
     }
@@ -564,19 +587,19 @@ async fn stop(
     inbound: &InboundEnd,
     hold: Option<QueueHold>,
     writer: WriteJoin<'_>,
-    cause: CloseCause,
-) -> CloseCause {
+    end: DialEnd,
+) -> DialEnd {
     if let Some(hold) = hold.as_ref() {
-        inbound.seal(hold, cause);
+        inbound.seal(hold, end);
     } else {
-        inbound.close(cause);
+        inbound.close(end);
     }
     drop(hold);
     if let WriteJoin::Pending(writer) = writer {
         writer.abort();
         drop(writer.await);
     }
-    cause
+    end
 }
 
 fn ignore<E>(result: Result<(), E>) {
@@ -592,7 +615,13 @@ mod tests {
         let ends = StreamEnds::open(8);
         let mut writer = tokio::spawn(async { CloseCause::new(CloseKind::IoError) });
         let joined = (&mut writer).await.expect("writer joined");
-        let cause = stop(&ends.inbound, Some(ends.hold), WriteJoin::Finished, joined).await;
-        assert_eq!(cause.kind(), CloseKind::IoError);
+        let end = stop(
+            &ends.inbound,
+            Some(ends.hold),
+            WriteJoin::Finished,
+            stream_side_end(joined),
+        )
+        .await;
+        assert_eq!(end.cause().kind(), CloseKind::IoError);
     }
 }

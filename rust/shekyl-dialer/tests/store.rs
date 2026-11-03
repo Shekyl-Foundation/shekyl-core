@@ -31,9 +31,15 @@ fn peer(n: u8) -> NetworkAddress {
 }
 
 fn dialer() -> (Arc<Dialer>, ManualClock) {
+    dialer_over(Sockets::new())
+}
+
+/// A dialer whose hub holds `sockets`: the ban list's timing owner
+/// expires through that table.
+fn dialer_over(sockets: Sockets) -> (Arc<Dialer>, ManualClock) {
     let clock = ManualClock::new(Tick::new(1_000_000_000));
     let hub = Hub::new(
-        Sockets::new(),
+        sockets,
         InboundCeiling::Bounded(8),
         Arc::new(|_post| {}),
         Arc::new(clock.clone()),
@@ -204,7 +210,8 @@ fn the_store_is_due_one_interval_after_the_open_and_stop_writes_once_more() {
 fn a_banned_host_is_left_out_of_the_file_and_written_again_once_its_ban_expires() {
     let dir = tempfile::tempdir().expect("a directory");
     let path = dir.path().join("p2pstate.bin");
-    let (dialer, clock) = dialer();
+    let sockets = Sockets::new();
+    let (dialer, clock) = dialer_over(sockets.clone());
     let mut rng = SplitMix64::new(9);
     dialer
         .open_address_file(path.clone(), &mut rng)
@@ -231,6 +238,11 @@ fn a_banned_host_is_left_out_of_the_file_and_written_again_once_its_ban_expires(
     );
 
     clock.set(until);
+    assert_eq!(
+        sockets.expire_bans(until),
+        None,
+        "the ban list's timer ends it"
+    );
     assert!(dialer.store_addresses().expect("stored"));
     let mut written = AddressStore::new(path).load().expect("readable");
     written.sort();

@@ -78,6 +78,10 @@ pub enum Event<K> {
         /// Seats free.
         seats: u32,
     },
+    /// The ingest window's cache slots changed: a seed they did not hold
+    /// may be held now. A session whose headers could not be proven for
+    /// that reason ([`Proved::NotHeld`]) is drawn again.
+    Seeds,
     /// The header request's deadline passed.
     Deadline {
         /// The session the request was drawn for.
@@ -131,10 +135,11 @@ pub enum Proved {
     /// A [`CachePlan::Main`] seed is not in either cache slot. The executor
     /// looks a main seed up and never derives it (B2), so the header cannot
     /// be proven against this window. Not the peer's fault: the run is
-    /// dropped and the session kept. A later header request fetches it
-    /// again, against the window the tip has moved to by then. Dropping the
-    /// run, not only the proof, is what stops the same plan being issued
-    /// again on the same event.
+    /// dropped and the session kept, closed to header draws until the
+    /// slots change ([`Event::Seeds`]), when the next header request
+    /// fetches the headers again against the window as it stands then.
+    /// Dropping the run, not only the proof, is what stops the same plan
+    /// being issued again on the same event.
     NotHeld,
 }
 
@@ -245,6 +250,20 @@ pub enum Command<K> {
         /// What the response, or its proof, came to.
         cause: Spent,
     },
+    /// This session's headers could not be proven: the cache for `seed`
+    /// was in neither of the ingest window's slots ([`Proved::NotHeld`]).
+    /// The run is dropped and the session is not drawn for headers until
+    /// the slots change ([`Event::Seeds`]). A record: the owner logs it,
+    /// and nothing is sent. The owner also reads the window it holds: a
+    /// pair that holds `seed` by the time this command is handled was
+    /// published between the lookup and now, and its change event may
+    /// already have passed, so the owner raises [`Event::Seeds`] itself.
+    SeedNotHeld {
+        /// The session.
+        session: K,
+        /// The seed the slots did not hold.
+        seed: BlockHash,
+    },
 }
 
 /// Why a session's headers from `H*` yielded nothing
@@ -260,8 +279,6 @@ pub enum Spent {
     /// The headers could not be judged where they were placed: the view
     /// moved under them, or the run's own record did not line up.
     Stale,
-    /// The proof's cache was not held.
-    CacheAbsent,
     /// The run's headers were gone when the proof answered.
     Gone,
 }
@@ -414,6 +431,30 @@ pub enum Outcome {
     Noted,
 }
 
+/// Which form rule a decoded header page failed. A page is a chain of
+/// headers hanging off one hash the request located; each variant is a
+/// way it can fail to be that. The close names the rule so a page that
+/// comes back the same way on every retry says why (2026-11-03: the
+/// three-miner rehearsal closed 47 sessions at `HeadersForm` and the
+/// log could not say which rule).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum HeadersFormFault {
+    /// No headers, and the peer says more follow.
+    EmptyWithMore,
+    /// A header blob did not read as a proof-of-work blob.
+    BlobUnreadable,
+    /// The first header's parent is not a hash this session's open
+    /// request located.
+    ParentUnrequested,
+    /// A header's parent is not the header before it.
+    Linkage,
+    /// The first header's parent is located and `T` does not place it.
+    ParentUnplaced,
+    /// A header this node holds follows one it does not: a chain
+    /// rejoining what it left.
+    HeldAfterNew,
+}
+
 /// Why a session is closed. Each variant is a universal rule the input
 /// failed. A missed deadline is not one of them.
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -421,7 +462,7 @@ pub enum CloseCause {
     /// The header payload did not decode.
     HeadersUndecodable,
     /// The header payload decoded and failed its form.
-    HeadersForm,
+    HeadersForm(HeadersFormFault),
     /// A cheap check or a proof refused the header.
     HeaderRefused(shekyl_chain_rules::CenRow),
     /// The header descends from one already marked invalid.

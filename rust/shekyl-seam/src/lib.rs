@@ -31,7 +31,7 @@ pub use connection::{
     AdvertisedEndpoint, ChainLength, Claimed, Connection, HeightClaim, HeightMessage, Redial,
     RedialRefusal,
 };
-pub use dial::{AttemptTask, Channel, ConnectFuture, Dial};
+pub use dial::{AttemptTask, Channel, ConnectFuture, Dial, StampStreamEnd};
 pub use drive::{drive_inbound, drive_inbound_async};
 pub use endpoint::{admit, connector_from_index, direction_from_index, Endpoint, TOR_HOST_MAX};
 pub use hub::{Attached, Hub};
@@ -39,6 +39,7 @@ pub use loopback::Loopback;
 pub use post::{Post, SyncPayload};
 pub use registry::{Board, Row};
 pub use shekyl_transport_layer::{
-    deadline_after, BanLeft, CloseCause, CloseKind, ConnectorId, Direction, DownCause, Ipv4Subnet,
-    Link, Links, ListedBan, Outbound, Route, RoutePublish, SocketId, Sockets, Subscription,
+    deadline_after, BanEvent, BanFeed, BanLeft, CloseCause, CloseKind, ConnectorId, Direction,
+    DownCause, Ipv4Subnet, Link, Links, ListedBan, Outbound, Route, RoutePublish, SocketId,
+    Sockets, Subscription,
 };

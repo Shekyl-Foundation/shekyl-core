@@ -111,7 +111,7 @@ fn stop_closes_the_store_withdraws_the_board_and_a_second_stop_is_a_no_op() {
     let rules =
         ChainRules::new(Chain::Regtest, None, FakechainSchedule::PRODUCTION).expect("rules");
     let horizons = Horizons::under(&rules.in_force(BlockHeight::ZERO)).expect("horizons");
-    let store = ChainStore::with_release(
+    let (store, _cut) = ChainStore::with_release(
         dir.path().join("chain.db"),
         ApplyPolicy::Full,
         horizons,

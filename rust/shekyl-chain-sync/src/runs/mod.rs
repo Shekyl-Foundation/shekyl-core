@@ -22,7 +22,9 @@ use shekyl_types::{BlockCount, BlockHash, BlockHeight, PowHash, Timestamp};
 use shekyl_wire::PowBlob;
 
 use crate::branch::{BranchView, Pending};
-use crate::model::{CloseCause, Command, HashClass, Job, ProveItem, Proved, Spent, Sync};
+use crate::model::{
+    CloseCause, Command, HashClass, HeadersFormFault, Job, ProveItem, Proved, Spent, Sync,
+};
 use crate::peer::{cache_for, Checked, HeaderRequest, Run};
 
 mod bodies;
@@ -57,6 +59,13 @@ where
         if self.opening == (crate::model::Opening::Open { id: request }) {
             self.opening = crate::model::Opening::Resolved;
             return;
+        }
+        // A withdrawn request's deadline: its answer is no longer owed.
+        if let Some(peer) = self.peers.get_mut(&session) {
+            if let Some(at) = peer.withdrawn.iter().position(|id| *id == request) {
+                peer.withdrawn.remove(at);
+                return;
+            }
         }
         let header = self
             .header_request
@@ -110,6 +119,20 @@ where
         let Some(peer) = self.peers.get_mut(&session) else {
             return Ok(());
         };
+        // Answers arrive in request order. When the oldest request still
+        // owed an answer is one this node withdrew, this is that answer:
+        // asked for, so not the peer's fault, and stale, so not judged.
+        // A follow-up sent before it is answered first, and is not it.
+        if let Some(&oldest) = peer.withdrawn.first() {
+            let follow_up_first = peer
+                .follow_up
+                .as_ref()
+                .is_some_and(|request| request.id < oldest);
+            if !follow_up_first {
+                peer.withdrawn.remove(0);
+                return Ok(());
+            }
+        }
         // Responded. For the opening the request has resolved once none of
         // this response's headers waits for its proof: a refusal closes the
         // session, and a verified heavier header makes the node `Behind`.
@@ -125,7 +148,11 @@ where
         }
         if response.blobs.is_empty() {
             if response.more {
-                self.close(session, CloseCause::HeadersForm, out);
+                self.close(
+                    session,
+                    CloseCause::HeadersForm(HeadersFormFault::EmptyWithMore),
+                    out,
+                );
             } else if self.claim_exceeds(session, self.star.work) {
                 // Nothing above the locator, and no more: the peer's tip
                 // is a locator hash, none of which outweighs `H*`, so a
@@ -141,7 +168,11 @@ where
         let mut blobs = Vec::new();
         for bytes in &response.blobs {
             let Ok(pow) = PowBlob::read(bytes) else {
-                self.close(session, CloseCause::HeadersForm, out);
+                self.close(
+                    session,
+                    CloseCause::HeadersForm(HeadersFormFault::BlobUnreadable),
+                    out,
+                );
                 return Ok(());
             };
             blobs.push((pow.identity(), pow));
@@ -162,7 +193,11 @@ where
             .map(|req| (req.points.clone(), req.sent));
         let from_continuation = continuation.is_some();
         let Some((points, sent)) = continuation.or(frontier) else {
-            self.close(session, CloseCause::HeadersForm, out);
+            self.close(
+                session,
+                CloseCause::HeadersForm(HeadersFormFault::ParentUnrequested),
+                out,
+            );
             return Ok(());
         };
         if let Some(state) = self.peers.get_mut(&session) {
@@ -186,7 +221,11 @@ where
         let mut previous = parent;
         for (index, (hash, pow)) in blobs.iter().enumerate() {
             if index > 0 && pow.header.previous != previous {
-                self.close(session, CloseCause::HeadersForm, out);
+                self.close(
+                    session,
+                    CloseCause::HeadersForm(HeadersFormFault::Linkage),
+                    out,
+                );
                 return Ok(());
             }
             previous = *hash;
@@ -197,7 +236,11 @@ where
             .map(|(height, _)| *height)
             .or_else(|| self.tree.placement(parent).map(|placed| placed.height));
         let Some(parent_height) = parent_height else {
-            self.close(session, CloseCause::HeadersForm, out);
+            self.close(
+                session,
+                CloseCause::HeadersForm(HeadersFormFault::ParentUnplaced),
+                out,
+            );
             return Ok(());
         };
         if let Some(state) = self.peers.get_mut(&session) {
@@ -234,7 +277,11 @@ where
                     || matches!(main.header_at(height)?, AtHeight::Recorded(record) if record.hash == hash));
             if in_tree || on_main {
                 if !fresh.is_empty() {
-                    self.close(session, CloseCause::HeadersForm, out);
+                    self.close(
+                        session,
+                        CloseCause::HeadersForm(HeadersFormFault::HeldAfterNew),
+                        out,
+                    );
                     return Ok(());
                 }
                 // The session's frontier is the highest header it served
@@ -544,7 +591,7 @@ where
                     return Ok(());
                 }
                 Proved::NotHeld => {
-                    self.spend(session, Spent::CacheAbsent, out);
+                    self.seed_not_held(session, out);
                     return Ok(());
                 }
                 Proved::Formed(formed) => {
@@ -825,6 +872,35 @@ where
             state.gates.header_spent = true;
         }
         out.push(Command::HeadersSpent { session, cause });
+    }
+
+    /// The run's next header could not be proven because the slots did
+    /// not hold its seed: the run is dropped and the session is closed to
+    /// header draws until the slots change (`Event::Seeds`). Not a spend:
+    /// the same request would be answered once the window holds the seed,
+    /// with the claim and `H*` unchanged.
+    fn seed_not_held(&mut self, session: K, out: &mut Vec<Command<K>>) {
+        let Some(state) = self.peers.get_mut(&session) else {
+            return;
+        };
+        let Some(run) = state.run.take() else {
+            return;
+        };
+        state.gates.seed_not_held = true;
+        let seed = run
+            .chain
+            .checked
+            .get(run.chain.proven)
+            .map_or(BlockHash::NULL, |checked| checked.seed);
+        out.push(Command::SeedNotHeld { session, seed });
+    }
+
+    /// The ingest window's slots changed: every session closed for a seed
+    /// they did not hold is open to header draws again.
+    pub(crate) fn seeds_changed(&mut self) {
+        for peer in self.peers.values_mut() {
+            peer.gates.seed_not_held = false;
+        }
     }
 
     fn session_for_job(&self, job: u64) -> Option<K> {

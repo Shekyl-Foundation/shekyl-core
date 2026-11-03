@@ -226,19 +226,43 @@ ingest deciding forks.**
   - A header tree `T` of verified headers.
   - The best chain `H*`: the most cumulative work among the
     **reachable** chains in `T`, meaning those whose fork point with `L`
-    lies within `D_max`. A header main connected leaves `T`; when main
-    pops it, its children stay, anchored at a hash no longer on main, and
-    are unreachable until it is served again — at which point it is
-    their parent in `T`, not a tip over them (fixed 2026-11-02, #1237:
-    a re-served parent was made a tip, its children's branch stayed
-    anchored off main, and `H*` fell back to `L` while every answer
-    from `L` was already held).
+    lies within `D_max`. `T` hangs off main: a header main connected
+    leaves `T`, and when main pops a block (a chain switch demotes it),
+    every branch anchored at it leaves `T` with it
+    (`HeaderTree::drop_orphans`, one `header_at` per branch on each
+    tip). The peers on that chain serve those headers again, above a
+    parent the node then holds. **Amended 2026-11-03 (#1237, the
+    three-miner rehearsal):** before, the children stayed as a branch
+    anchored off main and a re-served parent adopted them (the
+    2026-11-02 form). That held only while the page stopped at the
+    parent. A page that walked the demoted chain — new to the node —
+    and reached the orphan met a held header after new ones
+    (`HeadersForm(HeldAfterNew)`), so a node that switched once closed
+    every later session from that peer and mined alone
+    (`switch_orphan_tests`). The close causes name the form rule they
+    failed (`HeadersFormFault`), which is how the 47 closes were read.
 - **Per session.**
   - the peer's claim (height and cumulative work, a hint only);
   - its verified frontier in `T`;
   - its **run**: headers received but not yet PoW-verified, held within
     a per-session byte budget;
-  - at most one outstanding request with its deadline.
+  - at most one outstanding request with its deadline;
+  - the ids of frontier requests to it that a new `H*` **withdrew**
+    before they were answered (`Peer::withdrawn`). **Amended 2026-11-03
+    (#1237, the three-miner rehearsal):** a new `H*` is a new locator,
+    so the frontier request in flight is withdrawn; its answer is still
+    owed, arrives in request order, and is this node's doing. Before,
+    the request was forgotten and its answer, matching no request,
+    closed the session at `HeadersForm(ParentUnrequested)` — a fault
+    charged to a peer that did what it was asked; or, when the
+    replacement request to the same session had the same fork point,
+    the stale answer was taken as the replacement's and the real one
+    then closed it. A miner's own block connecting, or a proof landing,
+    moves `H*`, so a request in flight across either cost the session
+    (`abandoned_request_tests`). Now the answer to a withdrawn request
+    is discarded unjudged and its deadline, if it passes first, drops
+    the id. A follow-up sent before the withdrawn request is answered
+    before it and is judged as before.
 
 **Steps.**
 1. **Hint.**
@@ -311,12 +335,26 @@ ingest deciding forks.**
        owner logs): it is not drawn to extend `H*` again until its claim
        or `H*` changes, because the same locator would get the same
        answer. The same gate closes on a response that names no header
-       `T` lacks and says the chain ends there, on a run whose headers
-       could not be judged where they were placed, and on a proof whose
-       cache was not held; a response that names only headers `T` holds
-       *with more to come* continues from the last header served instead
-       of from `H*`. Before the gate, a node whose `H*` was reachable by
-       no heavier tip re-sent the same request every millisecond. **The
+       `T` lacks and says the chain ends there, and on a run whose
+       headers could not be judged where they were placed; a response
+       that names only headers `T` holds *with more to come* continues
+       from the last header served instead of from `H*`. Before the
+       gate, a node whose `H*` was reachable by no heavier tip re-sent
+       the same request every millisecond. **A proof whose seed the
+       cache slots did not hold is not a spend (amended 2026-11-02,
+       #1237's `a_main_seed_not_held_asks_again_when_the_window_changes`;
+       defect 8):** the gate as first written closed on it too, and a
+       joiner whose one source was idle then stood at height 1 for ever,
+       because neither the source's claim nor `H*` would move while the
+       ingest attendant was still deriving the genesis seed's cache (a
+       startup race a 4-vCPU host loses and a 16-thread one does not).
+       The slots are the window's state, not the peer's answer: the run
+       is dropped (`Command::SeedNotHeld`, a record the owner logs) and
+       the session is closed to header draws only until the window's
+       published pair changes (`Event::Seeds`, raised by the owner off
+       the door's seed watch, and again by the owner itself when the
+       pair already holds the seed by the time the record is handled),
+       its claim changes, or `H*` does. **The
        liar is judged first (amended 2026-11-02, #1237's
        `the_liar_closes_at_claim_unmet`):** a response that names only
        held headers, or none, and says the chain ends there is read

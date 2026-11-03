@@ -11,6 +11,9 @@
 //! clock is not yet due, so after moving the clock the test nudges the
 //! engine with a throwaway registration.
 
+#[path = "support/tables.rs"]
+mod tables;
+
 use std::collections::VecDeque;
 use std::net::Ipv4Addr;
 use std::sync::{Arc, Mutex};
@@ -69,7 +72,7 @@ fn the_owner_dials_only_after_the_engine_wakes_it_and_once_per_wake() {
         Arc::new(move |post| queue.lock().expect("posts").push_back(post)),
         Arc::new(clock.clone()),
     );
-    hub.install_loopback(SEND_CAP);
+    hub.install_loopback(SEND_CAP, tables::tables);
     let dialer = Arc::new(Dialer::new(
         hub.clone(),
         RefusedSet::NON_GLOBAL,

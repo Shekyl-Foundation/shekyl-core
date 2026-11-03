@@ -18,6 +18,8 @@
 #![deny(unsafe_code)]
 
 #[cfg(test)]
+mod abandoned_request_tests;
+#[cfg(test)]
 mod announce_connected_tests;
 #[cfg(test)]
 mod announce_tests;
@@ -47,6 +49,8 @@ mod select_tests;
 mod spent_tests;
 #[cfg(test)]
 mod stall_tests;
+#[cfg(test)]
+mod switch_orphan_tests;
 
 mod arrivals;
 mod branch;
@@ -63,8 +67,9 @@ mod view;
 pub use claim::{PayloadRefused, PeerClaim};
 pub use locator::locator;
 pub use model::{
-    BoundArrival, CachePlan, ClaimError, CloseCause, Command, Event, HashClass, Job, OfferedBody,
-    Outcome, ProveItem, Proved, Requesting, Spent, Sync, BODY_REQUESTS_IN_FLIGHT, SYNC_RATE_FLOOR,
+    BoundArrival, CachePlan, ClaimError, CloseCause, Command, Event, HashClass, HeadersFormFault,
+    Job, OfferedBody, Outcome, ProveItem, Proved, Requesting, Spent, Sync, BODY_REQUESTS_IN_FLIGHT,
+    SYNC_RATE_FLOOR,
 };
 pub use shekyl_chain_rules::HeaderView;
 pub use state::{Declaration, SyncState};

@@ -144,8 +144,8 @@ session held past 24 hours expired its own address.* A confirm-and-close
 address already white keeps its clock. Contact
 that arrived inbound does not. White is known-working (Rick, 2026-10-26):
 a white address whose test fails, its retries included (on clearnet one
-redial), moves to gray and cools on the ladder, except in the dialer's
-quiet stretch; the clock demotes one that is not tested. *Records-was:
+redial), moves to gray and cools on the ladder, unless the dialer's judge
+excuses the failure; the clock demotes one that is not tested. *Records-was:
 one failed redial did not demote; only the clock did.*
 
 *Wargame (white is known-working).* A restart already reloads white as
@@ -155,8 +155,8 @@ on-path party who drops this node's connections to one honest peer can
 push it out of white. That is a permanent, accepted residual, since
 clearnet can encrypt and recognize but never authenticate a destination;
 the address stays in gray, at the cost of the cooldown ladder. A block
-does not empty white: in the dialer's quiet stretch a failed white test
-does not demote (`P2P_3_SLICE_3_DIALER_BRIEF.md`, the gray lifecycle).
+does not empty white: a failed white test the dialer's judge excuses does
+not demote (`DIALER_OUTAGE_EVIDENCE.md` §4.2).
 
 **Address validity — RULED 2026-10-11 (Rick; formerly the dialer
 brief's D2a; scope settled the same day; R4 2026-10-12).** An address
@@ -448,7 +448,7 @@ The peerlist offers uniform draws and no ordered walk:
 | `SessionAccepted` | Outstanding gray draw: move to white and set `last_observed`. The session stays. Already white, on a session this node opened: move the clock. Anything else: white unchanged. The clock moves again when the kept session closes (`session_ended`, 2026-10-24), and expiry skips the address while the session is live |
 | `Confirmed` | Outstanding gray draw: the same white write. No session remains. Anything else: white unchanged |
 | *`HarvestDone` — DELETED (2026-10-11; no crate symbol)* | Absorbed into `Confirmed` (dialer brief arm 2): a confirm-and-close dial learns the peer's sample as a harvest did and writes white. The variant, its `address()` arm, its `apply` arm and its test are gone. *Records-was, same day: the variant remained and wrote no white, deferred to PR-3 as "more than one line"; before that: one of the six Foundation hosts, the same white write, from any seat* |
-| `DialFailed`, `PeerlistRefused` | Outstanding gray draw: the cause's marks decide (2026-10-24). One that proves misbehaviour drops the address. Any other keeps it gray and cools it: 2 min, doubling per consecutive failed test, capped at 1 h, each with U(0, 50%) jitter; a cooling address is not drawable, and `Confirmed` or `SessionAccepted` clears the count. A white address is known-working (Rick, 2026-10-26): proof drops it as for gray; any other failure moves it to gray, cooling at the first rung, except in the dialer's quiet stretch, where it stays white. *Records-was: dropped whatever the cause (Rick, 2026-10-16; #1092); to 2026-10-26, a white address stayed white* |
+| `DialFailed` | Outstanding gray draw: the dialer's judge decides (#1235; `DIALER_OUTAGE_EVIDENCE.md`). Proof of misbehaviour drops the address. A counted failure keeps it gray and cools it: 2 min, doubling per consecutive failed test, capped at 1 h, each with U(0, 50%) jitter; a cooling address is not drawable, and `Confirmed` or `SessionAccepted` clears the count. A white address is known-working (Rick, 2026-10-26): proof drops it as for gray; a counted failure moves it to gray, cooling at the first rung; an excused one leaves it white. An excused failure holds the rung: counted failures cool at the current rung, none waits the outage retry. A refused list is this variant. *`PeerlistRefused` — DELETED (2026-11-02, #1235; no crate symbol)*, absorbed into `DialFailed`. *Records-was: dropped whatever the cause (Rick, 2026-10-16; #1092); to 2026-10-26, a white address stayed white* |
 | `PayloadRefused` | No promotion, no demotion. An outstanding draw returns to drawable gray |
 
 *Records-was: `handshake_confirmed` was the only writer, and `draw_failed`
@@ -618,23 +618,37 @@ uniform sample stands.** It lowers one observer's success and raises
 another's, and the one it raises is the cheaper to be: polling and
 remembering what was *not* said.
 
-### 5b. D4 — a ban demotes, it does not remove (RULED 2026-10-09)
+### 5b. D4 — a ban demotes, it does not remove (RULED 2026-10-09; bans arrive as events, RULED 2026-10-31)
 
-**Demotion.** A white entry covered by an active ban (host, or IPv4
-subnet, per the transport layer's ban list) is moved to gray. The
-demotion happens when white is next counted, drawn from, or sampled;
-the transport layer never writes the peer list. White therefore holds
-only unbanned, confirmed peers, so the floor and the refill line count
-white as it stands.
+**Bans arrive as events.** The transport layer's ban list owns every
+ban and its expiry; a timed ban ends only when the list's timer reaches
+its deadline, or when it is lifted. It posts each ban and each lift, in
+order, to the dialer's queue, starting with every entry in force when
+the dialer subscribed. The dialer applies them to the lists under its
+own lock (`Peerlist::ban`, `Peerlist::lift`); the lists hold the
+entries in force.
 
-**Gray handling.** A demoted entry is an ordinary gray entry, subject
-to normal random eviction, with no protection; it enters gray through
-the capped insert, so a mass demotion — a subnet ban, an expiry sweep —
-leaves gray at or below its cap (F3). While the ban lasts,
-the dialer's pre-dial ban check skips it, and gray admission refuses
-it if it is gossiped back in. After the ban expires, it can be drawn,
-dialled, and earn white again through `SessionAccepted` or
-`Confirmed` — the normal door, §2.
+**Demotion.** When a ban arrives, every white entry its entry covers
+(host, or IPv4 subnet) moves straight to barred gray, and every gray
+seat it covers is barred. Applying a ban draws nothing and evicts
+nothing (Rick, 2026-11-01). White therefore holds only unbanned,
+confirmed peers, so the floor and the refill line count white as it
+stands.
+
+**Gray handling.** A barred seat is never drawn and is in no count or
+candidate census, but it holds a slot under the gray cap, and it is the
+first evicted when gray is over its cap (Rick, 2026-11-01): it cannot be
+dialled while its ban holds, and no peer can make a ban, so the order
+cannot be steered. After a ban, gray may sit over its cap by the seats it
+moved from white, at most the white cap, until the next gray insert
+evicts it back, as it already does for outstanding draws. An expiry demotion enters gray through the
+capped insert, so a mass expiry leaves gray at or below its cap (F3).
+Gray admission refuses an address an entry covers if it is gossiped
+back in, and the address file leaves it out. When the ban is lifted or
+expires, its lift frees every barred seat no remaining entry covers,
+as drawable gray on its rung; it can then be drawn, dialled, and earn
+white again through `SessionAccepted` or `Confirmed` — the normal
+door, §2.
 
 **Disclosure is unchanged:** gray is never disclosed, and the cached
 sample is not rebuilt on a ban.
@@ -642,10 +656,10 @@ sample is not rebuilt on a ban.
 **Scope:** the clearnet partition only. Tor has no bannable address
 (`P2P_TRANSPORT_LAYER.md` D7).
 
-**Tests (PR-2):** a banned white entry is demoted on the next white
-read; the floor count drops with it; it is evictable from gray; it is
-skipped by the pre-dial check during the ban; after expiry it re-earns
-white only through the normal door.
+**Tests:** a banned white entry is demoted when its ban arrives; the
+floor count drops with it; it is evictable from gray; it is never drawn
+while the ban holds; after the lift it re-earns white only through the
+normal door.
 
 ### 5c. D-S1 — gray intake per session (RULED 2026-10-09)
 
@@ -860,10 +874,11 @@ They check different things. Neither stands for the other.
    `SessionAccepted` on an address already white moves the clock and
    `Confirmed` on that address does not; inbound contact does not; reload is gray only and
    does not draw former white first; `disclose` is a sample of white and
-   carries no clock; `DialFailed` and `PeerlistRefused` drop an outstanding
-   gray draw; `PayloadRefused` returns that
+   carries no clock; `DialFailed` is the judge's verdict on an outstanding
+   gray draw (a refused list included; *`PeerlistRefused` — DELETED
+   2026-11-02, #1235*); `PayloadRefused` returns that
    draw to drawable gray; a failed white test moves it to cooling gray,
-   and in the quiet stretch leaves it white.
+   and an excused one leaves it white.
    The harness fails if it has no sequence (rule 47).
 4. **The C++ list is gone, and so is the old spelling** (met 2026-10-13, PR-3: the RPC wire history's `_v1`/`_v2` vectors that carried the stripe seed went with it, Rick's ruling of the same day). `rg -n 'm_peers_white|peerlist_manager' src/p2p`
    returns nothing. `rg -n pruning_seed src rust tests` returns nothing,
@@ -1055,7 +1070,7 @@ line):
 | Only clearnet addresses can be banned | `is_banned` takes an `IpAddr`; `NetworkAddress::Tor::ip()` is `None` | yes (D7). The Tor partition never demotes on a ban |
 | The clock is `Tick`, nanoseconds, with a hand-moved test clock | `shekyl-timing-engine/src/lib.rs:26` `Tick(u64)`; `ManualClock` `:46` | yes. `last_observed`, the window and the intake span are `Tick`s; `EXPIRATION_PERIOD` is 24 h in nanoseconds |
 | A uniform draw primitive exists, and the peer list depends on it directly | `shekyl-draw-rng/src/lib.rs` `RelayRng`, `bounded_uniform`, `SplitMix64` (the `splitmix` feature; moved 2026-10-12; *records-was* the `rng` module of `shekyl-relay-privacy`). `shekyl-peerlist/Cargo.toml` depends on `shekyl-draw-rng`. `shekyl-transport-layer` reads `DerivationMs` and the transit constants from `shekyl-relay-privacy`; that edge is not the draw | yes. The list draws through `RelayRng`. There is one draw abstraction |
-| The `DialOutcome` variants are the live rows of §5's `apply` table | `SessionAccepted`, `Confirmed`, `DialFailed`, `PeerlistRefused`, `PayloadRefused`. *`HarvestDone` — DELETED (2026-10-11; no crate symbol)*, absorbed into `Confirmed` | the dialer crate does not exist yet (PR-3); this crate defines the enum and PR-3 consumes it. The `Harvest` aim is not coded |
+| The `DialOutcome` variants are the live rows of §5's `apply` table | `SessionAccepted`, `Confirmed`, `DialFailed`, `PayloadRefused`. *`HarvestDone` — DELETED (2026-10-11; no crate symbol)*, absorbed into `Confirmed`. *`PeerlistRefused` — DELETED (2026-11-02, #1235; no crate symbol)*, absorbed into `DialFailed` | the dialer crate does not exist yet (PR-3); this crate defines the enum and PR-3 consumes it. The `Harvest` aim is not coded |
 | The reference draft | local branch `feat/p2p3-slice1-peerlist`, one commit `6faa836dc1` (2026-09-23, base `dbfc07623d`): increment 1 as first drafted, with `Hypothesis`/`Observed` types, a `Reached` token and `complete_dial` | predates the 2026-09-25 partition ruling, the 2026-10-08 revision and D3/D4/D-S1. Read as a reference for the constructor-reachability shape (§11.1); not cherry-picked |
 
 ### 16.2 The crate (B4) — `rust/shekyl-peerlist`
