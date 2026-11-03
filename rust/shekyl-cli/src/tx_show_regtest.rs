@@ -157,6 +157,64 @@ fn a_failed_wallet_read_does_not_ask_the_daemon() {
     );
 }
 
+/// Every moved §13 word answers a difficulty-1 regtest daemon.
+///
+/// The CLI cannot name fakechain, so this builds the renderer with
+/// `DaemonNetwork::Fakechain` the way `tx show` does. Dropping the
+/// handshake (`Source`'s identity check) lets a mainnet renderer print
+/// this daemon's height.
+#[test]
+#[ignore = "needs SHEKYLD_BIN built from this tree; spawns a regtest daemon"]
+fn section_13_words_answer_a_regtest_daemon() {
+    let daemon = Regtest::spawn();
+    let runtime = tokio::runtime::Builder::new_current_thread()
+        .enable_all()
+        .build()
+        .expect("runtime");
+    runtime.block_on(async {
+        let rpc = HttpRpc::with_custom_timeout(daemon.url.clone(), Duration::from_secs(30))
+            .await
+            .expect("rpc client");
+        await_ready(&rpc, &daemon.logs).await;
+    });
+    drop(runtime);
+    let client = daemon.client();
+    let source = crate::console::Source::new(
+        client.transport().expect("the session's client"),
+        DaemonNetwork::Fakechain.to_cryptonote(),
+    );
+    let height =
+        crate::console::execute(&source, &crate::resolve::View::ChainHeight).expect("chain height");
+    assert!(!height.is_empty(), "{height}");
+    let block = crate::console::execute(
+        &source,
+        &crate::resolve::View::BlockShow(crate::resolve::BlockRef::Height(0)),
+    )
+    .expect("block show");
+    assert!(block.contains("height:"), "{block}");
+    let spent = crate::console::execute(
+        &source,
+        &crate::resolve::View::ChainSpent {
+            hash: "00".repeat(32),
+        },
+    )
+    .expect("chain spent");
+    assert!(spent.contains("unspent"), "{spent}");
+    for view in [
+        crate::resolve::View::DaemonStatus,
+        crate::resolve::View::ChainDifficulty,
+        crate::resolve::View::TxpoolStats,
+        crate::resolve::View::TxpoolList { short: true },
+        crate::resolve::View::BanList,
+        crate::resolve::View::PeerStats,
+        crate::resolve::View::SyncStatus,
+    ] {
+        let text = crate::console::execute(&source, &view)
+            .unwrap_or_else(|error| panic!("{}: {error}", view.label()));
+        assert!(!text.is_empty(), "{}: {text}", view.label());
+    }
+}
+
 fn transactions_method() -> &'static str {
     shekyl_rpc_types::methods::rest_path("/get_transactions")
         .expect("the get_transactions row")
