@@ -820,11 +820,13 @@ fn open_chain(
         // genesis): an older layout is removed so an alpha starts on a fresh
         // store. The permanent policy ships each layout bump with its
         // migration and never deletes (`DAEMON_REDB_STORE.md` §11.1, S3).
-        Err(StoreError::Cannot(StoreCannot::SchemaVersionMismatch { found, expected })) => {
+        Err(StoreError::Cannot(StoreCannot::SchemaVersionMismatch { found, expected }))
+            if found < expected =>
+        {
             tracing::warn!(
                 %found,
                 %expected,
-                "the chain file is an older layout than this release's; removing it and opening a fresh store"
+                "the chain file's layout is older than this release's layout; removing it and opening a fresh store"
             );
             std::fs::remove_file(path).map_err(OpenError::Wipe)?;
             let (store, cut) =

@@ -617,7 +617,7 @@ fn a_file_the_engine_never_finished_initializing_is_created_by_the_next_open() {
             &path,
             ApplyPolicy::Full,
             production_horizons(),
-            &GenesisPin::NONE,
+            ReleaseAdmission::Unanchored,
         )
         .unwrap_or_else(|e| panic!("{label}: created: {e:?}"));
         let Some(CutShort::Uninitialized { to }) = cut else {
@@ -637,7 +637,7 @@ fn a_file_the_engine_never_finished_initializing_is_created_by_the_next_open() {
             &path,
             ApplyPolicy::Full,
             production_horizons(),
-            &GenesisPin::NONE,
+            ReleaseAdmission::Unanchored,
         )
         .unwrap_or_else(|e| panic!("{label}: reopens: {e:?}"));
         assert!(cut.is_none(), "{label}: an ordinary reopen");
@@ -666,7 +666,7 @@ fn two_openers_of_one_unfinished_file_finish_it_once() {
                 &path,
                 ApplyPolicy::Full,
                 production_horizons(),
-                &GenesisPin::NONE,
+                ReleaseAdmission::Unanchored,
             )
         })
     };
@@ -700,7 +700,7 @@ fn two_openers_of_one_unfinished_file_finish_it_once() {
         &path,
         ApplyPolicy::Full,
         production_horizons(),
-        &GenesisPin::NONE,
+        ReleaseAdmission::Unanchored,
     )
     .expect("reopen");
     assert!(cut.is_none(), "the file is a store now");
