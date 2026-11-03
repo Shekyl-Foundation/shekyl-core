@@ -300,10 +300,10 @@ fn print_transaction(src: &Source, args: &[String]) -> Result<String, String> {
         return Err("Invalid syntax: At least one parameter expected. For more                     details, use the help command."
             .to_owned());
     };
-    let mut hex_out = false;
+    let mut body_out = false;
     for flag in &args[1..] {
         match flag.as_str() {
-            "--body" => hex_out = true,
+            "--body" => body_out = true,
             other => {
                 return Err(format!(
                     "Invalid syntax: Unexpected parameter: {other}. For more                      details, use the help command."
@@ -412,22 +412,27 @@ fn print_transaction(src: &Source, args: &[String]) -> Result<String, String> {
     // old "Error parsing transaction" soft lines have no input left.
     out.push(format!("Size: {}", blob.len()));
     out.push(format!("Weight: {}", parsed.weight()));
-    if hex_out {
-        out.push(tx.as_hex.clone());
+    if body_out {
+        // The wire carries hex until the rename. The shell's `--body` is
+        // kind `bytes`: base64, RFC 4648 §4, padded (RW-Q4).
+        out.push(encode_body(&blob));
     }
     Ok(out.join("\n"))
+}
+
+/// The serialized body, as the shell prints it: base64, RFC 4648 §4, padded.
+pub(crate) fn encode_body(bytes: &[u8]) -> String {
+    use base64::Engine as _;
+    base64::engine::general_purpose::STANDARD.encode(bytes)
 }
 
 /// What the daemon said about one transaction.
 pub(crate) enum TxRender {
     /// The daemon answered, and the id is not among the transactions it holds.
     Unknown,
-    /// The daemon's rendering. `body_hex` is the serialized bytes when they
-    /// were fetched.
-    Shown {
-        text: String,
-        body_hex: Option<String>,
-    },
+    /// The daemon's rendering. `body` is the serialized bytes, base64, when
+    /// they were fetched.
+    Shown { text: String, body: Option<String> },
 }
 
 /// The daemon's view of `id`.
@@ -443,32 +448,33 @@ pub(crate) fn show_transaction(src: &Source, id: &str, body: bool) -> Result<TxR
     }
     match print_transaction(src, &args) {
         Ok(text) => {
-            let body_hex = if body {
+            let body = if body {
                 Some(body_line(&text).ok_or_else(|| {
                     format!("tx show: the daemon's reply for {id} carried no serialized bytes")
                 })?)
             } else {
                 None
             };
-            Ok(TxRender::Shown { text, body_hex })
+            Ok(TxRender::Shown { text, body })
         }
         Err(reason) if reason.starts_with("Transaction wasn't found") => Ok(TxRender::Unknown),
         Err(reason) if reason.starts_with("Transaction ") => Ok(TxRender::Shown {
             text: reason,
-            body_hex: None,
+            body: None,
         }),
         Err(reason) => Err(reason),
     }
 }
 
-/// The last line, when it is the serialized body: hex, and longer than an id.
+/// The last line, when it is the serialized body: base64, padded.
 fn body_line(text: &str) -> Option<String> {
+    use base64::Engine as _;
     let line = text.lines().last()?.trim();
-    if line.len() > 64 && line.chars().all(|c| c.is_ascii_hexdigit()) {
-        Some(line.to_owned())
-    } else {
-        None
-    }
+    base64::engine::general_purpose::STANDARD
+        .decode(line)
+        .ok()
+        .filter(|bytes| !bytes.is_empty())
+        .map(|_| line.to_owned())
 }
 
 /// `is_key_image_spent <key_image>` — RK-4c. Reads that method only.

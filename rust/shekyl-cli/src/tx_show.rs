@@ -67,14 +67,10 @@ pub(crate) fn command(
     } else {
         None
     };
-    let network = session_network(network).map_err(refusal)?;
-    let endpoint = daemon.map(|daemon| DaemonEndpoint {
-        url: daemon.url(),
-        proxy: daemon.proxy().map(str::to_owned),
-        network,
-        loopback: daemon.is_loopback(),
-        down_hint: daemon.down_hint(),
-    });
+    let endpoint = daemon
+        .map(|daemon| endpoint_for(daemon, network))
+        .transpose()
+        .map_err(refusal)?;
     report(&TxShow {
         id: &id,
         wallet_records: wallet_records.as_deref(),
@@ -161,7 +157,6 @@ fn format_record(row: &Value) -> String {
     };
     let mut lines = vec![
         format!("Transaction {}", text("tx_hash")),
-        format!("  Id:         {}", text("id")),
         format!("  Direction:  {}", text("direction")),
         format!("  State:      {}", text("state")),
         format!("  Amount:     {} SKL", format_amount_str(&text("amount"))),
@@ -194,13 +189,9 @@ fn held_with_body(records: &str, id: &str, render: &TxRender, loopback: bool) ->
     let section = match render {
         TxRender::Unknown => format!("The daemon has no serialized bytes for {id}."),
         TxRender::Shown {
-            body_hex: Some(hex),
-            ..
-        } => hex.clone(),
-        TxRender::Shown {
-            text,
-            body_hex: None,
-        } => text.clone(),
+            body: Some(body), ..
+        } => body.clone(),
+        TxRender::Shown { text, body: None } => text.clone(),
     };
     let mut out = format!("{records}\n\n{section}");
     if !loopback {
@@ -228,6 +219,21 @@ fn neither(wallet_open: bool, id: &str) -> String {
 
 fn not_configured(wallet_open: bool, id: &str) -> String {
     format!("{} {NOT_CONFIGURED}", wallet_clause(wallet_open, id))
+}
+
+/// The daemon endpoint `command` builds. `loopback` is
+/// [`DaemonClient::is_loopback`], not a flag the caller sets.
+pub(crate) fn endpoint_for<'a>(
+    daemon: &'a DaemonClient,
+    network: &str,
+) -> Result<DaemonEndpoint<'a>, String> {
+    Ok(DaemonEndpoint {
+        url: daemon.url(),
+        proxy: daemon.proxy().map(str::to_owned),
+        network: session_network(network)?,
+        loopback: daemon.is_loopback(),
+        down_hint: daemon.down_hint(),
+    })
 }
 
 fn fetch(daemon: &DaemonEndpoint<'_>, id: &str, body: bool) -> Result<TxRender, String> {
@@ -327,7 +333,7 @@ mod tests {
             &id(),
             &TxRender::Shown {
                 text: "view".to_owned(),
-                body_hex: Some("abcd".repeat(20)),
+                body: Some("abcd".repeat(20)),
             },
             false,
         );
@@ -344,7 +350,7 @@ mod tests {
             &id(),
             &TxRender::Shown {
                 text: "view".to_owned(),
-                body_hex: Some("ee".repeat(40)),
+                body: Some("ee".repeat(40)),
             },
             true,
         );
@@ -385,10 +391,67 @@ mod tests {
             }
         ]);
         let text = format_records(rows.as_array().expect("rows"), &id);
-        assert!(text.contains(&format!("{id}:0")), "{text}");
-        assert!(text.contains(&format!("{id}:1")), "{text}");
+        assert!(text.contains(&format!("Transaction {id}")), "{text}");
         assert!(text.contains("rent"), "{text}");
+        assert!(!text.contains(&format!("{id}:0")), "no transfer id: {text}");
+        assert!(!text.contains(&format!("{id}:1")), "no transfer id: {text}");
         assert!(!text.contains(&other), "another transaction: {text}");
+    }
+
+    /// The id `tx list` prints is the id `tx show` takes.
+    ///
+    /// Red edit: `listed_tx_id` returns the wallet's transfer id (`hash:0`).
+    /// `tx show` then has no record of it.
+    #[test]
+    fn the_id_tx_list_prints_is_what_tx_show_takes() {
+        let hash = id();
+        let row = serde_json::json!({
+            "id": format!("{hash}:0"),
+            "tx_hash": hash,
+            "direction": "INCOMING",
+            "state": "MINED",
+            "amount": "1",
+            "fee": "0",
+            "block_height": 4
+        });
+        let listed = crate::commands::listed_tx_id(&row);
+        let records = format_records(std::slice::from_ref(&row), listed);
+        let text = report(&TxShow {
+            id: listed,
+            wallet_records: Some(&records),
+            body: false,
+            daemon: None,
+        })
+        .expect("tx show of the listed id");
+        assert!(
+            text.contains(&format!("Transaction {hash}")),
+            "the listed id did not show the transaction: {text}"
+        );
+        assert!(!text.contains(":0"), "the transfer id is not shown: {text}");
+    }
+
+    /// `command` classifies loopback from the daemon address.
+    ///
+    /// Red edit: `endpoint_for` sets `loopback: true` for every address.
+    /// The line then disappears.
+    #[test]
+    fn a_remote_daemon_address_adds_the_line_command_would_add() {
+        let daemon = crate::daemon::DaemonClient::new("http://203.0.113.5:18081", None, None, None)
+            .expect("the address parses");
+        let endpoint = endpoint_for(&daemon, "mainnet").expect("mainnet");
+        assert!(!endpoint.loopback, "203.0.113.5 is not loopback");
+        let records = "wallet holds it";
+        let text = held_with_body(
+            records,
+            &id(),
+            &TxRender::Shown {
+                text: "view".to_owned(),
+                body: Some("AQID".to_owned()),
+            },
+            endpoint.loopback,
+        );
+        assert!(text.contains(DAEMON_LEARNED), "{text}");
+        assert!(text.contains("AQID"), "{text}");
     }
 }
 

@@ -265,6 +265,14 @@ pub(crate) fn show_submit(val: &Value) {
     }
 }
 
+/// The transaction id a row is listed under.
+///
+/// `tx show`, `tx note` and `tx abandon` take this id. It is the transaction
+/// hash, not the wallet's per-output transfer id.
+pub(crate) fn listed_tx_id(t: &Value) -> &str {
+    t.get("tx_hash").and_then(Value::as_str).unwrap_or("?")
+}
+
 /// One history row.
 ///
 /// A single send produces several rows sharing one TxID — the OUTGOING
@@ -281,7 +289,7 @@ fn print_transfer_row(t: &Value) {
     let amount = format_amount_str(s("amount"));
     let fee = format_amount_str(s("fee"));
     let height = format_height(t);
-    let id = s("id");
+    let id = listed_tx_id(t);
     println!("{direction:<10} {state:<12} {amount:>16} {fee:>12} {height:>8}  {id}");
     // An UNSPENDABLE row (PL-D3 §6.2) carries why; print it beside the row
     // so the user sees the failure where the money is listed (rule 82).

@@ -56,6 +56,9 @@ shekyl-units = { path = "../shekyl-units" }
 # The console binds a transaction body and recomputes its id (`tx show`).
 shekyl-wire = { path = "../shekyl-wire" }
 hex = "0.4"
+# `--body` prints a transaction's bytes as base64 (IG-6, RW-Q4). Already
+# in the lock through shekyl-crypto-pq.
+base64 = "0.22"
 
 # WP-W2: the self-hosted transport's dial (`open_verified`, which runs the
 # peer check before handing back a handle) and the seed file's owner-only

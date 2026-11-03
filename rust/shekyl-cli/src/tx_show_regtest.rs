@@ -58,14 +58,20 @@ fn tx_show_reads_the_wallet_or_the_daemon() {
         daemon: Some(&daemon.endpoint()),
     })
     .unwrap_or_else(|error| panic!("the daemon's view: {error}"));
-    let foreign_delta = daemon.delta_until(&foreign_at, "rpc request: /get_transactions");
+    let foreign_delta = daemon.delta_until(&foreign_at, &request_line(transactions_method()));
     assert!(
         foreign.contains("Found in blockchain"),
         "an id the wallet does not hold is the daemon's view:\n{foreign}"
     );
     assert!(
-        foreign_delta.contains("rpc request: /get_transactions"),
+        foreign_delta.contains(&request_line(transactions_method())),
         "the daemon's view is a request the log records:\n{foreign_delta}"
+    );
+    // The handshake is JSON-RPC. Logging the path would say `/json_rpc`
+    // and this line would be absent. Red edit: log `request.uri().path()`.
+    assert!(
+        foreign_delta.contains(&request_line(version_method())),
+        "a JSON-RPC request is logged as its method name:\n{foreign_delta}"
     );
 
     let body_at = daemon.marks();
@@ -76,24 +82,130 @@ fn tx_show_reads_the_wallet_or_the_daemon() {
         daemon: Some(&daemon.endpoint()),
     })
     .expect("the bytes");
-    let body_delta = daemon.delta_until(&body_at, "rpc request: /get_transactions");
+    let body_delta = daemon.delta_until(&body_at, &request_line(transactions_method()));
     assert!(
         body.starts_with(&records),
         "the wallet's record stays the report:\n{body}"
     );
-    assert!(
-        body.lines()
-            .any(|line| line.len() > 64 && line.bytes().all(|b| b.is_ascii_hexdigit())),
-        "--body fetches the serialized bytes:\n{body}"
+    let printed = body_line(&body).expect("a base64 body line");
+    let decoded = decode_body(printed);
+    let wire = daemon_body_bytes(&daemon.url, &found.held);
+    assert_eq!(
+        decoded, wire,
+        "--body's base64 is the bytes the daemon returned"
     );
     assert!(
-        body_delta.contains("rpc request: /get_transactions"),
+        body_delta.contains(&request_line(transactions_method())),
         "--body is a daemon request:\n{body_delta}"
     );
     assert!(
         !body.contains("The daemon now knows you asked for this transaction."),
         "a loopback daemon is not announced: the operator asked a daemon on this machine:\n{body}"
     );
+}
+
+/// A wallet read that fails does not ask the daemon.
+///
+/// Red edit: `read_wallet` returns an empty record on error. The command
+/// then treats the id as unheld and the request log gains a line.
+#[test]
+#[ignore = "needs SHEKYLD_BIN built from this tree; spawns a regtest daemon"]
+fn a_failed_wallet_read_does_not_ask_the_daemon() {
+    let daemon = Regtest::spawn();
+    let runtime = tokio::runtime::Builder::new_multi_thread()
+        .enable_all()
+        .build()
+        .expect("runtime");
+    runtime.block_on(async {
+        let rpc = HttpRpc::with_custom_timeout(daemon.url.clone(), Duration::from_secs(30))
+            .await
+            .expect("rpc client");
+        await_ready(&rpc, &daemon.logs).await;
+    });
+    drop(runtime);
+
+    let listener = std::net::TcpListener::bind("127.0.0.1:0").expect("port");
+    let port = listener.local_addr().expect("addr").port();
+    drop(listener);
+    let session =
+        crate::rpc_client::RpcSession::connect(&format!("http://127.0.0.1:{port}"), None, false)
+            .expect("the dead socket still constructs a session");
+    session.set_open("wallet");
+    let client =
+        crate::daemon::DaemonClient::new(&daemon.url, None, None, None).expect("daemon client");
+    let at = daemon.marks();
+    let error = super::command(&session, Some(&client), "mainnet", &"ab".repeat(32), false)
+        .expect_err("the wallet read fails");
+    let delta = daemon.delta_after_mark(&at, Duration::from_secs(1));
+    assert!(
+        error
+            .message
+            .contains("Failed to read this wallet's transactions"),
+        "{}",
+        error.message
+    );
+    assert!(
+        !delta.contains("rpc request:"),
+        "a failed wallet read asked the daemon:\n{delta}"
+    );
+}
+
+fn transactions_method() -> &'static str {
+    shekyl_rpc_types::methods::rest_path("/get_transactions")
+        .expect("the get_transactions row")
+        .name
+}
+
+fn version_method() -> &'static str {
+    shekyl_rpc_types::methods::json_rpc("get_version")
+        .expect("the get_version row")
+        .name
+}
+
+fn request_line(name: &str) -> String {
+    format!("rpc request: {name}")
+}
+
+fn body_line(report: &str) -> Option<&str> {
+    report.lines().rev().find(|line| decode_body_ok(line))
+}
+
+fn decode_body(line: &str) -> Vec<u8> {
+    use base64::Engine as _;
+    base64::engine::general_purpose::STANDARD
+        .decode(line)
+        .expect("base64")
+}
+
+fn decode_body_ok(line: &str) -> bool {
+    use base64::Engine as _;
+    base64::engine::general_purpose::STANDARD
+        .decode(line)
+        .is_ok_and(|bytes| !bytes.is_empty())
+}
+
+fn daemon_body_bytes(url: &str, id: &str) -> Vec<u8> {
+    let rpc =
+        shekyl_rpc_transport::SyncDaemon::connect(url.to_owned(), None, Duration::from_secs(30))
+            .expect("daemon client");
+    let request = shekyl_rpc_types::GetTransactionsRequest {
+        txs_hashes: vec![id.to_owned()],
+        prune: false,
+    };
+    let raw = rpc
+        .post(
+            "/get_transactions",
+            serde_json::to_vec(&request).expect("request"),
+        )
+        .expect("get_transactions");
+    let reply: shekyl_rpc_types::GetTransactionsResponse =
+        serde_json::from_slice(&raw).expect("reply");
+    let entry = reply
+        .txs
+        .iter()
+        .find(|tx| tx.tx_hash.to_string() == id)
+        .expect("the daemon returned the transaction");
+    hex::decode(&entry.as_hex).expect("wire hex")
 }
 
 struct Found {

@@ -411,9 +411,19 @@ fn a_retained_transaction_prints_from_its_whole_body() {
         out.contains("Found in blockchain at height 3"),
         "expected the confirmed line, got: {out}"
     );
+    use base64::Engine as _;
+    let bytes = console_spend().serialize();
+    let printed = super::encode_body(&bytes);
     assert!(
-        out.contains(&hex::encode(console_spend().serialize())),
-        "the whole body, pqc_auths included, is what +hex prints: {out}"
+        out.contains(&printed),
+        "the whole body, base64, is what --body prints: {out}"
+    );
+    let decoded = base64::engine::general_purpose::STANDARD
+        .decode(printed)
+        .expect("the printed body is base64");
+    assert_eq!(
+        decoded, bytes,
+        "the printed body is the transaction's bytes"
     );
 }
 

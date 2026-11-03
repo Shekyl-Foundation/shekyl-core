@@ -24,6 +24,8 @@ mod staking;
 
 pub use staking::{accept_foundation_terms, post_foundation_stake, FOUNDATION_PHRASE};
 mod transfers;
+#[cfg(test)]
+pub(crate) use transfers::listed_tx_id;
 pub(crate) use transfers::{format_height, unspendable_reason_text};
 
 use crate::daemon::DaemonClient;
