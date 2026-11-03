@@ -53,6 +53,8 @@ DATA_BYTES = 4 << 30
 LOG_BYTES = 16 << 30
 SECTOR = 512
 _FLUSH_FLAGS = ("--next-flush", "--next-fua")
+# How long the mkfs mark's super block may take to reach the log.
+MKFS_MARK_DEADLINE_S = 30
 
 
 def sh(*argv, check=True, capture=False):
@@ -69,7 +71,10 @@ def sparse_file(path, size):
 
 
 def loop_attach(path):
-    return sh("losetup", "--find", "--show", path, capture=True).strip()
+    """A loop device over `path`, with buffered I/O: its writes land in the
+    file's page cache, which is what `LogCursor` reads (`--direct-io=off`
+    says so rather than relying on the default)."""
+    return sh("losetup", "--find", "--show", "--direct-io=off", path, capture=True).strip()
 
 
 def parse_found(out):
@@ -90,19 +95,47 @@ def find_entry(replay_log, log_dev, flag, start):
 class LogCursor:
     """The latest flush or FUA already in the log, read while the device is attached.
 
+    It reads the log's backing file, never the loop device the target
+    writes through. A read of the loop device fills that device's own page
+    cache, which the target's writes below it do not update: every later
+    read sees the first, and on a fresh log the first read precedes the
+    super block (`Magic doesn't match`). The loop driver's writes land in
+    the file's page cache, so a read of the file sees each as it is made.
+
     The walk remembers where each flag left off, so a poll does not rescan
     the image it has already passed.
     """
 
-    def __init__(self, replay_log, log_dev):
+    def __init__(self, replay_log, log_path):
         self.replay_log = replay_log
-        self.log_dev = log_dev
+        self.log_dev = log_path
         self.starts = {flag: 0 for flag in _FLUSH_FLAGS}
         self.latest = None
 
     def num_entries(self):
         text = sh(self.replay_log, "--log", self.log_dev, "--num-entries", capture=True).strip()
         return int(text)
+
+    def first_count(self, deadline_s):
+        """The entry count once the log's super block can be read.
+
+        The target writes the super block from its own thread after the
+        mark or FUA that asks for it, so the first read can come before it
+        (about half a second after a 4 GiB mkfs, measured). Past the
+        deadline the capture fails: a log that never reads is not one this
+        harness can judge.
+        """
+        deadline = time.time() + deadline_s
+        while True:
+            proc = subprocess.run(
+                ["sudo", "-n", self.replay_log, "--log", self.log_dev, "--num-entries"],
+                check=False, capture_output=True, text=True)
+            if proc.returncode == 0 and proc.stdout.strip().isdigit():
+                return int(proc.stdout.strip())
+            if time.time() >= deadline:
+                B._fail(f"the log at {self.log_dev} had no readable super block {deadline_s}s "
+                        f"after the mkfs mark: {proc.stderr.strip() or proc.stdout.strip()}")
+            time.sleep(0.1)
 
     def advance(self):
         total = self.num_entries()
@@ -281,47 +314,74 @@ class Powerloss:
         sparse_file(data, DATA_BYTES)
         sparse_file(log, LOG_BYTES)
         data_dev, log_dev = loop_attach(data), loop_attach(log)
-        sectors = DATA_BYTES // SECTOR
-        sh("dmsetup", "create", DM_NAME, "--table",
-           f"0 {sectors} log-writes {data_dev} {log_dev}")
-        dm = f"/dev/mapper/{DM_NAME}"
-        sh("mkfs.ext4", "-q", "-F", dm)
-        cursor = LogCursor(args.replay_log, log_dev)
-        mkfs_entries = cursor.num_entries()
-        os.makedirs(self.mnt, exist_ok=True)
-        sh("mount", dm, self.mnt)
-        sh("chown", f"{os.getuid()}:{os.getgid()}", self.mnt)
-        subject = os.path.join(self.mnt, "subject")
-        os.makedirs(subject)
+        held = {"subject": None, "mounted": False, "dm": False, "loops": [data_dev, log_dev]}
+        try:
+            sectors = DATA_BYTES // SECTOR
+            sh("dmsetup", "create", DM_NAME, "--table",
+               f"0 {sectors} log-writes {data_dev} {log_dev}")
+            held["dm"] = True
+            dm = f"/dev/mapper/{DM_NAME}"
+            sh("mkfs.ext4", "-q", "-F", dm)
+            # The target writes its super block, the entry count replay-log
+            # reads, when it logs a mark or a FUA; mkfs alone may leave
+            # none. The mark asks for one, and `first_count` waits for it,
+            # so `mkfs_entries` covers every entry mkfs made.
+            sh("dmsetup", "message", DM_NAME, "0", "mark", "mkfs")
+            cursor = LogCursor(args.replay_log, log)
+            mkfs_entries = cursor.first_count(MKFS_MARK_DEADLINE_S)
+            os.makedirs(self.mnt, exist_ok=True)
+            sh("mount", dm, self.mnt)
+            held["mounted"] = True
+            sh("chown", f"{os.getuid()}:{os.getgid()}", self.mnt)
+            subject = os.path.join(self.mnt, "subject")
+            os.makedirs(subject)
 
-        seed = session.spawn("seed", seed_dir, [], session.sp2p, session.srpc)
-        with session.running(seed, session.srpc) as ready:
-            if not ready.ready:
-                B._fail("the main chain's seed never came up")
-            session.record_hashes("main", session.srpc, main_tip)
-            session.digest_chain(session.srpc, "main", main_tip)
-            proc = session.spawn("subject", subject,
-                                 ["--p2p-closed-peer", f"127.0.0.1:{session.sp2p}"],
-                                 session.bp2p, session.brpc)
-            self.follow("main", main_tip, args.startup_timeout, cursor, mkfs_entries)
-            proc.terminate()
-            proc.wait(args.shutdown_timeout)
-        fork = session.spawn("fork", fork_dir, [], session.fp2p, session.frpc)
-        with session.running(fork, session.frpc) as ready:
-            if not ready.ready:
-                B._fail("the fork's daemon never came up")
-            session.record_hashes("fork", session.frpc, fork_tip)
-            session.digest_chain(session.frpc, "fork", fork_tip)
-            proc = session.spawn("subject", subject,
-                                 ["--p2p-closed-peer", f"127.0.0.1:{session.fp2p}"],
-                                 session.bp2p, session.brpc)
-            self.follow("fork", fork_tip, args.startup_timeout, cursor, mkfs_entries)
-            proc.kill()
-            proc.wait()
-        sh("umount", self.mnt)
-        sh("dmsetup", "remove", DM_NAME)
-        sh("losetup", "-d", data_dev)
-        sh("losetup", "-d", log_dev)
+            seed = session.spawn("seed", seed_dir, [], session.sp2p, session.srpc)
+            with session.running(seed, session.srpc) as ready:
+                if not ready.ready:
+                    B._fail("the main chain's seed never came up")
+                session.record_hashes("main", session.srpc, main_tip)
+                session.digest_chain(session.srpc, "main", main_tip)
+                proc = held["subject"] = session.spawn(
+                    "subject", subject, ["--p2p-closed-peer", f"127.0.0.1:{session.sp2p}"],
+                    session.bp2p, session.brpc)
+                self.follow("main", main_tip, args.startup_timeout, cursor, mkfs_entries)
+                proc.terminate()
+                proc.wait(args.shutdown_timeout)
+            fork = session.spawn("fork", fork_dir, [], session.fp2p, session.frpc)
+            with session.running(fork, session.frpc) as ready:
+                if not ready.ready:
+                    B._fail("the fork's daemon never came up")
+                session.record_hashes("fork", session.frpc, fork_tip)
+                session.digest_chain(session.frpc, "fork", fork_tip)
+                proc = held["subject"] = session.spawn(
+                    "subject", subject, ["--p2p-closed-peer", f"127.0.0.1:{session.fp2p}"],
+                    session.bp2p, session.brpc)
+                self.follow("fork", fork_tip, args.startup_timeout, cursor, mkfs_entries)
+                proc.kill()
+                proc.wait()
+            # A complete capture is released with every step checked: the
+            # target's removal writes the log's last super block.
+            sh("umount", self.mnt)
+            held["mounted"] = False
+            sh("dmsetup", "remove", DM_NAME)
+            held["dm"] = False
+            while held["loops"]:
+                sh("losetup", "-d", held["loops"].pop())
+        finally:
+            # A failed capture releases whatever it still holds, so the next
+            # run does not meet a busy device name. Its own error is the one
+            # reported; these steps do not replace it.
+            subject_proc = held["subject"]
+            if subject_proc is not None and subject_proc.poll() is None:
+                subject_proc.kill()
+                subject_proc.wait()
+            if held["mounted"]:
+                sh("umount", self.mnt, check=False)
+            if held["dm"]:
+                sh("dmsetup", "remove", DM_NAME, check=False)
+            for dev in held["loops"]:
+                sh("losetup", "-d", dev, check=False)
         os.remove(data)
         record = {
             "schema_version": SCHEMA,
