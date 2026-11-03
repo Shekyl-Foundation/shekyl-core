@@ -4330,16 +4330,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "shekyl-daemon-ctl"
-version = "3.1.0"
-dependencies = [
- "serde_json",
- "shekyl-rpc-client",
- "shekyl-rpc-transport",
- "tokio",
-]
-
-[[package]]
 name = "shekyl-daemon-rpc"
 version = "3.1.0"
 dependencies = [
@@ -4689,7 +4679,6 @@ dependencies = [
  "shekyl-curve-primitives",
  "shekyl-curve-tree",
  "shekyl-daemon-config",
- "shekyl-daemon-ctl",
  "shekyl-dialer",
  "shekyl-difficulty",
  "shekyl-draw-rng",

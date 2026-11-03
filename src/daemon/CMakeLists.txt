@@ -29,8 +29,8 @@
 
 # shekyld is a Rust binary (rust/shekyld; DAEMON_CONFIG_CUTOVER.md DC-Q19).
 # What this directory builds is the C++ that remains behind its two entry
-# points, `shekyl_remnant_run` and `shekyl_remnant_stop` (daemon.h): the
-# console, the RPC command executor and `Daemon`. It is a static library,
+# points, `shekyl_remnant_run` and `shekyl_remnant_stop` (daemon.h):
+# `Daemon`. It is a static library,
 # and cmake/BuildRust.cmake's `shekyl_rust_link_cxx_closure` hands this
 # library and everything it links to the Rust binary's link (DC-Q23).
 #
@@ -38,10 +38,7 @@
 # the Rust side owns the process's signals and its panic hook; a C++
 # crash handler would be a second owner, DC-F17).
 set(shekyld_remnant_sources
-  command_parser_executor.cpp
-  command_server.cpp
   daemon.cpp
-  rpc_command_executor.cpp
 )
 
 set(shekyld_remnant_headers)
@@ -72,7 +69,6 @@ target_link_libraries(shekyld_remnant
     p2p
     cryptonote_protocol
     serialization
-    ${EPEE_READLINE}
     version
     ${SHEKYL_FFI_LINK_LIBS}
     ${Boost_CHRONO_LIBRARY}
@@ -80,7 +76,6 @@ target_link_libraries(shekyld_remnant
     ${Boost_REGEX_LIBRARY}
     ${Boost_SYSTEM_LIBRARY}
     ${CMAKE_THREAD_LIBS_INIT}
-    ${GNU_READLINE_LIBRARY}
     ${EXTRA_LIBRARIES})
 
 # The walk runs when the top-level directory finishes configuring: every

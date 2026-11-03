@@ -18,7 +18,7 @@
 //! the one child-row table. [`ban`] reads the ban file. A row the table
 //! fills with a literal is required: its default is not restated here.
 
-use std::net::{IpAddr, Ipv4Addr, SocketAddr, SocketAddrV4};
+use std::net::{IpAddr, Ipv4Addr, SocketAddr};
 use std::num::NonZeroU32;
 use std::path::{Path, PathBuf};
 
@@ -290,21 +290,12 @@ pub struct Dev {
     pub archival_reorg_depth: Option<u64>,
 }
 
-/// The interim C++ console's section, until `shekyl-cli` serves it (R8).
+/// Whether this start checks the configuration and exits (`config-verify`,
+/// IG-Q58).
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub struct Session {
-    /// Run the interactive console.
-    pub console: bool,
-    /// Check the configuration as a start would and exit without starting
-    /// (`config-verify`, IG-Q58).
+    /// Check the configuration as a start would and exit without starting.
     pub verify: bool,
-    /// The positional words: a client-mode command, empty for a daemon
-    /// start.
-    pub command: Vec<String>,
-    /// The admin endpoint a client-mode command reaches. Present only in
-    /// client mode, and only when that endpoint is IPv4: the console dials
-    /// four octets and a port. A daemon may still bind IPv6.
-    pub client_endpoint: Option<SocketAddrV4>,
 }
 
 /// The whole configuration, by section.
@@ -334,7 +325,7 @@ pub struct DaemonConfig {
     pub mine: Mine,
     /// The development levers.
     pub dev: Dev,
-    /// The console.
+    /// The configuration check.
     pub session: Session,
 }
 
@@ -353,13 +344,6 @@ impl DaemonConfig {
             Clearnet::Off => false,
             Clearnet::On { .. } => true,
         }
-    }
-
-    /// Whether this process is a client of a running daemon (§2.2, client
-    /// mode).
-    #[must_use]
-    pub fn is_client(&self) -> bool {
-        !self.session.command.is_empty()
     }
 }
 
@@ -406,7 +390,7 @@ pub fn build(
     let rpc = rpc_section(&mut r);
     let mine = mine_section(&mut r, network);
     let dev = dev_section(&mut r);
-    let session = session_section(&mut r, &rpc.admin_listen);
+    let session = session_section(&mut r);
     let notify = notify_section(&mut r);
 
     faults.append(&mut r.faults);
@@ -668,35 +652,9 @@ fn dev_section(r: &mut Reader<'_>) -> Dev {
     }
 }
 
-fn session_section(r: &mut Reader<'_>, admin_listen: &[SocketAddr]) -> Session {
-    let command = r.positional().to_vec();
-    let client_endpoint = if command.is_empty() {
-        None
-    } else {
-        match admin_listen.first() {
-            Some(SocketAddr::V4(endpoint)) => Some(*endpoint),
-            Some(endpoint) => {
-                r.faults.push(
-                    Diagnostic::new(Code::ValueRange, r.source("rpc-admin-listen"))
-                        .option("rpc-admin-listen")
-                        .param("value", endpoint.to_string())
-                        .param("rule", "the console client reaches an IPv4 admin endpoint"),
-                );
-                None
-            }
-            None => {
-                r.faults.push(
-                    Diagnostic::new(Code::ClientNoEndpoint, Source::Cli).option("rpc-admin-listen"),
-                );
-                None
-            }
-        }
-    };
+fn session_section(r: &mut Reader<'_>) -> Session {
     Session {
-        console: r.switch("console"),
         verify: r.switch("config-verify"),
-        command,
-        client_endpoint,
     }
 }
 

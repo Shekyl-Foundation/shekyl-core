@@ -231,17 +231,10 @@ pub mod panic_hook;
 // contract).
 pub use shekyl_logging;
 
-// The same, for the daemon control client's `#[no_mangle]` exports
-// (`shekyl_daemon_ctl_post`, `shekyl_daemon_ctl_free`). The Rust daemon
-// binary links that crate as an rlib of its own graph; this re-export is
-// for the C++ binaries that still link `libshekyl_ffi.a` and call into it
-// — today `unit_tests`, through `src/daemon/rpc_client.h` — so that
-// archive stays the one Rust image a C++ link sees. The RPC server
-// (`shekyl-daemon-rpc`) is deliberately not re-exported: it imports C++
+// The RPC server (`shekyl-daemon-rpc`) is not re-exported: it imports C++
 // symbols from `rpc`, and a member of this archive can be pulled into any
 // C++ binary by a shared monomorphization (DAEMON_CONFIG_CUTOVER.md
 // DC-F26, corrected by DC-F30).
-pub use shekyl_daemon_ctl;
 
 // Legacy monofile FFI surface (split from the former body of this file).
 // Domain modules keep #[no_mangle] symbols; this root only wires and re-exports.

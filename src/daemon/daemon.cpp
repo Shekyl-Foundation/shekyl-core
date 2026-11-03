@@ -30,22 +30,13 @@
 
 #include "daemon/daemon.h"
 
-#include <atomic>
-#include <functional>
-#include <limits>
 #include <memory>
 #include <mutex>
 #include <stdexcept>
-#include <vector>
 
-#include <boost/algorithm/string/split.hpp>
-
-#include "common/password.h"
-#include "common/scoped_message_writer.h"
 #include "cryptonote_basic/events.h"
 #include "cryptonote_core/cryptonote_core.h"
 #include "cryptonote_protocol/cryptonote_protocol_handler.h"
-#include "daemon/command_server.h"
 #include "misc_log_ex.h"
 #include "p2p/net_node.h"
 #include "rpc/core_rpc_ffi.h"
@@ -54,7 +45,6 @@
 #include "cryptonote_config.h"
 
 #include <cstdint>
-#include <cstring>
 #include <exception>
 #include <iostream>
 #include <string>
@@ -193,7 +183,7 @@ Daemon::~Daemon() = default;
 Daemon::Daemon(Daemon &&) = default;
 Daemon & Daemon::operator=(Daemon &&) = default;
 
-bool Daemon::run(bool interactive)
+bool Daemon::run()
 {
   if (nullptr == mp_internals)
   {
@@ -220,8 +210,8 @@ bool Daemon::run(bool interactive)
   // that escapes — stops the Rust RPC tasks before ~t_internals destroys the
   // core they hold pointers into. The normal path stops them explicitly
   // below so "Node stopped" follows the stop; this is the backstop for
-  // every other path (a later listener refusing to start, the command
-  // server or p2p.run() throwing).
+  // every other path (a later listener refusing to start, or p2p.run()
+  // throwing).
   epee::misc_utils::auto_scope_leave_caller stop_rust_rpc = epee::misc_utils::create_scope_leave_handler([](){
     shekyl_daemon_rpc_stop();
   });
@@ -238,24 +228,6 @@ bool Daemon::run(bool interactive)
       throw std::runtime_error("Failed to start the RPC; the reason is logged just above");
     }
     MGINFO("RPC started; each bound socket is logged by the Rust listener");
-
-    std::unique_ptr<daemonize::t_command_server> rpc_commands;
-    if (interactive)
-    {
-      // The first two ctor args are unused when the third is false.
-      // The interactive console renders from the live core in this process,
-      // so its identity handshake is skipped entirely (every axis would
-      // compare a value to itself). The nettype is passed for signature
-      // uniformity and read by nothing on this arm.
-      rpc_commands.reset(new daemonize::t_command_server(
-        0, 0,
-        mp_internals->core.get_nettype(),
-        false,
-        &mp_internals->subject));
-      // The console's `exit` asks the one stop owner (§2.2 step 9); the
-      // remnant never stops itself.
-      rpc_commands->start_handling([](){ shekyl_daemon_request_stop(); });
-    }
 
     // RPC listeners are open now, and each server has a connection budget
     // that is not yet open. Re-derive so both are inside the ceiling.
@@ -286,9 +258,6 @@ bool Daemon::run(bool interactive)
     MGINFO("Starting p2p net loop...");
     mp_internals->p2p.run(); // blocks until p2p goes down
     MGINFO("p2p net loop stopped");
-
-    if (rpc_commands)
-      rpc_commands->stop_handling();
 
     shekyl_daemon_rpc_stop();
     MGINFO("Node stopped.");
@@ -350,42 +319,9 @@ extern "C" int shekyl_remnant_run(const ShekylDaemonSnapshot* snapshot) noexcept
       return 1;
     }
 
-    const bool testnet = snapshot->network == 1;
-    const bool stagenet = snapshot->network == 2;
-    const bool regtest = snapshot->network == 3;
-
-    // Client mode: a command for a running daemon, at the admin endpoint
-    // Rust resolved. No lock, no marker, no log file. The endpoint is four
-    // octets and a port; this does not parse a string.
-    if (snapshot->command.len > 0)
-    {
-      if (!snapshot->client_endpoint.present)
-        return 1;
-      std::vector<std::string> command;
-      command.reserve(snapshot->command.len);
-      for (size_t i = 0; i < snapshot->command.len; ++i)
-        command.emplace_back(snapshot->command.items[i]);
-      // Network order, the bit pattern inet_addr returns.
-      uint32_t rpc_ip;
-      std::memcpy(&rpc_ip, snapshot->client_endpoint.octets,
-                  sizeof snapshot->client_endpoint.octets);
-      uint16_t rpc_port = snapshot->client_endpoint.port;
-      const cryptonote::network_type console_nettype =
-        testnet ? cryptonote::TESTNET
-        : stagenet ? cryptonote::STAGENET
-        : regtest ? cryptonote::FAKECHAIN
-        : cryptonote::MAINNET;
-      daemonize::t_command_server rpc_commands{rpc_ip, rpc_port, console_nettype};
-      if (rpc_commands.process_command_vec(command))
-        return rpc_commands.rpc_request_failed() ? 1 : 0;
-      PAUSE_READLINE();
-      std::cerr << "Unknown command: " << command.front() << std::endl;
-      return 1;
-    }
-
     MINFO("Constructing daemon.");
     daemonize::Daemon daemon{*snapshot};
-    return daemon.run(snapshot->console) ? 0 : 1;
+    return daemon.run() ? 0 : 1;
   }
   catch (std::exception const & ex)
   {

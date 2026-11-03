@@ -7,8 +7,9 @@
 ///
 /// This header is the C ABI between C++ and Rust. Most functions are
 /// exported from `rust/shekyl-ffi` (`libshekyl_ffi.a`). Daemon-only
-/// symbols (`shekyl_daemon_rpc_*`, `shekyl_daemon_ctl_*`) are exported
-/// from `rust/shekyl-daemon-rpc`, which `shekyl-ffi` re-exports (DC-F26).
+/// symbols (`shekyl_daemon_rpc_*`) are exported from
+/// `rust/shekyl-daemon-rpc`. `shekyl-ffi` does not re-export the server
+/// (DC-F26, DC-F30).
 ///
 /// ## Linking
 ///
@@ -1627,89 +1628,6 @@ void shekyl_daemon_rpc_stop(void);
 size_t shekyl_thread_ledger_report(char* buf, size_t len);
 
 // ---------------------------------------------------------------------------
-// shekyld control client (`shekyld <command>` → running daemon), the outbound
-// half of the daemon's HTTP surface. Plaintext loopback only — the daemon
-// registers neither --rpc-login nor --rpc-ssl* (docs/DAEMON_RPC_RUST.md).
-// Rust: rust/shekyl-daemon-ctl/src/lib.rs.
-// ---------------------------------------------------------------------------
-
-/// Request completed; the out pair holds the response body.
-#define SHEKYL_DAEMON_CTL_OK             0
-/// A required pointer was null, or a C string was not UTF-8.
-#define SHEKYL_DAEMON_CTL_ERR_NULL_PTR  -1
-/// `address` did not form a dialable http://host:port endpoint.
-#define SHEKYL_DAEMON_CTL_ERR_ENDPOINT  -2
-/// Connect, send, receive, or timeout failure; the out pair holds the reason.
-#define SHEKYL_DAEMON_CTL_ERR_TRANSPORT -3
-/// The runtime could not be started, or the caller is already inside one.
-#define SHEKYL_DAEMON_CTL_ERR_RUNTIME   -4
-/// The transport completed; the body is a grant refusal, a method error,
-/// a non-OK status, or not JSON. HTTP 200 is not success (RW-Q3).
-#define SHEKYL_DAEMON_CTL_ERR_REPLY     -5
-
-/// POST `body` to `http://<address>/<route>` and return the response body.
-/// address: "host:port" of the daemon RPC listener (no scheme).
-/// route: the path, leading '/' optional ("/json_rpc", "/getinfo", …); the
-///   content type follows the route (".bin" → binary, otherwise JSON).
-/// body / body_len: request body; body may be NULL iff body_len == 0.
-/// timeout_secs: per-request bound, connect through the last body byte.
-/// out_ptr / out_len: on SHEKYL_DAEMON_CTL_OK the response body; on any
-///   error that can write (every path except a NULL out_ptr/out_len) the
-///   UTF-8 reason. Always release with shekyl_daemon_ctl_free (a NULL/0
-///   pair is a no-op there).
-/// Returns one of the SHEKYL_DAEMON_CTL_* codes.
-int32_t shekyl_daemon_ctl_post(
-    const char* address,
-    const char* route,
-    const uint8_t* body,
-    size_t body_len,
-    uint64_t timeout_secs,
-    uint8_t** out_ptr,
-    size_t* out_len);
-
-/// Release a buffer returned through shekyl_daemon_ctl_post's out pair.
-void shekyl_daemon_ctl_free(uint8_t* ptr, size_t len);
-
-/// Decode a REST/JSON-RPC reply the transport already delivered.
-/// body / body_len: the response body; body may be NULL iff body_len == 0.
-/// out_ptr / out_len: on SHEKYL_DAEMON_CTL_ERR_REPLY the UTF-8 diagnostic;
-///   on OK a NULL/0 pair. Always release with shekyl_daemon_ctl_free.
-/// Returns SHEKYL_DAEMON_CTL_OK, ERR_REPLY, or ERR_NULL_PTR.
-int32_t shekyl_daemon_ctl_rest_outcome(
-    const uint8_t* body,
-    size_t body_len,
-    uint8_t** out_ptr,
-    size_t* out_len);
-
-// Console rendering for natively-served methods (DAEMON_RPC_KV_CUTOVER.md
-// §3.4). Rust: shekyl-daemon-rpc/src/console.rs.
-#define SHEKYL_DAEMON_CONSOLE_OK            0
-#define SHEKYL_DAEMON_CONSOLE_ERR_NULL_PTR -1
-#define SHEKYL_DAEMON_CONSOLE_ERR_UNKNOWN  -2
-#define SHEKYL_DAEMON_CONSOLE_ERR_REQUEST  -3
-#define SHEKYL_DAEMON_CONSOLE_ERR_AMBIGUOUS_SOURCE -4  // both rpc_server_ptr and address given
-
-/// Run one console command (`argv[0]` selects) and return its rendered text.
-/// rpc_server_ptr: the live rpc_subject in-process, else NULL.
-/// address: "host:port" of the daemon RPC when running as `shekyld <cmd>`,
-///   else NULL. Exactly one of the two is set.
-/// out_ptr / out_len: on OK the text to print, on ERR_REQUEST the reason;
-///   release with shekyl_daemon_ctl_free.
-// `nettype` is the CALLING process's network (cryptonote::network_type), for
-// the VC-2 identity handshake on the remote arm. Read by nothing on the live
-// arm, where every axis would compare a value to itself.
-int32_t shekyl_daemon_console_run(
-    const char* const* argv,
-    size_t argc,
-    void* rpc_server_ptr,
-    const char* address,
-    uint64_t timeout_secs,
-    uint8_t nettype,
-    uint8_t** out_ptr,
-    size_t* out_len);
-
-
-// ---------------------------------------------------------------------------
 // Archival serve-credit verification (ARCHIVAL_RETENTION_GATE2.md §5.3)
 // ---------------------------------------------------------------------------
 
@@ -3050,33 +2968,17 @@ int shekyl_network_id(std::uint8_t nettype, std::uint8_t* out);
 /// `shekyl_daemon_snapshot_field_count()` at run, and
 /// `scripts/ci/check_snapshot_readers.py` holds every member to a C++
 /// reader under `src/`.
-#define SHEKYL_DAEMON_SNAPSHOT_FIELDS 5u
-
-/// A list of NUL-terminated strings.
-struct ShekylStringList {
-  const char* const* items;
-  size_t len;
-};
-
-/// The admin endpoint a client command dials. `octets` are network order:
-/// a memcpy into a uint32_t is the value `inet_addr` returns. `present` is
-/// false for a daemon start. One member of the snapshot.
-struct ShekylClientEndpoint {
-  uint8_t octets[4];
-  uint16_t port;
-  bool present;
-};
-static_assert(sizeof(ShekylClientEndpoint) == 8,
-    "the console endpoint is four octets, a port and a flag");
+#define SHEKYL_DAEMON_SNAPSHOT_FIELDS 2u
 
 /// The values whose reader is still C++ (§2.9), filled once by Rust.
-struct ShekylDaemonSnapshot {
+/// Aligned to a pointer: the parse export hands back this struct's address,
+/// and it is the first member of the lease the free releases.
+struct alignas(8) ShekylDaemonSnapshot {
   uint8_t network;
   bool offline;
-  bool console;
-  ShekylStringList command;
-  ShekylClientEndpoint client_endpoint;
 };
+static_assert(sizeof(ShekylDaemonSnapshot) == 8,
+    "the snapshot is pointer-aligned, matching the Rust lease");
 
 /// The snapshot's field count, from the Rust definition.
 uint32_t shekyl_daemon_snapshot_field_count();

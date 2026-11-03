@@ -4,7 +4,7 @@
 // BSD-3-Clause
 
 use std::ffi::OsString;
-use std::net::{Ipv4Addr, SocketAddrV4};
+use std::net::Ipv4Addr;
 use std::path::{Path, PathBuf};
 
 use shekyl_options::{Code, Diagnostic, Source, Value};
@@ -80,7 +80,6 @@ fn the_defaults_build_a_managed_tor_clearnet_node_on_mainnet() {
     assert_eq!(c.p2p.upload_max, None);
     assert!(c.dev.sync);
     assert!(!c.offline());
-    assert!(!c.is_client());
 }
 
 #[test]
@@ -373,29 +372,9 @@ fn log_categories_become_the_owners_directive() {
 }
 
 #[test]
-fn positional_words_make_a_client_that_needs_an_admin_endpoint() {
-    let c = build_from(&["status"], "").unwrap();
-    assert!(c.is_client());
-    assert_eq!(
-        c.session.client_endpoint,
-        Some(SocketAddrV4::new(Ipv4Addr::LOCALHOST, 11029))
-    );
-    let d = codes(build_from(&["--rpc-admin-listen", "none", "status"], ""));
-    assert_eq!(d, vec![(Code::ClientNoEndpoint, "rpc-admin-listen".into())]);
-}
-
-/// The console dials IPv4. A daemon may bind an IPv6 admin listener; a
-/// client command to one is refused at parse, with the grammar's range code.
-#[test]
-fn a_client_refuses_an_admin_endpoint_the_console_cannot_dial() {
-    let d = codes(build_from(
-        &["--rpc-admin-listen", "[::1]:11029", "status"],
-        "",
-    ));
-    assert_eq!(d, vec![(Code::ValueRange, "rpc-admin-listen".into())]);
+fn an_ipv6_admin_listener_is_accepted() {
     let c = build_from(&["--rpc-admin-listen", "[::1]:11029"], "").unwrap();
     assert_eq!(c.rpc.admin_listen, vec!["[::1]:11029".parse().unwrap()]);
-    assert!(c.session.client_endpoint.is_none());
 }
 
 #[test]

@@ -13,7 +13,9 @@ use shekyl_options::{Default, Kind, Surface, Table, Visibility};
 #[must_use]
 pub fn render(table: &Table, program: &str, release_name: &str, version_full: &str) -> String {
     let mut out = format!(
-        "Shekyl '{release_name}' (v{version_full})\n\nUsage: {program} [options] [command...]\n\n"
+        "Shekyl '{release_name}' (v{version_full})\n\n\
+         Usage: {program} [options]\n\n\
+         Daemon commands are shekyl-cli words.\n\n"
     );
     for row in table
         .rows
@@ -54,6 +56,8 @@ mod tests {
         assert!(text.contains("--log-level <value>"));
         assert!(text.contains("[default: warn]"));
         assert!(text.contains("--network <value>") && text.contains("(command line only)"));
+        assert!(text.contains("Daemon commands are shekyl-cli words."));
+        assert!(!text.contains("[command...]"));
         assert!(!text.contains("dev-difficulty"), "levers are hidden");
         assert!(!text.contains("in-peers"), "rejected rows are hidden");
         assert!(!text.contains("rpc-listen"), "reserved rows are hidden");

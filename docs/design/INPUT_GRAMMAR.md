@@ -171,7 +171,6 @@ A term listed under two parents is one term. Part B's terms are §11; a parent a
 | cors | rpc | cross-origin resource sharing | |
 | origin | cors | an allowed origin | |
 | connections | rpc, peer | concurrent connections; under `peer`, *view* — the live peer connections | peer:view |
-| console | — | the daemon's interactive console (interim; R8) | |
 | dev | — | a development lever (IG-8) | |
 | encrypt | clearnet | the pre-flip clearnet encryption switch | |
 | relay | dev, tx | transaction relay (Dandelion++); under `tx`, *verb* — relay a transaction | tx:verb |
@@ -296,13 +295,6 @@ Legend — **R** rename or fold (no trace), **K** kept as is, **X** REJECTED row
 | `disable-rpc-ban` | — | | | |  |  | – (R5; the scorer it switches has no caller, IG-F9) |
 | `rpc-response-soft-limit` | — | | | |  |  | – (response limits belong to the RPC resource policy, IG-Q12) |
 
-### Session (interim, until `shekyl-cli` serves the console — R8)
-
-| Today | New | Kind | Default | Surface | Runtime | Grant | Notes |
-|---|---|---|---|---|---|---|---|
-| `non-interactive` | `console` | switch | off | CLI |  |  | R (IG-Q8); deleted with the console |
-| `daemon_command` (positional) | unchanged | | | |  |  | moves to `shekyl-cli` (Part B) |
-
 ### Environment levers (regtest only, IG-8)
 
 | Today | New | Kind |
@@ -331,7 +323,7 @@ Criterion: a REJECTED row exists for a capability a user could reasonably ask fo
 
 The `removed_flags` shim, its FOLLOWUPS sunset row, and its C++ tests go with the cutover; the X rows live in the Rust table.
 
-**Count:** 83 registered options and 4 environment levers today, plus PR-3's `p2p-disclose-early`, DRS-X's `dev-rpc` and Part D's `config-verify`; 50 live names after, the four environment levers among them (`rpc-listen` arrives at RT-W10 and `rpc-admin-listen` becomes an X row at RT-W12, RT-O33; 50 between the two; `txpool-weight-max` became an X row with IG-Q11; `mine` arrived with IG-Q21's 2026-11-02 amendment).
+**Count:** 83 registered options and 4 environment levers today, plus PR-3's `p2p-disclose-early`, DRS-X's `dev-rpc` and Part D's `config-verify`; 49 live names, the four environment levers among them (`rpc-listen` arrives at RT-W10 and `rpc-admin-listen` becomes an X row at RT-W12, RT-O33; 49 between the two; `txpool-weight-max` became an X row with IG-Q11; `mine` arrived with IG-Q21's 2026-11-02 amendment; `console` left with the C++ console, 2026-11-03).
 
 ---
 
@@ -376,7 +368,7 @@ The `removed_flags` shim, its FOLLOWUPS sunset row, and its C++ tests go with th
 
 **IG-Q7 — `max-concurrency` — RULED 2026-10-13.** A cap on one C++ thread pool (`util.cpp:861`), a macOS workaround. Removed; concurrency belongs to the thread-budget work.
 
-**IG-Q8 — the interim console — RULED 2026-10-13.** Every service unit and the GUI pass `--non-interactive`. No console unless `--console` is given, until R8 deletes it.
+**IG-Q8 — the interim console — RULED 2026-10-13; deleted 2026-11-03.** The switch `console` and the bare command words are gone with the C++ console. A bare word on `shekyld` is `config.cli.syntax` and names the token. Daemon commands are `shekyl-cli` words.
 
 **IG-Q9 — absolute paths only — RULED 2026-10-13.** On both surfaces.
 
@@ -1246,7 +1238,7 @@ Each carries its recommendation, ruled as recommended on 2026-10-22 (Rick). The 
 **IG-Q58 — the check's name — RULED 2026-10-22.** *Recommended:* `config-verify`, a command-line-only switch (IG-7, beside `help` and `version`), off by default, public. It walks `config` → `verify`: §11's `verify` already means "check a claim against its source", and here the claim is the configuration and the source is the table. When this is ruled, the same edit adds the parent `config` and extends that one sentence to cover it (Kind `config:verb`). `config-check` would widen §11's `check`, which means "check a proof".
 
 **IG-Q59 — what it does — RULED 2026-10-22.** *Recommended:* one walk, called from `shekyl-daemon`'s `run` (`verify.rs`), in start's order. `config-verify` runs the walk and exits. Start runs the same walk and, on acceptance, performs the effects the walk withheld. `--help` and `--version` still win, before the file is read. Every other flag is read as start reads it.
-- **The walk.** `load`, unchanged: the choosers, the file under the permission walk, `read_file`, `resolve` and `build`. A client invocation stops here, as start does. Otherwise, in order, stopping at the first refusal and printing that stage's whole vector, as `refuse` does: whether the account can create the data directory and open the lock file; whether the host has a network id (exit 1, the same `tell` as start); the marker read; whether the account can create the log directory and open the log file; the pure owner checks; the Tor pin read. Each pure function lives beside the effect it was split from, and the effect's function calls the pure half, so the decision is not written twice. `shekyl-daemon-config` does not gain a dependency on the owner latches.
+- **The walk.** `load`, unchanged: the choosers, the file under the permission walk, `read_file`, `resolve` and `build`. A client invocation used to stop here; that mode was deleted with the console (2026-11-03), so every start continues. Then, in order, stopping at the first refusal and printing that stage's whole vector, as `refuse` does: whether the account can create the data directory and open the lock file; whether the host has a network id (exit 1, the same `tell` as start); the marker read; whether the account can create the log directory and open the log file; the pure owner checks; the Tor pin read. Each pure function lives beside the effect it was split from, and the effect's function calls the pure half, so the decision is not written twice. `shekyl-daemon-config` does not gain a dependency on the owner latches.
 - **The splits (IG-F15).** `Lock::take` and `log_location_writable` gain a creatability half that does not create, open or lock; start calls it and then creates. `marker::check_or_write` gains a read that does not write: absent when the directory is missing, or when the directory holds no marker and no store; matched; or the refusal start already returns (`config.marker.network`, `config.marker.network-id`, `config.marker.missing`, `config.marker.unreadable`). Verify calls the read. Start takes the lock, calls the read, and writes only when the read is absent. The lock stays the proof of the write, and start rechecks under it. `record_seed_epoch` and `arm_settlement_schedule` gain a pure check of the value. The walk calls that check. The record functions call it and then latch. The walk does not observe `Latched`.
 - **Left on start.** Creating the directory, the lock file, the marker and the log file. `network::record`. Logging. Signals, the runtime, binds, the store, and anything sent. `tor::begin`'s spawn and bootstrap. The pin half is `discover_and_verify` / `discover_and_verify_at`. The walk classifies that error as the supervisor's pin does (`BundleMissing`, `Unavailable`, `PinRefused`) and warns with that cause's posture sentence; a missed discovery names the paths it searched, and the held sentence is the posture's for a link that is not up, with clearnet read from the connector. TB-2 does not turn that warning into a refusal ([`TOR_BUNDLE_DISTRIBUTION.md`](TOR_BUNDLE_DISTRIBUTION.md); the posture table in [`TOR_SUPERVISOR.md`](TOR_SUPERVISOR.md)).
 - **Outside the verdict.** A port in use, Tor's bootstrap, disk space, mandatory-access policy (SELinux, AppArmor), and a held data-directory lock. Those are contention or the running service. The check takes no lock, so it can run while the daemon is up. Exit 0 says nothing about them.

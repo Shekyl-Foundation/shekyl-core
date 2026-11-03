@@ -35,7 +35,6 @@ set(unit_tests_sources
   gap7_bp_bench.cpp
   command_line.cpp
   crypto.cpp
-  daemon_rpc_client.cpp
   decompose_amount_into_digits.cpp
   device.cpp
   difficulty.cpp
@@ -105,18 +104,11 @@ target_link_libraries(unit_tests
     net
     serialization
     p2p
-    # daemon_rpc_client.cpp exercises src/daemon/rpc_client.h, whose failure
-    # path writes through scoped_message_writer -> rdln::suspend_readline
-    # (same link the daemon carries; empty when built without readline).
-    ${EPEE_READLINE}
     # The one Rust archive a C++ binary links (libshekyl_ffi.a; the
     # single-image contract, V3_WALLET_DECISION_LOG.md 2026-06-11). The
     # daemon's RPC server and its `shekyl_rpc_*` exports are not in it:
-    # they reach shekyld as rlibs of the Rust binary (DC-Q19) and no C++
-    # test calls them. daemon_rpc_client.cpp's transport,
-    # `shekyl_daemon_ctl_*`, is `shekyl-daemon-ctl`'s, re-exported by
-    # shekyl-ffi; the server is kept out of the archive on purpose
-    # (DAEMON_CONFIG_CUTOVER.md DC-F30).
+    # they reach shekyld as rlibs of the Rust binary (DC-Q19). The server
+    # stays out of the archive (DAEMON_CONFIG_CUTOVER.md DC-F30).
     ${SHEKYL_FFI_LINK_LIBS}
     version
     ${Boost_CHRONO_LIBRARY}

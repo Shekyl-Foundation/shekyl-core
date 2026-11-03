@@ -38,7 +38,7 @@ use crate::bind::{bind_listener, BoundListener};
 use crate::conn_limit::ConnLimits;
 use crate::core::CoreRpc;
 use crate::handles::Handles;
-use crate::options::{OptionsAbsent, OptionsHandle};
+use crate::options::OptionsHandle;
 use crate::server::{serve_listeners, ServerConfig};
 
 /// Structural floor, the same pair the transport runtime is built with.
@@ -75,23 +75,6 @@ static RUNNING: Mutex<Option<Running>> = Mutex::new(None);
 /// methods read it before any dialer call. Default false, so a process
 /// that never configured still asks the dialer.
 static OFFLINE: AtomicBool = AtomicBool::new(false);
-/// The armed-lever switch the last [`configure`] recorded. [`Pending`] is
-/// taken at start, so the in-process console cannot read it from there.
-/// Default false: a console that runs before configure fails closed.
-static ARMED: AtomicBool = AtomicBool::new(false);
-/// The options handle the last `configure` recorded, for the in-process
-/// console arm, which has the core and not the server's state.
-static OPTIONS: Mutex<Option<OptionsHandle>> = Mutex::new(None);
-
-/// The options handle the daemon configured, or the absent handle before
-/// any was. The in-process console was the reader; the remote arm does
-/// not call it.
-#[allow(dead_code)]
-pub(crate) fn options() -> OptionsHandle {
-    slot(&OPTIONS)
-        .clone()
-        .unwrap_or_else(|| Arc::new(OptionsAbsent))
-}
 
 fn slot<T>(of: &'static Mutex<Option<T>>) -> MutexGuard<'static, Option<T>> {
     of.lock().unwrap_or_else(PoisonError::into_inner)
@@ -107,19 +90,6 @@ pub fn offline() -> bool {
 
 fn store_offline(offline: bool) {
     OFFLINE.store(offline, Ordering::Release);
-}
-
-/// Whether this daemon was started with `dev-rpc`. The in-process console
-/// admitted an armed lever under this bit. The remote arm does not read
-/// it. Default false.
-#[allow(dead_code)]
-#[must_use]
-pub(crate) fn armed() -> bool {
-    ARMED.load(Ordering::Acquire)
-}
-
-fn store_armed(armed: bool) {
-    ARMED.store(armed, Ordering::Release);
 }
 
 /// Records the RPC section, whether the daemon is offline, and the options
@@ -139,8 +109,6 @@ pub fn configure(
 ) -> oneshot::Receiver<Result<(), String>> {
     let (constructed, rx) = oneshot::channel();
     store_offline(offline);
-    store_armed(armed);
-    *slot(&OPTIONS) = Some(Arc::clone(&options));
     *slot(&PENDING) = Some(Pending {
         section,
         options,
@@ -297,37 +265,6 @@ pub extern "C" fn shekyl_daemon_rpc_stop() {
     stop();
 }
 
-/// The C++ console still calls this (`rpc_command_executor.cpp`). The
-/// renderer moved to `shekyl-cli`; this returns unknown, with an empty
-/// buffer `shekyl_daemon_ctl_free` treats as a no-op, until that caller
-/// is deleted (R8).
-///
-/// # Safety
-///
-/// `out_ptr` and `out_len`, when non-null, are written. The other
-/// pointers are not read.
-#[no_mangle]
-#[allow(dead_code)]
-pub unsafe extern "C" fn shekyl_daemon_console_run(
-    _argv: *const *const std::os::raw::c_char,
-    _argc: usize,
-    _rpc_server_ptr: *mut c_void,
-    _address: *const std::os::raw::c_char,
-    _timeout_secs: u64,
-    _nettype: u8,
-    out_ptr: *mut *mut u8,
-    out_len: *mut usize,
-) -> i32 {
-    if !out_ptr.is_null() {
-        *out_ptr = std::ptr::null_mut();
-    }
-    if !out_len.is_null() {
-        *out_len = 0;
-    }
-    // `SHEKYL_DAEMON_CONSOLE_ERR_UNKNOWN`.
-    -2
-}
-
 #[cfg(test)]
 mod tests {
     use std::num::NonZeroU32;
@@ -335,6 +272,7 @@ mod tests {
 
     use super::*;
     use crate::core::{CoreRpc, P2pRead};
+    use crate::options::OptionsAbsent;
 
     /// The offline bit and the section `configure` stores are process-wide.
     /// This puts both back, including when the test panics.
@@ -344,7 +282,6 @@ mod tests {
         fn drop(&mut self) {
             store_offline(false);
             slot(&PENDING).take();
-            slot(&OPTIONS).take();
         }
     }
 

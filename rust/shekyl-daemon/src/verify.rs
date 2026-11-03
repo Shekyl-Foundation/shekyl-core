@@ -332,26 +332,6 @@ mod tests {
         assert!(!data.exists());
     }
 
-    /// A client invocation stops after the load, as a start does: the
-    /// check accepts without calling the remnant.
-    #[test]
-    fn config_verify_in_client_mode_stops_after_the_load() {
-        let d = tempfile::tempdir().unwrap();
-        let status = crate::run::main(
-            checking_remnant(),
-            &args(&[
-                "--config-verify",
-                "--rpc-admin-listen",
-                "127.0.0.1:4444",
-                "status",
-            ]),
-            &host(d.path()),
-        );
-        assert_eq!(status, 0);
-        assert_eq!(FORBIDDEN_RUNS.load(Ordering::SeqCst), 0, "no client ran");
-        assert!(!d.path().join(".shekyl").exists());
-    }
-
     /// The owner values the table accepted are judged in the row's terms,
     /// and judged only: the walk latches nothing, so the same process can
     /// still record the schedule a start would.

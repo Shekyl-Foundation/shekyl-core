@@ -74,7 +74,7 @@ CFG_TEST = re.compile(r"#\[\s*cfg\s*\(\s*test\s*\)\s*\]")
 # this set is what `--selftest` pins, so a comment that starts matching, or
 # a real export that appears, fails here instead of drifting.
 EXPORT_CRATES = frozenset(
-    {"shekyl-daemon", "shekyl-daemon-ctl", "shekyl-daemon-rpc", "shekyl-ffi", "shekyl-logging"}
+    {"shekyl-daemon", "shekyl-daemon-rpc", "shekyl-ffi", "shekyl-logging"}
 )
 
 

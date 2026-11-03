@@ -31,8 +31,8 @@ fn fresh_client() -> (TempDir, CurveTreeClient) {
 /// than passing tests until a deadlock interleaving in production.
 #[test]
 fn actor_constructed_from_only_the_client() {
-    fn assert_args_is_client<A: Actor<Args = CurveTreeClient>>() {}
-    assert_args_is_client::<CurveTreeActor>();
+    fn assert_actor_args_are_curve_tree_client<A: Actor<Args = CurveTreeClient>>() {}
+    assert_actor_args_are_curve_tree_client::<CurveTreeActor>();
 }
 
 /// kameo requires the actor and its messages to be `Send`. (The replies are
