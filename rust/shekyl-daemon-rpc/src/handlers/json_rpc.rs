@@ -78,6 +78,7 @@ pub async fn handle(
     if let Err(error) = authority.admit(row) {
         return (StatusCode::OK, Json(refusal(id, &error)));
     }
+    crate::authority::note_admitted(authority, row);
 
     // Natively-served methods (RK-1, `docs/completed/DAEMON_RPC_KV_CUTOVER.md`)
     // never reach the C++ dispatch table.
