@@ -27,6 +27,8 @@ shekyl-shard-visual = { path = "../shekyl-shard-visual" }
 # `--rpc-url` validation shares with it; already in this binary's graph
 # through shekyl-wallet-rpc.
 shekyl-rpc-transport = { path = "../shekyl-rpc-transport" }
+# `SyncDaemon`'s error. The shell reads a connection failure from it.
+shekyl-rpc-client = { path = "../shekyl-rpc-client" }
 # The console renderers read the block target from the economics
 # parameters, the peer-list caps, and the daemon's option table.
 shekyl-economics = { path = "../shekyl-economics" }
@@ -45,6 +47,8 @@ serde_json = "1"
 zeroize = { workspace = true }
 rpassword = "7"
 dirs = "6"
+# The wallet-RPC session's HTTP agent. The daemon client is
+# `SyncDaemon` and does not use this.
 ureq = { version = "3", default-features = false, features = ["rustls", "socks-proxy"] }
 tracing = "0.1"
 shekyl-logging = { path = "../shekyl-logging" }
@@ -79,7 +83,6 @@ shekyl-engine-core = { path = "../shekyl-engine-core" }
 shekyl-address = { path = "../shekyl-address" }
 shekyl-engine-file = { path = "../shekyl-engine-file" }
 shekyl-engine-prefs = { path = "../shekyl-engine-prefs" }
-shekyl-rpc-client = { path = "../shekyl-rpc-client" }
 
 [lints]
 workspace = true

@@ -3,16 +3,20 @@
 // All rights reserved.
 // BSD-3-Clause
 
-//! Standalone daemon RPC client for shekyl-cli.
+//! The shell's daemon client.
 //!
-//! Privacy-critical: this client is **independent** of the wallet-RPC
-//! session's daemon connection. It uses a separate TCP connection (and a
-//! separate Tor circuit when SOCKS is configured) so that unauthenticated
-//! daemon queries like `get_info` are not correlated with the engine session.
+//! One [`SyncDaemon`](shekyl_rpc_transport::SyncDaemon), connected on the
+//! first request. The SOCKS proxy, the loopback down-hint and the timeout
+//! are this client's; the bytes are the shared transport's.
 
 use serde::Deserialize;
 use serde_json::Value;
 use std::fmt;
+use std::sync::OnceLock;
+use std::time::Duration;
+
+use shekyl_rpc_client::RpcError;
+use shekyl_rpc_transport::SyncDaemon;
 
 use shekyl_rpc_transport::network_posture::{host_of, is_loopback_host};
 use shekyl_rpc_types::mining::MineSpeed;
@@ -107,17 +111,21 @@ pub struct MiningStatus {
     pub difficulty: u64,
 }
 
-/// Lightweight daemon RPC client. Uses ureq (rustls TLS backend) with an
-/// independent connection from the wallet-RPC session's daemon path.
+/// How long one daemon request waits. The views, mining, `tx show`, the
+/// shard reads and the startup check share it.
+const DAEMON_TIMEOUT: Duration = Duration::from_secs(30);
+
+/// The shell's one daemon client. The connection is opened on the first
+/// request, so a run that never asks the daemon does not dial it.
 pub struct DaemonClient {
     url: String,
-    agent: ureq::Agent,
-    /// The SOCKS proxy this client was built with, so a later daemon
-    /// request (`tx show --body`) uses the same circuit.
+    /// The SOCKS proxy this client was built with, so every request uses
+    /// the same circuit.
     proxy: Option<String>,
     /// See [`DaemonError::ConnectionRefused`]: attached to every refused
     /// connection this client reports.
     down_hint: Option<String>,
+    rpc: OnceLock<SyncDaemon>,
 }
 
 /// Normalize a daemon address to the URL form the transports expect: a
@@ -168,24 +176,24 @@ impl DaemonClient {
             return Err(DaemonError::NotConfigured);
         }
 
-        let url = daemon_url(daemon_address);
-
-        let mut config_builder = ureq::Agent::config_builder();
-
-        if let Some(proxy_addr) = proxy {
-            let proxy_obj = ureq::Proxy::new(proxy_addr)
-                .map_err(|e| DaemonError::SocksFailure(e.to_string()))?;
-            config_builder = config_builder.proxy(Some(proxy_obj));
-        }
-
-        let agent = config_builder.build().new_agent();
-
         Ok(Self {
-            url,
-            agent,
+            url: daemon_url(daemon_address),
             proxy: proxy.map(str::to_owned),
             down_hint,
+            rpc: OnceLock::new(),
         })
+    }
+
+    /// The shared client, connected on the first call.
+    fn rpc(&self) -> Result<&SyncDaemon, DaemonError> {
+        let rpc = SyncDaemon::connect(self.url.clone(), self.proxy.clone(), DAEMON_TIMEOUT)
+            .map_err(|error| classify_transport(&error))?;
+        // A concurrent first request may have stored one. Either client
+        // speaks to the same daemon.
+        match self.rpc.set(rpc) {
+            Ok(()) => Ok(self.rpc.get().expect("this call stored the client")),
+            Err(_) => Ok(self.rpc.get().expect("another call stored the client")),
+        }
     }
 
     /// The SOCKS proxy, when the client was built with one.
@@ -209,26 +217,20 @@ impl DaemonClient {
         }
     }
 
-    /// POST JSON to `url` and parse the body as a JSON value.
-    fn post_json(&self, url: &str, body: &Value) -> Result<Value, DaemonError> {
-        let mut response = self
-            .agent
-            .post(url)
-            .header("Content-Type", "application/json")
-            .send(body.to_string().as_bytes())
-            .map_err(|e| self.with_down_hint(classify_ureq_error(&e)))?;
-
-        let body_str = response
-            .body_mut()
-            .read_to_string()
-            .map_err(|e| DaemonError::MalformedResponse(e.to_string()))?;
-
-        serde_json::from_str(&body_str).map_err(|e| DaemonError::MalformedResponse(e.to_string()))
+    /// POST JSON to `path` (a daemon route, with or without a leading `/`).
+    fn post_json(&self, path: &str, body: &Value) -> Result<Value, DaemonError> {
+        let bytes = serde_json::to_vec(body)
+            .map_err(|error| DaemonError::MalformedResponse(error.to_string()))?;
+        let raw = self
+            .rpc()?
+            .post(path, bytes)
+            .map_err(|error| self.with_down_hint(classify_transport(&error)))?;
+        serde_json::from_slice(&raw)
+            .map_err(|error| DaemonError::MalformedResponse(error.to_string()))
     }
 
     /// Call a JSON-RPC method on the daemon.
     fn json_rpc(&self, method: &str, params: &Value) -> Result<Value, DaemonError> {
-        let rpc_url = format!("{}/json_rpc", self.url);
         let body = serde_json::json!({
             "jsonrpc": "2.0",
             "id": "0",
@@ -236,7 +238,7 @@ impl DaemonClient {
             "params": params,
         });
 
-        let parsed = self.post_json(&rpc_url, &body)?;
+        let parsed = self.post_json("/json_rpc", &body)?;
 
         if let Some(err) = parsed.get("error") {
             let code = err
@@ -323,8 +325,7 @@ impl DaemonClient {
     /// methods. Success is a flat object whose `status` is `"OK"`; a grant
     /// or method refusal is the JSON-RPC error object on HTTP 200 (RW-Q3).
     fn path_rpc(&self, path: &str, body: &Value) -> Result<Value, DaemonError> {
-        let url = format!("{}{path}", self.url);
-        let parsed = self.post_json(&url, body)?;
+        let parsed = self.post_json(path, body)?;
         classify_path_body(parsed)
     }
 
@@ -394,29 +395,13 @@ fn classify_path_status(status: &str) -> Result<(), DaemonError> {
     }
 }
 
-fn classify_ureq_error(err: &ureq::Error) -> DaemonError {
-    let msg = err.to_string();
-    let lower = msg.to_lowercase();
-
-    if lower.contains("socks") || lower.contains("proxy") || lower.contains("tor") {
-        DaemonError::SocksFailure(msg)
-    } else if lower.contains("tls")
-        || lower.contains("ssl")
-        || lower.contains("certificate")
-        || lower.contains("handshake")
-    {
-        DaemonError::TlsFailure(msg)
-    } else if lower.contains("connection refused")
-        || lower.contains("connect error")
-        || lower.contains("unreachable")
-        || lower.contains("timed out")
-    {
-        DaemonError::ConnectionRefused {
-            detail: msg,
+fn classify_transport(err: &RpcError) -> DaemonError {
+    match err {
+        RpcError::ConnectionError(detail) => DaemonError::ConnectionRefused {
+            detail: detail.clone(),
             hint: None,
-        }
-    } else {
-        DaemonError::Other(msg)
+        },
+        other => DaemonError::Other(other.to_string()),
     }
 }
 
