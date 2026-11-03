@@ -145,12 +145,10 @@ def _metrics_pow(replay_bin, seed_rpc_port, work, tip_count):
     store = os.path.join(store_dir, "chain.db")
     trace = os.path.join(work, "pow.trace.e2")
     metrics = os.path.join(work, "pow.metrics.json")
-    subprocess.run([replay_bin, "fetch", "--daemon", f"http://127.0.0.1:{seed_rpc_port}",
-                    *R.REPLAY_CHAIN, "--from", "0", "--to", str(tip_count),
-                    "--out", corpus], check=True, capture_output=True)
-    subprocess.run([replay_bin, "baseline", "--corpus", corpus, "--store", store,
-                    *R.REPLAY_CHAIN, "--out", trace, "--metrics-out", metrics],
-                   check=True, capture_output=True)
+    R.run_tool([replay_bin, "fetch", "--daemon", f"http://127.0.0.1:{seed_rpc_port}",
+                *R.FETCH_CHAIN, "--from", "0", "--to", str(tip_count), "--out", corpus])
+    R.run_tool([replay_bin, "baseline", "--corpus", corpus, "--store", store,
+                *R.REPLAY_CHAIN, "--out", trace, "--metrics-out", metrics])
     shutil.rmtree(store_dir, ignore_errors=True)
     with open(metrics, encoding="utf-8") as fh:
         return json.load(fh).get("hash_ns_mean")
