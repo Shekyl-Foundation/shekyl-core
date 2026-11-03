@@ -17,15 +17,108 @@
 //! asks for one storage chunk per reply, about 52 replies per shard, and
 //! those must not queue in front of bond signing (one mechanism, one job;
 //! `05-system-thinking.mdc`).
+//!
+//! The actor's synchronous redb and chunk decrypt run on
+//! [`BodyStoreHome`], a one-worker runtime whose threads lower their own
+//! CPU priority at start (`ARCHIVAL_CHALLENGE_MECHANISM.md` §9.8,
+//! `CURVE_TREE_CLIENT.md` §11.1). That is not the serving host's runtime:
+//! this store lives for the whole wallet session, including while nothing
+//! is served, and erase is asked from the engine side. The serving host's
+//! threads only wait. The key stays in this actor.
 
+use std::num::NonZeroUsize;
 use std::ops::ControlFlow;
+use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::Arc;
 
 use kameo::actor::{Actor, ActorRef, Spawn, WeakActorRef};
 use kameo::error::{ActorStopReason, Infallible, PanicError};
 use kameo::message::{Context, Message};
 use shekyl_p_host::{HeldShardSource, ProviderError};
 use shekyl_p_store::{BodyStore, HeldShard, StoreError};
+use shekyl_runtime::{runtime_with_thread_hooks, Pool, RuntimeBudget, ThreadHooks, ThreadName};
+use shekyl_thread_priority::lower_current_thread;
 use shekyl_types::ShardId;
+
+/// OS thread name and ledger label of the body-store runtime.
+///
+/// The same family as the serving runtime's `sk-serving`, and short enough
+/// for the Linux thread-name limit.
+const BODY_STORE_THREAD_NAME: &str = "sk-body-store";
+
+/// One worker. The actor loop is one task, and the synchronous store work
+/// runs on that worker, so a second worker would sit idle.
+const BODY_STORE_WORKERS: usize = 1;
+
+/// The actor does not hop to the blocking pool. A runtime's blocking cap
+/// cannot be zero; a thread the pool does start is still lowered.
+const BODY_STORE_BLOCKING: usize = 1;
+
+const BODY_STORE_WORKER_THREADS: NonZeroUsize = match NonZeroUsize::new(BODY_STORE_WORKERS) {
+    Some(count) => count,
+    None => panic!("BODY_STORE_WORKERS is zero"),
+};
+
+const BODY_STORE_BLOCKING_THREADS: NonZeroUsize = match NonZeroUsize::new(BODY_STORE_BLOCKING) {
+    Some(count) => count,
+    None => panic!("BODY_STORE_BLOCKING is zero"),
+};
+
+/// The owner's runtime. Drop stops it without waiting, which is safe from
+/// an async task (`Pool::shutdown_background`). It does not await
+/// `on_stop`: callers that reopen the file call
+/// [`BodyStoreHandle::shutdown`] first, while this runtime is still up.
+struct BodyStoreHome {
+    pool: Option<Pool>,
+}
+
+impl BodyStoreHome {
+    fn start() -> Self {
+        let name = ThreadName::new(BODY_STORE_THREAD_NAME)
+            .unwrap_or_else(|error| panic!("body-store thread name: {error}"));
+        let budget = RuntimeBudget {
+            workers: BODY_STORE_WORKER_THREADS,
+            blocking: BODY_STORE_BLOCKING_THREADS,
+        };
+        let pool = runtime_with_thread_hooks(budget, &name, body_store_thread_hooks())
+            .unwrap_or_else(|error| {
+                panic!("the persona body-store runtime could not start: {error}")
+            });
+        Self { pool: Some(pool) }
+    }
+
+    fn runtime(&self) -> &tokio::runtime::Runtime {
+        self.pool.as_ref().expect("the pool is present until drop")
+    }
+}
+
+impl Drop for BodyStoreHome {
+    fn drop(&mut self) {
+        if let Some(pool) = self.pool.take() {
+            pool.shutdown_background();
+        }
+    }
+}
+
+/// Lower every thread of the body-store runtime. One warning if the
+/// platform refuses, then the thread keeps working at normal priority
+/// (§9.8 item 3). The store must still open.
+fn body_store_thread_hooks() -> ThreadHooks {
+    let warned = Arc::new(AtomicBool::new(false));
+    ThreadHooks::pair(
+        move || {
+            if let Err(refused) = lower_current_thread() {
+                if !warned.swap(true, Ordering::Relaxed) {
+                    tracing::warn!(
+                        %refused,
+                        "persona body-store thread stayed at normal priority; chunk reads continue"
+                    );
+                }
+            }
+        },
+        || {},
+    )
+}
 
 /// The owning actor. The store is an `Option` only so `on_stop` can take it.
 pub(crate) struct BodyStoreActor {
@@ -155,13 +248,26 @@ impl Message<PutShard> for BodyStoreActor {
 #[derive(Clone)]
 pub(crate) struct BodyStoreHandle {
     actor: ActorRef<BodyStoreActor>,
+    /// Keeps the owner's runtime alive for as long as a handle does.
+    home: Arc<BodyStoreHome>,
 }
 
 impl BodyStoreHandle {
-    /// Spawn the owner over an opened store.
+    /// Spawn the owner over an opened store, on its lowered runtime.
     pub(crate) fn spawn(store: BodyStore) -> Self {
+        let home = BodyStoreHome::start();
+        let (started, owner) = std::sync::mpsc::sync_channel(1);
+        home.runtime().spawn(async move {
+            started
+                .send(BodyStoreActor::spawn(store))
+                .expect("the spawning task is still waiting for its owner");
+        });
+        let actor = owner
+            .recv()
+            .expect("the body-store runtime accepted its owner");
         Self {
-            actor: BodyStoreActor::spawn(store),
+            actor,
+            home: Arc::new(home),
         }
     }
 
@@ -181,6 +287,7 @@ impl BodyStoreHandle {
     pub(crate) fn downgrade(&self) -> WeakBodyStoreHandle {
         WeakBodyStoreHandle {
             actor: self.actor.downgrade(),
+            home: Arc::downgrade(&self.home),
         }
     }
 
@@ -214,6 +321,22 @@ impl BodyStoreHandle {
             .await
             .expect("put shard");
     }
+
+    /// Open a shard the way the serving path does, awaited rather than
+    /// through [`BodyReads`]. `None` is a row the store does not hold.
+    #[cfg(test)]
+    pub(crate) async fn open_for_test(&self, shard_id: ShardId) -> Option<HeldShard> {
+        self.actor
+            .ask(OpenHeldShard { shard_id })
+            .await
+            .expect("open shard")
+    }
+
+    /// The nice value of the thread that runs the store work.
+    #[cfg(all(test, target_os = "linux"))]
+    pub(crate) async fn nice_for_test(&self) -> i32 {
+        self.actor.ask(OwnerNice).await.expect("owner nice")
+    }
 }
 
 /// A non-owning [`BodyStoreHandle`], for the stake engine's weak handle: it
@@ -222,13 +345,15 @@ impl BodyStoreHandle {
 #[derive(Clone)]
 pub(crate) struct WeakBodyStoreHandle {
     actor: WeakActorRef<BodyStoreActor>,
+    home: std::sync::Weak<BodyStoreHome>,
 }
 
 impl WeakBodyStoreHandle {
     /// A strong handle iff the owner is still running.
     pub(crate) fn upgrade(&self) -> Option<BodyStoreHandle> {
         let actor = self.actor.upgrade()?;
-        actor.is_alive().then_some(BodyStoreHandle { actor })
+        let home = self.home.upgrade()?;
+        actor.is_alive().then_some(BodyStoreHandle { actor, home })
     }
 }
 
@@ -236,8 +361,9 @@ impl WeakBodyStoreHandle {
 ///
 /// Called on the endpoint's blocking pool: each read parks the calling
 /// thread on the owner's reply (`blocking_send`), so it must never be called
-/// from an async executor thread. An owner that has stopped is a store
-/// fault, which the endpoint renders as its bare 503.
+/// from an async executor thread. The parked thread does not touch the
+/// store. The owner's lowered thread does. An owner that has stopped is a
+/// store fault, which the endpoint renders as its bare 503.
 pub(crate) struct BodyReads {
     actor: WeakActorRef<BodyStoreActor>,
 }
@@ -267,6 +393,24 @@ impl HeldShardSource for BodyReads {
             })
             .blocking_send()
             .map_err(|e| ProviderError::other(format!("persona body store read failed: {e:?}")))
+    }
+}
+
+/// Read the nice value of the thread handling this message. The handler
+/// runs on the owner's worker, so the reading is that thread's.
+#[cfg(all(test, target_os = "linux"))]
+pub(crate) struct OwnerNice;
+
+#[cfg(all(test, target_os = "linux"))]
+impl Message<OwnerNice> for BodyStoreActor {
+    type Reply = i32;
+
+    async fn handle(
+        &mut self,
+        _msg: OwnerNice,
+        _ctx: &mut Context<Self, Self::Reply>,
+    ) -> Self::Reply {
+        shekyl_thread_priority::current_thread_nice().expect("the owner's nice value")
     }
 }
 

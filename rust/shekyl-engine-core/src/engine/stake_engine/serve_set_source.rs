@@ -51,10 +51,6 @@
 use shekyl_archival_retention::HoldingsKind;
 use shekyl_curve_tree::BlockHeight;
 use shekyl_p_host::{PinReport, ServeSetPinner, StoreFacts, StoreIdentity};
-#[cfg(test)]
-use shekyl_p_store::BodyStore;
-#[cfg(test)]
-use shekyl_types::ShardId;
 
 use super::body_store_actor::BodyStoreHandle;
 
@@ -99,46 +95,21 @@ pub(crate) struct EngineServeSetPinner<R: PersonaIsolatedTransport> {
     /// The store's pin set as of the last reconcile — the other half of the
     /// release input, kept here so a refresh costs one actor round trip.
     last_pinned: std::sync::Mutex<Vec<u64>>,
-    /// Where a released shard's body row is erased (`WSS-Q8`). Production
-    /// asks the stake actor, which keeps the writer. Tests hold a store
-    /// because they have no actor.
-    rows: ReleasedRows,
-}
-
-/// The body rows a pin release erases.
-pub(crate) enum ReleasedRows {
-    /// A store in this process. Tests have no body-store actor.
-    #[cfg(test)]
-    Store(std::sync::Arc<BodyStore>),
-    /// The body store's owning actor (`CURVE_TREE_CLIENT.md` §11.1). The
-    /// serving host never holds the key.
-    Owner(BodyStoreHandle),
-}
-
-impl ReleasedRows {
-    async fn erase(&self, ids: &[u64]) -> Result<(), String> {
-        match self {
-            #[cfg(test)]
-            Self::Store(store) => {
-                for id in ids {
-                    store
-                        .erase_shard(ShardId::from_raw(*id))
-                        .map_err(|e| e.to_string())?;
-                }
-                Ok(())
-            }
-            Self::Owner(bodies) => bodies.erase(ids.to_vec()).await,
-        }
-    }
+    /// The body store's owning actor (`CURVE_TREE_CLIENT.md` §11.1,
+    /// `WSS-Q8`). A pin-release erase is a message to it. This pinner
+    /// holds neither the store nor its key, and neither does the stake
+    /// actor: the body-store actor is the one owner.
+    bodies: BodyStoreHandle,
 }
 
 impl<R: PersonaIsolatedTransport> EngineServeSetPinner<R> {
-    /// Bind a pinner to one persona's canonical id and its own transport.
+    /// Bind a pinner to one persona's canonical id, its transport, and the
+    /// body store's owner.
     pub(crate) fn new(
         curve_tree: CurveTreeHandle,
         rpc: R,
         p_id: [u8; 32],
-        rows: ReleasedRows,
+        bodies: BodyStoreHandle,
     ) -> Self {
         Self {
             curve_tree,
@@ -146,7 +117,7 @@ impl<R: PersonaIsolatedTransport> EngineServeSetPinner<R> {
             p_id,
             absent_since: std::sync::Mutex::new(DepartureLedger::default()),
             last_pinned: std::sync::Mutex::new(Vec::new()),
-            rows,
+            bodies,
         }
     }
 
@@ -259,7 +230,7 @@ impl<R: PersonaIsolatedTransport> EngineServeSetPinner<R> {
         // while the body row remained, and the clock — spent or restarted
         // after a process restart — would not see an unpinned row again.
         // A missing row is success.
-        self.rows.erase(&releasable).await?;
+        self.bodies.erase(releasable.clone()).await?;
         let reply = self
             .curve_tree
             .pin_serve_set(shard_ids.clone(), releasable.clone())

@@ -293,8 +293,8 @@ impl BoundServe {
 ///   still pins the curve-tree serve set (`CTS-7`: the concept survives,
 ///   re-keyed to shard `k`). A pin does not keep a `.pstore` row. The
 ///   body row is erased when the pin-release gate releases that shard
-///   (`WSS-Q8`). That erase is an ask to the stake actor, which keeps
-///   the writer. This host does not hold it.
+///   (`WSS-Q8`). That erase is a message to the body-store actor, which
+///   keeps the key. This host does not hold the store or the key.
 /// - **A serving persona always runs full vanguards.** The posture this host
 ///   writes is [`ServingPosture::Serving`], the one variant that carries both
 ///   the onion and `VanguardsMode::Managed`. The "onion without vanguards"
@@ -307,8 +307,8 @@ impl BoundServe {
 /// spend authority, no body-store writer, and no handle on the curve-tree
 /// store. Pinning writes and the witness's reads go through the pinner to
 /// the curve-tree actor, the store's one owner. A
-/// pin-release erase goes through the pinner to the stake actor, which
-/// keeps the body-store key. The one assumption worth stating rather than leaving implicit:
+/// pin-release erase goes through the pinner to the body-store actor,
+/// which keeps the key. The one assumption worth stating rather than leaving implicit:
 /// the design frames the custody boundary as *which secret crosses the
 /// process boundary*, and this host is in-process with the wallet — so
 /// what enforces the boundary here is the type of what it can hold, not

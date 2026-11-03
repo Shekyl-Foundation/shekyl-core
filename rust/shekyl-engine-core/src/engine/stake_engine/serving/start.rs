@@ -236,9 +236,7 @@ where
             curve_tree,
             claim_rpc,
             p_id.to_bytes(),
-            crate::engine::stake_engine::serve_set_source::ReleasedRows::Owner(
-                stake.bodies.clone(),
-            ),
+            stake.bodies.clone(),
         );
 
         Ok(Some(spawn_serving_task(

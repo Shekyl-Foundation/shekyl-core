@@ -136,3 +136,18 @@ async fn the_stake_engine_shutdown_closes_the_body_store_too() {
     let reopened = BodyStore::open(&path, key()).expect("the file is closed at once");
     assert!(reopened.holds(ShardId::from_raw(3)).expect("holds"));
 }
+
+/// The owner's store work runs at serving priority (§9.8). The reading is
+/// taken on the actor's thread, by a message, so it is not the test
+/// thread's nice value.
+#[cfg(target_os = "linux")]
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn the_owner_does_its_store_work_at_serving_priority() {
+    let handle = BodyStoreHandle::spawn(BodyStore::open_ephemeral(key()).expect("open"));
+    assert_eq!(
+        handle.nice_for_test().await,
+        shekyl_thread_priority::SERVING_NICE,
+        "the body-store worker lowered itself before it took store work"
+    );
+    handle.shutdown().await;
+}

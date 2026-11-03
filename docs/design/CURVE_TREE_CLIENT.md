@@ -1411,11 +1411,20 @@ ask there would stall bond signing behind bulk redb reads.
 - **Close awaits it.** The stake engine's shutdown stops the stake actor,
   then the body-store actor, each awaited with `wait_for_shutdown_result`
   (a supervision link would not do: §11's kameo note).
+- **Its store work runs at serving priority.** The synchronous redb and
+  chunk decrypt run on a one-worker runtime whose threads call
+  `lower_current_thread` at start (`ARCHIVAL_CHALLENGE_MECHANISM.md`
+  §9.8). That runtime is not the serving host's: the store lives for the
+  whole session, including while nothing is served, and erase is asked
+  from the engine side. The key stays in the actor. The serving host's
+  threads only wait. Drop of the handle retires the runtime; it does not
+  await `on_stop`. Shutdown does, and it returns before the runtime goes.
 
 **Tests that can fail** (rule 47): a held shard served through the actor
 returns the stored bytes chunk by chunk; after the owner stops, a serve
 read is refused and the `.pstore` path reopens at once; erase through the
-stake engine reaches the store. *As landed (#1261):*
+stake engine reaches the store; the owner's worker, asked for its own
+nice value, reads serving nice. *As landed (#1261):*
 `engine::stake_engine::body_store_actor::tests`, of which the two reopen
 tests fail with `DatabaseAlreadyOpen` when the store is not dropped in
 `on_stop`, and `a_closed_wallet_has_closed_its_stores` checks the `.pstore`
