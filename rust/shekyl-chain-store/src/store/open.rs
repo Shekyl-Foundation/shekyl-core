@@ -122,9 +122,12 @@ pub(super) fn open_at(
 /// The read-only open is the refusal filter. [`filter_readable`] rejects
 /// a file with nothing written. `RepairAborted` is not a refusal: a
 /// read-only open returns it before any table read when the file needs
-/// recovery, and only the writable open repairs it. Pin admission for
-/// that file is the one on the handle [`open_at`] returns — the body
-/// cannot be read until the repair has run. The writable open's [`judge`]
+/// recovery, and only the writable open repairs it. That open writes the
+/// repaired header before it returns the handle, so the repair is in
+/// place — this is the power-loss restart. Pin admission for that file
+/// is the one on the handle [`open_at`] returns — the body cannot be
+/// read until the repair has run. A refusal after the repair leaves the
+/// recorded blocks in the file. The writable open's [`judge`]
 /// is the provenance of the handle, not the filter's. A creation a power
 /// loss cut short is finished ([`crate::creation`]). A file with no table
 /// is sealed in place under the writable open, which holds the engine's
