@@ -228,9 +228,9 @@ pub(crate) struct BlockContext<'a> {
     /// caller's claim of it; a mismatch with this derivation is
     /// `Stale::Target`, not a second proof check.
     pub(crate) target: Target,
-    /// What this node takes on the release's word — the anchors (E1 reads
-    /// them at anchored heights); from slice 6, the posture the 4.I rows
-    /// read.
+    /// The genesis pin this node holds a height-0 candidate to (CEN-E1).
+    /// Nothing above genesis is pinned, and there is no posture arm
+    /// (S1, design review 2026-11-03).
     pub(crate) trust: &'a Trust,
 }
 
@@ -291,7 +291,7 @@ impl<'a> BlockContext<'a> {
         self.formed.candidate()
     }
 
-    /// Isolated-rule tests that read neither the target nor the anchors.
+    /// Isolated-rule tests that read neither the target nor the genesis pin.
     /// Production `validate` always passes D4's target and the driver's
     /// `Trust`.
     #[cfg(test)]
@@ -352,7 +352,7 @@ pub(crate) struct HeaderContext<'a, P> {
     pub(crate) tip: Option<Tip>,
     /// C3's window. `None` at genesis.
     pub(crate) mtp_window: Option<&'a MtpWindow>,
-    /// The anchors E1 reads.
+    /// The genesis pin E1 reads.
     pub(crate) trust: &'a Trust,
 }
 
@@ -710,7 +710,7 @@ pub fn recorded<'id, V: ChainView<'id>>(
 /// [`recorded`]'s header-facts half: the [`HeaderRecord`] at `height`,
 /// which is below the connecting height and therefore present on a
 /// conforming view — the read every [`HeaderRule`] makes for a parent-side
-/// fact (C3's window, D3's seed, D4's window and work, E1's anchors, B4's
+/// fact (C3's window, D3's seed, D4's window and work, E1's pin, B4's
 /// anchor window). The hole is the same SI-7 under
 /// [`PerHeightRecord::Header`], so the store halts against `block_info`.
 pub fn recorded_header<'id, H: HeaderView<'id>>(

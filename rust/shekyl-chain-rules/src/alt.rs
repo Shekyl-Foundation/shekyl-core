@@ -37,13 +37,14 @@
 //! The **view** is the stitched chain: `tip()` is the candidate's parent
 //! and `header_at(h)` the recorded row at or below the fork point, the alt
 //! entry above it. The **fork** is where the alternative leaves the
-//! recorded chain and where that chain ends ([`Fork`]) — CEN-E2's
-//! operands. Both come from one snapshot, and the view states the fork
+//! recorded chain and where that chain ends ([`Fork`]). The switch reads
+//! [`Fork::pops`] against the rule set's reorg cap
+//! (`PopBeyondReorgCap`); the cheap tier does not refuse on it (CEN-E2
+//! rejected, S1 2026-11-03). The view states the fork
 //! ([`AltChainView::fork`]) rather than the caller passing it beside the
 //! view: a fork from one read and a chain from another could describe two
-//! different alternatives, and E2 would then judge a pop the chain does
-//! not cause. The type makes that pair unrepresentable; the store's
-//! `AltView` answers from the `AltChain` it was built over.
+//! different alternatives. The type makes that pair unrepresentable; the
+//! store's `AltView` answers from the `AltChain` it was built over.
 //!
 //! The one relation the view cannot state is that it was built for *this*
 //! candidate. The store derives the chain from the candidate's `previous`,
@@ -98,7 +99,7 @@ use crate::view::{HeaderView, Tip};
 /// `AltView` holds the `AltChain` the walk built and the recorded tip it
 /// read first. There is no constructor-side way to pair a chain with a
 /// fork from another read, which is why [`alt_against`] takes the view and
-/// nothing beside it for E2's operands.
+/// nothing beside it. The switch reads the fork; the tier does not.
 pub trait AltChainView<'id>: HeaderView<'id> {
     /// Where this chain leaves the recorded one, and where the recorded one
     /// ends, on the snapshot the chain was built over.
@@ -121,7 +122,8 @@ pub struct InvertedFork {
 }
 
 /// Where an alternative chain leaves the recorded one, and where the
-/// recorded one ends — CEN-E2's operands.
+/// recorded one ends. [`pops`](Self::pops) is what the switch compares
+/// with the rule set's reorg cap. The cheap tier does not.
 ///
 /// `root` is the last recorded block the alternative shares (the store's
 /// `AltChain::root`); `recorded_tip` is the recorded chain's tip in the

@@ -90,8 +90,8 @@ fn hash_at(chain: &MockChain, height: BlockHeight) -> BlockHash {
 
 const OTHER: BlockHash = BlockHash::from_bytes([0xEE; 32]);
 
-fn conflict(chain: &MockChain, anchors: &GenesisPin) -> Option<GenesisConflict> {
-    chain.with_view(|view| infallible(anchors.conflict_with(&view)))
+fn conflict(chain: &MockChain, pin: &GenesisPin) -> Option<GenesisConflict> {
+    chain.with_view(|view| infallible(pin.conflict_with(&view)))
 }
 
 /// The refusal fixture the registry names: a file whose genesis is not the
@@ -104,9 +104,8 @@ fn a_foreign_genesis_is_the_conflict_at_height_zero() {
     assert_eq!(
         conflict(&chain, &pinning_genesis(OTHER)),
         Some(GenesisConflict {
-            height: BlockHeight::ZERO,
             expected: OTHER,
-            recorded: Some(hash_at(&chain, BlockHeight::ZERO)),
+            recorded: hash_at(&chain, BlockHeight::ZERO),
         })
     );
 }
@@ -130,26 +129,6 @@ fn an_empty_chain_or_an_empty_table_has_no_conflict() {
         None
     );
     assert_eq!(conflict(&five_blocks(), &GenesisPin::NONE), None);
-}
-
-/// `conflict_with` is the view face of `conflict_over`. A second walk
-/// would let the store's open and the view's open disagree.
-#[test]
-fn conflict_with_is_the_view_face_of_the_one_walk() {
-    let chain = five_blocks();
-    let anchors = pinning_genesis(OTHER);
-    chain.with_view(|view| {
-        let via_view = infallible(anchors.conflict_with(&view));
-        let tip = infallible(view.tip());
-        let via_walk = infallible(anchors.conflict_over(tip, |height| {
-            Ok(match view.header_at(height)? {
-                AtHeight::Recorded(record) => Some(record.hash),
-                AtHeight::AboveTip => None,
-            })
-        }));
-        assert_eq!(via_view, via_walk);
-        assert!(via_walk.is_some(), "a foreign genesis is a conflict");
-    });
 }
 
 /// A view that cannot answer is a fault, not a conflict and not agreement.

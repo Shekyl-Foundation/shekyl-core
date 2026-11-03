@@ -3,14 +3,17 @@
 // All rights reserved.
 // BSD-3-Clause
 
-//! Census 4.K's rule arms, and CEN-E2 — the rows only an alternative
-//! block can be judged on (`DRS_E5_POOL_ALT_PRUNE.md` §2.1, slice 9 a4).
+//! Census 4.K's rule arms — the rows only an alternative block can be
+//! judged on (`DRS_E5_POOL_ALT_PRUNE.md` §2.1, slice 9 a4).
 //!
-//! The alt tier ([`crate::alt_against`]) judges a block against the chain it
-//! extends rather than the recorded tip. Most of what it runs is the
-//! header-rule half of `validate`'s ladder, bound on a [`HeaderView`] so
-//! the stitched, unexecuted chain can answer it. Three rows have no
-//! main-chain arm at all and live here:
+//! CEN-E2 is rejected (S1, design review 2026-11-03): no coded checkpoints,
+//! so no anchor floor, and `D_max` is the switch's local limit
+//! (`PopBeyondReorgCap`), not a consensus refusal. The alt tier
+//! ([`crate::alt_against`]) judges a block against the chain it extends
+//! rather than the recorded tip. Most of what it runs is the header-rule
+//! half of `validate`'s ladder, bound on a [`HeaderView`] so the stitched,
+//! unexecuted chain can answer it. The rows with no main-chain arm live
+//! here:
 //!
 //! - **CEN-K1b** ([`K1b`]) — a block whose coinbase *claims* height 0
 //!   cannot be an alternative. Stateless: it reads the claim, not the
@@ -19,16 +22,6 @@
 //!   rule is CEN-F5's claimed-equals-derived equality, which runs after;
 //!   this arm's one job is to exit before a header is read. Not run by
 //!   `form`: on the main chain a height-0 claim is genesis admission.
-//! - **CEN-E2** ([`E2`]) — the two bands of `PDM-Q11`. The *anchor floor*:
-//!   an alternative rooted below the release's current anchor would replace
-//!   the anchored block, and no chain that does so can reach the anchor's
-//!   hash. The *rolling cap*: an alternative that would pop more than
-//!   `D_max` recorded blocks is refused, so a deep rewrite is a visible
-//!   split rather than a silent reorg. Both read the **fork** — where the
-//!   alternative leaves the recorded chain and how long the recorded chain
-//!   is — which no [`HeaderView`] states, so the rule is a function over
-//!   the [`Fork`] the alt view names (`AltChainView::fork`), recorded at
-//!   its site as CEN-E5 is.
 //! - **CEN-D5** ([`D5`]) — the alt chain's difficulty is CEN-D4's
 //!   algorithm over the stitched window. The algorithm is `D4::target`
 //!   unchanged; what D5 names is the window's provenance — the view the
@@ -36,7 +29,7 @@
 //!   (`AltView::header_at` in the store) — so the row records at the site
 //!   that fed D4 an alt view, and the algorithm records its own.
 //!
-//! A fourth row is the tier itself: **CEN-K4** ([`K4`]) — an alternative
+//! The tier itself is a row: **CEN-K4** ([`K4`]) — an alternative
 //! block is stored only after the ladder above has run, in that order, and
 //! nothing else. It has no predicate of its own; it is recorded when the
 //! last step passes, and what it holds is the set and the order, pinned by
@@ -56,7 +49,7 @@ use crate::verdict::{InvalidBlock, Locus, Verdict};
 /// holds it to the derived height later in the same ladder, and on an alt
 /// chain the derived height is `≥ 1` by construction (CEN-K1a, the
 /// store's `AltChain`), so every block this refuses F5 would also refuse.
-/// The row is the *order*: the C++ exits here before checkpoints,
+/// The row is the *order*: the C++ exits here before its checkpoint walk,
 /// attestation and PoW (`blockchain.cpp:1982`–`:1988`), and the census
 /// pins the arm to that one job — its falsifier is the arm acquiring
 /// another. The locus is the block (`reject_block_form`: a height-0 claim
@@ -88,8 +81,8 @@ impl FormRule for K1b {
 
 /// CEN-K4: an alternative block is accepted into storage after the cheap
 /// tier's ladder — the version rows, linkage, the timestamp rows over the
-/// stitched window, the anchor floor, PoW at the alt target, the
-/// coinbase's prevalidate-only rows — and before anything that reads
+/// stitched window, PoW at the alt target, the coinbase's prevalidate-only
+/// rows — and before anything that reads
 /// executed state, which is promotion's (`validate_miner_transaction`,
 /// `check_tx_inputs`, the curve root, the attestation set).
 ///

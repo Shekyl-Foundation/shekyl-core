@@ -17,8 +17,8 @@
 //! held from before `create_new` until the engine holds the file
 //! ([`crate::creation::PathGuard`]).
 //!
-//! [`ReleaseAdmission`] says whether that read-only screen also admits
-//! the file against a genesis pin. The unanchored doors do not read the
+//! [`GenesisAdmission`] says whether that read-only screen also admits
+//! the file against a genesis pin. The unpinned doors do not read the
 //! chain body. [`ChainStore::with_genesis`](super::ChainStore::with_genesis)
 //! does, on this screen and again on the handle the writable open returns,
 //! because the file can change between the two opens.
@@ -26,7 +26,7 @@
 use std::path::Path;
 
 use redb::{Database, ReadableDatabase};
-use shekyl_chain_rules::{AtHeight, GenesisPin, Tip};
+use shekyl_chain_rules::{AtHeight, GenesisPin};
 use shekyl_types::BlockHeight;
 
 use super::chain_reads::{self, ReadFault};
@@ -38,47 +38,49 @@ use crate::provenance::Provenance;
 
 /// Whether this open admits the chain against a genesis pin.
 ///
-/// [`Unanchored`](Self::Unanchored) verifies the header and does not read
-/// the body. [`Anchored`](Self::Anchored) admits `genesis` on that same
-/// read. [`GenesisPin::NONE`] pins nothing: the comparison still runs, and
-/// a tip the snapshot cannot read is a fault.
+/// [`Unpinned`](Self::Unpinned) verifies the header and does not read the
+/// body. [`Pinned`](Self::Pinned) admits `genesis` on that same read.
+/// [`GenesisPin::NONE`] pins nothing: the comparison still runs, and a tip
+/// the snapshot cannot read is a fault.
 #[derive(Clone, Copy)]
-pub(super) enum ReleaseAdmission<'a> {
+pub(super) enum GenesisAdmission<'a> {
     /// [`ChainStore::with_horizons`](super::ChainStore::with_horizons) and
     /// the doors that call it.
-    Unanchored,
+    Unpinned,
     /// [`ChainStore::with_genesis`](super::ChainStore::with_genesis).
-    Anchored(&'a GenesisPin),
+    Pinned(&'a GenesisPin),
 }
 
 /// CEN-E5 over one read transaction.
 ///
 /// `Ok` agrees, including an empty chain and a pin that names nothing. A
 /// contradiction is [`StoreCannot::ForeignGenesis`]. A read that cannot
-/// answer is that read's error.
+/// answer is that read's error. The comparison is
+/// [`GenesisPin::conflict`]: this read supplies block 0, and a hole below
+/// the tip is that read's fault.
 ///
 /// # Errors
 ///
 /// [`StoreCannot::ForeignGenesis`] when block 0 is not the pinned genesis.
 /// A fault from the tip or the block read passes through: a fault is not
 /// agreement and not a pin mismatch.
-pub(super) fn admit_pins(
+pub(super) fn admit_genesis(
     txn: &redb::ReadTransaction,
     genesis: &GenesisPin,
 ) -> Result<(), StoreError> {
     let tip = chain_reads::tip_of(txn).map_err(ReadFault::into_plain)?;
-    let recorded = tip.as_ref().map(|(height, info)| Tip {
-        height: BlockHeight::from_raw(*height),
-        hash: info.hash,
-    });
-    match genesis.conflict_over(recorded, |height| -> Result<_, StoreError> {
-        let at = chain_reads::info_at(txn, tip.as_ref(), height.to_raw())
-            .map_err(ReadFault::into_plain)?;
-        Ok(match at {
-            AtHeight::Recorded(info) => Some(info.hash),
-            AtHeight::AboveTip => None,
-        })
-    })? {
+    let recorded = match tip {
+        None => None,
+        Some(tip) => {
+            let at = chain_reads::info_at(txn, Some(&tip), BlockHeight::ZERO.to_raw())
+                .map_err(ReadFault::into_plain)?;
+            Some(match at {
+                AtHeight::Recorded(info) => info.hash,
+                AtHeight::AboveTip => unreachable!("a recorded tip means block 0 is a block"),
+            })
+        }
+    };
+    match genesis.conflict(recorded) {
         None => Ok(()),
         Some(conflict) => Err(StoreCannot::ForeignGenesis(conflict).into()),
     }
@@ -91,12 +93,12 @@ pub(super) fn admit_pins(
 /// [`StoreCannot::EmptyApplyStub`] if the policy stubs no families —
 /// checked before the path is touched. The header refusals of
 /// [`filter_readable`], the engine's open errors, and, when `admission`
-/// is [`ReleaseAdmission::Anchored`], the pin refusals of [`admit_pins`].
+/// is [`GenesisAdmission::Pinned`], the pin refusals of [`admit_genesis`].
 pub(super) fn open_at(
     path: &Path,
     apply_policy: ApplyPolicy,
     horizons: Horizons,
-    admission: ReleaseAdmission<'_>,
+    admission: GenesisAdmission<'_>,
 ) -> Result<(ChainStore, Option<CutShort>), StoreError> {
     let epoch = horizons.epoch();
     apply_policy
@@ -141,7 +143,7 @@ fn open_existing(
     path: &Path,
     policy: ApplyPolicy,
     epoch: SettlementEpochBlocks,
-    admission: ReleaseAdmission<'_>,
+    admission: GenesisAdmission<'_>,
     guard: &crate::creation::PathGuard,
 ) -> Result<(Database, Provenance, Option<CutShort>), StoreError> {
     match builder.open_read_only(path) {
@@ -167,20 +169,20 @@ fn open_existing(
 /// One read of a database the read-only open returned.
 ///
 /// A file with no table has no block for a pin to contradict. A sealed
-/// file is verified, and an anchored open admits its pins before this
+/// file is verified, and a pinned open admits its genesis before this
 /// read ends, so the database can be dropped — releasing the shared lock
 /// — before the writable open.
 fn filter_readable(
     db: &impl ReadableDatabase,
     epoch: SettlementEpochBlocks,
-    admission: ReleaseAdmission<'_>,
+    admission: GenesisAdmission<'_>,
 ) -> Result<(), StoreError> {
     let txn = db.begin_read().map_err(EngineError::BeginRead)?;
     if verified_header(&txn, epoch)?.is_none() {
         return Ok(());
     }
-    if let ReleaseAdmission::Anchored(anchors) = admission {
-        admit_pins(&txn, anchors)?;
+    if let GenesisAdmission::Pinned(genesis) = admission {
+        admit_genesis(&txn, genesis)?;
     }
     Ok(())
 }

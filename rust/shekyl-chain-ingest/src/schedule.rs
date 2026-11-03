@@ -173,12 +173,16 @@ impl ChainRules {
     }
 
     /// What this run takes on the release's word — `validate`'s `Trust`
-    /// input (DRS-E6 slice 3; `PDM-Q5`). A public network's release-carried
-    /// anchors, resolved by the same nettype the schedule is; regtest is
-    /// unanchored — no release vouches for a regtest chain. Resolved here
-    /// beside `in_force` because the two are the run's two chain-derived
-    /// inputs to `validate` and the rules crate holds neither a schedule nor
-    /// a `Network` (rule 71).
+    /// input (DRS-E6 slice 3; `PDM-Q5`). A public network carries its
+    /// genesis pin, resolved by the same nettype the schedule is. Regtest
+    /// stays [`Trust::UNPINNED`](Trust::UNPINNED): harness chains mine
+    /// their own genesis. A regtest node's *open* pins
+    /// [`GenesisPin::FAKECHAIN`](GenesisPin::FAKECHAIN) separately
+    /// (`shekyl-node`'s `genesis_pin_of`); the network marker, not the
+    /// store, tells that chain from mainnet, which shares block 0.
+    /// Resolved here beside `in_force` because the two are the run's two
+    /// chain-derived inputs to `validate` and the rules crate holds neither
+    /// a schedule nor a `Network` (rule 71).
     #[must_use]
     pub const fn trust(&self) -> Trust {
         match *self {
@@ -237,10 +241,8 @@ mod tests {
                 Err(RegtestLever::FixedDifficulty),
                 "both pulled: the difficulty is named first"
             );
-            // The release's anchors for that network — empty today, so
-            // equal to UNPINNED by value; the *resolution* is what this
-            // pins (the first anchor entry moves the left side, not the
-            // right).
+            // The pin `validate` holds a public chain to. Not empty, and
+            // not `UNPINNED`: each network's genesis is its own.
             assert_eq!(rules.trust(), Trust::full(GenesisPin::for_network(net)));
         }
     }
@@ -260,7 +262,9 @@ mod tests {
         assert_eq!(set.settlement_schedule(), short().settlement());
         assert_eq!(set.reorg_cap(), BlockCount::from_raw(64));
         assert_eq!(set.id(), RuleSet::GENESIS.id());
-        // No release vouches for a regtest chain, lever or no lever.
+        // `validate` stays unpinned on regtest, lever or no lever, so a
+        // harness chain can mine its own genesis. The open pins
+        // `GenesisPin::FAKECHAIN`; this value does not.
         assert_eq!(plain.trust(), Trust::UNPINNED);
         assert_eq!(fixed.trust(), Trust::UNPINNED);
         assert_eq!(scheduled.trust(), Trust::UNPINNED);

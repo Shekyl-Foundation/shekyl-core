@@ -903,10 +903,12 @@ impl GenesisPin {
     pub const FAKECHAIN: Self;
     pub const fn for_network(network: Network) -> Self;
     pub fn expected_at(&self, height: BlockHeight) -> Option<BlockHash>;   // CEN-E1's read: genesis at 0, nothing above
-    /// CEN-E5, run at open; a conflict is another network's file.
+    /// CEN-E5's comparison. `None` is an empty file, which contradicts nothing.
+    pub fn conflict(&self, recorded: Option<BlockHash>) -> Option<GenesisConflict>;
+    /// [`conflict`](GenesisPin::conflict) over a view: reads block 0 and calls it.
     pub fn conflict_with<'id, H: HeaderView<'id>>(&self, view: &H) -> Result<Option<GenesisConflict>, H::Fault>;
 }
-pub struct GenesisConflict { pub height: BlockHeight, pub expected: BlockHash, pub recorded: Option<BlockHash> }
+pub struct GenesisConflict { pub expected: BlockHash, pub recorded: BlockHash }
 
 pub enum Fault<V> { View(V), Stale(Stale), Corrupt(Corrupt) }
 pub enum Stale {
@@ -2265,10 +2267,12 @@ state-shaped enum), but a third relocation in a scaffold PR, not proposed here.
   `connector.rs:271`, PR #806). **LANDED as the parameter, slice 3 c3
   (2026-09-20):** `Trust { anchors }`, `Trust::full` / `Trust::UNANCHORED`,
   `validate(formed, view, rule_set, trust)`; CEN-E1 is its first reader.
-  **Still owed to slice 6:** the posture arm (`Trust::below_anchor`, band 1
-  per `PDM-Q5` `:293`), the 4.I skip it governs, and this item's falsifier —
-  which needs a proof row to skip and a **skeleton candidate type** a
-  band-1 block can be (slice 3 F10; `Candidate` holds full transactions).
+  **REJECTED with the checkpoints (S1, design review 2026-11-03):** the
+  posture arm (`Trust::below_anchor`, band 1 per `PDM-Q5` `:293`), the 4.I
+  skip it would have governed, and this item's falsifier. Nothing is
+  assumed. `Trust` carries only the genesis pin (`full` / `UNPINNED`).
+  Reopen only if a later design names a reason to skip proof rows that is
+  not a coded checkpoint.
 - **`TxIdentity::pqc_auth_hash: Option<PqcAuthHash>`** — **LANDED in the
   `tip()` PR (slice 1, 2026-09-17)**, items 1 **and** 2 of
   `DAEMON_REDB_STORE.md` §7.7's plan for `PDM-Q-F26` (PR #765): the

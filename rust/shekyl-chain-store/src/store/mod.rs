@@ -168,7 +168,7 @@ use crate::apply_policy::ApplyPolicy;
 use crate::codec::SettlementEpochBlocks;
 use crate::provenance::Provenance;
 
-use open::{open_at, ReleaseAdmission};
+use open::{open_at, GenesisAdmission};
 use shared::Shared;
 
 /// The durability every write transaction is armed with (DRS-D9, Tier-A A4).
@@ -334,7 +334,7 @@ impl ChainStore {
             path.as_ref(),
             apply_policy,
             horizons,
-            ReleaseAdmission::Unanchored,
+            GenesisAdmission::Unpinned,
         )
         .map(|(store, _cut)| store)
     }
@@ -472,7 +472,7 @@ impl ChainStore {
             path.as_ref(),
             apply_policy,
             horizons,
-            ReleaseAdmission::Anchored(genesis),
+            GenesisAdmission::Pinned(genesis),
         )?;
         store.admit(genesis)?;
         Ok((store, cut))
@@ -499,13 +499,13 @@ impl ChainStore {
         Ok(store)
     }
 
-    /// CEN-E5 over this file. `Ok` agrees, including an empty file and an
-    /// empty table. A contradiction is [`StoreCannot::ForeignGenesis`]. A read
-    /// that cannot answer is that read's error: a fault is not agreement
-    /// and not a pin mismatch.
+    /// CEN-E5 over this file. `Ok` agrees, including an empty file and a
+    /// pin that names nothing. A contradiction is [`StoreCannot::ForeignGenesis`].
+    /// A read that cannot answer is that read's error: a fault is not
+    /// agreement and not a pin mismatch.
     fn admit(&self, genesis: &GenesisPin) -> Result<(), StoreError> {
         let snap = self.begin_read()?;
-        open::admit_pins(snap.txn(), genesis)
+        open::admit_genesis(snap.txn(), genesis)
     }
 
     /// Whether the writer is live or halted (`DAEMON_REDB_STORE.md` §3.6.2).
