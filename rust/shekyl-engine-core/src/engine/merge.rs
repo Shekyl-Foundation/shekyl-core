@@ -415,14 +415,12 @@ impl<
 }
 
 /// Collapse a [`CurveTreeHandleError`] into a
-/// [`RefreshError::CurveTreeIngest`], classifying whether an in-place rebuild
-/// can heal it:
+/// [`RefreshError::CurveTreeIngest`], classifying which fault an in-place
+/// rebuild heals:
 ///
-/// - A poisoned client ([`ClientError::Poisoned`]) is
-///   ([`CurveTreeIngestFault::recoverable_by_rebuild`]):
-///   [`Engine::ingest_scan_result_with_recovery`] asks the actor to rebuild
-///   the client over the store it holds and retries the cursor-driven ingest
-///   once, which resumes from the store's persisted tip (D2).
+/// - [`ClientError::Poisoned`] is [`CurveTreeIngestFault::recoverable_by_rebuild`]:
+///   ingest asks the actor to rebuild the client over the store it holds and
+///   retries once from the persisted tip (D2).
 /// - A stopped actor ([`CurveTreeHandleError::Unavailable`]) is terminal: the
 ///   actor is not restarted (`curve_tree_actor` module docs).
 /// - Every other client error (e.g.
