@@ -190,14 +190,12 @@ mod tests {
     /// exposes `get_connections` (this node's live peer set) and the ban/mining
     /// controls to unauthenticated callers on the public listener.
     const SPECIFIED_ADMIN_METHODS: &[&str] = &[
-        "calc_pow",
         "generateblocks",
         "get_connections",
         "set_bans",
         "get_bans",
         "banned",
         "flush_txpool",
-        "get_coinbase_tx_sum",
         "get_alternate_chains",
         "relay_tx",
         "sync_info",
@@ -269,8 +267,8 @@ mod tests {
             NativeMethod::RequestArchivalShard,
             true,
         ),
-        ("calc_pow", NativeMethod::CalcPow, true),
-        ("get_coinbase_tx_sum", NativeMethod::CoinbaseTxSum, true),
+        ("calc_pow", NativeMethod::CalcPow, false),
+        ("get_coinbase_tx_sum", NativeMethod::CoinbaseTxSum, false),
         ("get_alternate_chains", NativeMethod::AlternateChains, true),
         ("get_curve_tree_info", NativeMethod::CurveTreeInfo, false),
         (
@@ -336,15 +334,19 @@ mod tests {
         assert!(native_method_for("hard_fork_info").is_none());
     }
 
-    /// A bounded caller never makes the node compute a pow hash, however the
-    /// request is phrased — the whole truth table, since only one of its four
-    /// cells may be true.
+    /// One hash is computed when it was asked for and, if the caller is
+    /// bounded, the budget can pay. Not asking computes nothing.
     #[test]
-    fn pow_hash_is_never_computed_for_a_bounded_caller() {
-        assert!(admit_pow_hash("get_block", true, false).unwrap());
-        assert!(admit_pow_hash("get_block", true, true).is_err());
-        assert!(!admit_pow_hash("get_block", false, false).unwrap());
-        assert!(!admit_pow_hash("get_block", false, true).unwrap());
+    fn a_bounded_caller_pays_one_hash_for_fill_pow_hash() {
+        use crate::hash_budget::HashBudget;
+        use std::time::Instant;
+        let full = HashBudget::new(Instant::now());
+        assert!(admit_pow_hash("get_block", true, false, &full).unwrap());
+        assert!(admit_pow_hash("get_block", true, true, &full).unwrap());
+        let empty = HashBudget::empty(Instant::now());
+        assert!(admit_pow_hash("get_block", true, true, &empty).is_err());
+        assert!(!admit_pow_hash("get_block", false, false, &empty).unwrap());
+        assert!(!admit_pow_hash("get_block", false, true, &empty).unwrap());
     }
 
     /// Each native name is gated exactly as specified, and none is gated on

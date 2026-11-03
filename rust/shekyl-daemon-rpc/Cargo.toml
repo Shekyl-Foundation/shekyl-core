@@ -103,6 +103,9 @@ shekyl-pow-randomx = { path = "../shekyl-pow-randomx" }
 # The daemon's one hasher budget (PR2-Q3): calc_pow hashes under a permit
 # in its class, below the chain's and above the miner's.
 shekyl-hash-budget = { path = "../shekyl-hash-budget" }
+# Plaintext listeners set hyper's header-read timer. Axum's `serve` does not
+# expose it.
+hyper-util = { version = "0.1.20", features = ["server-auto", "tokio", "service"] }
 
 [dev-dependencies]
 # Real consensus-valid spend fixture for the production-verifier oracle test

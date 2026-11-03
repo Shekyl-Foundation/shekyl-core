@@ -242,7 +242,14 @@ pub const CORE_RPC_VERSION_MAJOR: u32 = 3;
 /// The four caps stay 1000, 1000, 100 and 5000. `calc_pow` and
 /// `get_coinbase_tx_sum` stay refused to a bounded caller until their
 /// costs are set. `get_version` gains nothing.
-pub const CORE_RPC_VERSION_MINOR: u32 = 66;
+/// 3.67: `calc_pow` and `get_coinbase_tx_sum` are served to a bounded
+/// caller. `calc_pow` hashes a blob no longer than the hashing-blob
+/// format (`MAX_POW_BLOB_SIZE`) and pays one hash from the shared budget.
+/// `fill_pow_hash` pays one hash per header from the same budget; more
+/// than one hash in a request, or one hash while the budget is empty, is
+/// `OverResourceBound`. A bounded `get_coinbase_tx_sum` waits for the one
+/// coinbase-read permit. `get_version` gains nothing.
+pub const CORE_RPC_VERSION_MINOR: u32 = 67;
 /// `MAKE_CORE_RPC_VERSION(major, minor)` = `(major << 16) | minor`.
 pub const CORE_RPC_VERSION: u32 = (CORE_RPC_VERSION_MAJOR << 16) | CORE_RPC_VERSION_MINOR;
 
@@ -673,10 +680,12 @@ mod tests {
         // 64, so `mining_status.speed` carrying the hash count over its
         // window took the next minor, as 3.44 did. 3.66 makes a bounded
         // connection's list cap and `fill_pow_hash` `OverResourceBound`.
-        assert_eq!(CORE_RPC_VERSION, 196_674);
-        assert_eq!(CORE_RPC_VERSION, (3 << 16) | 66);
+        // 3.67 serves `calc_pow` and `get_coinbase_tx_sum` to a bounded
+        // caller, within the hash budget and the one coinbase-read permit.
+        assert_eq!(CORE_RPC_VERSION, 196_675);
+        assert_eq!(CORE_RPC_VERSION, (3 << 16) | 67);
         assert_eq!(CORE_RPC_VERSION_MAJOR, 3);
-        assert_eq!(CORE_RPC_VERSION_MINOR, 66);
+        assert_eq!(CORE_RPC_VERSION_MINOR, 67);
     }
 
     #[test]

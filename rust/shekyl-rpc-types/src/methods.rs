@@ -167,6 +167,9 @@ const fn rest(name: &'static str, aliases: &'static [&'static str], policy: Poli
     }
 }
 
+/// No row uses this. [`crate::Cost::Unbounded`] stays so a method with no
+/// measured bound is refused by `Authority::admit` rather than served.
+#[allow(dead_code)]
 const fn unbounded(method: Method) -> Method {
     Method {
         cost: Cost::Unbounded,
@@ -218,9 +221,9 @@ pub const METHODS: &[Method] = &[
     // is part of mining status, and the serve-credit lever went with the
     // C++ chain.
     json("submit_block", &["submitblock"], g(MiningWork)),
-    // A computation service (RT-O9.4); its bound is RT-W10 step 2's.
-    // Dispatched from the store (`read_methods::calc_pow`).
-    unbounded(json("calc_pow", &[], g(MiningWork))),
+    // A computation service (RT-O9.4). A bounded caller pays one hash
+    // from the shared budget; the blob is at most `MAX_POW_BLOB_SIZE`.
+    json("calc_pow", &[], g(MiningWork)),
     json("get_block_template", &["getblocktemplate"], g(MiningWork)),
     json("get_miner_data", &[], g(MiningWork)),
     json("generateblocks", &[], Policy::Armed),
@@ -228,10 +231,9 @@ pub const METHODS: &[Method] = &[
     json("get_bans", &[], g(Bans)),
     json("banned", &[], g(Bans)),
     json("flush_txpool", &[], g(Node)),
-    // A public chain fact (RT-O9.4); its span bound is RT-W10 step 2's.
-    // Dispatched from the store, with `get_alternate_chains` and the
-    // curve-tree and archival rows below.
-    unbounded(json("get_coinbase_tx_sum", &[], g(Chain))),
+    // A public chain fact (RT-O9.4). A bounded caller's read runs on the
+    // blocking pool behind a concurrency limit of one.
+    json("get_coinbase_tx_sum", &[], g(Chain)),
     json("get_alternate_chains", &[], g(Status)),
     json("relay_tx", &[], g(Node)),
     json("get_txpool_backlog", &[], g(Pool)),
@@ -419,16 +421,16 @@ mod tests {
         assert!(placed.is_empty(), "placed but not in the table: {placed:?}");
     }
 
-    /// The two rows whose bound is RT-W10 step 2's are the only unbounded
-    /// ones (§6.3): a bounded caller is refused them until then.
+    /// No row is unbounded (§6.3). `calc_pow` pays the hash budget and
+    /// `get_coinbase_tx_sum` takes the one coinbase-read permit.
     #[test]
-    fn only_calc_pow_and_the_coinbase_sum_are_unbounded() {
+    fn no_method_is_unbounded() {
         let unbounded: Vec<&str> = METHODS
             .iter()
             .filter(|row| row.cost == Cost::Unbounded)
             .map(|row| row.name)
             .collect();
-        assert_eq!(unbounded, ["calc_pow", "get_coinbase_tx_sum"]);
+        assert!(unbounded.is_empty(), "{unbounded:?}");
     }
 
     #[test]

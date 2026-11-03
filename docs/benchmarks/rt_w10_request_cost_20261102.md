@@ -1,8 +1,9 @@
 # RT-W10: what a bounded request may cost on the floor device. Registration of 2026-11-02
 
-**State of this record: registered, not yet measured.** The section
-"Registered before the run" is not edited after a result is read. Results
-are added under "Results". A run that is not the floor device is not data.
+**State of this record: measured 2026-11-03.** The section "Registered
+before the run" is the method as frozen and is not edited after a result
+is read. Results are under "Results". A run that is not the floor device
+is not data.
 
 `RPC_CHANNEL.md` §6.3 (RT-O9.4) bounds three computations for every
 connection except the host's administrator: one `calc_pow`, the number of
@@ -144,4 +145,57 @@ and `SHA256SUMS`.
 
 ## Results
 
-Not run.
+Run 2026-11-03 on the floor device, build `git revision 3d0bf6844c`. The
+checkout was a tree of that commit. The harness was pinned to core 3 at
+`nice -n 10` and `ionice -c3`, with the compile at two jobs under the
+same nice and ionice. The standing testnet daemon stayed up and was not
+restarted.
+
+**Conditions.** Start 2026-11-03T00:32Z, one-minute load 6.45 (6.37, 6.54).
+End 2026-11-03T00:37Z, load 5.08 (5.52, 6.12). Governor `ondemand`
+throughout. SoC temperature 76,932 to 77,906 millidegrees. The
+under-voltage alarm stayed 0. The clock-change counter stayed 8,964,473.
+`time_in_state` moved only in the 1,800,000 kHz bin, by 29,185 jiffies of
+10 ms (291.85 s of a window of about 300 s), so every recorded jiffy of
+the run was at the top clock. The 99 percent gate holds.
+
+**Thread-CPU, nearest rank, n = 100, the 99th percentile at rank 99.**
+
+| Series | CPU p99 (ns) | Wall p99 (ns) |
+| --- | --- | --- |
+| `header` (136 bytes) | 1,290,885,199 | 1,326,131,403 |
+| `max` (33,000,128 bytes) | 1,406,112,385 | 1,456,937,827 |
+
+The header series' CPU maximum was 1,314,168,495 ns. The long blob is
+1.089 times the header at the CPU 99th percentile. Length inside a
+hashing blob is not a second hash: one `compute_hash` is one RandomX
+execution. The frozen summary's other series are in the captures. They
+do not set a span.
+
+**What the handlers use.** The frozen summary
+(`rt_w10_request_cost_20261102_captures/summary.md`) applied the
+registration's formula and printed a blob cap of 136 bytes and a coinbase
+span of 168 heights. That formula is the record of what was registered.
+The handlers do not use it.
+
+- `calc_pow`'s blob limit is `MAX_POW_BLOB_SIZE`, the longest hashing
+  blob the preimage format accepts. The 33 MB series is longer than that
+  blob and still one hash, so one format-maximum blob is one hash.
+- Bounded callers share a hash budget. One charge is the header CPU p99,
+  `HASH_CPU_NANOS` = 1,290,885,199. The share is a quarter of one core,
+  the handshake budget's share. A one-second burst of that share is 250 ms
+  and cannot pay one hash, so the burst is one hash. A request for more
+  than one hash, or for one hash while the bucket is empty, is
+  `OverResourceBound`. `fill_pow_hash` of K headers costs K hashes.
+- A bounded `get_coinbase_tx_sum` takes the one coinbase-read permit and
+  runs on the blocking pool. Cold reads wait on disk. It does not pay the
+  hash budget, and it has no height cap from this run.
+- Plaintext listeners take 4 seconds to read headers and 4 seconds idle,
+  hyper's one timer. The registration's 5-second idle is not what landed:
+  the plaintext idle is the header bound. A channel connection does not
+  set that timer. Its idle is the record stream's, one hour until
+  RT-W11's pool sets its own, and a record already started fails after 4
+  seconds without progress. Every listener closes a response write that
+  makes no progress for 4 seconds.
+
+**Captures:** `docs/benchmarks/rt_w10_request_cost_20261102_captures/`.

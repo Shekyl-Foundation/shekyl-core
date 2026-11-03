@@ -57,7 +57,12 @@ fn fetch_block_headers_by_hash(
     };
     let reply = native_json_rpc(src, "get_block_header_by_hash", &request, |_core| {
         let chain = super::open_chain()?;
-        crate::methods::get_block_header_by_hash(chain.as_chain_facts(), &request, false)
+        crate::methods::get_block_header_by_hash(
+            chain.as_chain_facts(),
+            &request,
+            false,
+            &crate::hash_budget::HashBudget::new(std::time::Instant::now()),
+        )
     })?;
     require_ok(&reply.status)?;
     Ok(reply.block_headers)

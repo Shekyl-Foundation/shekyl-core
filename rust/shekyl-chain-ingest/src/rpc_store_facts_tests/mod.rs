@@ -27,6 +27,7 @@ use shekyl_chain_rules::{relay_floor_at, AtHeight, Substrate};
 use shekyl_chain_store::apply_policy::ApplyPolicy;
 use shekyl_chain_store::store::{ChainStore, SnapshotView};
 use shekyl_daemon_rpc::chain_facts::{BlockLookup, ChainFacts, FactsFault};
+use shekyl_daemon_rpc::hash_budget::HashBudget;
 use shekyl_daemon_rpc::info::{get_info, Disclosure};
 use shekyl_daemon_rpc::info_facts::{
     InfoPeersFacts, PeerFacts, PoolCounts, PoolScope, PoolState, SessionCounts,
@@ -51,6 +52,10 @@ use crate::scenario::{Mined, Scenario, RULES};
 use crate::schedule::ChainRules;
 use crate::source::{IngestEvent, Source};
 use crate::test_support::{cleanup, open_store, open_store_under, tmp};
+
+fn hash_budget() -> HashBudget {
+    HashBudget::new(std::time::Instant::now())
+}
 
 mod below_horizon;
 mod reads;
@@ -361,6 +366,7 @@ async fn a_scenario_chains_headers_and_blocks_are_the_mined_blocks() {
                 fill_pow_hash: false,
             },
             false,
+            &hash_budget(),
         )
         .expect("by hash");
         assert_eq!(
@@ -372,7 +378,7 @@ async fn a_scenario_chains_headers_and_blocks_are_the_mined_blocks() {
             )
         );
         assert_eq!(
-            get_last_block_header(&facts, false, false)
+            get_last_block_header(&facts, false, false, &hash_budget())
                 .expect("tip")
                 .block_header
                 .hash,
@@ -388,6 +394,7 @@ async fn a_scenario_chains_headers_and_blocks_are_the_mined_blocks() {
                 fill_pow_hash: false,
             },
             false,
+            &hash_budget(),
         )
         .expect("in range");
         assert_eq!(
@@ -403,6 +410,7 @@ async fn a_scenario_chains_headers_and_blocks_are_the_mined_blocks() {
                     fill_pow_hash: false,
                 },
                 false,
+                &hash_budget(),
             ),
             Err(RpcFault::Refused(_))
         ));
@@ -450,15 +458,21 @@ async fn a_scenario_chains_headers_and_blocks_are_the_mined_blocks() {
                 fill_pow_hash: false,
             },
             false,
+            &hash_budget(),
         )
         .expect("an unknown hash is a slot, not a refusal");
         assert_eq!(unknown.block_headers[0].block_header, None);
 
-        // A restricted caller asking for the PoW is refused, not blanked.
+        // A bounded caller with an empty hash budget is refused. A full
+        // budget pays for the one hash and the header carries it.
+        let empty = HashBudget::empty(std::time::Instant::now());
         assert!(matches!(
-            get_last_block_header(&facts, true, true),
+            get_last_block_header(&facts, true, true, &empty),
             Err(RpcFault::Refused(_))
         ));
+        let paid = get_last_block_header(&facts, true, true, &hash_budget())
+            .expect("one hash is in the budget");
+        assert!(paid.block_header.pow_hash.is_some());
         drop(facts);
         drop(store);
     })
@@ -580,6 +594,7 @@ async fn an_alt_block_by_hash_is_described_by_its_own_row() {
                 fill_pow_hash: true,
             },
             false,
+            &hash_budget(),
         )
         .expect("by hash");
         let header = reply.block_headers[0]

@@ -35,7 +35,7 @@ use shekyl_pow_randomx::{compute_hash, CacheStore, Seedhash};
 use shekyl_rpc_types::{
     CalcPowRequest, GetArchivalEmissionClaimSourceRequest, GetCoinbaseTxSumRequest,
     GetCurveTreeCheckpointRequest, HashHex, CORE_RPC_ERROR_CODE_WRONG_BLOCKBLOB,
-    CORE_RPC_ERROR_CODE_WRONG_BLOCKBLOB_SIZE, CORE_RPC_ERROR_CODE_WRONG_PARAM,
+    CORE_RPC_ERROR_CODE_WRONG_PARAM,
 };
 use shekyl_types::{BlockHash, BlockHeight};
 use shekyl_wire::{Ct, Transaction};
@@ -50,6 +50,10 @@ use crate::substrate::ProductionSubstrate;
 use crate::test_support::{
     cleanup, h, open_store, open_store_under, tmp, Family, FIRST_SPEND_HEIGHT,
 };
+
+fn hash_budget() -> shekyl_daemon_rpc::hash_budget::HashBudget {
+    shekyl_daemon_rpc::hash_budget::HashBudget::new(std::time::Instant::now())
+}
 
 /// The fee a listed body pays.
 fn fee_of(tx: &Transaction) -> u64 {
@@ -630,7 +634,7 @@ async fn calc_pow_waits_for_a_hasher_permit_in_its_class() {
         };
         let held = budget.acquire(Class::Chain);
         std::thread::scope(|scope| {
-            let asked = scope.spawn(|| calc_pow(&facts, &request));
+            let asked = scope.spawn(|| calc_pow(&facts, &request, false, &hash_budget()));
             let started = std::time::Instant::now();
             while budget.waiting(Class::CalcPow) == 0 {
                 assert!(
@@ -755,7 +759,7 @@ async fn the_coinbase_sum_is_the_supply_growth_and_the_listed_fees() {
 /// node recorded when it judged the block, and where it no longer does
 /// (genesis's, replaced by the next seed) the request is refused. A held seed the
 /// caller names is answered the same way. A seed height above the tip, a
-/// blob that is not hex or is larger than any block, and a seed that is not
+/// blob that is not hex or is longer than a hashing blob, and a seed that is not
 /// 32 bytes are refused with the C++ codes.
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn calc_pow_hashes_under_the_caches_the_validator_holds() {
@@ -774,6 +778,8 @@ async fn calc_pow_hashes_under_the_caches_the_validator_holds() {
                     block_blob: blob.to_owned(),
                     seed_hash: seed.to_owned(),
                 },
+                false,
+                &hash_budget(),
             )
         };
         // The driver pins each connecting seed before the hash. Genesis
@@ -833,14 +839,15 @@ async fn calc_pow_hashes_under_the_caches_the_validator_holds() {
                 data: None,
             }))
         );
-        let oversize = vec![0u8; shekyl_wire::block::MAX_BLOCK_BLOB_SIZE + 1];
+        let oversize = vec![0u8; shekyl_wire::block::MAX_POW_BLOB_SIZE + 1];
         assert_eq!(
-            ask(h(1), &hex::encode(oversize), ""),
-            Err(RpcFault::Refused(RpcRefusal {
-                code: CORE_RPC_ERROR_CODE_WRONG_BLOCKBLOB_SIZE,
-                message: "Block blob size is too big, rejecting block".to_owned(),
-                data: None,
-            }))
+            ask(h(1), &hex::encode(&oversize), ""),
+            Err(shekyl_daemon_rpc::methods::bound_fault(
+                "calc_pow",
+                "bytes",
+                u64::try_from(shekyl_wire::block::MAX_POW_BLOB_SIZE).unwrap(),
+                u64::try_from(oversize.len()).unwrap(),
+            ))
         );
         assert!(matches!(
             ask(h(1), &hex::encode(&blob), "abcd"),
@@ -884,7 +891,9 @@ async fn calc_pow_never_derives_a_cache() {
                     height: 2,
                     block_blob: blob.clone(),
                     seed_hash: hex::encode(fresh.to_bytes()),
-                }
+                },
+                false,
+                &hash_budget(),
             ),
             not_held(fresh)
         );
@@ -896,7 +905,9 @@ async fn calc_pow_never_derives_a_cache() {
                     height: 2,
                     block_blob: blob,
                     seed_hash: String::new(),
-                }
+                },
+                false,
+                &hash_budget(),
             ),
             not_held(named_by_height)
         );
@@ -942,7 +953,9 @@ fn an_empty_store_has_no_chain_reads_and_hashes_nothing() {
                 height: 5,
                 block_blob: "00".to_owned(),
                 seed_hash: hex::encode(seed.to_bytes()),
-            }
+            },
+            false,
+            &hash_budget(),
         ),
         not_held(seed)
     );

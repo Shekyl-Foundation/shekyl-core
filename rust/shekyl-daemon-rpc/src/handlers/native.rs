@@ -16,27 +16,31 @@ use crate::authority::Authority;
 use crate::chain_facts::FfiP2pFacts;
 use crate::core::CoreRpc;
 use crate::handles::ChainReadHandle;
-use crate::methods::{pow_hash_refused, InternalFault, RpcFault, RpcRefusal};
+use crate::hash_budget::HashBudget;
+use crate::methods::{InternalFault, RpcFault, RpcRefusal};
 use crate::server::AppState;
 use crate::types::JsonRpcResponse;
 use shekyl_rpc_types::errors::RpcError;
 use std::sync::Arc;
 use tracing::warn;
 
-/// Whether `method` computes `fill_pow_hash`. A bounded caller who asked is
-/// refused (`methods::pow_hash_refused`), never handed a blank hash.
-/// Dropping the refusal fails [`pow_hash_is_never_computed_for_a_bounded_caller`].
+/// Whether `method` computes one `fill_pow_hash`. A bounded caller pays one
+/// hash first. The host's administrator does not. Not asking spends nothing.
 pub(super) fn admit_pow_hash(
     method: &'static str,
     requested: bool,
     bounded: bool,
+    budget: &HashBudget,
 ) -> Result<bool, RpcFault> {
-    if requested && bounded {
-        return Err(RpcFault::Refused(RpcRefusal::of_error(&pow_hash_refused(
-            method,
-        ))));
+    if !requested {
+        return Ok(false);
     }
-    Ok(requested)
+    if bounded {
+        budget
+            .charge(method, 1)
+            .map_err(|error| RpcFault::Refused(RpcRefusal::of_error(&error)))?;
+    }
+    Ok(true)
 }
 
 /// A JSON-RPC method this crate serves itself.
@@ -181,11 +185,16 @@ pub(super) async fn native_method(
                 Ok(request) => request,
                 Err(fault) => return Some(Err(NativeFail::Fault(fault))),
             };
-            let fill_pow_hash =
-                match admit_pow_hash("get_block", request.fill_pow_hash, authority.bounded()) {
-                    Ok(fill) => fill,
-                    Err(fault) => return Some(Err(NativeFail::Fault(fault))),
-                };
+            let budget = Arc::clone(&state.hash_budget);
+            let fill_pow_hash = match admit_pow_hash(
+                "get_block",
+                request.fill_pow_hash,
+                authority.bounded(),
+                &budget,
+            ) {
+                Ok(fill) => fill,
+                Err(fault) => return Some(Err(NativeFail::Fault(fault))),
+            };
             Some(frame_native(
                 on_chain(state, move |chain| {
                     crate::methods::get_block(chain.as_ref(), &request, fill_pow_hash)
@@ -231,12 +240,14 @@ pub(super) async fn native_method(
                 Err(fault) => return Some(Err(NativeFail::Fault(fault))),
             };
             let bounded = authority.bounded();
+            let budget = Arc::clone(&state.hash_budget);
             Some(frame_native(
                 on_chain(state, move |chain| {
                     crate::methods::get_last_block_header(
                         chain.as_ref(),
                         request.fill_pow_hash,
                         bounded,
+                        &budget,
                     )
                 })
                 .await,
@@ -248,9 +259,15 @@ pub(super) async fn native_method(
                 Err(fault) => return Some(Err(NativeFail::Fault(fault))),
             };
             let bounded = authority.bounded();
+            let budget = Arc::clone(&state.hash_budget);
             Some(frame_native(
                 on_chain(state, move |chain| {
-                    crate::methods::get_block_header_by_hash(chain.as_ref(), &request, bounded)
+                    crate::methods::get_block_header_by_hash(
+                        chain.as_ref(),
+                        &request,
+                        bounded,
+                        &budget,
+                    )
                 })
                 .await,
             ))
@@ -261,9 +278,15 @@ pub(super) async fn native_method(
                 Err(fault) => return Some(Err(NativeFail::Fault(fault))),
             };
             let bounded = authority.bounded();
+            let budget = Arc::clone(&state.hash_budget);
             Some(frame_native(
                 on_chain(state, move |chain| {
-                    crate::methods::get_block_headers_range(chain.as_ref(), &request, bounded)
+                    crate::methods::get_block_headers_range(
+                        chain.as_ref(),
+                        &request,
+                        bounded,
+                        &budget,
+                    )
                 })
                 .await,
             ))
@@ -323,10 +346,12 @@ pub(super) async fn native_method(
                 Ok(request) => request,
                 Err(fault) => return Some(Err(NativeFail::Fault(fault))),
             };
+            let budget = Arc::clone(&state.hash_budget);
             let fill_pow_hash = match admit_pow_hash(
                 "get_block_header_by_height",
                 request.fill_pow_hash,
                 authority.bounded(),
+                &budget,
             ) {
                 Ok(fill) => fill,
                 Err(fault) => return Some(Err(NativeFail::Fault(fault))),
@@ -350,9 +375,11 @@ pub(super) async fn native_method(
                 Ok(request) => request,
                 Err(fault) => return Some(Err(NativeFail::Fault(fault))),
             };
+            let bounded = authority.bounded();
+            let budget = Arc::clone(&state.hash_budget);
             Some(frame_native(
                 on_chain(state, move |chain| {
-                    crate::read_methods::calc_pow(chain.as_ref(), &request)
+                    crate::read_methods::calc_pow(chain.as_ref(), &request, bounded, &budget)
                 })
                 .await,
             ))
@@ -365,10 +392,25 @@ pub(super) async fn native_method(
                 Ok(request) => request,
                 Err(fault) => return Some(Err(NativeFail::Fault(fault))),
             };
+            let bounded = authority.bounded();
+            let reads = Arc::clone(&state.coinbase_reads);
             Some(frame_native(
-                on_chain(state, move |chain| {
-                    crate::read_methods::get_coinbase_tx_sum(chain.as_ref(), &request)
-                })
+                async {
+                    let _permit = if bounded {
+                        Some(
+                            reads
+                                .acquire_owned()
+                                .await
+                                .expect("the coinbase read semaphore stays open"),
+                        )
+                    } else {
+                        None
+                    };
+                    on_chain(state, move |chain| {
+                        crate::read_methods::get_coinbase_tx_sum(chain.as_ref(), &request)
+                    })
+                    .await
+                }
                 .await,
             ))
         }

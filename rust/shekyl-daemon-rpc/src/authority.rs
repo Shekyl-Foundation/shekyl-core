@@ -288,16 +288,10 @@ mod tests {
     }
 
     #[test]
-    fn an_unbounded_row_is_refused_to_a_bounded_caller() {
+    fn calc_pow_and_the_coinbase_sum_are_admitted_on_the_view_listener() {
         let view = Authority::VIEW_LISTENER;
         for name in ["calc_pow", "get_coinbase_tx_sum"] {
-            let refused = view.admit(row(name)).expect_err(name);
-            assert_eq!(refused.class, ErrorClass::OverResourceBound, "{name}");
-            assert_eq!(refused.diagnostic.code, codes::NO_BOUND_YET, "{name}");
-            assert!(
-                Authority::admin_listener(false).admit(row(name)).is_ok(),
-                "{name}"
-            );
+            assert!(view.admit(row(name)).is_ok(), "{name}");
         }
     }
 
@@ -313,7 +307,9 @@ mod tests {
 
     /// The view listener's method set, written out (RT-O33: it keeps today's
     /// set, less `/get_alt_blocks_hashes`, which §6.1 moves to `status`).
-    /// Written from the specification, not from the table.
+    /// `calc_pow` and `get_coinbase_tx_sum` are on it: they are bounded
+    /// reads, paid from the hash budget and the coinbase permit, not
+    /// admin-gated. Written from the specification, not from the table.
     #[test]
     fn the_view_listener_serves_exactly_its_specified_set() {
         let specified: &[&str] = &[
@@ -325,6 +321,8 @@ mod tests {
             "get_last_block_header",
             "get_block_header_by_hash",
             "get_block_headers_range",
+            "calc_pow",
+            "get_coinbase_tx_sum",
             "get_fee_estimate",
             "option_show",
             "get_info",

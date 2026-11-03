@@ -52,16 +52,19 @@
 //! - **One class table in both directions** ([`class_table`], RT-O29):
 //!   512, 16,384 and 65,535.
 
+use std::future::Future;
 use std::io;
 use std::pin::Pin;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
 use std::task::{ready, Context, Poll};
+use std::time::Duration;
 
 use shekyl_noise::{
     ClassId, ClassedError, ClassedOpener, ClassedSealer, RecvDirection, SendDirection,
 };
 use tokio::io::{AsyncRead, AsyncWrite, ReadBuf};
+use tokio::time::{sleep, Sleep};
 use zeroize::{Zeroize, Zeroizing};
 
 mod frame;
@@ -72,6 +75,21 @@ use message::{EndPlan, Message, MessageKind, SealPlan, WritePlan};
 
 pub use frame::InboundShape;
 pub use message::{class_table, CLASS_LENGTHS, MAX_PAYLOAD, SUBMISSION_CAP, SUBMISSION_RECORDS};
+
+/// A read that has started and then makes no progress for this long is
+/// closed. The plaintext listeners' header-read bound, the message-1
+/// deadline.
+pub const READ_STALL: Duration = Duration::from_secs(4);
+
+/// A response write that makes no progress for this long is closed.
+pub const WRITE_STALL: Duration = Duration::from_secs(4);
+
+/// Idle between records when the caller has not set one. RT-W11's pool
+/// replaces it with the pool's own limit (`set_idle`), long enough that a
+/// session is not closed and opened again through a new handshake. The
+/// plaintext listeners do not use this: their idle is the 4-second header
+/// timer.
+pub const RECORD_IDLE: Duration = Duration::from_secs(60 * 60);
 
 /// How much the adapter asks of the transport at once when reading.
 const READ_CHUNK: usize = 16 * 1024;
@@ -230,6 +248,11 @@ pub struct RecordStream<T> {
     /// The peer's close record has been read.
     peer_closed: bool,
     eof: bool,
+    idle: Duration,
+    read_wait: Option<Pin<Box<Sleep>>>,
+    read_wait_for: Duration,
+    write_wait: Option<Pin<Box<Sleep>>>,
+    write_wait_for: Duration,
     #[cfg(test)]
     counters: Arc<std::sync::Mutex<Counters>>,
 }
@@ -284,9 +307,21 @@ impl<T: AsyncRead + AsyncWrite + Unpin> RecordStream<T> {
             shape: InboundShape::default(),
             peer_closed: false,
             eof: false,
+            idle: RECORD_IDLE,
+            read_wait: None,
+            read_wait_for: RECORD_IDLE,
+            write_wait: None,
+            write_wait_for: WRITE_STALL,
             #[cfg(test)]
             counters: Arc::default(),
         }
+    }
+
+    /// The idle RT-W11's pool sets. A session waits this long with no
+    /// record in progress before it is closed. A record already started
+    /// still fails at [`READ_STALL`].
+    pub fn set_idle(&mut self, idle: Duration) {
+        self.idle = idle;
     }
 
     /// The switch that arms this stream's next unclassified message.
@@ -638,6 +673,40 @@ impl<T: AsyncRead + AsyncWrite + Unpin> RecordStream<T> {
             }
         }
     }
+
+    fn read_limit(&self) -> Duration {
+        if self.wire_len > 0 || self.next_len.is_some() {
+            READ_STALL
+        } else {
+            self.idle
+        }
+    }
+}
+
+fn poll_deadline(
+    wait: &mut Option<Pin<Box<Sleep>>>,
+    armed_for: &mut Duration,
+    limit: Duration,
+    cx: &mut Context<'_>,
+    message: &'static str,
+) -> Poll<io::Result<()>> {
+    // A caller polling with its own waker, outside a runtime, has no timer
+    // to wake it. The bound is enforced where the listeners run.
+    if tokio::runtime::Handle::try_current().is_err() {
+        return Poll::Pending;
+    }
+    let restart = wait.is_none() || *armed_for != limit;
+    if restart {
+        *wait = Some(Box::pin(sleep(limit)));
+        *armed_for = limit;
+    }
+    let sleep = wait.as_mut().expect("the deadline was just armed");
+    if sleep.as_mut().poll(cx).is_ready() {
+        *wait = None;
+        Poll::Ready(Err(io::Error::new(io::ErrorKind::TimedOut, message)))
+    } else {
+        Poll::Pending
+    }
 }
 
 fn shape_refused() -> io::Error {
@@ -658,12 +727,38 @@ impl<T: AsyncRead + AsyncWrite + Unpin> AsyncWrite for RecordStream<T> {
             return Poll::Ready(Err(io::Error::from(io::ErrorKind::BrokenPipe)));
         }
         let result = this.write_step(cx, buf);
+        if matches!(result, Poll::Pending) {
+            if let Poll::Ready(timed_out) = poll_deadline(
+                &mut this.write_wait,
+                &mut this.write_wait_for,
+                WRITE_STALL,
+                cx,
+                "the response write made no progress",
+            ) {
+                return this.guard(Poll::Ready(timed_out.map(|()| 0)));
+            }
+        } else if result.is_ready() {
+            this.write_wait = None;
+        }
         this.guard(result)
     }
 
     fn poll_flush(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<io::Result<()>> {
         let this = self.get_mut();
         let result = this.flush_step(cx);
+        if matches!(result, Poll::Pending) {
+            if let Poll::Ready(timed_out) = poll_deadline(
+                &mut this.write_wait,
+                &mut this.write_wait_for,
+                WRITE_STALL,
+                cx,
+                "the response write made no progress",
+            ) {
+                return this.guard(Poll::Ready(timed_out));
+            }
+        } else if result.is_ready() {
+            this.write_wait = None;
+        }
         this.guard(result)
     }
 
@@ -682,6 +777,20 @@ impl<T: AsyncRead + AsyncWrite + Unpin> AsyncRead for RecordStream<T> {
     ) -> Poll<io::Result<()>> {
         let this = self.get_mut();
         let result = this.read_step(cx, buf);
+        if matches!(result, Poll::Pending) {
+            let limit = this.read_limit();
+            if let Poll::Ready(timed_out) = poll_deadline(
+                &mut this.read_wait,
+                &mut this.read_wait_for,
+                limit,
+                cx,
+                "the channel session made no progress",
+            ) {
+                return this.guard(Poll::Ready(timed_out));
+            }
+        } else if matches!(result, Poll::Ready(Ok(()))) {
+            this.read_wait = None;
+        }
         this.guard(result)
     }
 }

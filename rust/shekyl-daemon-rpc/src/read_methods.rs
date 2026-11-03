@@ -16,7 +16,7 @@ use shekyl_rpc_types::{
     AltChainInfo, CalcPowRequest, GetAltBlocksHashesResponse, GetAlternateChainsResponse,
     GetCoinbaseTxSumRequest, GetCoinbaseTxSumResponse, GetCurveTreeCheckpointRequest,
     GetCurveTreeCheckpointResponse, GetCurveTreeInfoResponse, HashHex, RpcStatus,
-    CORE_RPC_ERROR_CODE_WRONG_BLOCKBLOB, CORE_RPC_ERROR_CODE_WRONG_BLOCKBLOB_SIZE,
+    CORE_RPC_ERROR_CODE_WRONG_BLOCKBLOB,
 };
 use shekyl_rpc_types::{
     ClaimBondRow, ClaimCreditPair, ClaimEpochSnapshot, ClaimShardRow,
@@ -151,10 +151,13 @@ pub fn get_coinbase_tx_sum(
 /// `calc_pow`: RandomX over the request's bytes, under the seed it names
 /// or the chain's seed for `height`. The reply is the hash as bare hex.
 ///
-/// The bytes are hashed as given — a block's hashing blob — as the C++
-/// handler hashed them. Their length is bounded by the largest block blob
-/// the wire parses (`MAX_BLOCK_BLOB_SIZE`): `calc_pow` admits nothing, so
-/// the bound protects the hasher, not the chain.
+/// The bytes are hashed as given — a block's hashing blob. Their length
+/// is the longest hashing blob the format can write
+/// ([`MAX_POW_BLOB_SIZE`](shekyl_wire::block::MAX_POW_BLOB_SIZE)), not the
+/// block-body parse cap: the body is not hashed. A bounded caller pays
+/// one hash from the shared budget for a blob of that length. The floor
+/// measurement showed a blob two hundred thousand times longer still costs
+/// one hash, so one format-maximum blob is one hash.
 ///
 /// The hash is computed only under a cache the daemon already holds;
 /// `calc_pow` never derives one (ruled 2026-10-17). The C++ derived a cache
@@ -163,11 +166,16 @@ pub fn get_coinbase_tx_sum(
 ///
 /// # Errors
 ///
-/// [`RpcFault::Refused`]: the blob is not hex (`WRONG_BLOCKBLOB`), larger
-/// than the bound (`WRONG_BLOCKBLOB_SIZE`), the seed is not 32 bytes of hex,
+/// [`RpcFault::Refused`]: the blob is not hex (`WRONG_BLOCKBLOB`), longer
+/// than the hashing blob (`OverResourceBound`), the seed is not 32 bytes of hex,
 /// the seed height is above the tip, or the seed's cache is not held (all
 /// `WRONG_PARAM`). The facts' fault otherwise.
-pub fn calc_pow(facts: &dyn ChainReadFacts, request: &CalcPowRequest) -> Result<String, RpcFault> {
+pub fn calc_pow(
+    facts: &dyn ChainReadFacts,
+    request: &CalcPowRequest,
+    bounded: bool,
+    budget: &crate::hash_budget::HashBudget,
+) -> Result<String, RpcFault> {
     let Ok(blob) = hex::decode(&request.block_blob) else {
         return Err(RpcFault::Refused(RpcRefusal {
             code: CORE_RPC_ERROR_CODE_WRONG_BLOCKBLOB,
@@ -175,12 +183,18 @@ pub fn calc_pow(facts: &dyn ChainReadFacts, request: &CalcPowRequest) -> Result<
             data: None,
         }));
     };
-    if blob.len() > shekyl_wire::block::MAX_BLOCK_BLOB_SIZE {
-        return Err(RpcFault::Refused(RpcRefusal {
-            code: CORE_RPC_ERROR_CODE_WRONG_BLOCKBLOB_SIZE,
-            message: "Block blob size is too big, rejecting block".to_owned(),
-            data: None,
-        }));
+    if blob.len() > shekyl_wire::block::MAX_POW_BLOB_SIZE {
+        return Err(crate::methods::bound_fault(
+            "calc_pow",
+            "bytes",
+            u64::try_from(shekyl_wire::block::MAX_POW_BLOB_SIZE).unwrap_or(u64::MAX),
+            u64::try_from(blob.len()).unwrap_or(u64::MAX),
+        ));
+    }
+    if bounded {
+        budget
+            .charge("calc_pow", 1)
+            .map_err(|error| RpcFault::Refused(crate::methods::RpcRefusal::of_error(&error)))?;
     }
     let seed = if request.seed_hash.is_empty() {
         PowSeed::AtHeight(BlockHeight::from_raw(request.height))
