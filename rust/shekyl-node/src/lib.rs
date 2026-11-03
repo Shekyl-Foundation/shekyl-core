@@ -138,6 +138,19 @@ pub enum OpenError {
     /// A layout-mismatched chain file could not be removed.
     #[error("the chain file could not be removed: {0}")]
     Wipe(std::io::Error),
+    /// The chain file was written by a newer release than this binary. It
+    /// is left as it is: removing it would destroy the newer node's data.
+    #[error(
+        "the chain file is layout {found}, newer than this binary's {expected}: this \
+         binary is older than the store, so the store was left untouched. Run the release \
+         that wrote it, or a newer one"
+    )]
+    NewerChainLayout {
+        /// The layout the file was sealed at.
+        found: shekyl_chain_store::codec::SchemaVersion,
+        /// The layout this binary writes.
+        expected: shekyl_chain_store::codec::SchemaVersion,
+    },
     /// The pool file did not open.
     #[error("the pool did not open: {0}")]
     Pool(String),
@@ -798,11 +811,20 @@ fn open_chain(
             log_chain_cut(cut);
             Ok(store)
         }
+        Err(StoreError::Cannot(StoreCannot::SchemaVersionMismatch { found, expected }))
+            if found > expected =>
+        {
+            Err(OpenError::NewerChainLayout { found, expected })
+        }
+        // TEMPORARY, pre-genesis only (FOLLOWUPS, trigger: before mainnet
+        // genesis): an older layout is removed so an alpha starts on a fresh
+        // store. The permanent policy ships each layout bump with its
+        // migration and never deletes (`DAEMON_REDB_STORE.md` §11.1, S3).
         Err(StoreError::Cannot(StoreCannot::SchemaVersionMismatch { found, expected })) => {
             tracing::warn!(
                 %found,
                 %expected,
-                "the chain file is a layout this release does not speak; removing it and opening a fresh store"
+                "the chain file is an older layout than this release's; removing it and opening a fresh store"
             );
             std::fs::remove_file(path).map_err(OpenError::Wipe)?;
             let (store, cut) =

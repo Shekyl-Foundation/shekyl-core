@@ -312,7 +312,13 @@ impl ChainStore {
         apply_policy: ApplyPolicy,
         horizons: Horizons,
     ) -> Result<Self, StoreError> {
-        open_at(path.as_ref(), apply_policy, horizons).map(|(store, _cut)| store)
+        open_at(
+            path.as_ref(),
+            apply_policy,
+            horizons,
+            &ReleaseAnchors::EMPTY,
+        )
+        .map(|(store, _cut)| store)
     }
 
     /// The settlement-epoch schedule this file is pinned to — equal to the
@@ -447,7 +453,11 @@ impl ChainStore {
         horizons: Horizons,
         anchors: &ReleaseAnchors,
     ) -> Result<(Self, Option<CutShort>), StoreError> {
-        let (store, cut) = open_at(path.as_ref(), apply_policy, horizons)?;
+        // An existing file is admitted on a read-only open first, so a store
+        // from another network is refused unwritten (`open_existing`). The
+        // admission here is the one under the writable open's lock: the
+        // file can change between the two opens.
+        let (store, cut) = open_at(path.as_ref(), apply_policy, horizons, anchors)?;
         store.admit(anchors)?;
         Ok((store, cut))
     }
@@ -732,12 +742,26 @@ fn open_existing(
     builder: &redb::Builder,
     path: &Path,
     policy: ApplyPolicy,
-    epoch: SettlementEpochBlocks,
+    horizons: Horizons,
+    anchors: &ReleaseAnchors,
     guard: &crate::creation::PathGuard,
 ) -> Result<(Database, Provenance, Option<CutShort>), StoreError> {
+    let epoch = horizons.epoch();
     match builder.open_read_only(path) {
         Ok(read_only) => {
-            judge(&read_only, epoch)?;
+            // A sealed file is also admitted against the release's pins
+            // here (CEN-E5: block 0 against this network's genesis), so a
+            // store from another network is refused before the writable
+            // open writes into it. A file with no table has no block 0.
+            if let Some(provenance) = judge(&read_only, epoch)? {
+                ChainStore {
+                    backend: Backend::ReadOnly(read_only),
+                    apply_policy: ApplyPolicy::Full,
+                    horizons,
+                    shared: Shared::new(provenance),
+                }
+                .admit(anchors)?;
+            }
         }
         Err(redb::DatabaseError::RepairAborted) => {}
         Err(refused) if crate::creation::open_is_foreign(&refused) => {
@@ -807,6 +831,7 @@ fn open_at(
     path: &Path,
     apply_policy: ApplyPolicy,
     horizons: Horizons,
+    anchors: &ReleaseAnchors,
 ) -> Result<(ChainStore, Option<CutShort>), StoreError> {
     let epoch = horizons.epoch();
     apply_policy
@@ -818,7 +843,7 @@ fn open_at(
     builder.set_cache_size(CACHE_SIZE);
     let (db, provenance, cut) = match create_fresh(&builder, path, apply_policy, epoch)? {
         Some((db, provenance)) => (db, provenance, None),
-        None => open_existing(&builder, path, apply_policy, epoch, &guard)?,
+        None => open_existing(&builder, path, apply_policy, horizons, anchors, &guard)?,
     };
     Ok((
         ChainStore {
