@@ -186,7 +186,12 @@ The handlers do not use it.
   the handshake budget's share. A one-second burst of that share is 250 ms
   and cannot pay one hash, so the burst is one hash. A request for more
   than one hash, or for one hash while the bucket is empty, is
-  `OverResourceBound`. `fill_pow_hash` of K headers costs K hashes.
+  `OverResourceBound`. Only `calc_pow` is priced in hashes.
+- `fill_pow_hash` is a store read. It returns the PoW hash the node
+  recorded when it validated the block (`recorded_pow`), and it does not
+  run RandomX. The `header` series above is `compute_hash`, which is what
+  `calc_pow` does. A bounded `fill_pow_hash` is a header read, bounded by
+  the 1,000-header cap, and it does not spend the hash budget.
 - A bounded `get_coinbase_tx_sum` takes the one coinbase-read permit and
   runs on the blocking pool. Cold reads wait on disk. It does not pay the
   hash budget, and it has no height cap from this run.

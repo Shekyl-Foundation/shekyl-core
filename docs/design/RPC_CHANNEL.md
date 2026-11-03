@@ -1553,8 +1553,9 @@ the admin listener.
   ([`methods.rs:512-527`](../../rust/shekyl-daemon-rpc/src/methods.rs):
   `RESTRICTED_BLOCK_COUNT`, `RESTRICTED_BLOCK_HEADER_RANGE`,
   `RESTRICTED_TRANSACTIONS_COUNT`, `RESTRICTED_SPENT_KEY_IMAGES_COUNT`) and
-  the expensive computations — `fill_pow_hash`, `calc_pow`, and a bounded
-  `get_coinbase_tx_sum`.
+  the expensive computation `calc_pow`, a bounded `get_coinbase_tx_sum`,
+  and `fill_pow_hash`, which is a header read of the hash recorded at
+  validation.
 - **Who is bounded:** every connection except the host's administrator
   (the owner leg and the console key), **whatever its grant**. An
   `admin`-ceiling key over the channel is bounded like any other.
@@ -1576,10 +1577,9 @@ the admin listener.
     99th percentile, 1,290,885,199 ns. A one-second burst of the share
     cannot pay that charge, so the burst holds one hash and a request for
     more is `OverResourceBound` without spending. One hash while the
-    bucket is empty is the same refusal. `fill_pow_hash` of K headers
-    costs K hashes, so a bounded range that asks for the hash on more
-    than one header is over the burst. The host's administrator does not
-    pay.
+    bucket is empty is the same refusal. The host's administrator does not
+    pay. `fill_pow_hash` does not pay: it is the hash recorded at
+    validation, and a bounded caller is held to the header cap.
   - A bounded `get_coinbase_tx_sum` takes the one coinbase-read permit
     and then runs on the blocking pool. The permit is one because a cold
     read waits on disk. It does not pay the hash budget. The host's

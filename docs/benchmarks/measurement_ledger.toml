@@ -1155,6 +1155,7 @@ id = "rpc-hash-budget"
 spec = ["rust/shekyl-daemon-rpc/src/hash_budget.rs"]
 cleared = [
   { through = "e44ab0a578", reason = "Introduces the hash budget and sets HASH_CPU_NANOS from the floor run at 3d0bf6844c. The instrument that produced the capture is not this file, and this commit does not change it." },
+  { through = "b257c61a6f", reason = "fill_pow_hash reads the hash recorded at validation and no longer charges this budget. The module comment says so, and a test reads the balance. HASH_CPU_NANOS is unchanged, and the instrument the capture timed is unchanged." },
 ]
 
 [[constant]]

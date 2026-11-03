@@ -245,8 +245,9 @@ pub const CORE_RPC_VERSION_MAJOR: u32 = 3;
 /// 3.67: `calc_pow` and `get_coinbase_tx_sum` are served to a bounded
 /// caller. `calc_pow` hashes a blob no longer than the hashing-blob
 /// format (`MAX_POW_BLOB_SIZE`) and pays one hash from the shared budget.
-/// `fill_pow_hash` pays one hash per header from the same budget; more
-/// than one hash in a request, or one hash while the budget is empty, is
+/// `fill_pow_hash` returns the hash recorded at validation and does not
+/// pay; a bounded header read stays within the 1,000-header cap. A request
+/// for more than one hash, or one hash while the budget is empty, is
 /// `OverResourceBound`. A bounded `get_coinbase_tx_sum` waits for the one
 /// coinbase-read permit. `get_version` gains nothing.
 pub const CORE_RPC_VERSION_MINOR: u32 = 67;
