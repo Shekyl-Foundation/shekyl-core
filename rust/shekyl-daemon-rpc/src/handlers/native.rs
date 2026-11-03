@@ -17,30 +17,17 @@ use crate::chain_facts::FfiP2pFacts;
 use crate::core::CoreRpc;
 use crate::handles::ChainReadHandle;
 use crate::hash_budget::HashBudget;
-use crate::methods::{InternalFault, RpcFault, RpcRefusal};
+use crate::methods::{InternalFault, RpcFault};
 use crate::server::AppState;
 use crate::types::JsonRpcResponse;
 use shekyl_rpc_types::errors::RpcError;
 use std::sync::Arc;
 use tracing::warn;
 
-/// Whether `method` computes one `fill_pow_hash`. A bounded caller pays one
-/// hash first. The host's administrator does not. Not asking spends nothing.
-pub(super) fn admit_pow_hash(
-    method: &'static str,
-    requested: bool,
-    bounded: bool,
-    budget: &HashBudget,
-) -> Result<bool, RpcFault> {
-    if !requested {
-        return Ok(false);
-    }
-    if bounded {
-        budget
-            .charge(method, 1)
-            .map_err(|error| RpcFault::Refused(RpcRefusal::of_error(&error)))?;
-    }
-    Ok(true)
+/// Whether the reply includes the PoW hash recorded at validation.
+/// `fill_pow_hash` is a store read, so `budget` is not spent.
+pub(super) fn admit_pow_hash(requested: bool, _budget: &HashBudget) -> bool {
+    requested
 }
 
 /// A JSON-RPC method this crate serves itself.
@@ -186,15 +173,7 @@ pub(super) async fn native_method(
                 Err(fault) => return Some(Err(NativeFail::Fault(fault))),
             };
             let budget = Arc::clone(&state.hash_budget);
-            let fill_pow_hash = match admit_pow_hash(
-                "get_block",
-                request.fill_pow_hash,
-                authority.bounded(),
-                &budget,
-            ) {
-                Ok(fill) => fill,
-                Err(fault) => return Some(Err(NativeFail::Fault(fault))),
-            };
+            let fill_pow_hash = admit_pow_hash(request.fill_pow_hash, &budget);
             Some(frame_native(
                 on_chain(state, move |chain| {
                     crate::methods::get_block(chain.as_ref(), &request, fill_pow_hash)
@@ -239,14 +218,12 @@ pub(super) async fn native_method(
                 Ok(request) => request,
                 Err(fault) => return Some(Err(NativeFail::Fault(fault))),
             };
-            let bounded = authority.bounded();
             let budget = Arc::clone(&state.hash_budget);
             Some(frame_native(
                 on_chain(state, move |chain| {
                     crate::methods::get_last_block_header(
                         chain.as_ref(),
                         request.fill_pow_hash,
-                        bounded,
                         &budget,
                     )
                 })
@@ -347,15 +324,7 @@ pub(super) async fn native_method(
                 Err(fault) => return Some(Err(NativeFail::Fault(fault))),
             };
             let budget = Arc::clone(&state.hash_budget);
-            let fill_pow_hash = match admit_pow_hash(
-                "get_block_header_by_height",
-                request.fill_pow_hash,
-                authority.bounded(),
-                &budget,
-            ) {
-                Ok(fill) => fill,
-                Err(fault) => return Some(Err(NativeFail::Fault(fault))),
-            };
+            let fill_pow_hash = admit_pow_hash(request.fill_pow_hash, &budget);
             Some(frame_native(
                 on_chain(state, move |chain| {
                     crate::methods::get_block_header_by_height(

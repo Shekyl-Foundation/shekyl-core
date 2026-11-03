@@ -378,7 +378,7 @@ async fn a_scenario_chains_headers_and_blocks_are_the_mined_blocks() {
             )
         );
         assert_eq!(
-            get_last_block_header(&facts, false, false, &hash_budget())
+            get_last_block_header(&facts, false, &hash_budget())
                 .expect("tip")
                 .block_header
                 .hash,
@@ -463,15 +463,10 @@ async fn a_scenario_chains_headers_and_blocks_are_the_mined_blocks() {
         .expect("an unknown hash is a slot, not a refusal");
         assert_eq!(unknown.block_headers[0].block_header, None);
 
-        // A bounded caller with an empty hash budget is refused. A full
-        // budget pays for the one hash and the header carries it.
+        // The recorded hash is a store read. An empty hash budget still
+        // serves it.
         let empty = HashBudget::empty(std::time::Instant::now());
-        assert!(matches!(
-            get_last_block_header(&facts, true, true, &empty),
-            Err(RpcFault::Refused(_))
-        ));
-        let paid = get_last_block_header(&facts, true, true, &hash_budget())
-            .expect("one hash is in the budget");
+        let paid = get_last_block_header(&facts, true, &empty).expect("the recorded hash");
         assert!(paid.block_header.pow_hash.is_some());
         drop(facts);
         drop(store);

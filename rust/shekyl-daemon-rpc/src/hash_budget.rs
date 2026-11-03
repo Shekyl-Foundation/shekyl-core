@@ -5,9 +5,10 @@
 
 //! The shared hash budget for bounded RPC callers (`RPC_CHANNEL.md` §6.3).
 //!
-//! One bucket per daemon. A bounded connection pays for `calc_pow` and for
-//! each header it asks `fill_pow_hash` on. The host's administrator does
-//! not pay. The bucket bounds charges, not measured CPU, in the same shape
+//! One bucket per daemon. A bounded connection pays for `calc_pow`.
+//! `fill_pow_hash` reads the hash recorded at validation and does not pay.
+//! The host's administrator does not pay. The bucket bounds charges, not
+//! measured CPU, in the same shape
 //! as the handshake budget:
 //!
 //! `charges ≤ share × elapsed + capacity`.
@@ -25,8 +26,10 @@ use std::time::{Duration, Instant};
 
 use shekyl_rpc_types::errors::{Diagnostic, ErrorClass, RpcError};
 
-/// One header hash on the floor device, thread-CPU 99th percentile
+/// One RandomX hash on the floor device, thread-CPU 99th percentile
 /// (RT-W10, `docs/benchmarks/rt_w10_request_cost_20261102.md`).
+/// `calc_pow` charges this. `fill_pow_hash` does not: it reads the hash
+/// recorded at validation.
 pub const HASH_CPU_NANOS: u64 = 1_290_885_199;
 
 /// The share of one core the long-run charge rate allows, in thousandths.
@@ -122,6 +125,16 @@ impl HashBudget {
         } else {
             Err(budget_empty(method))
         }
+    }
+
+    /// Nanoseconds of hash currently held. A read that does not charge
+    /// leaves this where it was.
+    #[cfg(test)]
+    pub(crate) fn held_ns(&self) -> u64 {
+        self.state
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
+            .balance_ns
     }
 }
 

@@ -334,19 +334,17 @@ mod tests {
         assert!(native_method_for("hard_fork_info").is_none());
     }
 
-    /// One hash is computed when it was asked for and, if the caller is
-    /// bounded, the budget can pay. Not asking computes nothing.
+    /// `fill_pow_hash` is the recorded hash. An empty budget still serves
+    /// it, and not asking does not.
     #[test]
-    fn a_bounded_caller_pays_one_hash_for_fill_pow_hash() {
+    fn fill_pow_hash_does_not_spend_the_hash_budget() {
         use crate::hash_budget::HashBudget;
         use std::time::Instant;
-        let full = HashBudget::new(Instant::now());
-        assert!(admit_pow_hash("get_block", true, false, &full).unwrap());
-        assert!(admit_pow_hash("get_block", true, true, &full).unwrap());
         let empty = HashBudget::empty(Instant::now());
-        assert!(admit_pow_hash("get_block", true, true, &empty).is_err());
-        assert!(!admit_pow_hash("get_block", false, false, &empty).unwrap());
-        assert!(!admit_pow_hash("get_block", false, true, &empty).unwrap());
+        let held = empty.held_ns();
+        assert!(admit_pow_hash(true, &empty));
+        assert!(!admit_pow_hash(false, &empty));
+        assert_eq!(empty.held_ns(), held);
     }
 
     /// Each native name is gated exactly as specified, and none is gated on
