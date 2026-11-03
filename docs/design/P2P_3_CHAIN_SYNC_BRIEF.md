@@ -226,13 +226,21 @@ ingest deciding forks.**
   - A header tree `T` of verified headers.
   - The best chain `H*`: the most cumulative work among the
     **reachable** chains in `T`, meaning those whose fork point with `L`
-    lies within `D_max`. A header main connected leaves `T`; when main
-    pops it, its children stay, anchored at a hash no longer on main, and
-    are unreachable until it is served again — at which point it is
-    their parent in `T`, not a tip over them (fixed 2026-11-02, #1237:
-    a re-served parent was made a tip, its children's branch stayed
-    anchored off main, and `H*` fell back to `L` while every answer
-    from `L` was already held).
+    lies within `D_max`. `T` hangs off main: a header main connected
+    leaves `T`, and when main pops a block (a chain switch demotes it),
+    every branch anchored at it leaves `T` with it
+    (`HeaderTree::drop_orphans`, one `header_at` per branch on each
+    tip). The peers on that chain serve those headers again, above a
+    parent the node then holds. **Amended 2026-11-03 (#1237, the
+    three-miner rehearsal):** before, the children stayed as a branch
+    anchored off main and a re-served parent adopted them (the
+    2026-11-02 form). That held only while the page stopped at the
+    parent. A page that walked the demoted chain — new to the node —
+    and reached the orphan met a held header after new ones
+    (`HeadersForm(HeldAfterNew)`), so a node that switched once closed
+    every later session from that peer and mined alone
+    (`switch_orphan_tests`). The close causes name the form rule they
+    failed (`HeadersFormFault`), which is how the 47 closes were read.
 - **Per session.**
   - the peer's claim (height and cumulative work, a hint only);
   - its verified frontier in `T`;

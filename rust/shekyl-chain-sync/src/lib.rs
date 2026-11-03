@@ -47,6 +47,8 @@ mod select_tests;
 mod spent_tests;
 #[cfg(test)]
 mod stall_tests;
+#[cfg(test)]
+mod switch_orphan_tests;
 
 mod arrivals;
 mod branch;
