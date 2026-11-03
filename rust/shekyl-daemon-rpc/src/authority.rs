@@ -231,6 +231,16 @@ pub async fn stamp(authority: Authority, mut request: Request, next: Next) -> Re
         )
             .into_response();
     }
+    // Armed daemons (`--dev-rpc`) record the path of each admitted request
+    // and not its body. A regtest test reads the line to see whether a
+    // command asked the daemon. The path is not a transaction id.
+    if authority.armed_switch() {
+        tracing::info!(
+            target: "global",
+            "rpc request: {}",
+            request.uri().path()
+        );
+    }
     request.extensions_mut().insert(authority);
     next.run(request).await
 }
