@@ -258,9 +258,15 @@ async fn a_switch_deeper_than_the_lock_window_raises_the_alarm_and_lands() {
 /// `block_info`'s hash and timestamp, and the hash index all name the
 /// rewritten block, so the reads that check a blob against its recorded
 /// identity (CEN-B6) pass. The links into those heights from above still
-/// name the old blocks, which nothing on the switch path re-reads. What is
-/// left is a recorded chain whose next block fails its own timestamp rule:
-/// the store SI-27 is for.
+/// name the old blocks, which nothing on the switch path re-reads: the
+/// alternative chain links to the root, and the demoted blocks' history is
+/// read by height. The links cannot all be made coherent: cascading
+/// `prev_id` upward reaches the root, and a root with a new identity is no
+/// longer the block the alternative chain links to. The tier reads
+/// timestamps from the header in the blob, not from `block_info`, so the
+/// blob has to change. What is left is a recorded chain whose next block
+/// fails its own timestamp rule: the store SI-27 is for. The test asserts
+/// that exact row at that height, so a fault from anything else fails it.
 fn rewrite_timestamps(path: &std::path::Path, heights: &[BlockHeight], at: u64) {
     use redb::ReadableTable;
     use shekyl_chain_store::codec::{BlockBody, BlockInfo};
