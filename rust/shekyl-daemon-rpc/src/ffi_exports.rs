@@ -334,5 +334,16 @@ mod tests {
         assert_eq!(CoreRpc::peerlist_sizes(), Ok(P2pRead::Offline));
         store_offline(false);
         assert_eq!(CoreRpc::p2p_state(), Ok(P2pRead::Running(())));
+        // Online, and this process installed no lists: a fault, not an
+        // empty list and not the null core handle.
+        assert_eq!(
+            CoreRpc::peerlist_sizes(),
+            Err(crate::chain_facts::FactsFault::ListsAbsent)
+        );
+        let core = CoreRpc::null_for_router_tests();
+        assert_eq!(
+            core.peer_list(false),
+            Err(crate::chain_facts::FactsFault::ListsAbsent)
+        );
     }
 }

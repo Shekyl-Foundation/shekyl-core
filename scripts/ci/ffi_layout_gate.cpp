@@ -48,8 +48,9 @@
 // `_pad` in Rust (the header now says `_pad`; no C++ reads it), and six text
 // members C++ reads as char were u8 in Rust: ShekylBanView::text,
 // ShekylRpcPeerFacts::host, and daemon-rpc's ConnectionFactsFfi::address and
-// ::host, SyncSpanFactsFfi::remote_address and PeerFactsFfi::host. Rust now
-// declares them c_char.
+// ::host and SyncSpanFactsFfi::remote_address. Rust now declares them
+// c_char. The peer-list row the RPC reads is an owned Rust struct, so it
+// is not a twin here.
 
 #include <cstddef>
 #include <cstdint>

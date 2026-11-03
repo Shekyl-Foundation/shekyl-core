@@ -247,37 +247,16 @@ impl SessionCounts {
     }
 }
 
-/// The seam board's session counts.
+/// The seam board's session counts, through the reads the composition
+/// root installed.
 ///
 /// # Errors
 ///
-/// [`FactsFault::HubAbsent`] when no hub is bound; [`FactsFault::Unknown`]
-/// for a code the export does not document.
+/// [`FactsFault::HubAbsent`] when no hub is bound. Zero sessions is an
+/// answer ([`SessionCounts::NONE`] is what an offline node carries) and
+/// is never what a missing hub returns.
 pub fn sessions() -> Result<SessionCounts, FactsFault> {
-    // Values no board can hold: if the export claimed success without
-    // writing, the answer would not pass for small counts.
-    let mut counts = crate::ffi::SeamSessionCountsFfi {
-        outbound: u64::MAX,
-        inbound: u64::MAX,
-    };
-    // SAFETY: `counts` is a valid, writable struct of the export's layout.
-    let code = unsafe { (crate::seam::seam().session_counts)(&raw mut counts) };
-    sessions_from(code, counts)
-}
-
-/// What a return code of the board's count export means.
-fn sessions_from(
-    code: i32,
-    counts: crate::ffi::SeamSessionCountsFfi,
-) -> Result<SessionCounts, FactsFault> {
-    match code {
-        crate::ffi::SHEKYL_SEAM_COUNT_OK => Ok(SessionCounts {
-            outbound: counts.outbound,
-            inbound: counts.inbound,
-        }),
-        crate::ffi::SHEKYL_SEAM_COUNT_ERR_NO_HUB => Err(FactsFault::HubAbsent),
-        other => Err(FactsFault::Unknown(other)),
-    }
+    (crate::p2p_reads::reads().sessions)().map_err(FactsFault::from)
 }
 
 /// The size of the chain store's data file.
@@ -312,35 +291,20 @@ mod tests {
     use super::*;
 
     /// **A missing hub is a fault, and zero sessions is an answer.** The
-    /// two are different return codes of the board's export and stay
-    /// different here; a code the export does not document is not guessed
-    /// at.
+    /// unit-test process installs no reads, so the read is the fault. An
+    /// offline node carries [`SessionCounts::NONE`], which is not that
+    /// fault: the two do not share a value.
     #[test]
     fn a_missing_hub_is_a_fault_and_zero_sessions_is_an_answer() {
-        use crate::ffi::{
-            SeamSessionCountsFfi, SHEKYL_SEAM_COUNT_ERR_NO_HUB, SHEKYL_SEAM_COUNT_OK,
-        };
-
-        let pod = |outbound, inbound| SeamSessionCountsFfi { outbound, inbound };
+        assert_eq!(sessions(), Err(FactsFault::HubAbsent));
         assert_eq!(
-            sessions_from(SHEKYL_SEAM_COUNT_OK, pod(0, 0)),
-            Ok(SessionCounts::NONE)
+            SessionCounts::NONE,
+            SessionCounts {
+                outbound: 0,
+                inbound: 0,
+            }
         );
-        assert_eq!(
-            sessions_from(SHEKYL_SEAM_COUNT_OK, pod(8, 12)),
-            Ok(SessionCounts {
-                outbound: 8,
-                inbound: 12,
-            }),
-            "each count lands in its own member"
-        );
-        assert_eq!(
-            sessions_from(SHEKYL_SEAM_COUNT_ERR_NO_HUB, pod(0, 0)),
-            Err(FactsFault::HubAbsent),
-            "no hub is not zero sessions, whatever the slots hold"
-        );
-        assert_eq!(sessions_from(-1, pod(0, 0)), Err(FactsFault::Unknown(-1)));
-        assert_eq!(sessions_from(1, pod(3, 3)), Err(FactsFault::Unknown(1)));
+        assert!(!SessionCounts::NONE.has_peers());
     }
 
     /// `has_peers` is a session in either direction, and only that.
@@ -359,13 +323,6 @@ mod tests {
                 "{outbound} out, {inbound} in"
             );
         }
-    }
-
-    /// The unit-test binary links no hub, and the stub that stands in for
-    /// the export says so. The read through it is the fault, not zeros.
-    #[test]
-    fn the_read_with_no_hub_linked_is_the_fault() {
-        assert_eq!(sessions(), Err(FactsFault::HubAbsent));
     }
 
     /// A scratch directory under the system temp dir, removed on drop.

@@ -164,20 +164,14 @@ const _: () = {
 
 /// The process hub's session counts, from one snapshot of its board.
 ///
-/// The daemon RPC's `get_info` reads this: the two connection counts are
-/// `outbound` and `inbound`, and `has_peers` is whether either is
-/// non-zero. One read and one definition of a session, so a reply cannot
-/// say a node has peers and no connections, or connections and no peers.
+/// Wraps [`crate::rpc_peerlist_ffi::session_counts`]: one definition of a
+/// session. The daemon reads that function. This export remains because
+/// the header declares it and the layout gate pairs the struct. No C++
+/// calls it.
 ///
-/// The other counts here answer a missing hub with `0`. This one cannot,
-/// because its reader would report a node whose p2p layer is not up as a
-/// node with no peers and no connections. So the counts are written
-/// through `out` and the return says whether there were any:
-/// [`SHEKYL_SEAM_COUNT_OK`], or [`SHEKYL_SEAM_COUNT_ERR_NO_HUB`] with `out`
-/// untouched.
-///
-/// The reader is Rust (`shekyl-daemon-rpc`, which does not depend on this
-/// crate and shares its link image). No C++ calls it.
+/// A null `out` returns [`SHEKYL_SEAM_COUNT_ERR_NULL`] and writes nothing.
+/// No hub returns [`SHEKYL_SEAM_COUNT_ERR_NO_HUB`] and writes nothing:
+/// zero sessions is an answer, and a missing hub is not that answer.
 ///
 /// # Safety
 ///
@@ -187,18 +181,13 @@ pub unsafe extern "C" fn shekyl_seam_session_counts(out: *mut ShekylSeamSessionC
     if out.is_null() {
         return SHEKYL_SEAM_COUNT_ERR_NULL;
     }
-    let Some(hub) = hub() else {
+    let Some((outbound, inbound)) = crate::rpc_peerlist_ffi::session_counts() else {
         return SHEKYL_SEAM_COUNT_ERR_NO_HUB;
     };
-    // One copy of the board; both counts are of it.
-    let board = hub.board();
-    let count = |n: usize| u64::try_from(n).unwrap_or(u64::MAX);
-    let counts = ShekylSeamSessionCounts {
-        outbound: count(board.established_count(shekyl_seam::Direction::Outbound)),
-        inbound: count(board.established_count(shekyl_seam::Direction::Inbound)),
-    };
     // SAFETY: `out` is non-null, and the caller's contract makes it writable.
-    unsafe { out.write(counts) };
+    unsafe {
+        out.write(ShekylSeamSessionCounts { outbound, inbound });
+    }
     SHEKYL_SEAM_COUNT_OK
 }
 

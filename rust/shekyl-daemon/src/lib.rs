@@ -18,6 +18,7 @@
 pub mod help;
 pub mod network;
 pub mod options;
+pub mod p2p_reads;
 pub mod remnant;
 pub mod run;
 pub mod signals;
@@ -47,8 +48,18 @@ pub fn main(remnant: Remnant, args: &[std::ffi::OsString]) -> i32 {
         return EXIT_FAILED;
     }
     shekyl_ffi::panic_hook::install();
-    // The RPC's core reads, before anything could construct an RPC: the
+    // The RPC's reads, before anything could construct an RPC: the
     // remnant's `run` reaches `shekyl_daemon_rpc_start` from C++ (DC-F43).
+    // The peer lists and the session counts are Rust, installed here
+    // because this crate sees both the RPC and `shekyl-ffi`. The core
+    // seam is only the C++ functions the binary handed over.
+    if !shekyl_daemon_rpc::p2p_reads::install(p2p_reads::installed()) {
+        run::tell(
+            &mut std::io::stderr(),
+            "shekyld: the p2p reads were already installed; not starting",
+        );
+        return EXIT_FAILED;
+    }
     if !shekyl_daemon_rpc::seam::install(remnant.core) {
         run::tell(
             &mut std::io::stderr(),

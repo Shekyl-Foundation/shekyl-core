@@ -15,8 +15,11 @@
 //! [`ShekylDaemonSnapshot`], the read-only structure holding exactly the
 //! values whose reader is still C++, and calls `run` with it; the sequence
 //! hands `relay_local` to the node and installs `core` for the RPC before
-//! `run` is reached. Every test in this crate drives the sequence with a
-//! fake remnant ([`Remnant::absent_core`]); none links C++.
+//! `run` is reached. The peer lists and the session counts are not part of
+//! this remnant: they are Rust, and [`crate::p2p_reads`] installs them.
+//! Every test in this crate drives the sequence with a fake remnant
+//! ([`Remnant::absent_core`]); none links C++, and none installs those
+//! reads, so a test reads a process with no lists and no hub.
 //!
 //! **The snapshot** ([`ShekylDaemonSnapshot`], its field count and the
 //! test binaries' parse export) is `shekyl-ffi`'s `daemon_snapshot_ffi`,
@@ -62,7 +65,8 @@ pub struct Remnant {
     pub stop: StopFn,
     /// The shell's relay entry, for the node.
     pub relay_local: RelayLocalFn,
-    /// The RPC's reads of the core and of the process's p2p state.
+    /// The RPC's reads of the C++ core. The peer lists and the sessions
+    /// are [`crate::p2p_reads`], not this seam.
     pub core: CoreSeam,
 }
 

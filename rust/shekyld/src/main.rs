@@ -22,24 +22,16 @@
 //! having no such block. The symbols reach this link only through CMake
 //! (`corrosion_import_crate` in `cmake/BuildRust.cmake`); see `build.rs`.
 //!
-//! Four of the seam's entries are Rust, exported by `shekyl-ffi` for the
-//! C++ side and reached by `shekyl-daemon-rpc` the same way as the C++
-//! ones, because that crate cannot depend on `shekyl-ffi` (the layering
-//! note in `shekyl-ffi/Cargo.toml`). They are taken from the crate here,
-//! not imported by name: a Rust symbol is never declared `extern`.
+//! The peer lists and the session counts are Rust. `shekyl-daemon` installs
+//! them as ordinary functions ([`shekyl_daemon::p2p_reads`]); they are not
+//! imported, and they are not members of this seam.
 
 use std::ffi::{c_char, c_int, c_void};
 
 use shekyl_daemon::Remnant;
-use shekyl_daemon_rpc::ffi::{
-    ConnectionFactsFfi, CoreRpcHandle, NetStatsFactsFfi, PeerFactsFfi, SeamSessionCountsFfi,
-};
+use shekyl_daemon_rpc::ffi::{ConnectionFactsFfi, CoreRpcHandle, NetStatsFactsFfi};
 use shekyl_daemon_rpc::seam::CoreSeam;
 use shekyl_ffi::daemon_snapshot_ffi::ShekylDaemonSnapshot;
-use shekyl_ffi::rpc_peerlist_ffi::{
-    shekyl_rpc_peer_list, shekyl_rpc_peer_list_free, shekyl_rpc_peerlist_sizes, ShekylRpcPeerFacts,
-};
-use shekyl_ffi::seam_board_ffi::{shekyl_seam_session_counts, ShekylSeamSessionCounts};
 
 // Every C++ function Rust calls, all `noexcept`.
 //
@@ -76,40 +68,6 @@ unsafe extern "C" {
     unsafe fn shekyl_rpc_connections_free(owner: *mut c_void);
 }
 
-// The two Rust entries whose pointee type is spelled twice — once in
-// `shekyl-ffi` for the C header, once in `shekyl-daemon-rpc` for the
-// reader — are one layout. The cast below is sound only while this holds.
-const _: () = assert!(size_of::<PeerFactsFfi>() == size_of::<ShekylRpcPeerFacts>());
-const _: () = assert!(align_of::<PeerFactsFfi>() == align_of::<ShekylRpcPeerFacts>());
-const _: () = assert!(size_of::<SeamSessionCountsFfi>() == size_of::<ShekylSeamSessionCounts>());
-const _: () = assert!(align_of::<SeamSessionCountsFfi>() == align_of::<ShekylSeamSessionCounts>());
-
-/// `shekyl_rpc_peer_list`, with the reader's spelling of the facts.
-///
-/// # Safety
-///
-/// As `shekyl_rpc_peer_list`'s.
-unsafe extern "C" fn peer_list(
-    public_only: u8,
-    out: *mut *const PeerFactsFfi,
-    out_len: *mut usize,
-    out_owner: *mut *mut c_void,
-) -> i32 {
-    // SAFETY: the caller's contract is the callee's; the pointee types are
-    // one layout, asserted above.
-    unsafe { shekyl_rpc_peer_list(public_only, out.cast(), out_len, out_owner) }
-}
-
-/// `shekyl_seam_session_counts`, with the reader's spelling of the counts.
-///
-/// # Safety
-///
-/// As `shekyl_seam_session_counts`'s.
-unsafe extern "C" fn session_counts(out: *mut SeamSessionCountsFfi) -> i32 {
-    // SAFETY: as above.
-    unsafe { shekyl_seam_session_counts(out.cast()) }
-}
-
 fn main() {
     let args: Vec<_> = std::env::args_os().collect();
     let remnant = Remnant {
@@ -124,10 +82,6 @@ fn main() {
             net_stats: shekyl_rpc_net_stats,
             connections: shekyl_rpc_connections,
             connections_free: shekyl_rpc_connections_free,
-            peer_list,
-            peer_list_free: shekyl_rpc_peer_list_free,
-            peerlist_sizes: shekyl_rpc_peerlist_sizes,
-            session_counts,
         },
     };
     std::process::exit(shekyl_daemon::main(remnant, &args));

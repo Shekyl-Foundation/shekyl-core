@@ -542,7 +542,7 @@ deleted.
 `has_peers` is at least one handshaken session on any connector (RK-Q4).
 It is not stored. `shekyl_seam_session_counts` returns the handshaken rows
 in each direction from one copy of the board
-(`rust/shekyl-ffi/src/seam_board_ffi.rs:186-199`), and
+(`rust/shekyl-ffi/src/seam_board_ffi.rs:180-191`), and
 `SessionCounts::has_peers` is whether either count is non-zero. The
 any-row export `shekyl_seam_board_count` does not read the handshake flag
 (`seam_board_ffi.rs:71-74`). That count is a dial cap. It is not this
@@ -558,9 +558,9 @@ index that is not a connector or a direction
 whose hub is not up would report `has_peers = false` — the false
 `DaemonPeerless` of §3.1, rebuilt one layer down (RK-D23: that `0` is not
 an answer). The session export can say so. It returns
-`SHEKYL_SEAM_COUNT_ERR_NO_HUB` and writes nothing, and
-`InfoFacts::sessions` maps that to `FactsFault::HubAbsent`
-(`rust/shekyl-daemon-rpc/src/chain_facts.rs:216-221`). Zero sessions is
+`SHEKYL_SEAM_COUNT_ERR_NO_HUB` and writes nothing. The Rust read
+(`rpc_peerlist_ffi::session_counts`) is `None` for that absence, and
+`InfoFacts::sessions` maps it to `FactsFault::HubAbsent`. Zero sessions is
 `Ok`. `has_peers` is read from that result, never from an export that
 answers a missing hub with `0`.
 

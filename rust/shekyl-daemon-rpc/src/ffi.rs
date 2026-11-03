@@ -271,28 +271,6 @@ pub struct ConnectionFactsFfi {
     pub reserved: [u8; 2],
 }
 
-/// Twin of `shekyl_rpc_peer_facts` (RK-5a), now `shekyl-ffi`'s
-/// `ShekylRpcPeerFacts`, exported from the Rust peer lists. Pinned by
-/// layout on both sides (24 bytes). No `last_seen`: the lists carry no
-/// clock (3.51).
-#[repr(C)]
-#[derive(Clone, Copy, Debug)]
-pub struct PeerFactsFfi {
-    /// Already resolved per address arm by the adapter — the ip string for
-    /// ipv4, the bare host for ipv6, the whole `host:port` for Tor.
-    pub host: *const c_char,
-    pub host_len: usize,
-    /// The ipv4 address with its four octets in **network** order, as
-    /// `ipv4_network_address::ip()` returns it; 0 for every other arm.
-    pub ip: u32,
-    /// 0 for the address arms that carry none.
-    pub port: u16,
-    /// 1 = white list, 0 = gray.
-    pub white: u8,
-    /// Filled unconditionally; applying `include_blocked` is this side's job.
-    pub blocked: u8,
-}
-
 /// Twin of `shekyl_rpc_info_chain_facts` (RK-5c): `get_info`'s health,
 /// identity, chain and economics operands, read for every caller. Every
 /// member from the chain store is read under one chain lock and carries its
@@ -364,10 +342,13 @@ const _: () = assert!(std::mem::offset_of!(InfoChainFactsFfi, reserved) == 157);
 const _: () = assert!(std::mem::size_of::<InfoStatusFactsFfi>() == 24);
 const _: () = assert!(std::mem::size_of::<InfoPeersFactsFfi>() == 32);
 
-// RK-5a layout pins. `ConnectionFactsFfi` and `PeerFactsFfi` carry
-// pointers, so there is no fill/check twin to catch a
-// disagreement — these asserts and their `static_assert` counterparts in
+// RK-5a layout pins. `ConnectionFactsFfi` carries pointers, so there is
+// no fill/check twin to catch a disagreement — these asserts and their
+// `static_assert` counterparts in
 // `tests/unit_tests/rpc_facts_ffi_roundtrip.cpp` are the whole pin.
+// The peer-list row is not a C type on this side: `shekyl-ffi`'s
+// `ShekylRpcPeerFacts` is the export's layout, and the RPC reads owned
+// rows (`crate::p2p_reads`).
 const _: () = assert!(std::mem::size_of::<NetStatsFactsFfi>() == 40);
 
 // `port` (u16), the four flag bytes and `reserved` fill the slot after
@@ -396,37 +377,3 @@ const _: () = assert!(std::mem::offset_of!(ConnectionFactsFfi, incoming) == 107)
 const _: () = assert!(std::mem::offset_of!(ConnectionFactsFfi, localhost) == 108);
 const _: () = assert!(std::mem::offset_of!(ConnectionFactsFfi, local_ip) == 109);
 const _: () = assert!(std::mem::offset_of!(ConnectionFactsFfi, reserved) == 110);
-
-// The twin is `shekyl-ffi`'s `ShekylRpcPeerFacts` and the C++
-// `shekyl_rpc_peer_facts` in `shekyl_ffi.h`, each pinned to 24 bytes.
-const _: () = assert!(std::mem::size_of::<PeerFactsFfi>() == 24);
-const _: () = assert!(std::mem::align_of::<PeerFactsFfi>() == 8);
-const _: () = assert!(std::mem::offset_of!(PeerFactsFfi, host) == 0);
-const _: () = assert!(std::mem::offset_of!(PeerFactsFfi, host_len) == 8);
-const _: () = assert!(std::mem::offset_of!(PeerFactsFfi, ip) == 16);
-const _: () = assert!(std::mem::offset_of!(PeerFactsFfi, port) == 20);
-const _: () = assert!(std::mem::offset_of!(PeerFactsFfi, white) == 22);
-const _: () = assert!(std::mem::offset_of!(PeerFactsFfi, blocked) == 23);
-
-/// `shekyl_seam_session_counts` ([`crate::seam::CoreSeam::session_counts`]) wrote the counts.
-pub const SHEKYL_SEAM_COUNT_OK: i32 = 0;
-/// No hub is bound in this process: there are no counts, which is not zeros.
-pub const SHEKYL_SEAM_COUNT_ERR_NO_HUB: i32 = -2;
-
-/// Twin of `shekyl-ffi`'s `ShekylSeamSessionCounts`: the board's handshaken
-/// sessions per direction, over one snapshot. The layout is asserted on
-/// both sides.
-#[repr(C)]
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub struct SeamSessionCountsFfi {
-    /// Handshaken sessions this node opened, on every connector.
-    pub outbound: u64,
-    /// Handshaken sessions opened to this node, on every connector.
-    pub inbound: u64,
-}
-
-const _: () = {
-    assert!(std::mem::offset_of!(SeamSessionCountsFfi, outbound) == 0);
-    assert!(std::mem::offset_of!(SeamSessionCountsFfi, inbound) == 8);
-    assert!(std::mem::size_of::<SeamSessionCountsFfi>() == 16);
-};

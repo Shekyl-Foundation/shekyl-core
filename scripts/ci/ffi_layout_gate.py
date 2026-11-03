@@ -79,8 +79,9 @@ GROUPS = [
         },
     },
     {
-        # The daemon RPC reads C++ facts through its own twins, some of them
-        # of structs shekyl-ffi also defines.
+        # The daemon RPC's twins of the C++ facts it still reads. The peer
+        # list and the session counts are owned Rust rows, so they are not
+        # paired here; `shekyl-ffi` pairs the C exports.
         "crate": "rust/shekyl-daemon-rpc/src/lib.rs",
         "namespace": "rust_daemon_rpc",
         "headers": [
@@ -103,8 +104,6 @@ GROUPS = [
             "InfoChainFactsFfi": "shekyl_rpc_info_chain_facts",
             "InfoStatusFactsFfi": "shekyl_rpc_info_status_facts",
             "InfoPeersFactsFfi": "shekyl_rpc_info_peers_facts",
-            "PeerFactsFfi": "shekyl_rpc_peer_facts",
-            "SeamSessionCountsFfi": "shekyl_seam_session_counts_t",
         },
     },
 ]

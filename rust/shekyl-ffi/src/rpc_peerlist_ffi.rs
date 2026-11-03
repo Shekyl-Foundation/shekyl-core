@@ -11,10 +11,15 @@
 //! `blocked` is the transport layer's ban on the address's host, asked
 //! through the hub. Nothing here changes the lists.
 //!
-//! Offline is not a result of these exports. The RPC answers it from the
+//! Offline is not a result of these reads. The RPC answers it from the
 //! bit `configure` recorded, before it calls here. An online daemon with
-//! no dialer is a fault (`FACTS_ERR_NULL`), and says so: absence of a
-//! dialer is not a way to infer offline.
+//! no dialer is [`None`], and the C exports say the same with
+//! `FACTS_ERR_NULL`: absence of a dialer is not a way to infer offline.
+//!
+//! The owned rows ([`ListedPeer`], [`listed_peers`], [`clearnet_list_sizes`])
+//! are the read. [`shekyl_rpc_peer_list`] and [`shekyl_rpc_peerlist_sizes`]
+//! are the C view of those rows, for the header and for `node_server`'s
+//! test. The daemon does not read through them.
 
 use std::ffi::{c_char, c_void};
 
@@ -23,18 +28,42 @@ use shekyl_peerlist::{ConnectorId, ListName, NetworkAddress, Peerlist};
 
 use crate::dialer_ffi::dialer;
 
-/// The facts codes the RPC's exports share (`rpc_facts_ffi.h`).
+/// The facts codes the C exports share (`rpc_facts_ffi.h`).
 const FACTS_OK: i32 = 0;
 /// A null out pointer, or an online daemon with no peer lists.
 const FACTS_ERR_NULL: i32 = -1;
 
-/// One peerlist entry, as `get_peer_list` renders it. Twin of
-/// `shekyl_rpc_peer_facts` (C++) and `shekyl-daemon-rpc`'s `PeerFactsFfi`,
-/// pinned by size on each side.
+/// A count that does not fit the `u64` the RPC reports.
+const COUNT_DOES_NOT_FIT: u64 = u64::MAX;
+
+fn count_width(count: usize) -> u64 {
+    u64::try_from(count).unwrap_or(COUNT_DOES_NOT_FIT)
+}
+
+/// One peer-list row. Owned: the host string is this row's, and the row
+/// is not a C layout. The C export builds [`ShekylRpcPeerFacts`] from these.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct ListedPeer {
+    /// The ip string for IPv4, the bare host for IPv6, and `host:port`
+    /// for Tor.
+    pub host: String,
+    /// The IPv4 address with its four octets in network order. Zero for
+    /// every other arm.
+    pub ip: u32,
+    /// Zero for Tor, whose port is carried in [`Self::host`].
+    pub port: u16,
+    /// White list. Otherwise gray.
+    pub white: bool,
+    /// The transport layer bans this host now. The request's
+    /// `include_blocked` is the caller's to apply.
+    pub blocked: bool,
+}
+
+/// One peerlist entry as the C export renders it. Twin of
+/// `shekyl_rpc_peer_facts`. The field order is pinned here and in
+/// `tests/unit_tests/rpc_facts_ffi_roundtrip.cpp`.
 ///
-/// `host` is the ip string for IPv4, the bare host for IPv6, and the whole
-/// `host:port` for Tor, with `port` zero there; `ip` is the IPv4 address
-/// with its four octets in network order, zero for every other arm.
+/// `host` points into the [`PeerListOwner`] the export hands back.
 #[repr(C)]
 #[derive(Clone, Copy, Debug)]
 pub struct ShekylRpcPeerFacts {
@@ -44,12 +73,18 @@ pub struct ShekylRpcPeerFacts {
     pub port: u16,
     /// 1 white, 0 gray.
     pub white: u8,
-    /// 1 when the transport layer bans the host now. The request's
-    /// `include_blocked` is the caller's to apply.
+    /// 1 when the transport layer bans the host now.
     pub blocked: u8,
 }
 
 const _: () = assert!(std::mem::size_of::<ShekylRpcPeerFacts>() == 24);
+const _: () = assert!(std::mem::align_of::<ShekylRpcPeerFacts>() == 8);
+const _: () = assert!(std::mem::offset_of!(ShekylRpcPeerFacts, host) == 0);
+const _: () = assert!(std::mem::offset_of!(ShekylRpcPeerFacts, host_len) == 8);
+const _: () = assert!(std::mem::offset_of!(ShekylRpcPeerFacts, ip) == 16);
+const _: () = assert!(std::mem::offset_of!(ShekylRpcPeerFacts, port) == 20);
+const _: () = assert!(std::mem::offset_of!(ShekylRpcPeerFacts, white) == 22);
+const _: () = assert!(std::mem::offset_of!(ShekylRpcPeerFacts, blocked) == 23);
 
 /// What `shekyl_rpc_peer_list` hands out and `shekyl_rpc_peer_list_free`
 /// takes back: the host strings and the entries that point into them.
@@ -70,8 +105,10 @@ fn render(address: &NetworkAddress) -> (String, u32, u16) {
 }
 
 /// The entries, white then gray, for every connector or clearnet only.
-/// `None` when there are no peer lists to read.
-fn entries(public_only: bool) -> Option<PeerListOwner> {
+/// `None` when there are no peer lists to read: an online daemon with no
+/// dialer, which is not an empty list.
+#[must_use]
+pub fn listed_peers(public_only: bool) -> Option<Vec<ListedPeer>> {
     let dialer = dialer()?;
     let bans = BanSnapshot::take(dialer.hub());
     let snapshot = dialer.shared().lists.snapshot();
@@ -82,33 +119,48 @@ fn entries(public_only: bool) -> Option<PeerListOwner> {
         })
         .collect();
     rows.sort_by_key(|(_, list)| matches!(list, ListName::Gray));
-    let mut hosts = Vec::new();
-    let mut facts = Vec::new();
-    for (address, list) in &rows {
-        let (host, ip, port) = render(address);
-        let blocked = match address {
-            NetworkAddress::Ipv4 { ip, .. } => bans.covers((*ip).into()),
-            NetworkAddress::Ipv6 { ip, .. } => bans.covers((*ip).into()),
-            NetworkAddress::Tor { .. } => false,
-        };
-        facts.push(ShekylRpcPeerFacts {
+    let peers = rows
+        .iter()
+        .map(|(address, list)| {
+            let (host, ip, port) = render(address);
+            let blocked = match address {
+                NetworkAddress::Ipv4 { ip, .. } => bans.covers((*ip).into()),
+                NetworkAddress::Ipv6 { ip, .. } => bans.covers((*ip).into()),
+                NetworkAddress::Tor { .. } => false,
+            };
+            ListedPeer {
+                host,
+                ip,
+                port,
+                white: matches!(list, ListName::White),
+                blocked,
+            }
+        })
+        .collect();
+    Some(peers)
+}
+
+/// The C export's owner, built from [`listed_peers`]. The host pointers
+/// borrow the owner's strings.
+fn c_owner(rows: Vec<ListedPeer>) -> PeerListOwner {
+    let mut hosts = Vec::with_capacity(rows.len());
+    let mut entries = Vec::with_capacity(rows.len());
+    for row in rows {
+        entries.push(ShekylRpcPeerFacts {
             host: std::ptr::null(),
-            host_len: host.len(),
-            ip,
-            port,
-            white: u8::from(matches!(list, ListName::White)),
-            blocked: u8::from(blocked),
+            host_len: row.host.len(),
+            ip: row.ip,
+            port: row.port,
+            white: u8::from(row.white),
+            blocked: u8::from(row.blocked),
         });
-        hosts.push(host);
+        hosts.push(row.host);
     }
-    let mut owner = PeerListOwner {
-        hosts,
-        entries: facts,
-    };
+    let mut owner = PeerListOwner { hosts, entries };
     for (entry, host) in owner.entries.iter_mut().zip(&owner.hosts) {
         entry.host = host.as_ptr().cast();
     }
-    Some(owner)
+    owner
 }
 
 /// White then gray peerlist entries in one array, discriminated by
@@ -132,10 +184,10 @@ pub unsafe extern "C" fn shekyl_rpc_peer_list(
         return FACTS_ERR_NULL;
     }
     unsafe { out_owner.write(std::ptr::null_mut()) };
-    let Some(owner) = entries(public_only != 0) else {
+    let Some(rows) = listed_peers(public_only != 0) else {
         return FACTS_ERR_NULL;
     };
-    let owner = Box::new(owner);
+    let owner = Box::new(c_owner(rows));
     let first = if owner.entries.is_empty() {
         std::ptr::null()
     } else {
@@ -175,27 +227,12 @@ pub unsafe extern "C" fn shekyl_rpc_peerlist_sizes(out_white: *mut u64, out_gray
     if out_white.is_null() || out_gray.is_null() {
         return FACTS_ERR_NULL;
     }
-    let Some(dialer) = dialer() else {
+    let Some((white, gray)) = clearnet_list_sizes() else {
         return FACTS_ERR_NULL;
     };
-    let now = dialer.hub().now();
-    let mut bans = BanSnapshot::take(dialer.hub());
-    let (white, gray) = {
-        let mut shared = dialer.shared();
-        let mut kept = shared.kept_addresses(ConnectorId::Clearnet);
-        let white = shared.lists.white_count(
-            ConnectorId::Clearnet,
-            now,
-            &mut bans,
-            &mut kept,
-            &mut crate::secure_relay_rng::SecureRelayRng,
-        );
-        let gray = shared.lists.gray_count(ConnectorId::Clearnet);
-        (white, gray)
-    };
     unsafe {
-        out_white.write(white as u64);
-        out_gray.write(gray as u64);
+        out_white.write(white);
+        out_gray.write(gray);
     }
     FACTS_OK
 }
@@ -297,6 +334,8 @@ mod tests {
         let mut rows: *const ShekylRpcPeerFacts = std::ptr::null();
         let mut len = 0usize;
         let mut owner: *mut c_void = std::ptr::null_mut();
+        assert!(listed_peers(false).is_none());
+        assert!(clearnet_list_sizes().is_none());
         assert_eq!(
             unsafe { shekyl_rpc_peer_list(0, &raw mut rows, &raw mut len, &raw mut owner) },
             FACTS_ERR_NULL
@@ -333,8 +372,22 @@ mod tests {
             .admit_operator(&v6, now, &mut SecureRelayRng)
             .expect("admitted");
 
+        let owned = listed_peers(false).expect("the lists are up");
         let all = listed(false);
         assert_eq!(all.len(), 4);
+        assert_eq!(owned.len(), all.len());
+        for (row, exported) in owned.iter().zip(&all) {
+            assert_eq!(
+                (row.host.as_str(), row.ip, row.port, row.white, row.blocked),
+                (
+                    exported.0.as_str(),
+                    exported.1,
+                    exported.2,
+                    exported.3,
+                    exported.4
+                )
+            );
+        }
         assert!(all
             .iter()
             .all(|(_, _, _, white, blocked)| !white && !blocked));
@@ -383,8 +436,8 @@ mod tests {
 
 /// What the bound hub and its dialer report of this node's peers
 /// (`DRS_X_STORE_FLIP.md` DX-Q3, b9): sockets by connector and direction,
-/// and the clearnet peer lists' sizes. Rust data the C++ facts read back
-/// through `shekyl_rpc_peerlist_sizes` and the seam's socket counts.
+/// and the clearnet peer lists' sizes. The node reads this directly.
+/// [`shekyl_rpc_peerlist_sizes`] is the C view of the same list sizes.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct PeerCounts {
     /// Clearnet sockets opened to this node.
@@ -401,12 +454,12 @@ pub struct PeerCounts {
     pub gray: u64,
 }
 
-/// The peer counts, while a hub and its dialer are up; `None` before.
+/// Clearnet white and gray list sizes, `(white, gray)`, while a dialer is
+/// up. `None` when there are no lists: an online daemon with no dialer,
+/// which is not a pair of zeros.
 #[must_use]
-pub fn peer_counts() -> Option<PeerCounts> {
-    let hub = crate::seam_ffi::hub()?;
+pub fn clearnet_list_sizes() -> Option<(u64, u64)> {
     let dialer = dialer()?;
-    let sockets = |connector, direction| hub.socket_count(connector, direction);
     let now = dialer.hub().now();
     let mut bans = BanSnapshot::take(dialer.hub());
     let (white, gray) = {
@@ -422,14 +475,22 @@ pub fn peer_counts() -> Option<PeerCounts> {
         let gray = shared.lists.gray_count(ConnectorId::Clearnet);
         (white, gray)
     };
-    let width = |n: usize| u64::try_from(n).unwrap_or(u64::MAX);
+    Some((count_width(white), count_width(gray)))
+}
+
+/// The peer counts, while a hub and its dialer are up; `None` before.
+#[must_use]
+pub fn peer_counts() -> Option<PeerCounts> {
+    let hub = crate::seam_ffi::hub()?;
+    let (white, gray) = clearnet_list_sizes()?;
+    let sockets = |connector, direction| hub.socket_count(connector, direction);
     Some(PeerCounts {
         clearnet_in: sockets(ConnectorId::Clearnet, shekyl_seam::Direction::Inbound),
         clearnet_out: sockets(ConnectorId::Clearnet, shekyl_seam::Direction::Outbound),
         tor_in: sockets(ConnectorId::Tor, shekyl_seam::Direction::Inbound),
         tor_out: sockets(ConnectorId::Tor, shekyl_seam::Direction::Outbound),
-        white: width(white),
-        gray: width(gray),
+        white,
+        gray,
     })
 }
 
@@ -439,9 +500,8 @@ pub fn peer_counts() -> Option<PeerCounts> {
 #[must_use]
 pub fn session_counts() -> Option<(u64, u64)> {
     let board = crate::seam_ffi::hub()?.board();
-    let width = |n: usize| u64::try_from(n).unwrap_or(u64::MAX);
     Some((
-        width(board.established_count(shekyl_seam::Direction::Outbound)),
-        width(board.established_count(shekyl_seam::Direction::Inbound)),
+        count_width(board.established_count(shekyl_seam::Direction::Outbound)),
+        count_width(board.established_count(shekyl_seam::Direction::Inbound)),
     ))
 }

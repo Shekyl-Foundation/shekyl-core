@@ -216,6 +216,10 @@ pub enum FactsFault {
     /// reported as a size of `0` — an empty store is `0`, and a store that
     /// cannot be read is not that (RK-D23).
     StoreUnreadable,
+    /// The process has no peer lists. An online daemon whose dialer is not
+    /// up. An empty list is a different answer. A null C++ core handle is
+    /// [`Self::NullHandle`], and a missing seam hub is [`Self::HubAbsent`].
+    ListsAbsent,
     /// The p2p hub is not up in this process, so there is no board to count
     /// sessions on. Raised by [`crate::info_facts::sessions`],
     /// and never reported as zero sessions: a node whose p2p layer has not
@@ -235,6 +239,15 @@ impl FactsFault {
             ffi::SHEKYL_RPC_FACTS_ERR_INTERNAL => Self::Internal,
             ffi::SHEKYL_RPC_FACTS_ERR_INCONSISTENT => Self::Inconsistent,
             other => Self::Unknown(other),
+        }
+    }
+}
+
+impl From<crate::p2p_reads::P2pFault> for FactsFault {
+    fn from(fault: crate::p2p_reads::P2pFault) -> Self {
+        match fault {
+            crate::p2p_reads::P2pFault::NoLists => Self::ListsAbsent,
+            crate::p2p_reads::P2pFault::NoHub => Self::HubAbsent,
         }
     }
 }
@@ -362,8 +375,9 @@ pub struct NetStats {
     pub total_bytes_out: u64,
 }
 
-/// Production [`P2pFacts`] over the C++ protocol handler. The chain reads
-/// go through [`crate::store_facts::StoreFacts`].
+/// Production [`P2pFacts`]. Connections and net stats still read the C++
+/// protocol handler. The peer list reads [`crate::p2p_reads`]. The chain
+/// reads go through [`crate::store_facts::StoreFacts`].
 pub struct FfiP2pFacts {
     core: Arc<CoreRpc>,
 }
@@ -391,13 +405,11 @@ impl P2pFacts for FfiP2pFacts {
     }
 
     fn peer_list(&self, public_only: bool) -> Result<P2pRead<Vec<PeerEntry>>, FactsFault> {
-        self.core
-            .peer_list(public_only)
-            .map_err(FactsFault::from_code)
+        self.core.peer_list(public_only)
     }
 
     fn p2p_state(&self) -> Result<P2pRead<()>, FactsFault> {
-        CoreRpc::p2p_state().map_err(FactsFault::from_code)
+        CoreRpc::p2p_state()
     }
 }
 
