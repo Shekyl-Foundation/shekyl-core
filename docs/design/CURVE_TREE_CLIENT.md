@@ -1258,13 +1258,16 @@ actor value is dropped only after that. So:
   cell) is deleted with the cell; a handle is a plain `ActorRef`. This
   loses nothing: the workspace builds with `panic = "abort"`, so a panic
   ends the process and the respawn path only ever served returned errors.
-- **Serving reads are messages.** The serving loop asks the actor for a
-  shard body; the actor reads it into owned bytes (a read transaction of a
-  few milliseconds) and replies. The seconds-long transfer runs on the
-  caller's copy, so ingest never waits behind it, which is the concern
-  `ServingReader` was built for (§9.5 item 3 of
-  `ARCHIVAL_CHALLENGE_MECHANISM.md`). The cost is one copy of the body
-  per serve, at most 3.33 MB.
+- **Serving reads are messages.** In production the `ServingReader` carries
+  no body reads at all: bodies are served from the persona's own store
+  (`shekyl-p-store`), and `open_frozen_segment_body` has no production
+  caller. Its holders, the serve-set witness in `shekyl-p-host` and the
+  stake engine's serving task, read only store facts (`sync_tip_height`,
+  `members_missing_pins`, `prune_disabled`, `next_freeze_seg`) and compare
+  store identity (`same_store`). Those become asks to the actor; the facts
+  a pin needs ride the pin's own reply, read in the same handler as the
+  pin. *Records-was (this section's proposal, 2026-11-02):* serving reads
+  were described as shard-body copies of up to 3.33 MB.
 - **Close is a message, and it is awaited.** `Engine::close` becomes
   `async`: it stops the actor and awaits `wait_for_shutdown`. `on_stop`
   takes the client out (`Option::take`) and drops it, so the `Database` and
@@ -1308,10 +1311,33 @@ not a fix.
   back to it; nothing new is adopted.
 - **Q2 — the serve copy: yes.** One owned copy per serve, measured at the
   floor device in testing; if it proves too costly there, the reader actor
-  is the fallback and is designed then.
+  is the fallback and is designed then. *Finding after the ruling
+  (2026-11-02):* no curve-tree body is served in production (above), so
+  no copy arises; the serving side's reads are store facts.
 - **Q3 — both together, in one PR.** The awaited close and the
   message-based serving reads land as one PR, as many commits as the work
   needs; only the PR's end state has to hold the property.
+
+**Commit plan (one PR; only its end state holds the property).**
+
+1. `shekyl-curve-tree`: the client reads its own store facts and rebuilds
+   its in-memory tree in place over the store it holds.
+2. The actor: `Option<CurveTreeClient>` released in `on_stop`; a `Recover`
+   message replaces the external respawn; store-fact messages; the handle
+   becomes a plain `ActorRef` (the shared cell goes); an awaited
+   `shutdown`.
+3. `shekyl-p-host`: the witness reads store facts through an async trait
+   instead of a `ServingReader`; pin-time facts arrive in the pin report;
+   store identity is a value, not `Arc` pointer equality.
+4. The stake engine implements that trait over the actor handle.
+5. `shekyl-curve-tree`: `ServingReader`, `WriterRecovery` and their minting
+   methods are deleted; no `Arc<LeafStore>` leaves the client.
+6. `Engine` close is awaited and stops the actor; the reopen retry and its
+   two constants are deleted.
+7. The wallet RPC awaits the close; tests, docs and the changelog.
+
+The GUI wallet's close (persist, then drop) moves to the awaited close in
+its own repository's PR.
 
 *Records-was (2026-11-02, the same day):* a first draft proposed a
 process-wide residency table with owner leases and a condition variable;
