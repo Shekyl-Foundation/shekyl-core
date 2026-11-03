@@ -63,8 +63,9 @@ mod view;
 pub use claim::{PayloadRefused, PeerClaim};
 pub use locator::locator;
 pub use model::{
-    BoundArrival, CachePlan, ClaimError, CloseCause, Command, Event, HashClass, Job, OfferedBody,
-    Outcome, ProveItem, Proved, Requesting, Spent, Sync, BODY_REQUESTS_IN_FLIGHT, SYNC_RATE_FLOOR,
+    BoundArrival, CachePlan, ClaimError, CloseCause, Command, Event, HashClass, HeadersFormFault,
+    Job, OfferedBody, Outcome, ProveItem, Proved, Requesting, Spent, Sync, BODY_REQUESTS_IN_FLIGHT,
+    SYNC_RATE_FLOOR,
 };
 pub use shekyl_chain_rules::HeaderView;
 pub use state::{Declaration, SyncState};

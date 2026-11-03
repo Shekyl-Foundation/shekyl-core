@@ -54,8 +54,8 @@ const _: () = assert!(HEADERS_RESPONSE_BYTES / SYNC_RATE_FLOOR == 256);
 const _: () = assert!(BODIES_RESPONSE_BYTES / SYNC_RATE_FLOOR == 1024);
 
 pub use crate::protocol::{
-    BoundArrival, CachePlan, CloseCause, Command, Event, HashClass, Job, OfferedBody, Outcome,
-    ProveItem, Proved, Spent,
+    BoundArrival, CachePlan, CloseCause, Command, Event, HashClass, HeadersFormFault, Job,
+    OfferedBody, Outcome, ProveItem, Proved, Spent,
 };
 
 /// The chain the model has observed.

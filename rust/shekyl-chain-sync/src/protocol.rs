@@ -431,6 +431,30 @@ pub enum Outcome {
     Noted,
 }
 
+/// Which form rule a decoded header page failed. A page is a chain of
+/// headers hanging off one hash the request located; each variant is a
+/// way it can fail to be that. The close names the rule so a page that
+/// comes back the same way on every retry says why (2026-11-03: the
+/// three-miner rehearsal closed 47 sessions at `HeadersForm` and the
+/// log could not say which rule).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum HeadersFormFault {
+    /// No headers, and the peer says more follow.
+    EmptyWithMore,
+    /// A header blob did not read as a proof-of-work blob.
+    BlobUnreadable,
+    /// The first header's parent is not a hash this session's open
+    /// request located.
+    ParentUnrequested,
+    /// A header's parent is not the header before it.
+    Linkage,
+    /// The first header's parent is located and `T` does not place it.
+    ParentUnplaced,
+    /// A header this node holds follows one it does not: a chain
+    /// rejoining what it left.
+    HeldAfterNew,
+}
+
 /// Why a session is closed. Each variant is a universal rule the input
 /// failed. A missed deadline is not one of them.
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -438,7 +462,7 @@ pub enum CloseCause {
     /// The header payload did not decode.
     HeadersUndecodable,
     /// The header payload decoded and failed its form.
-    HeadersForm,
+    HeadersForm(HeadersFormFault),
     /// A cheap check or a proof refused the header.
     HeaderRefused(shekyl_chain_rules::CenRow),
     /// The header descends from one already marked invalid.

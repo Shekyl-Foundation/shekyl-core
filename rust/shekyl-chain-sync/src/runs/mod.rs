@@ -22,7 +22,9 @@ use shekyl_types::{BlockCount, BlockHash, BlockHeight, PowHash, Timestamp};
 use shekyl_wire::PowBlob;
 
 use crate::branch::{BranchView, Pending};
-use crate::model::{CloseCause, Command, HashClass, Job, ProveItem, Proved, Spent, Sync};
+use crate::model::{
+    CloseCause, Command, HashClass, HeadersFormFault, Job, ProveItem, Proved, Spent, Sync,
+};
 use crate::peer::{cache_for, Checked, HeaderRequest, Run};
 
 mod bodies;
@@ -125,7 +127,11 @@ where
         }
         if response.blobs.is_empty() {
             if response.more {
-                self.close(session, CloseCause::HeadersForm, out);
+                self.close(
+                    session,
+                    CloseCause::HeadersForm(HeadersFormFault::EmptyWithMore),
+                    out,
+                );
             } else if self.claim_exceeds(session, self.star.work) {
                 // Nothing above the locator, and no more: the peer's tip
                 // is a locator hash, none of which outweighs `H*`, so a
@@ -141,7 +147,11 @@ where
         let mut blobs = Vec::new();
         for bytes in &response.blobs {
             let Ok(pow) = PowBlob::read(bytes) else {
-                self.close(session, CloseCause::HeadersForm, out);
+                self.close(
+                    session,
+                    CloseCause::HeadersForm(HeadersFormFault::BlobUnreadable),
+                    out,
+                );
                 return Ok(());
             };
             blobs.push((pow.identity(), pow));
@@ -162,7 +172,11 @@ where
             .map(|req| (req.points.clone(), req.sent));
         let from_continuation = continuation.is_some();
         let Some((points, sent)) = continuation.or(frontier) else {
-            self.close(session, CloseCause::HeadersForm, out);
+            self.close(
+                session,
+                CloseCause::HeadersForm(HeadersFormFault::ParentUnrequested),
+                out,
+            );
             return Ok(());
         };
         if let Some(state) = self.peers.get_mut(&session) {
@@ -186,7 +200,11 @@ where
         let mut previous = parent;
         for (index, (hash, pow)) in blobs.iter().enumerate() {
             if index > 0 && pow.header.previous != previous {
-                self.close(session, CloseCause::HeadersForm, out);
+                self.close(
+                    session,
+                    CloseCause::HeadersForm(HeadersFormFault::Linkage),
+                    out,
+                );
                 return Ok(());
             }
             previous = *hash;
@@ -197,7 +215,11 @@ where
             .map(|(height, _)| *height)
             .or_else(|| self.tree.placement(parent).map(|placed| placed.height));
         let Some(parent_height) = parent_height else {
-            self.close(session, CloseCause::HeadersForm, out);
+            self.close(
+                session,
+                CloseCause::HeadersForm(HeadersFormFault::ParentUnplaced),
+                out,
+            );
             return Ok(());
         };
         if let Some(state) = self.peers.get_mut(&session) {
@@ -234,7 +256,11 @@ where
                     || matches!(main.header_at(height)?, AtHeight::Recorded(record) if record.hash == hash));
             if in_tree || on_main {
                 if !fresh.is_empty() {
-                    self.close(session, CloseCause::HeadersForm, out);
+                    self.close(
+                        session,
+                        CloseCause::HeadersForm(HeadersFormFault::HeldAfterNew),
+                        out,
+                    );
                     return Ok(());
                 }
                 // The session's frontier is the highest header it served
