@@ -1114,3 +1114,21 @@ capture = "docs/benchmarks/ba_t5_serve_floor_device_20261007_obs.tsv"
 capture_rev = "42233bd135"
 verdict = "held"
 note = "Median of six eight-in-flight blocks on the floor device with the hash on the executor; the blocks are bimodal, three near 41 and three near 56, which is what run 3's two disagreeing blocks were. With the hash in the blocking-pool hop (bfcf46c092) all six read 52."
+
+[[path_set]]
+id = "rpc-hash-budget"
+spec = ["rust/shekyl-daemon-rpc/src/hash_budget.rs"]
+cleared = [
+  { through = "e44ab0a578", reason = "Introduces the hash budget and sets HASH_CPU_NANOS from the floor run at 3d0bf6844c. The instrument that produced the capture is not this file, and this commit does not change it." },
+]
+
+[[constant]]
+name = "hash_cpu_nanos"
+defined_in = "rust/shekyl-daemon-rpc/src/hash_budget.rs"
+needle = "pub const HASH_CPU_NANOS: u64 = 1_290_885_199;"
+measured_by = ["BA-T40"]
+status = "current"
+capture = "docs/benchmarks/rt_w10_request_cost_20261102.md"
+capture_rev = "3d0bf6844c"
+rev_source = "the record's results name the build: git revision 3d0bf6844c on the floor device (docs/benchmarks/rt_w10_request_cost_20261102.md, Results). The header series' thread-CPU 99th percentile, which the hash budget charges once per hash."
+path_set = "rpc-hash-budget"
