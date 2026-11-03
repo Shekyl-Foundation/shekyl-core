@@ -82,6 +82,41 @@ fn pinner(fail: bool) -> EmptySetPinner {
     }
 }
 
+/// A pinner that answers the start pin and the start's one store reading,
+/// then never answers a store reading again.
+///
+/// `acquire` reads the store once. The post-start report is the next read,
+/// and it runs after the host is up, before any refresh. Wedging there is
+/// the window a refresh-only wedge does not cover.
+struct PostStartReadWedge {
+    inner: EmptySetPinner,
+    facts_answered: std::sync::atomic::AtomicUsize,
+    wedged: Arc<std::sync::atomic::AtomicBool>,
+}
+
+impl ServeSetPinner for PostStartReadWedge {
+    async fn pin_serve_set(&self) -> Result<HostPinReport, String> {
+        self.inner.pin_serve_set().await
+    }
+
+    async fn store_facts(&self, claimed: Vec<u64>) -> Result<StoreFacts, String> {
+        if self
+            .facts_answered
+            .fetch_add(1, std::sync::atomic::Ordering::SeqCst)
+            == 0
+        {
+            self.inner.store_facts(claimed).await
+        } else {
+            self.wedged.store(true, std::sync::atomic::Ordering::SeqCst);
+            std::future::pending().await
+        }
+    }
+
+    async fn pruned_frozen_segments(&self) -> Result<(StoreIdentity, Vec<u64>), String> {
+        self.inner.pruned_frozen_segments().await
+    }
+}
+
 /// A pinner that answers the start pin and then never answers again — a
 /// store actor that has wedged after the host came up.
 ///
@@ -346,6 +381,55 @@ async fn shutdown_completes_while_a_refresh_is_wedged_on_the_actor() {
     tokio::time::timeout(Duration::from_secs(5), handle.shutdown())
         .await
         .expect("shutdown must not wait on a refresh the store actor will never answer");
+    assert_eq!(
+        *after_shutdown.borrow(),
+        None,
+        "teardown ran to the end: the posture is cleared after the host is gone"
+    );
+}
+
+/// **Shutdown does not wait on the post-start store read.** That read is
+/// the first report after the host is up, and it is an actor round trip
+/// with no timeout. The refresh wedge above never reaches it: the refresh
+/// is a later pin. This pinner answers the start pin and the start's one
+/// store reading, then parks every later reading. Shutdown has to win
+/// that park and still clear the posture.
+#[tokio::test]
+async fn shutdown_completes_while_the_post_start_read_is_wedged() {
+    let dir = tempfile::tempdir().expect("tmp");
+    let alarms = Arc::new(OperatorAlarms::new());
+    let wedged = Arc::new(std::sync::atomic::AtomicBool::new(false));
+    let handle = spawn_serving_task(
+        churning_tor(&dir),
+        serving_identity(),
+        PostStartReadWedge {
+            inner: pinner(false),
+            facts_answered: std::sync::atomic::AtomicUsize::new(0),
+            wedged: Arc::clone(&wedged),
+        },
+        Arc::clone(&alarms),
+        immediate(),
+        store_path(),
+        claim(),
+    );
+
+    let mut started = false;
+    for _ in 0..200 {
+        if wedged.load(std::sync::atomic::Ordering::SeqCst) {
+            started = true;
+            break;
+        }
+        tokio::time::sleep(Duration::from_millis(10)).await;
+    }
+    assert!(
+        started,
+        "the post-start read never asked the store; shutdown would not be racing a wedge"
+    );
+
+    let after_shutdown = handle.posture.clone();
+    tokio::time::timeout(Duration::from_secs(5), handle.shutdown())
+        .await
+        .expect("shutdown must not wait on a post-start read the store actor will never answer");
     assert_eq!(
         *after_shutdown.borrow(),
         None,

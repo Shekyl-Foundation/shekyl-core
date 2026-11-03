@@ -451,79 +451,100 @@ async fn run_serving_task<P>(
     // would have lasted a full refresh cadence. Read rather than refresh:
     // `start` just pinned, so a refresh here would re-pin and re-derive what
     // the witness already holds.
-    report(&alarms, read(&host, bound).await);
+    //
+    // The read is an actor round trip with no timeout, same as a refresh, so
+    // it stays under `cancel`. A store that stops answering after the host
+    // is up must not hold `ServingHandle::shutdown` open. Dropping the read
+    // leaves the witness `start` already installed. The probes below are
+    // not spawned until the read returns, so a cancel during it tears down
+    // only the host, the posture translator, and the priority warning.
+    let mut health = None;
+    let mut disk = None;
+    tokio::select! {
+        biased;
+        () = cancel.cancelled() => {}
+        observation = read(&host, bound) => {
+            report(&alarms, observation);
 
-    // TJ-D's operator surface (`SF-D6`): the host's serve counters, windowed
-    // per cadence so the board answers "is the key refusing *now*". Own
-    // task, sampling through the host's detached reader rather than through
-    // `&host`: the loop below awaits `refresh` for as long as the store
-    // actor takes (only `cancel` interrupts it), and a key that starts
-    // refusing while a refresh is wedged on that actor is exactly the
-    // reading this row exists to carry. First reading is
-    // immediate, so a published onion never sits `NotServing` for a cadence.
-    let counters = host.counter_reader();
-    let health = spawn_health_probe(
-        move || ServeCounters::read(&counters),
-        config.refresh_cadence,
-        Arc::clone(&alarms),
-        cancel.clone(),
-    );
+            // TJ-D's operator surface (`SF-D6`): the host's serve counters, windowed
+            // per cadence so the board answers "is the key refusing *now*". Own
+            // task, sampling through the host's detached reader rather than through
+            // `&host`: the loop below awaits `refresh` for as long as the store
+            // actor takes (only `cancel` interrupts it), and a key that starts
+            // refusing while a refresh is wedged on that actor is exactly the
+            // reading this row exists to carry. First reading is
+            // immediate, so a published onion never sits `NotServing` for a cadence.
+            let counters = host.counter_reader();
+            health = Some(spawn_health_probe(
+                move || ServeCounters::read(&counters),
+                config.refresh_cadence,
+                Arc::clone(&alarms),
+                cancel.clone(),
+            ));
 
-    // Own task: the probe is not a serve-set reading, and a wedged
-    // refresh must not also silence the volume check. First reading is
-    // immediate, so the board is not unwatched for a full cadence.
-    let disk = spawn_disk_probe(
-        store_fs_path,
-        DISK_HEADROOM_WARN_BYTES,
-        config.refresh_cadence,
-        Arc::clone(&alarms),
-        cancel.clone(),
-    );
+            // Own task: the probe is not a serve-set reading, and a wedged
+            // refresh must not also silence the volume check. First reading is
+            // immediate, so the board is not unwatched for a full cadence.
+            disk = Some(spawn_disk_probe(
+                store_fs_path,
+                DISK_HEADROOM_WARN_BYTES,
+                config.refresh_cadence,
+                Arc::clone(&alarms),
+                cancel.clone(),
+            ));
 
-    let mut ticker = tokio::time::interval(config.refresh_cadence);
-    ticker.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
-    // The first tick completes immediately, and the line above already reported
-    // that state; consume it so the loop starts one cadence out.
-    ticker.tick().await;
+            let mut ticker = tokio::time::interval(config.refresh_cadence);
+            ticker.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
+            // The first tick completes immediately, and the line above already reported
+            // that state; consume it so the loop starts one cadence out.
+            ticker.tick().await;
 
-    loop {
-        tokio::select! {
-            biased;
-            () = cancel.cancelled() => break,
-            _ = ticker.tick() => {}
+            loop {
+                tokio::select! {
+                    biased;
+                    () = cancel.cancelled() => break,
+                    _ = ticker.tick() => {}
+                }
+
+                // The refresh is an actor round trip with no timeout, so it stays
+                // under `cancel` too: a refresh wedged on the store actor must not
+                // hold `ServingHandle::shutdown` open. Dropping it mid-flight is
+                // safe — `PersonaServingHost::refresh` swaps the witness only after
+                // the pin returns, so an abandoned attempt leaves the previous pins
+                // in place, and the teardown below reports `NotServing` over
+                // whatever this tick would have said.
+                let observation = tokio::select! {
+                    biased;
+                    () = cancel.cancelled() => break,
+                    observation = observe(&host, bound) => observation,
+                };
+                report(&alarms, observation);
+                // Re-read after every refresh so a host whose obligation *arm*
+                // changes is not stuck on the start snapshot. The type is the
+                // arm, not the size — a growing prefix does not change what we
+                // publish.
+                publish_posture(&serving_posture, &host);
+            }
         }
-
-        // The refresh is an actor round trip with no timeout, so it stays
-        // under `cancel` too: a refresh wedged on the store actor must not
-        // hold `ServingHandle::shutdown` open. Dropping it mid-flight is
-        // safe — `PersonaServingHost::refresh` swaps the witness only after
-        // the pin returns, so an abandoned attempt leaves the previous pins
-        // in place, and the teardown below reports `NotServing` over
-        // whatever this tick would have said.
-        let observation = tokio::select! {
-            biased;
-            () = cancel.cancelled() => break,
-            observation = observe(&host, bound) => observation,
-        };
-        report(&alarms, observation);
-        // Re-read after every refresh so a host whose obligation *arm*
-        // changes is not stuck on the start snapshot. The type is the
-        // arm, not the size — a growing prefix does not change what we
-        // publish.
-        publish_posture(&serving_posture, &host);
     }
 
     // Ordered teardown: tor first, then the listener (§9.7 item 4).
+    // Reached whether the post-start read finished or cancel won it.
     host.shutdown().await;
     posture.abort();
-    // Drain the probes and the priority warning before disarming. A late
-    // measured reading must not overwrite `NotServing` after the host is
-    // gone, and a warning already woken must be said before this task
-    // returns — dropping the join handle would detach it. Cancel has
-    // already fired; the warning task prefers a ready refusal over that
-    // cancel, so the line is not lost on the way out.
-    let _disk = disk.await;
-    let _health = health.await;
+    // Drain the probes that were spawned, and the priority warning, before
+    // disarming. A late measured reading must not overwrite `NotServing`
+    // after the host is gone, and a warning already woken must be said
+    // before this task returns — dropping the join handle would detach it.
+    // Cancel has already fired; the warning task prefers a ready refusal
+    // over that cancel, so the line is not lost on the way out. A cancel
+    // during the post-start read never spawned the probes.
+    if let Some(disk) = disk {
+        let _disk = disk.await;
+    }
+    if let Some(health) = health {
+        let _health = health.await;
+    }
     let _priority_warning = priority_warning.await;
     // Nothing is watched once the host is gone. Disarm rather than clear: a
     // closed wallet is not a healthy serve-set, and a live pruned-bytes report
