@@ -2,7 +2,7 @@
 
 **Families (registered in `IMPLEMENTATION_INDEX.md` §2, rule 94):** **`NI-R`** (rulings), **`NI-Q`** (questions) and **`NI-F`** (findings). `NI-` is free at `8f2b68dbbf`.
 **Ground:** `feat/drs-s1-no-checkpoints` at `8f2b68dbbf` (#1263, 2026-11-03), read from the tree. The design review's first draft read `dev` at `b8f1b76c0`; the two places this ground differs from that draft are NI-F1 and NI-F2.
-**Status:** OPEN — Round 0. NI-R1…NI-R5 RULED by Rick 2026-11-03; NI-Q10's shape RULED the same day (§3). NI-Q1…NI-Q9 are building as recommended, in §8's order; NI-Q11 and NI-Q12 are open. Each row of §5 carries its own status.
+**Status:** OPEN — Round 0. NI-R1…NI-R7 RULED by Rick 2026-11-03 (NI-R6 rules NI-Q11, NI-R7 rules NI-Q12); NI-Q10's shape RULED the same day (§3). NI-Q1…NI-Q9 are building as recommended, in §8's order. NI-F7 asks one question of NI-R6. Each row of §5 carries its own status.
 **Related:** [`FCMP_SPEND_SIGNING_PREIMAGE.md`](FCMP_SPEND_SIGNING_PREIMAGE.md) (NI-Q4), [`CRYPTO_DOMAIN_REGISTRY.tsv`](CRYPTO_DOMAIN_REGISTRY.tsv) (NI-Q9), [`GENESIS_TX_WIRE_FORMAT.md`](GENESIS_TX_WIRE_FORMAT.md) (the genesis content), rule [`71-network-uniformity`](../../.cursor/rules/71-network-uniformity.mdc).
 
 ---
@@ -91,6 +91,8 @@ Regtest is a row in the table: its own genesis, address prefixes, ports, difficu
 - **NI-R3 — RULED 2026-11-03: this is a round, not a PR.** It touches consensus (signing), the wire (the handshake), the store, the corpus and the C++ genesis constants, and should land once.
 - **NI-R4 — RULED 2026-11-03: one pathway for every network, no exemptions.** All four networks get a tool-built genesis with nonce 0 and the network tag. Testnet and stagenet regenesis once, in this round.
 - **NI-R5 — RULED 2026-11-03: no genesis rotation, ever.** Compatibility is NI-Q10's handshake check, not a regenesis.
+- **NI-R6 — RULED 2026-11-03 (NI-Q11): regtest's levers are a `permits` field on the network's row.** One gate reads it, the existing armed-lever gate, answering from the row; the scattered "is regtest" and "is the trust unpinned" checks go (NI-F3). The field is compiled into the table, never configurable. Invariant test: `permits` is empty on every row but regtest's. NI-F6 and NI-F7 are what this ground holds for it.
+- **NI-R7 — RULED 2026-11-03 (NI-Q12): one seed format on every network: BIP39, 24 words only.** No 12-word option, not even on import: 128 bits is 64 bits of quantum security under Grover, below Shekyl's post-quantum floor. No BIP39 passphrase: its PBKDF2 stretch is weak, and the wallet file has its own encryption. Derivation takes the 32 entropy bytes the words encode, not BIP39's PBKDF2 seed output, so a wallet can always show its words and an import round-trips. Raw32 survives only as harness input where a fixture injects a fixed key, the genesis tool's recipient wallets included. Raw-seed testnet wallets do not survive the testnet regenesis.
 
 ### 4.1 NI-R2: why Zcash binds the rule set, and why Shekyl doesn't
 
@@ -118,15 +120,15 @@ Regtest is a row in the table: its own genesis, address prefixes, ports, difficu
 | NI-Q5 | The Noise prologue. | OPEN (PR 3): `network id ‖ wire-protocol version`; the network id is already the prologue (NI-F1), so the change is the wire version and a handshake KAT re-record; lands at a testnet alpha cut. |
 | NI-Q6 | The pool seal. | OPEN (PR 4): records the network id; the chain store needs no field. |
 | NI-Q7 | The marker file. | OPEN (PR 4): daemon-config's call (DC-Q15, IG-Q17); recommendation: a label, trusted for nothing. |
-| NI-Q8 | Regtest as an ordinary network. | BUILDING (PR 1): §2.5; corpus re-captured through #1244's path. |
-| NI-Q9 | The domain-registry audit. | OPEN (PR 2): an audit table over `CRYPTO_DOMAIN_REGISTRY.tsv`; each row bound to the network id or shown unable to replay. NI-F2's two rows are in it. |
+| NI-Q8 | Regtest as an ordinary network. | BUILDING (PR 1): §2.5; corpus re-captured through #1244's path. The address byte is persisted in wallet files and multisig addresses (NI-F5), so the wallet-file codec takes rule 42's version bump; an older file is refused with a reason, never reinterpreted. |
+| NI-Q9 | The domain-registry audit. | OPEN (PR 2): an audit table over `CRYPTO_DOMAIN_REGISTRY.tsv`; each row bound to the network id or shown unable to replay. NI-F2's two bindings, message signing's enum code and key derivation's name label, move to the genesis-derived network id, with a KAT re-record. |
 | NI-Q10 | Compatibility at the handshake, replacing genesis rotation. | SHAPE RULED 2026-11-03 (§3); OPEN (PR 3): what the rules digest covers per step, and the frozen-tuple gate shrinks or goes. |
-| NI-Q11 | Regtest's levers (inject serve credit, issue draws, fixed difficulty, the settlement-epoch override): the one behaviour a network row may switch on. | OPEN, for PR 1. Recommendation: each lever is a named row field (`permits: [..]`), empty on mainnet, testnet and stagenet; the lever sites check the row, never "is regtest" or an unpinned trust (NI-F3); the divergence is named and loud under rule 71. Regtest is otherwise pinned and validated like the others. |
-| NI-Q12 | Seed format: BIP39 on mainnet and stagenet, Raw32 on testnet and regtest, through separate wallet code paths. | OPEN, for PR 1. Recommendation: one seed format on every network (BIP39), so a test network exercises the wallet path mainnet uses; Raw32 stays only where a harness injects a fixed key, as the harness's input, not a network property. |
+| NI-Q11 | Regtest's levers. | RULED 2026-11-03 (NI-R6); BUILDING (PR 1). NI-F7 is open against it. |
+| NI-Q12 | Seed format. | RULED 2026-11-03 (NI-R7); BUILDING (PR 1): BIP39, 24 words, on every network. |
 
 ## 6. Census at this ground: where the code branches on the network
 
-Read from the tree at `8f2b68dbbf`, non-test code. **Data** is a value selection that becomes a lookup in the network's row; **alias** treats regtest as mainnet; **divergence** is a different code path. PR 1 turns every data site into a row lookup and deletes every alias and every divergence, except the two NI-Q11 and NI-Q12 rule on.
+Read from the tree at `8f2b68dbbf`, non-test code. **Data** is a value selection that becomes a lookup in the network's row; **alias** treats regtest as mainnet; **divergence** is a different code path. PR 1 turns every data site into a row lookup and deletes every alias and every divergence; regtest's levers become the row's `permits` (NI-R6).
 
 | Site | Branch | Class | PR 1 |
 | --- | --- | --- | --- |
@@ -137,12 +139,12 @@ Read from the tree at `8f2b68dbbf`, non-test code. **Data** is a value selection
 | `shekyl-node/src/lib.rs` `sync_at_open` | regtest opens `Synced`, the others `NoView` | divergence | one rule for every network |
 | `shekyl-node/src/lib.rs` `rules_of`; `shekyl-chain-ingest/src/schedule.rs` `Chain`, `ChainRules`, `in_force` | regtest takes `RuleSet::fakechain`, the others `RuleSchedule::for_network` | divergence | the rule schedule is a row field; fixed difficulty is data in it |
 | `schedule.rs` `trust`; `shekyl-chain-rules/src/rules/genesis.rs` (CEN-E1) | regtest validates `Trust::UNPINNED`, so its block 0 is never checked | divergence | every network pinned from the table |
-| `schedule.rs` `ChainRules::new`; `shekyl-chain-ingest/src/connector.rs`; `corpus.rs` `check_inject`; `shekyl-chain-store/src/store/archival_write.rs` | levers (inject serve credit, issue draws) refused off regtest; the store keys "is regtest" on an unpinned trust | divergence | NI-Q11 |
+| `schedule.rs` `ChainRules::new`; `shekyl-chain-ingest/src/connector.rs`; `corpus.rs` `check_inject`; `shekyl-chain-store/src/store/archival_write.rs` | levers (inject serve credit, issue draws) refused off regtest; the store keys "is regtest" on an unpinned trust | divergence | the row's `permits` (NI-R6) |
 | `shekyl-rpc-types/src/identity.rs` `genesis_hash_for`, `exact_or_fakechain`, `check_tuple`; `shekyl-engine-core/src/engine/daemon/mod.rs` `FakechainPolicy` | a fakechain daemon passes a mainnet wallet's identity check | alias | deleted; exact match only |
 | `shekyl-ffi/src/network_id_ffi.rs` | regtest's network id is mainnet's | alias | the table |
 | `shekyl-daemon-rpc/src/console/info.rs` `network_label` | regtest shown as "mainnet" | alias | the row's name |
 | `shekyl-crypto-pq/src/account.rs` `to_address_network` | regtest → mainnet's prefixes | alias | the row |
-| `shekyl-crypto-pq/src/account.rs` `permitted_seed_format`; `shekyl-wallet-rpc/src/lifecycle.rs`; `shekyl-genesis-tool/src/wallets.rs` | BIP39 on mainnet and stagenet, Raw32 on testnet and regtest, by separate code paths | divergence | NI-Q12 |
+| `shekyl-crypto-pq/src/account.rs` `permitted_seed_format`; `shekyl-wallet-rpc/src/lifecycle.rs`; `shekyl-genesis-tool/src/wallets.rs` | BIP39 on mainnet and stagenet, Raw32 on testnet and regtest, by separate code paths | divergence | BIP39, 24 words, everywhere (NI-R7) |
 | `shekyl-ffi/src/dialer_ffi.rs` `note_network`; `shekyl-dialer/src/seeds.rs` | stagenet and regtest get no seeds; a second copy of the ports | data | the row's seed list, empty where there are none |
 | `shekyl-cli/src/commands/mine.rs` | regtest refused | divergence | all four rows |
 | `shekyl-engine-state/src/safety_constants.rs` `for_network` | per-network wallet constants; no regtest row | data | a row field |
@@ -160,10 +162,12 @@ Guards that compare a configured network with a recorded one (the marker, the mi
 - **NI-F3 — at `8f2b68dbbf`: one regtest node reads its own network three ways.** The store opens with `GenesisPin::FAKECHAIN`, mainnet's genesis (`shekyl-node/src/lib.rs` `genesis_pin_of`); `validate` receives `Trust::UNPINNED` and skips CEN-E1 (`shekyl-chain-ingest/src/schedule.rs` `trust`); and the store's regtest-only writes require `genesis_pin() == NONE` (`shekyl-chain-store/src/store/archival_write.rs`), which holds only because ingest hands them its own trust rather than the store's pin. "Unpinned" stands in for "is regtest". With regtest a row, every network is pinned, and a lever's permission is a row field (NI-Q11).
 - **NI-F4 — at `8f2b68dbbf`: no C++ in `src/` reads `GENESIS_TX` or `GENESIS_NONCE`.** Their readers are Rust parsing the header as text (`shekyl-node/src/genesis.rs`, `shekyl-genesis-tool/src/config_pin.rs`) and C++ tests under `tests/`. NI-Q3 deletes them outright, with no FFI read. C++ still takes the network id and ports for its handshake from `get_config`, whose id already comes from Rust (`shekyl_network_id`).
 - **NI-F5 — at `8f2b68dbbf`: six numeric encodings of the network.** The cryptonote code, `DaemonNetwork`, `DerivationNetwork::as_u8` and the `CorpusNet` tag (0–3), and `shekyl_address::Network::as_u8` (0–2), which is persisted as the wallet file's network byte (`shekyl-engine-file/src/handle.rs`) and inside multisig addresses (`shekyl-address/src/multisig_address.rs`). The one network type has one code. Regtest gives the address byte a fourth value, so the wallet-file codec takes rule 42's version bump in PR 1.
+- **NI-F6 — at `8f2b68dbbf`: the inject lever is live, as a corpus replay event.** A corpus `inject` record is `IngestEvent::Inject` (`shekyl-chain-ingest/src/corpus.rs`); the pipeline hands it to the connector's `Inject`, which writes through `ChainStore::regtest_inject_serve_credit` (`shekyl-chain-store/src/store/archival_write.rs`). Issue draws (`ChainStore::regtest_issue_draws`) take the same door. No RPC lever reaches either, but the archival corpus chains replay through them, so both are `permits` entries on regtest's row, not stale names.
+- **NI-F7 — at `8f2b68dbbf`: the existing armed-lever gate admits three levers on testnet and stagenet.** The gate is per option: each `dev-*` row in `shekyl-daemon-config/src/table.rs` lists the networks that accept it (`Visibility::Dev { networks }`), and `dev-rpc` is the switch `admit_armed` reads for `generateblocks` and `pop_blocks`. `dev-rpc`, `dev-relay-cover` and `dev-clearnet-encrypt` are listed for testnet, stagenet and regtest; every other `dev-*` row is regtest's alone. NI-R6's invariant (`permits` empty on every row but regtest's) removes those three from testnet and stagenet. **Open:** remove them there (one pathway: testnet then has no levers mainnet lacks), or rule them a named exception on the test rows.
 
 ## 8. Shape and order
 
-1. **PR 1 — the table (NI-Q1, Q2, Q3, Q8).** The crate and the one network type; all four networks' genesis rebuilt once by the tool; regtest's prefixes; pins and KATs regenerated; corpora re-captured; the C++ genesis constants deleted; the frozen-tuple gate repointed at the table so it stays readable until PR 3. Lands first; everything else reads the table.
+1. **PR 1 — the table (NI-Q1, Q2, Q3, Q8, Q11, Q12).** The crate and the one network type; all four networks' genesis rebuilt once by the tool; regtest's prefixes and its `permits`; the fakechain deletions; the wallet-file version bump; BIP39, 24 words, on every network; pins and KATs regenerated; corpora re-captured; the C++ genesis constants deleted; the frozen-tuple gate repointed at the table so it stays readable until PR 3. Lands first; everything else reads the table.
 2. **PR 2 — the signing domain and the audit (NI-Q4, Q9).** One consensus PR.
 3. **PR 3 — the handshake (NI-Q10, Q5).** The rules check in message one and the wire version in the prologue; one wire PR, at a cut; the frozen-tuple gate shrinks or goes in the same PR.
 4. **PR 4 — the pool seal and the marker (NI-Q6, Q7).**
