@@ -242,7 +242,7 @@ what follows from it, in one change:
 - [ ] the nonce in `src/cryptonote_config.h`;
 - [ ] the block id, from `cargo run -p shekyl-genesis-tool -- block-id --network testnet`,
       in `rust/shekyl-rpc-types/src/identity.rs` (`TESTNET_GENESIS`),
-      `rust/shekyl-chain-rules/src/anchors.rs` (`ReleaseAnchors::TESTNET`, a
+      `rust/shekyl-chain-rules/src/genesis_pin.rs` (`GenesisPin::TESTNET`, a
       byte array, so a search for the hex string does not find it),
       `tests/unit_tests/mining_parity.cpp` and `docs/GENESIS_ALLOCATIONS.md`;
 - [ ] the id and prefix in `rust/shekyl-ffi/src/network_id_ffi.rs`'s KAT, which

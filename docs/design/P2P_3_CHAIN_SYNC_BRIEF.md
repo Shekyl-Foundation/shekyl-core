@@ -87,8 +87,9 @@ fix to its PR 2 (`:330`). §A records the couplings that remain.
     (`shekyl-wire/src/block.rs:322-356`).
   - Difficulty is `lwma1_next` over timestamps and cumulative
     difficulties only.
-  - `ReleaseAnchors` is a genesis hash plus a static table of
-    `(height, hash)` anchors (`shekyl-chain-rules/src/anchors.rs:114`).
+  - `GenesisPin` is each network's genesis hash and nothing above it
+    (`shekyl-chain-rules/src/genesis_pin.rs`; S1, 2026-11-03: no coded
+    checkpoints).
   - So a header chain can be checked for linkage, PoW, difficulty,
     timestamps and anchors without any bodies.
 - **CS-F7. Validation runs on the p2p I/O pool.**
@@ -268,7 +269,7 @@ ingest deciding forks.**
      cost.** Any failure closes the session.
      - linkage;
      - timestamp rules (MTP from the chain, FTL against the local clock);
-     - `ReleaseAnchors` (CEN-E1);
+     - the genesis pin (`GenesisPin`, CEN-E1);
      - each header's difficulty from `lwma1_next`, which needs only the
        chain's timestamps and work.
      - Headers that pass are added to the session's run. So the run's
@@ -1488,7 +1489,7 @@ increments?
 **Ruled (Rick, 2026-10-18): as written.**
 - **Now, pure Rust, no FFI:**
   - (1) the header-chain verifier (over `shekyl-difficulty`, RandomX and
-    `ReleaseAnchors`), tested against the captured chains;
+    `GenesisPin`), tested against the captured chains;
   - (2) the sync model as a crate with property tests (CS-Q11);
   - (3) the new payload types in `shekyl-levin` with KATs.
 - **The cutover's horizon.** The cutover follows the DRS-X flip, whose

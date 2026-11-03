@@ -458,9 +458,9 @@ mod tests {
         // this constant is the record, and this line is what makes a bump
         // without a history entry visible in review.
         assert_eq!(SCHEMA_VERSION, SchemaVersion::new(36));
-        assert_eq!(SCHEMA_VERSION.encode(), [35, 0, 0, 0, 0, 0, 0, 0]);
+        assert_eq!(SCHEMA_VERSION.encode(), [36, 0, 0, 0, 0, 0, 0, 0]);
         assert_eq!(
-            SchemaVersion::decode(&[35, 0, 0, 0, 0, 0, 0, 0]),
+            SchemaVersion::decode(&[36, 0, 0, 0, 0, 0, 0, 0]),
             Ok(SCHEMA_VERSION)
         );
     }

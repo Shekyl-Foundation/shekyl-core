@@ -889,31 +889,24 @@ pub fn validate<'id, V: ChainView<'id>>(
 ) -> Result<Verdict<ChainValid<'id, V>>, Fault<V::Fault>>;
 
 /// What this node takes on the release's word — orthogonal to `RuleSet`
-/// (PDM-Q5 / PDM-Q-F27; slice 3 Q1). Carries the release anchors (CEN-E1
-/// reads them per block); slice 6 adds the posture arm by a second
-/// constructor, `Trust::below_anchor(anchors)` (PDM-Q5 :293: band 1's
-/// skeleton), and no existing caller changes.
-pub struct Trust { anchors: ReleaseAnchors /* , posture — slice 6 */ }
-impl Trust { pub const UNANCHORED: Self; pub const fn full(anchors: ReleaseAnchors) -> Self; pub const fn anchors(&self) -> &ReleaseAnchors; }
+/// (slice 3 Q1). Carries the genesis pin (CEN-E1 reads it per block). No
+/// coded checkpoints (S1, 2026-11-03), so there is no posture arm.
+pub struct Trust { genesis: GenesisPin }
+impl Trust { pub const UNPINNED: Self; pub const fn full(genesis: GenesisPin) -> Self; pub const fn genesis_pin(&self) -> &GenesisPin; }
 
-/// The release-carried anchor table, per network — `const` data shipped with
-/// the binary (PDM-Q5 "trusted with the binary"; never an operator-editable
-/// carrier), strictly ascending, const-asserted well formed. Empty on every
-/// network today (`no_release_has_shipped_an_anchor_yet` pins it).
-pub struct Anchor { pub height: BlockHeight, pub hash: BlockHash }
-pub struct ReleaseAnchors { entries: &'static [Anchor] }
-impl ReleaseAnchors {
-    pub const EMPTY: Self;
+/// The release-carried genesis pin, per network — `const` data shipped with
+/// the binary, never an operator-editable carrier. `FAKECHAIN` is the block a
+/// regtest node connects; `NONE` pins nothing (harness chains).
+pub struct GenesisPin { genesis: Option<BlockHash> }
+impl GenesisPin {
+    pub const NONE: Self;
+    pub const FAKECHAIN: Self;
     pub const fn for_network(network: Network) -> Self;
-    pub fn expected_at(&self, height: BlockHeight) -> Option<BlockHash>;   // CEN-E1's read
-    pub const fn current(&self) -> Option<Anchor>;                           // `C`
-    pub fn covers(&self, height: BlockHeight) -> bool;                       // band 1: `height ≤ C`
-    /// CEN-E5, run once by the writer at open; the remedy is the writer's.
-    pub fn conflict_with<'id, H: HeaderView<'id>>(&self, view: &H) -> Result<Option<AnchorConflict>, H::Fault>;   // `HeaderView` since DRS-E5 a2
+    pub fn expected_at(&self, height: BlockHeight) -> Option<BlockHash>;   // CEN-E1's read: genesis at 0, nothing above
+    /// CEN-E5, run at open; a conflict is another network's file.
+    pub fn conflict_with<'id, H: HeaderView<'id>>(&self, view: &H) -> Result<Option<GenesisConflict>, H::Fault>;
 }
-pub struct AnchorConflict { pub height: BlockHeight, pub expected: BlockHash, pub recorded: Option<BlockHash> }
-impl AnchorConflict { pub const fn remedy(&self) -> Remedy; }
-pub enum Remedy { RefuseToRun /* at genesis */, PopTo(ChainCount) /* stop at max(h − 2, 1) blocks; the tip is count.tip() */ }
+pub struct GenesisConflict { pub height: BlockHeight, pub expected: BlockHash, pub recorded: Option<BlockHash> }
 
 pub enum Fault<V> { View(V), Stale(Stale), Corrupt(Corrupt) }
 pub enum Stale {
