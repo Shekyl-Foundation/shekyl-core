@@ -963,6 +963,70 @@ impl CurveTreeClient {
         self.store.next_freeze_seg().map_err(ClientError::from)
     }
 
+    /// The store's ingest tip, the staleness baseline a serve-set witness is
+    /// minted at. Pure forward to [`LeafStore::sync_tip_height`].
+    ///
+    /// # Errors
+    ///
+    /// [`ClientError::Store`] wrapping the store's.
+    pub fn sync_tip_height(&self) -> Result<BlockHeight, ClientError> {
+        self.store.sync_tip_height().map_err(ClientError::from)
+    }
+
+    /// The members of `shard_ids` whose pin row is gone. Pure forward to
+    /// [`LeafStore::members_missing_pins`].
+    ///
+    /// # Errors
+    ///
+    /// [`ClientError::Store`] wrapping the store's.
+    pub fn members_missing_pins(&self, shard_ids: &[u64]) -> Result<Vec<u64>, ClientError> {
+        self.store
+            .members_missing_pins(shard_ids)
+            .map_err(ClientError::from)
+    }
+
+    /// Whether the prune-disabled posture is declared. Pure forward to
+    /// [`LeafStore::prune_disabled`].
+    ///
+    /// # Errors
+    ///
+    /// [`ClientError::Store`] wrapping the store's.
+    pub fn prune_disabled(&self) -> Result<bool, ClientError> {
+        self.store.prune_disabled().map_err(ClientError::from)
+    }
+
+    /// The frozen segments already pruned: the corpus integrity scan. Pure
+    /// forward to [`LeafStore::pruned_frozen_segments`].
+    ///
+    /// # Errors
+    ///
+    /// [`ClientError::Store`] wrapping the store's.
+    pub fn pruned_frozen_segments(&self) -> Result<Vec<u64>, ClientError> {
+        self.store
+            .pruned_frozen_segments()
+            .map_err(ClientError::from)
+    }
+
+    /// Rebuild this client's in-memory tree from the store it holds, in
+    /// place: the recovery from [`ClientError::Poisoned`]. The same rebuild
+    /// `open` runs, over the store this client already has open, so the
+    /// file is not reopened and no second writer exists at any point. On
+    /// `Err` the client is left as it was (still poisoned), since the
+    /// rebuilt state is assigned only after every check passes; the error is
+    /// a store that no longer resumes (pruned or corrupt), which a retry
+    /// cannot heal. Like a fresh `open`, the rebuilt client holds no output
+    /// registrations; the caller re-registers.
+    ///
+    /// # Errors
+    ///
+    /// The resume refusals `open` surfaces
+    /// ([`ClientError::ResumeFromPrunedStore`],
+    /// [`ClientError::ResumeFromCorruptStore`], store I/O).
+    pub fn rebuild(&mut self) -> Result<(), ClientError> {
+        *self = Self::resume(Arc::clone(&self.store))?;
+        Ok(())
+    }
+
     /// Release pins so the prune can reclaim those segments.
     ///
     /// A store **write**, so it runs on the actor's object for the same reason
@@ -2403,6 +2467,26 @@ mod tests {
             client.ingest_block(block),
             Err(ClientError::Poisoned)
         ));
+    }
+
+    #[test]
+    fn a_poisoned_client_rebuilds_in_place_over_its_own_store() {
+        let mut client = CurveTreeClient::new();
+        ingest_coinbase_blocks(&mut client, 0, 5);
+        let root = client.root_at(BlockHeight::from_raw(5)).unwrap();
+        let store = Arc::clone(&client.store);
+        client.poisoned = true;
+
+        client.rebuild().expect("the store resumes");
+
+        assert!(!client.poisoned);
+        assert!(
+            Arc::ptr_eq(&store, &client.store),
+            "the same store, not a reopen"
+        );
+        assert_eq!(client.root_at(BlockHeight::from_raw(5)).unwrap(), root);
+        ingest_coinbase_blocks(&mut client, 6, 6);
+        client.root_at(BlockHeight::from_raw(6)).unwrap();
     }
 
     #[test]
