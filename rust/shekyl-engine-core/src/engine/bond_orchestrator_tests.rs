@@ -220,6 +220,7 @@ async fn first_stake_refuses_a_fresh_slot_off_the_cursor() {
     Engine::<SoloSigner>::create(params, dummy_daemon())
         .expect("create")
         .close(&creds)
+        .await
         .expect("close");
 
     let engine = Engine::<SoloSigner>::open_full_with_first_stake_intent(
@@ -273,6 +274,7 @@ async fn market_posture_refuses_before_any_daemon_work_or_durable_write() {
     Engine::<SoloSigner>::create(params, dummy_daemon())
         .expect("create")
         .close(&creds)
+        .await
         .expect("close");
 
     let engine = Engine::<SoloSigner>::open_full_with_first_stake_intent(
@@ -330,7 +332,7 @@ async fn staker_first_stake_refuses_wrong_slots_and_confirmed_wallets_at_any_slo
     engine
         .persist_bond_record(PSlot::from_raw(3))
         .expect("persist bond record");
-    engine.close(&creds).expect("close");
+    engine.close(&creds).await.expect("close");
 
     // W2 shape (durable slot, no post anywhere): resume must target the
     // recorded slot; slot 4 is the WrongSlot refusal, not a second mint.
@@ -365,7 +367,7 @@ async fn staker_first_stake_refuses_wrong_slots_and_confirmed_wallets_at_any_slo
     );
     // Release the wallet-file lock before sealing evidence below.
     match StdArc::try_unwrap(arc) {
-        Ok(lock) => lock.into_inner().close(&creds).expect("close staker"),
+        Ok(lock) => lock.into_inner().close(&creds).await.expect("close staker"),
         Err(_) => panic!("engine arc still shared"),
     }
 
@@ -448,7 +450,10 @@ async fn probe_adopted_slot_refuses_first_stake_before_pscan_corroboration() {
             }],
         );
     }
-    engine.close(&creds).expect("close persists the adoption");
+    engine
+        .close(&creds)
+        .await
+        .expect("close persists the adoption");
 
     let opened = Engine::<SoloSigner>::open_full(
         &base_path,

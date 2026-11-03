@@ -23,23 +23,6 @@ use shekyl_rpc_types::errors::RpcError;
 use std::sync::Arc;
 use tracing::warn;
 
-/// Whether to compute a block's proof-of-work hash: only if the caller asked
-/// **and** the caller is not bounded (§6.3) — the C++ handler's
-/// `req.fill_pow_hash && !restricted`.
-///
-/// Its own function because it is a policy, not an expression: computing the
-/// long hash is the expensive part of a header read, and a bounded caller is
-/// exactly the one that must not be made to do it on request. Dropping the
-/// `!bounded` here fails [`pow_hash_is_never_computed_for_a_bounded_caller`].
-///
-/// RK-5b's methods do **not** use this. They refuse a bounded caller that
-/// asked for the field (`methods::pow_hash_or_refuse`) rather than blanking
-/// it. RT-W10 step 2 brings RK-2's methods under the same refusal (§6.3:
-/// never silently truncated).
-pub(super) fn pow_hash_entitled(requested: bool, bounded: bool) -> bool {
-    requested && !bounded
-}
-
 /// A JSON-RPC method this crate serves itself.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(super) enum NativeMethod {
@@ -182,7 +165,7 @@ pub(super) async fn native_method(
                 Ok(request) => request,
                 Err(fault) => return Some(Err(NativeFail::Fault(fault))),
             };
-            let fill_pow_hash = pow_hash_entitled(request.fill_pow_hash, authority.bounded());
+            let fill_pow_hash = request.fill_pow_hash;
             Some(frame_native(
                 on_chain(state, move |chain| {
                     crate::methods::get_block(chain.as_ref(), &request, fill_pow_hash)
@@ -227,14 +210,10 @@ pub(super) async fn native_method(
                 Ok(request) => request,
                 Err(fault) => return Some(Err(NativeFail::Fault(fault))),
             };
-            let bounded = authority.bounded();
+            let fill_pow_hash = request.fill_pow_hash;
             Some(frame_native(
                 on_chain(state, move |chain| {
-                    crate::methods::get_last_block_header(
-                        chain.as_ref(),
-                        request.fill_pow_hash,
-                        bounded,
-                    )
+                    crate::methods::get_last_block_header(chain.as_ref(), fill_pow_hash)
                 })
                 .await,
             ))
@@ -320,7 +299,7 @@ pub(super) async fn native_method(
                 Ok(request) => request,
                 Err(fault) => return Some(Err(NativeFail::Fault(fault))),
             };
-            let fill_pow_hash = pow_hash_entitled(request.fill_pow_hash, authority.bounded());
+            let fill_pow_hash = request.fill_pow_hash;
             Some(frame_native(
                 on_chain(state, move |chain| {
                     crate::methods::get_block_header_by_height(
@@ -340,9 +319,16 @@ pub(super) async fn native_method(
                 Ok(request) => request,
                 Err(fault) => return Some(Err(NativeFail::Fault(fault))),
             };
+            let bounded = authority.bounded();
+            let budget = Arc::clone(&state.hash_budget);
             Some(frame_native(
                 on_chain(state, move |chain| {
-                    crate::read_methods::calc_pow(chain.as_ref(), &request)
+                    crate::read_methods::calc_pow(
+                        chain.as_ref(),
+                        &request,
+                        bounded,
+                        budget.as_ref(),
+                    )
                 })
                 .await,
             ))
@@ -355,10 +341,33 @@ pub(super) async fn native_method(
                 Ok(request) => request,
                 Err(fault) => return Some(Err(NativeFail::Fault(fault))),
             };
+            let bounded = authority.bounded();
+            let reads = Arc::clone(&state.coinbase_reads);
             Some(frame_native(
-                on_chain(state, move |chain| {
-                    crate::read_methods::get_coinbase_tx_sum(chain.as_ref(), &request)
-                })
+                async {
+                    // Wait on the async task, then hold the permit inside the
+                    // scan. Cancelling the request must not free the permit
+                    // while the blocking read is still on disk. The pool is
+                    // one blocking thread (`daemon_rpc_budget`), and this
+                    // scan is the disk read that thread is for. The sum is
+                    // one snapshot, so the walk is one task; the permit is
+                    // what keeps a second scan off that thread.
+                    let permit = if bounded {
+                        Some(
+                            reads
+                                .acquire_owned()
+                                .await
+                                .expect("the coinbase read semaphore stays open"),
+                        )
+                    } else {
+                        None
+                    };
+                    on_chain(state, move |chain| {
+                        let _permit = permit;
+                        crate::read_methods::get_coinbase_tx_sum(chain.as_ref(), &request)
+                    })
+                    .await
+                }
                 .await,
             ))
         }

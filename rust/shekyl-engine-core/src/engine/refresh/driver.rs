@@ -344,8 +344,8 @@ impl<
             // before `refresh_with` merges it (ack-before-commit, O2).
             // Cursor-driven + idempotent, so re-running it on a retried
             // attempt is safe. Mirrors the async `run_refresh_task` path,
-            // including the R1-Q4 respawn-and-retry on a fail-stop / poison.
-            runtime.block_on(self.ingest_scan_result_with_respawn(&mut result))?;
+            // including the in-place rebuild and retry on a poisoned client.
+            runtime.block_on(self.ingest_scan_result_with_recovery(&mut result))?;
             Ok(result)
         })
     }

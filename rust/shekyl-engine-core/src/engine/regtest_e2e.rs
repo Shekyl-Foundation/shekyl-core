@@ -1840,7 +1840,7 @@ async fn e2e_fcmp_spend_accepted_by_daemon() {
     let creds = super::lifecycle::Credentials::password_only(b"track2-spend");
     let (created, tmp) = create_wallet(daemon.rpc_port, &seed, b"track2-spend").await;
     let wallet_path = tmp.path().join("wallet");
-    created.close(&creds).expect("close created wallet");
+    created.close(&creds).await.expect("close created wallet");
 
     let rpc = HttpRpc::new(format!("http://127.0.0.1:{}", daemon.rpc_port))
         .await
@@ -2007,7 +2007,7 @@ async fn e2e_fcmp_spend_reorg_restores_pool_and_fee() {
     let creds = super::lifecycle::Credentials::password_only(b"track2-spend-reorg");
     let (created, tmp) = create_wallet(daemon.rpc_port, &seed, b"track2-spend-reorg").await;
     let wallet_path = tmp.path().join("wallet");
-    created.close(&creds).expect("close created wallet");
+    created.close(&creds).await.expect("close created wallet");
 
     let rpc = HttpRpc::new(format!("http://127.0.0.1:{}", daemon.rpc_port))
         .await
@@ -3454,7 +3454,7 @@ pub(super) async fn staker_wallet(
     engine
         .persist_bond_record(slot)
         .expect("persist bond record");
-    engine.close(&creds).expect("close created wallet");
+    engine.close(&creds).await.expect("close created wallet");
 
     let rpc = HttpRpc::new(format!("http://127.0.0.1:{rpc_port}"))
         .await
@@ -3478,7 +3478,7 @@ pub(super) async fn staker_wallet(
 
 /// The persona's payment destination, derived in-test from the same master
 /// seed the wallet holds. The production wallet derives the identical bundle
-/// at open (`spawn_stake_engine_if_staker` → `derive_archival_p_keys`); the
+/// at open (`prepare_stake_engine_if_staker` → `derive_archival_p_keys`); the
 /// harness takes only its public keys, for the one walk that pays a persona
 /// outside `stake_in` (the emission claim's post-bond fee input).
 pub(super) fn persona_destination(
@@ -5867,6 +5867,7 @@ async fn e2e_arm3_phantom_slot_collected_at_open() {
     });
     lock.into_inner()
         .close(&creds)
+        .await
         .expect("close phantom staker");
     let rpc = HttpRpc::new(format!("http://127.0.0.1:{}", daemon.rpc_port))
         .await
@@ -5891,7 +5892,7 @@ async fn e2e_arm3_phantom_slot_collected_at_open() {
         "no actor spawns for the collected phantom"
     );
     eprintln!("arm #3 production discharge: phantom bonded_slots[{SLOT}] collected at open");
-    reopened.close(&creds).expect("close");
+    reopened.close(&creds).await.expect("close");
 }
 
 /// The build a captured chain names: the daemon's own, held to the checkout
@@ -6614,11 +6615,11 @@ async fn native_handlers_apply_their_own_request_caps() {
         .await
         .expect("restricted /get_transactions over cap");
     assert_eq!(
-        status(&over),
-        "Too many transactions requested in restricted mode",
-        "a restricted listener must refuse more than {TX_CAP} hashes; if this \
-         says OK the handler saw a null connection context and the restricted \
-         gate is inert again"
+        over.pointer("/error/code")
+            .and_then(serde_json::Value::as_i64),
+        Some(shekyl_rpc_types::errors::ErrorClass::OverResourceBound.code()),
+        "a bounded listener must refuse more than {TX_CAP} hashes; if this \
+         has no error the handler saw an unbounded caller and the cap is inert"
     );
 
     // At the cap, restricted: served. Pins the boundary rather than "refuses
@@ -6645,9 +6646,11 @@ async fn native_handlers_apply_their_own_request_caps() {
         .await
         .expect("restricted /is_key_image_spent over cap");
     assert_eq!(
-        status(&ki_over),
-        "Too many key images queried in restricted mode",
-        "a restricted listener must refuse more than {KI_CAP} key images"
+        ki_over
+            .pointer("/error/code")
+            .and_then(serde_json::Value::as_i64),
+        Some(shekyl_rpc_types::errors::ErrorClass::OverResourceBound.code()),
+        "a bounded listener must refuse more than {KI_CAP} key images"
     );
 
     // Blast radius: the same over-cap request on the admin listener is served.

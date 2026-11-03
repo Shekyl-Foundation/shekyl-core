@@ -327,8 +327,16 @@ async fn restricted_listener_is_withheld_status_and_capped_by_native_handlers() 
         .await
         .expect("restricted get_block_header_by_hash over cap");
     assert_eq!(
-        hdr.pointer("/error/message").and_then(|m| m.as_str()),
-        Some("Too many block headers requested in restricted mode"),
+        hdr.pointer("/error/code")
+            .and_then(serde_json::Value::as_i64),
+        Some(shekyl_rpc_types::errors::ErrorClass::OverResourceBound.code()),
+        "a bounded listener must refuse more than {BLOCK_CAP} block hashes"
+    );
+    assert!(
+        hdr.pointer("/error/message")
+            .and_then(|m| m.as_str())
+            .unwrap_or("")
+            .contains("1000"),
         "a restricted listener must refuse more than {BLOCK_CAP} block hashes; \
          if this succeeds the handler answered a restricted caller without its cap"
     );

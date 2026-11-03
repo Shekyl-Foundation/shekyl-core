@@ -322,6 +322,7 @@ pub async fn run_arm3_fire(scratch_dir: &std::path::Path) -> Result<Arm3FireRepo
     Engine::<SoloSigner>::create(params, dummy_daemon().await?)
         .map_err(|e| format!("create: {e}"))?
         .close(&creds)
+        .await
         .map_err(|e| format!("close create: {e}"))?;
     let opened = Engine::<SoloSigner>::open_full(
         &base,
@@ -335,7 +336,10 @@ pub async fn run_arm3_fire(scratch_dir: &std::path::Path) -> Result<Arm3FireRepo
     opened
         .persist_bond_record(PSlot::from_raw(SLOT))
         .map_err(|e| format!("persist: {e}"))?;
-    opened.close(&creds).map_err(|e| format!("close: {e}"))?;
+    opened
+        .close(&creds)
+        .await
+        .map_err(|e| format!("close: {e}"))?;
 
     // Control: no sealed scan evidence yet — every verdict is
     // `OutsideCovered`, so the reopen must KEEP the slot (and spawn the
@@ -355,6 +359,7 @@ pub async fn run_arm3_fire(scratch_dir: &std::path::Path) -> Result<Arm3FireRepo
     } && control.has_stake_engine();
     control
         .close(&creds)
+        .await
         .map_err(|e| format!("close control: {e}"))?;
 
     // Build confirmed-absence evidence through the production path: scan a
@@ -432,7 +437,10 @@ pub async fn run_arm3_fire(scratch_dir: &std::path::Path) -> Result<Arm3FireRepo
         )
     };
     let reverted_to_non_staker = reverted && !after.has_stake_engine();
-    after.close(&creds).map_err(|e| format!("close: {e}"))?;
+    after
+        .close(&creds)
+        .await
+        .map_err(|e| format!("close: {e}"))?;
 
     Ok(Arm3FireReport {
         unscanned_slot_survived,

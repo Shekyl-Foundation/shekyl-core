@@ -32,14 +32,14 @@ use shekyl_daemon_rpc::info_facts::{
 };
 use shekyl_daemon_rpc::mining_facts::{LocalOutcome, Pending, PopOutcome};
 use shekyl_daemon_rpc::read_facts::{
-    AltChainFacts, BlocksAt, ChainReadFacts, ClaimSource, CoinbaseRange, CurveTreeFacts, PowAt,
-    PowSeed, ShardCoverage, SpentAt,
+    AdmittedPow, AltChainFacts, BlocksAt, ChainReadFacts, ClaimSource, CoinbaseRange,
+    CurveTreeFacts, PowAdmission, PowSeed, ShardCoverage, SpentAt,
 };
 use shekyl_daemon_rpc::store_facts::{NodeFacts, StoreFacts, SyncFacts};
 use shekyl_ffi::seam_ffi::bans::{BanPath, BanSpan, BanTarget};
 use shekyl_mempool::Pool;
 use shekyl_transport_layer::{BanLeft, Ipv4Subnet, ListedBan};
-use shekyl_types::{BlockHash, BlockHeight, PCanonicalId, TxHash};
+use shekyl_types::{BlockHash, BlockHeight, PCanonicalId, PowHash, TxHash};
 
 fn lock<T>(mutex: &Mutex<T>) -> std::sync::MutexGuard<'_, T> {
     mutex.lock().unwrap_or_else(PoisonError::into_inner)
@@ -262,7 +262,7 @@ impl ChainBridge {
     /// Clone the facts out of the slot and drop the lock before `read`.
     ///
     /// The guard covers the swap to absent. The read runs after it drops:
-    /// `pow_hash` waits for a hasher permit and then hashes, and a read
+    /// `hash_admitted` waits for a hasher permit and then hashes, and a read
     /// such as `block_at` or `coinbase_sum` takes its own time. A guard
     /// that spanned any of them would stall every chain read.
     fn with<T>(
@@ -380,8 +380,16 @@ impl ChainReadFacts for ChainBridge {
         self.with(|facts| facts.coinbase_sum(start, count))
     }
 
-    fn pow_hash(&self, pow_blob: &[u8], seed: PowSeed) -> Result<PowAt, FactsFault> {
-        self.with(|facts| facts.pow_hash(pow_blob, seed))
+    fn admit_pow(&self, seed: PowSeed) -> Result<PowAdmission, FactsFault> {
+        self.with(|facts| facts.admit_pow(seed))
+    }
+
+    fn hash_admitted(
+        &self,
+        pow_blob: &[u8],
+        admitted: &AdmittedPow,
+    ) -> Result<PowHash, FactsFault> {
+        self.with(|facts| facts.hash_admitted(pow_blob, admitted))
     }
 
     fn emission_claim_source(&self, persona: &PCanonicalId) -> Result<ClaimSource, FactsFault> {

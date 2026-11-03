@@ -33,10 +33,10 @@
 //!   it, the new chain's pair would be judged against the old chain's leaf
 //!   and reported stale.
 //! - *Before the first fold*, for the reason above.
-//! - *Inside the respawn-aware wrapper*, because a respawned actor starts
-//!   with an empty registry: the retry re-offers the set before it folds
-//!   the rest of the range, and a dead actor fails this call with the same
-//!   respawn-recoverable fault the ingest's own calls do.
+//! - *Inside the recovering wrapper*, because a client rebuilt in place
+//!   starts with an empty registry: the retry re-offers the set before it
+//!   folds the rest of the range, and a poisoned client fails this call
+//!   with the same rebuild-recoverable fault the ingest's own calls do.
 //!
 //! # Whose outputs
 //!
@@ -775,7 +775,7 @@ mod tests {
     /// The genesis both forks share. Not empty: a store whose only block is
     /// an empty genesis resumes as a fresh one, and the ingest would then
     /// ask the fixture's unreachable daemon for it after a rollback or a
-    /// respawn.
+    /// rebuild.
     fn genesis_leaves() -> std::sync::Arc<Vec<crate::scan::OwnedTxLeaves>> {
         seeded_tx_leaves(CHAIN, 0, PER_BLOCK)
     }
@@ -965,24 +965,24 @@ mod tests {
         );
     }
 
-    /// A respawned actor starts with an empty registry. The registration is
-    /// inside the respawn-aware ingest, so the retry re-offers the set to
-    /// the fresh actor before it folds anything.
+    /// A client rebuilt in place starts with an empty registry. The
+    /// registration is inside the recovering ingest, so the retry re-offers
+    /// the set to the rebuilt client before it folds anything.
     #[tokio::test(flavor = "multi_thread")]
-    async fn a_respawned_actor_is_re_offered_the_set_before_it_folds() {
+    async fn a_rebuilt_client_is_re_offered_the_set_before_it_folds() {
         let (_tmp, engine) = engine_at_genesis(SEED_MULT.wrapping_add(5)).await;
         let mut result = scan_result(CHAIN, &[5]).await;
         let pair = detected_output(&result.new_transfers[0]);
 
-        engine.curve_tree.kill_and_wait_for_test().await;
+        engine.curve_tree.poison_for_test().await;
         let ingest = engine
-            .ingest_scan_result_with_respawn(&mut result)
+            .ingest_scan_result_with_recovery(&mut result)
             .await
-            .expect("the dead actor is respawned and the retry ingests");
+            .expect("the poisoned client is rebuilt and the retry ingests");
         assert_eq!(
             (ingest.before_drain, ingest.after_drain),
             (1, 0),
-            "the retry offered the set to the fresh actor before folding"
+            "the retry offered the set to the rebuilt client before folding"
         );
         assert_eq!(ingest.reconciliation, None);
 
