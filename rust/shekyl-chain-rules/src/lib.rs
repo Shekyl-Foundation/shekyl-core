@@ -12,7 +12,7 @@
 //! [`StructurallyValid`], stateless and outside any transaction;
 //! [`validate`] takes that, a `ChainView<'id>` (narrow, read-only trait over
 //! **recorded** chain facts), the rule set in force and the node's [`Trust`]
-//! (the release anchors; from slice 6, the below-anchor posture), and yields
+//! (the genesis pin it carries), and yields
 //! `ChainValid<'id, V>` or `InvalidBlock { rule: CenRow, .. }` — or a
 //! [`Fault`], which is neither. Ruled in
 //! [`CONSENSUS_C2_R8_STORE_PLACEMENT.md`](../../docs/completed/CONSENSUS_C2_R8_STORE_PLACEMENT.md)
@@ -56,7 +56,8 @@
 //! (`CHAIN_RULES_SLICE_3.md`) housed `PDM-Q5`'s anchor model — the
 //! release-carried [`GenesisPin`], the [`Trust`] input to `validate`,
 //! CEN-E1 per block and CEN-E5 at writer open (the first `enforced_at` row;
-//! E2 waits on the alt view and `D_max`); slice 4 (`CHAIN_RULES_SLICE_4.md`)
+//! CEN-E2 is rejected: no coded checkpoints, and `D_max` stays the switch's
+//! local limit); slice 4 (`CHAIN_RULES_SLICE_4.md`)
 //! landed 4.F's sixteen operand-complete rows — the coinbase's shape and
 //! height claims as predicates at [`TxSlot::Miner`], the emission
 //! definitions derived and recorded in coverage (the priced value stays

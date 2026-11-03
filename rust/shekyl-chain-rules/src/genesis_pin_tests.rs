@@ -3,7 +3,7 @@
 // All rights reserved.
 // BSD-3-Clause
 
-//! `anchors.rs` — the release-carried genesis pin on every public network
+//! `genesis_pin.rs` — the release-carried genesis pin on every public network
 //! (`CHAIN_RULES_SLICE_4.md` Q3), and nothing above it (S1, design review
 //! 2026-11-03).
 
@@ -39,11 +39,6 @@ fn every_network_pins_its_own_genesis_and_nothing_above_it() {
                 "{network:?} at {above}"
             );
         }
-        assert_eq!(
-            table.pins().collect::<Vec<_>>(),
-            vec![(height(0), genesis)],
-            "{network:?}: the genesis pin is the only pin"
-        );
         assert!(
             seen.insert(genesis),
             "{network:?}: each network has its own genesis"
@@ -79,7 +74,6 @@ fn expected_at_is_genesis_only() {
     assert_eq!(PINNED.expected_at(height(0)), Some(hash(0x60)));
     assert_eq!(PINNED.expected_at(height(1)), None);
     assert_eq!(GenesisPin::NONE.expected_at(height(0)), None);
-    assert_eq!(GenesisPin::NONE.pins().count(), 0);
 }
 
 /// `Debug` prints whether genesis is pinned, never the hash.

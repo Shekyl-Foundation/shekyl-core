@@ -22,9 +22,9 @@
 //! - **CEN-E1** judges a height-0 candidate against the pin
 //!   ([`expected_at`](GenesisPin::expected_at)).
 //! - **CEN-E5** holds the file a node opens to it: a store whose block 0 is
-//!   another network's is refused (`rules::anchors`). The walk is
-//!   [`GenesisPin::conflict_over`]; [`GenesisPin::conflict_with`] is
-//!   that walk over a `ChainView`.
+//!   another network's is refused (`rules::genesis`). The comparison is
+//!   [`GenesisPin::conflict`]; [`GenesisPin::conflict_with`] reads a view
+//!   and calls it.
 //! - **`Trust`** carries the pin into `validate`.
 //!
 //! The hashes are **read**, not restated: [`for_network`](GenesisPin::for_network)
@@ -52,6 +52,8 @@ pub struct GenesisPin {
 
 impl GenesisPin {
     /// Nothing pinned: the table no release vouches for.
+    /// [`Trust::UNPINNED`](crate::Trust::UNPINNED) carries this into
+    /// `validate`, so a harness chain can mine its own genesis.
     pub const NONE: Self = Self { genesis: None };
 
     const fn genesis_only(genesis: [u8; 32]) -> Self {
@@ -84,14 +86,6 @@ impl GenesisPin {
         } else {
             None
         }
-    }
-
-    /// The pin as `(height, hash)`: what CEN-E5 holds the recorded chain to
-    /// at open. Crate-private: callers read through the named accessors.
-    pub(crate) fn pins(&self) -> impl Iterator<Item = (BlockHeight, BlockHash)> + '_ {
-        self.genesis
-            .map(|hash| (BlockHeight::ZERO, hash))
-            .into_iter()
     }
 }
 

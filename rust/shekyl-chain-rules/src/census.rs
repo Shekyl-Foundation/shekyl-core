@@ -390,7 +390,7 @@ census_rows! {
         // D7 as data on a Fakechain rule set (`DifficultyRule::Fixed`), the
         // override arm D4 consults on every block (slice 2 Q10, arm (d)).
         D7 implemented(crate::rules::difficulty::D7),
-        // 4.E The genesis pin (`anchors.rs`); no coded checkpoints (S1,
+        // 4.E The genesis pin (`genesis_pin.rs`); no coded checkpoints (S1,
         // design review 2026-11-03).
         E1 implemented(crate::rules::genesis::E1),
         // E2 is bucket 3 (REJECTED, S1 2026-11-03): no coded checkpoints,

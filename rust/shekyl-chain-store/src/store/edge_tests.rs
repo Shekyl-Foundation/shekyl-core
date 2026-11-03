@@ -11,7 +11,7 @@
 //! root arm. So does an empty tree whose two copies agree on any root but
 //! the empty one: there is no chunk to rebuild, and the empty root is known.
 
-use shekyl_chain_rules::RuleSet;
+use shekyl_chain_rules::{AtHeight, RuleSet};
 use shekyl_types::{BlockHeight, CurveTreeRoot, TreeLeaf};
 
 use super::connect_fixtures::{connect_chain, spend, spendable_prefix, Listed};

@@ -682,14 +682,12 @@ impl ChainStore {
     /// tip)] = Present`, a bit no block earned, attributed to the tip's
     /// height — the C++'s `regtest_inject_archival_serve_credit`
     /// (`blockchain.cpp:4708`), the Gate-6 stand-in that lets a regtest
-    /// reach a closed epoch with a credit in it. Refused off Fakechain as
-    /// the C++ refuses it: `trust` must be [`Trust::UNPINNED`] — the one
-    /// posture no release vouches for, which is what a Fakechain node
-    /// always is and a public-network node never is
-    /// ([`GenesisPin`] has no constructor from arbitrary entries, so
-    /// the empty table cannot be minted for a public network). The store
-    /// holds no nettype (rule 71); it reads the posture the caller runs
-    /// under, and the ingest maps `ChainRules::Regtest` to it.
+    /// reach a closed epoch with a credit in it. Refused unless `trust` is
+    /// [`Trust::UNPINNED`], which is what a Fakechain run is and a public
+    /// network's `trust()` never is ([`GenesisPin`] has no constructor a
+    /// public network can use to mint an empty pin). The store holds no
+    /// nettype (rule 71); it reads the pin the caller runs under, and the
+    /// ingest maps `ChainRules::Regtest` to `Trust::UNPINNED`.
     ///
     /// Its own transaction, **not journaled** (module doc): a pop below the
     /// returned height leaves the bit, as the C++'s does. Returns the
@@ -697,8 +695,8 @@ impl ChainStore {
     ///
     /// # Errors
     ///
-    /// [`StoreCannot::InjectionOffFakechain`] if `trust` carries any
-    /// anchor; [`StoreCannot::ChainEmpty`] with no block recorded (no tip
+    /// [`StoreCannot::InjectionOffFakechain`] if `trust` pins a genesis;
+    /// [`StoreCannot::ChainEmpty`] with no block recorded (no tip
     /// to attribute the bit to); [`StoreCannot::InjectionForUnbondedPersona`]
     /// if `persona` has no bond record — every serve-credit read arms
     /// SI-15, so a bit for a stranger would be a file the reads refuse
@@ -764,8 +762,8 @@ impl ChainStore {
     ///
     /// # Errors
     ///
-    /// [`StoreCannot::InjectionOffFakechain`] if `trust` carries any
-    /// anchor; [`StoreCannot::InjectionForUnbondedPersona`] if a draw names
+    /// [`StoreCannot::InjectionOffFakechain`] if `trust` pins a genesis;
+    /// [`StoreCannot::InjectionForUnbondedPersona`] if a draw names
     /// a persona with no bond record; [`StoreCannot::DrawAlreadyIssued`]
     /// if the index holds one of the draws; the admission and engine
     /// errors of [`write`](Self::write).

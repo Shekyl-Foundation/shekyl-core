@@ -223,11 +223,11 @@ impl Node {
         let rules = rules_of(args.config)?;
         let horizons = Horizons::under(&rules.in_force(BlockHeight::ZERO))
             .map_err(|error| OpenError::Rules(format!("the store horizons: {error}")))?;
-        let anchors = genesis_pin_of(rules);
+        let genesis = genesis_pin_of(rules);
         std::fs::create_dir_all(&args.config.data_dir).map_err(OpenError::Directory)?;
         let store_path = args.config.data_dir.join("chain.db");
         let pool_path = args.config.data_dir.join("pool.db");
-        let store = Arc::new(open_chain(&store_path, horizons, &anchors)?);
+        let store = Arc::new(open_chain(&store_path, horizons, &genesis)?);
         tracing::info!("{}", store_durability_line());
         let parallelism = std::thread::available_parallelism().unwrap_or(NonZeroUsize::MIN);
         let budget = Budget::new(parallelism);
@@ -803,10 +803,10 @@ fn uninstall_process_doors() {
 fn open_chain(
     path: &std::path::Path,
     horizons: Horizons,
-    anchors: &GenesisPin,
+    genesis: &GenesisPin,
 ) -> Result<ChainStore, OpenError> {
     use shekyl_chain_store::store::{StoreCannot, StoreError};
-    match ChainStore::with_genesis(path, ApplyPolicy::Full, horizons, anchors) {
+    match ChainStore::with_genesis(path, ApplyPolicy::Full, horizons, genesis) {
         Ok((store, cut)) => {
             log_chain_cut(cut);
             Ok(store)
@@ -820,15 +820,17 @@ fn open_chain(
         // genesis): an older layout is removed so an alpha starts on a fresh
         // store. The permanent policy ships each layout bump with its
         // migration and never deletes (`DAEMON_REDB_STORE.md` §11.1, S3).
-        Err(StoreError::Cannot(StoreCannot::SchemaVersionMismatch { found, expected })) => {
+        Err(StoreError::Cannot(StoreCannot::SchemaVersionMismatch { found, expected }))
+            if found < expected =>
+        {
             tracing::warn!(
                 %found,
                 %expected,
-                "the chain file is an older layout than this release's; removing it and opening a fresh store"
+                "the chain file's layout is older than this release's layout; removing it and opening a fresh store"
             );
             std::fs::remove_file(path).map_err(OpenError::Wipe)?;
             let (store, cut) =
-                ChainStore::with_genesis(path, ApplyPolicy::Full, horizons, anchors)?;
+                ChainStore::with_genesis(path, ApplyPolicy::Full, horizons, genesis)?;
             log_chain_cut(cut);
             Ok(store)
         }

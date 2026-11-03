@@ -318,13 +318,10 @@ fn a_regtest_node_refuses_a_testnet_store_and_leaves_it_unwritten() {
         .expect("mtime");
     match open_on(&config_at(dir.path())) {
         Err(OpenError::Store(StoreError::Cannot(StoreCannot::ForeignGenesis(conflict)))) => {
-            assert_eq!(conflict.height, BlockHeight::ZERO);
             assert_eq!(conflict.expected, genesis_hash());
             assert_eq!(
                 conflict.recorded,
-                Some(BlockHash::from_bytes(shekyl_rpc_types::genesis_hash_for(
-                    Network::Testnet
-                )))
+                BlockHash::from_bytes(shekyl_rpc_types::genesis_hash_for(Network::Testnet))
             );
         }
         Err(other) => panic!("another network's store is a genesis refusal, got {other}"),

@@ -375,10 +375,10 @@ pub enum StoreCannot {
     ChainEmpty,
     /// The regtest serve-credit injection
     /// (`ChainStore::regtest_inject_serve_credit`, DRS-E4 §3.8 item 3) was
-    /// asked for under a [`Trust`](shekyl_chain_rules::Trust) that carries
-    /// a release's anchors — a public network's posture. The door writes
-    /// a bit the rules did not admit and opens on Fakechain only, as the
-    /// C++'s `regtest_inject_archival_serve_credit` refuses off
+    /// asked for under a [`Trust`](shekyl_chain_rules::Trust) that pins a
+    /// genesis. The door writes a bit the rules did not admit and opens
+    /// only for [`Trust::UNPINNED`](shekyl_chain_rules::Trust::UNPINNED),
+    /// which is what a Fakechain run is. The C++ refuses the same door off
     /// `FAKECHAIN` (`blockchain.cpp:4715`).
     InjectionOffFakechain,
     /// The regtest serve-credit injection named a persona with no bond
@@ -591,8 +591,8 @@ impl core::fmt::Display for StoreCannot {
             ),
             Self::ChainEmpty => f.write_str("the chain store has no block recorded"),
             Self::InjectionOffFakechain => f.write_str(
-                "regtest injection refused: the node's trust carries a release's anchors, so \
-                 this is not a Fakechain",
+                "regtest injection refused: the node's trust pins a genesis, so this is not an \
+                 unpinned Fakechain",
             ),
             Self::InjectionForUnbondedPersona { persona } => write!(
                 f,
@@ -644,22 +644,13 @@ impl core::fmt::Display for StoreCannot {
                  session runs {session}: persisted join epochs and serve-credit windows would be \
                  silently mislabeled; reopen under the pinned schedule or use a fresh data directory"
             ),
-            Self::ForeignGenesis(conflict) => match conflict.recorded {
-                Some(recorded) => write!(
-                    f,
-                    "block {height} is {recorded} but this binary pins {expected}; \
-                     the file is another network's chain, and this node does not run on it",
-                    height = conflict.height,
-                    expected = conflict.expected,
-                ),
-                None => write!(
-                    f,
-                    "block {height} is absent below the tip but this binary pins {expected}; \
-                     the file is not a chain this node can run on",
-                    height = conflict.height,
-                    expected = conflict.expected,
-                ),
-            },
+            Self::ForeignGenesis(conflict) => write!(
+                f,
+                "block 0 is {recorded} but this binary pins {expected}; \
+                 the file is another network's chain, and this node does not run on it",
+                recorded = conflict.recorded,
+                expected = conflict.expected,
+            ),
             Self::Pool(cannot) => write!(f, "pool store: {cannot}"),
             Self::Alt(cannot) => write!(f, "alt-chain store: {cannot}"),
             Self::Queue(cannot) => write!(f, "bundle queue: {cannot}"),

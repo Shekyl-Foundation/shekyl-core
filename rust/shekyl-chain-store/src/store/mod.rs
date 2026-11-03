@@ -114,6 +114,7 @@ mod header;
 mod invariant;
 mod keyed;
 mod leaf_reads;
+mod open;
 mod output_reads;
 mod pop;
 mod prune;
@@ -161,12 +162,13 @@ pub use crate::creation::CutShort;
 use std::path::Path;
 
 use redb::{Database, Durability, ReadOnlyDatabase, ReadableDatabase, WriteTransaction};
-use shekyl_chain_rules::{AtHeight, GenesisPin};
+use shekyl_chain_rules::GenesisPin;
 
 use crate::apply_policy::ApplyPolicy;
 use crate::codec::SettlementEpochBlocks;
 use crate::provenance::Provenance;
 
+use open::{open_at, GenesisAdmission};
 use shared::Shared;
 
 /// The durability every write transaction is armed with (DRS-D9, Tier-A A4).
@@ -224,6 +226,22 @@ impl core::fmt::Debug for ChainStore {
 }
 
 impl ChainStore {
+    /// A writable handle over a database the open path already sealed or
+    /// reopened. The open module is the only caller.
+    fn opened(
+        db: Database,
+        apply_policy: ApplyPolicy,
+        horizons: Horizons,
+        provenance: Provenance,
+    ) -> Self {
+        Self {
+            backend: Backend::Writable(db),
+            apply_policy,
+            horizons,
+            shared: Shared::new(provenance),
+        }
+    }
+
     /// Create or open the store at `path` for reading and writing, under
     /// the settlement-epoch schedule `epoch` (a fresh file is pinned to it;
     /// an existing file must have been built under it).
@@ -312,7 +330,13 @@ impl ChainStore {
         apply_policy: ApplyPolicy,
         horizons: Horizons,
     ) -> Result<Self, StoreError> {
-        open_at(path.as_ref(), apply_policy, horizons, &GenesisPin::NONE).map(|(store, _cut)| store)
+        open_at(
+            path.as_ref(),
+            apply_policy,
+            horizons,
+            GenesisAdmission::Unpinned,
+        )
+        .map(|(store, _cut)| store)
     }
 
     /// The settlement-epoch schedule this file is pinned to — equal to the
@@ -416,19 +440,14 @@ impl ChainStore {
     ///
     /// An existing file is admitted on a read-only open, before any
     /// writable one, so another network's store is refused with nothing
-    /// written; the admission runs again under the writable open's lock. A
-    /// file the engine must repair first cannot be judged read-only, and is
-    /// repaired (its own committed state, nothing lost) before it is
-    /// refused (`open_existing`). An empty file agrees: there is no block for
-    /// a pin to contradict. A recorded block 0 that is not the pin is
-    /// [`StoreCannot::ForeignGenesis`].
-    ///
-    /// The walk is [`GenesisPin::conflict_over`], the same one
-    /// [`GenesisPin::conflict_with`] runs over a `ChainView`. The
-    /// snapshot is not a `ChainView` — that impl is deferred — so admission
-    /// reads [`ReadSnapshot::tip`] and [`ReadSnapshot::block_info`] and
-    /// hands those to the walk. A hole at or below the tip is the read's
-    /// own fault, not a pin mismatch.
+    /// written. The admission runs again under the writable open's lock,
+    /// because the directory entry can be replaced between the two opens.
+    /// A file the engine must repair first cannot be judged read-only, and
+    /// is repaired (its own committed state, nothing lost) before it is
+    /// refused. An empty file agrees: there is no block for a pin to
+    /// contradict. A recorded block 0 that is not the pin is
+    /// [`StoreCannot::ForeignGenesis`]. The open does not pop: genesis
+    /// cannot be popped, and the remedy is refuse-to-run.
     ///
     /// # Errors
     ///
@@ -445,11 +464,16 @@ impl ChainStore {
         horizons: Horizons,
         genesis: &GenesisPin,
     ) -> Result<(Self, Option<CutShort>), StoreError> {
-        // An existing file is admitted on a read-only open first, so a store
-        // from another network is refused unwritten (`open_existing`). The
-        // admission here is the one under the writable open's lock: the
-        // file can change between the two opens.
-        let (store, cut) = open_at(path.as_ref(), apply_policy, horizons, genesis)?;
+        // The filter admits an existing file on its read-only open, so a
+        // store from another network is refused unwritten. This admission
+        // is the one under the writable open's lock: the file can change
+        // between the two opens.
+        let (store, cut) = open_at(
+            path.as_ref(),
+            apply_policy,
+            horizons,
+            GenesisAdmission::Pinned(genesis),
+        )?;
         store.admit(genesis)?;
         Ok((store, cut))
     }
@@ -475,22 +499,13 @@ impl ChainStore {
         Ok(store)
     }
 
-    /// CEN-E5 over this file. `Ok` agrees, including an empty file and an
-    /// empty table. A contradiction is [`StoreCannot::ForeignGenesis`]. A read
-    /// that cannot answer is that read's error: a fault is not agreement
-    /// and not a pin mismatch.
+    /// CEN-E5 over this file. `Ok` agrees, including an empty file and a
+    /// pin that names nothing. A contradiction is [`StoreCannot::ForeignGenesis`].
+    /// A read that cannot answer is that read's error: a fault is not
+    /// agreement and not a pin mismatch.
     fn admit(&self, genesis: &GenesisPin) -> Result<(), StoreError> {
         let snap = self.begin_read()?;
-        let tip = snap.tip()?.recorded;
-        match genesis.conflict_over(tip, |height| -> Result<_, StoreError> {
-            Ok(match snap.block_info(height)? {
-                AtHeight::Recorded(info) => Some(info.hash),
-                AtHeight::AboveTip => None,
-            })
-        })? {
-            None => Ok(()),
-            Some(conflict) => Err(StoreCannot::ForeignGenesis(conflict).into()),
-        }
+        open::admit_genesis(snap.txn(), genesis)
     }
 
     /// Whether the writer is live or halted (`DAEMON_REDB_STORE.md` §3.6.2).
@@ -657,235 +672,6 @@ fn arm_write(db: &Database) -> Result<WriteTransaction, StoreError> {
         .map_err(EngineError::Durability)?;
     txn.set_two_phase_commit(TWO_PHASE_COMMIT);
     Ok(txn)
-}
-
-/// What an existing file is to this store: its verified provenance, or
-/// `None` for a file with no table at all, a creation stopped before its
-/// seal (`crate::creation`). A file with any table and no seal, or another
-/// layout or schedule, is `verify`'s refusal.
-fn judge(
-    db: &impl redb::ReadableDatabase,
-    epoch: SettlementEpochBlocks,
-) -> Result<Option<Provenance>, StoreError> {
-    let txn = db.begin_read().map_err(EngineError::BeginRead)?;
-    if crate::creation::no_table(&txn)? {
-        return Ok(None);
-    }
-    header::verify(&txn, epoch).map(Some)
-}
-
-/// Claim `path` with `create_new` and create a sealed store in it. `None`
-/// when the path already exists. A file this made and the engine or the
-/// seal then refused is removed again, so a failed create does not leave a
-/// headerless file the next open refuses.
-fn create_fresh(
-    builder: &redb::Builder,
-    path: &Path,
-    policy: ApplyPolicy,
-    epoch: SettlementEpochBlocks,
-) -> Result<Option<(Database, Provenance)>, StoreError> {
-    let file = match std::fs::OpenOptions::new()
-        .read(true)
-        .write(true)
-        .create_new(true)
-        .open(path)
-    {
-        Ok(file) => file,
-        Err(e) if e.kind() == std::io::ErrorKind::AlreadyExists => return Ok(None),
-        Err(e) => return Err(EngineError::Open(redb::DatabaseError::Storage(e.into())).into()),
-    };
-    match create_sealed(builder, file, policy, epoch) {
-        Ok(fresh) => Ok(Some(fresh)),
-        Err(e) => {
-            // The path exists only because `create_new` just made it.
-            // `create_sealed` has dropped its `Database`, so the file is
-            // unlocked.
-            drop(std::fs::remove_file(path));
-            Err(e)
-        }
-    }
-}
-
-/// Reopen an existing file.
-///
-/// The read-only open is the refusal filter: a file [`judge`] rejects is
-/// rejected with nothing written, because a writable open records the
-/// engine's allocator state when it closes. `RepairAborted` is not a
-/// refusal. A read-only open returns it before any table read when the
-/// file needs recovery, and only the writable open repairs it. The
-/// writable open's `judge` is the admission, and the provenance of the
-/// handle it returns. The filter's result is not that provenance. redb
-/// opens read-only only by path, so the two opens cannot share a
-/// descriptor. A refusal of the filter writes nothing to the inode it
-/// opened. A directory entry replaced before the writable open is a
-/// different file: refusing it drops that open, which writes the inode the
-/// writable open took.
-///
-/// A creation a power loss cut short is finished (`crate::creation`). A
-/// file with no table at all is sealed in place under the writable open,
-/// which holds the engine's exclusive lock, and reported as
-/// [`CutShort::Unsealed`]. A file the engine would not open is moved
-/// aside only when [`creation::open_is_foreign`](crate::creation::open_is_foreign)
-/// and the file is an initialization the engine never finished; the move
-/// returns the fresh file, which is sealed here. Any other file the
-/// engine would not open is refused with the engine's own error.
-/// `guard` is held by [`open_at`] for the whole decision.
-fn open_existing(
-    builder: &redb::Builder,
-    path: &Path,
-    policy: ApplyPolicy,
-    horizons: Horizons,
-    genesis: &GenesisPin,
-    guard: &crate::creation::PathGuard,
-) -> Result<(Database, Provenance, Option<CutShort>), StoreError> {
-    let epoch = horizons.epoch();
-    match builder.open_read_only(path) {
-        Ok(read_only) => {
-            // A sealed file is also admitted against the release's pins
-            // here (CEN-E5: block 0 against this network's genesis), so a
-            // store from another network is refused before the writable
-            // open writes into it. A file with no table has no block 0.
-            if let Some(provenance) = judge(&read_only, epoch)? {
-                ChainStore {
-                    backend: Backend::ReadOnly(read_only),
-                    apply_policy: ApplyPolicy::Full,
-                    horizons,
-                    shared: Shared::new(provenance),
-                }
-                .admit(genesis)?;
-            }
-        }
-        // A file the engine must repair cannot be judged on a read-only open
-        // (redb refuses one). The writable open below repairs it, restoring
-        // the file's own committed state with nothing lost, and the
-        // admission after it refuses another network's store. That is the
-        // one refusal that writes: judging a repaired copy instead would
-        // cost a second copy of the store at every start after a crash
-        // (PB-S3), and refusing to repair would stop a node recovering its
-        // own store.
-        Err(redb::DatabaseError::RepairAborted) => {}
-        Err(refused) if crate::creation::open_is_foreign(&refused) => {
-            return finish_uninitialized(builder, path, policy, epoch, guard, refused);
-        }
-        Err(refused) => return Err(EngineError::Open(refused).into()),
-    }
-    let db = builder.open(path).map_err(EngineError::Open)?;
-    // `create_file` commits an empty database before the seal's
-    // transaction commits, so a power loss between the two leaves a valid
-    // file with no table at all (PB-S2's first replay). Nothing in it can
-    // be lost: it is sealed here, as `create_sealed` would have.
-    let (provenance, cut) = match judge(&db, epoch)? {
-        Some(provenance) => (provenance, None),
-        None => (seal_new(&db, policy, epoch)?, Some(CutShort::Unsealed)),
-    };
-    Ok((db, provenance, cut))
-}
-
-/// The engine refused `path` as not a database. Move it aside when it is
-/// an unfinished initialization and seal a fresh store in the file the
-/// move claimed. The aside stays if the seal fails: it is the operator's
-/// file, and the replacement is the one this process just created.
-fn finish_uninitialized(
-    builder: &redb::Builder,
-    path: &Path,
-    policy: ApplyPolicy,
-    epoch: SettlementEpochBlocks,
-    guard: &crate::creation::PathGuard,
-    refused: redb::DatabaseError,
-) -> Result<(Database, Provenance, Option<CutShort>), StoreError> {
-    debug_assert_eq!(guard.store(), path);
-    let Some(replaced) = crate::creation::set_aside_unfinished_init(guard)
-        .map_err(|error| EngineError::Open(redb::DatabaseError::Storage(error.into())))?
-    else {
-        return Err(EngineError::Open(refused).into());
-    };
-    match create_sealed(builder, replaced.file, policy, epoch) {
-        Ok((db, provenance)) => Ok((
-            db,
-            provenance,
-            Some(CutShort::Uninitialized { to: replaced.to }),
-        )),
-        Err(error) => {
-            drop(std::fs::remove_file(path));
-            Err(error)
-        }
-    }
-}
-
-/// Create or open `path`, and report a creation this open finished.
-///
-/// Fresh-vs-existing is decided by the same syscall that claims the path,
-/// never by a separate probe: `create_new` either creates the file
-/// atomically (fresh) or fails with AlreadyExists (reopen). The creation
-/// lock is held from before that syscall until the engine holds the store
-/// file ([`crate::creation::PathGuard`]).
-///
-/// The reopen arm is `open`, which never creates and never initializes
-/// (`redb-4.4.0/src/db.rs`, an empty file is `InvalidData`). With `create`
-/// there, a path removed between AlreadyExists and the open — or an empty
-/// file some other process left — would be initialized as a fresh,
-/// unsealed database and then refused by `verify`, leaving behind exactly
-/// the headerless file the fresh arm's cleanup exists to prevent. Only
-/// the `create_new` winner initializes a file.
-fn open_at(
-    path: &Path,
-    apply_policy: ApplyPolicy,
-    horizons: Horizons,
-    genesis: &GenesisPin,
-) -> Result<(ChainStore, Option<CutShort>), StoreError> {
-    let epoch = horizons.epoch();
-    apply_policy
-        .reject_empty_stub()
-        .map_err(|crate::apply_policy::EmptyApplyStub| StoreCannot::EmptyApplyStub)?;
-    let guard = crate::creation::PathGuard::acquire(path)
-        .map_err(|error| EngineError::Open(redb::DatabaseError::Storage(error.into())))?;
-    let mut builder = redb::Builder::new();
-    builder.set_cache_size(CACHE_SIZE);
-    let (db, provenance, cut) = match create_fresh(&builder, path, apply_policy, epoch)? {
-        Some((db, provenance)) => (db, provenance, None),
-        None => open_existing(&builder, path, apply_policy, horizons, genesis, &guard)?,
-    };
-    Ok((
-        ChainStore {
-            backend: Backend::Writable(db),
-            apply_policy,
-            horizons,
-            shared: Shared::new(provenance),
-        },
-        cut,
-    ))
-}
-
-/// Hand a just-created, still-empty file to the engine and seal its header
-/// in the first transaction, under the same durability every batch
-/// commits with.
-///
-/// Everything that can fail between `create_new` and a usable store runs
-/// here, so the caller has exactly one place to undo the creation. On
-/// `Err` the `Database` is dropped before returning, releasing the
-/// engine's file lock so the caller's `remove_file` can succeed.
-fn create_sealed(
-    builder: &redb::Builder,
-    file: std::fs::File,
-    policy: ApplyPolicy,
-    epoch: SettlementEpochBlocks,
-) -> Result<(Database, Provenance), StoreError> {
-    let db = builder.create_file(file).map_err(EngineError::Open)?;
-    let provenance = seal_new(&db, policy, epoch)?;
-    Ok((db, provenance))
-}
-
-/// Seal a database that has no table yet: the header, in one transaction,
-/// under the durability every batch commits with.
-fn seal_new(
-    db: &Database,
-    policy: ApplyPolicy,
-    epoch: SettlementEpochBlocks,
-) -> Result<Provenance, StoreError> {
-    let txn = arm_write(db)?;
-    let provenance = header::seal(&txn, policy, epoch)?;
-    txn.commit().map_err(EngineError::Commit)?;
-    Ok(provenance)
 }
 
 #[cfg(test)]

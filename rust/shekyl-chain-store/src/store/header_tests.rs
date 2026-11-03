@@ -439,6 +439,33 @@ fn a_recovery_bit_reopens_the_probe_row() {
     cleanup(&path);
 }
 
+/// A newer layout that also needs repair is still a mismatch, and the
+/// probe row survives it. Red if the repair refusal deletes the file or
+/// drops the row. The bytes change: the repair runs before the mismatch
+/// is known.
+#[test]
+fn a_newer_layout_that_needs_repair_is_refused_and_the_probe_remains() {
+    let path = tmp("repair-newer");
+    seeded(&path, ApplyPolicy::Full);
+    let newer = SchemaVersion::new(SCHEMA_VERSION.get() + 1);
+    raw_put(&path, "schema_version", Some(&newer.encode()));
+    mark_recovery_required(&path);
+    assert!(
+        read_only_open_is_repair_aborted(&path),
+        "the bit is the repair arm"
+    );
+    match ChainStore::create(&path, EPOCH) {
+        Err(StoreError::Cannot(StoreCannot::SchemaVersionMismatch { found, expected })) => {
+            assert_eq!((found, expected), (newer, SCHEMA_VERSION));
+        }
+        other => panic!("a newer layout is a mismatch, got {other:?}"),
+    }
+    raw_put(&path, "schema_version", Some(&SCHEMA_VERSION.encode()));
+    let store = ChainStore::create(&path, EPOCH).expect("the repaired file reopens");
+    assert_eq!(super::store_tests::probe_val(&store, "k"), Some(1));
+    cleanup(&path);
+}
+
 #[test]
 fn a_malformed_header_cell_is_corruption_not_a_version() {
     let path = tmp("corrupt");
@@ -767,7 +794,7 @@ fn a_creation_cut_off_before_its_seal_is_finished_by_the_next_open() {
         &path,
         ApplyPolicy::Full,
         production_horizons(),
-        &GenesisPin::NONE,
+        GenesisAdmission::Unpinned,
     )
     .expect("the creation is finished");
     assert_eq!(cut, Some(CutShort::Unsealed));
