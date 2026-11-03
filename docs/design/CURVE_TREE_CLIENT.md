@@ -1317,7 +1317,9 @@ not a fix.
   floor device in testing; if it proves too costly there, the reader actor
   is the fallback and is designed then. *Finding after the ruling
   (2026-11-02):* no curve-tree body is served in production (above), so
-  no copy arises; the serving side's reads are store facts.
+  no copy arises here; the serving side's reads of this store are store
+  facts. The bodies are the persona store's, where the copy does arise:
+  §11.1, which also records the granularity ruled for it.
 - **Q3 — both together, in one PR.** The awaited close and the
   message-based serving reads land as one PR, as many commits as the work
   needs; only the PR's end state has to hold the property.
@@ -1330,15 +1332,19 @@ not a fix.
    message replaces the external respawn; store-fact messages; the handle
    becomes a plain `ActorRef` (the shared cell goes); an awaited
    `shutdown`.
-3. `shekyl-p-host`: the witness reads store facts through an async trait
-   instead of a `ServingReader`; pin-time facts arrive in the pin report;
-   store identity is a value, not `Arc` pointer equality.
-4. The stake engine implements that trait over the actor handle.
+3. `shekyl-p-host`: the witness reads store facts through the
+   `ServeSetPinner` trait instead of a `ServingReader`; store identity is a
+   value, not `Arc` pointer equality. *As landed:* the facts are their own
+   pinner call rather than riding the pin reply, so a report's claims are
+   still checked against a separate reading of the store.
+4. The stake engine implements that trait over the actor handle. *As
+   landed:* in one commit with step 3, since neither builds alone.
 5. `shekyl-curve-tree`: `ServingReader`, `WriterRecovery` and their minting
    methods are deleted; no `Arc<LeafStore>` leaves the client.
-6. `Engine` close is awaited and stops the actor; the reopen retry and its
-   two constants are deleted.
-7. The wallet RPC awaits the close; tests, docs and the changelog.
+6. The persona body store gets its owning actor (§11.1).
+7. `Engine` close is awaited and stops every store-owning actor; the reopen
+   retry and its two constants are deleted.
+8. The wallet RPC awaits the close; tests, docs and the changelog.
 
 The GUI wallet's close (persist, then drop) moves to the awaited close in
 its own repository's PR.
@@ -1349,6 +1355,59 @@ Rick rejected it as a state machine beside an actor.
 
 Timeframes (`05-system-thinking.mdc`): now only. The store's format, the
 chain and V4 are untouched.
+
+### 11.1 The persona body store, the same defect — RULED 2026-11-02 (Rick)
+
+**The problem.** A staker's `.pstore` (`shekyl-p-store`) is a redb file
+too. Its `BodyStore` held the database behind an `Arc` shared with every
+`BodyStoreReader`, and the stake engine handed one to the serving host,
+whose provider read and **decrypted** bodies with it. So the file had two
+holders with unawaited stops, as the curve-tree store did, and the serving
+path held the store key: `WALLET_SIDE_STORE.md` `WSS-Q13` (RULED
+2026-09-19: "the store's owning actor decrypts, the serving path receives
+bodies, and the key never leaves the actor") was unmet. The stake actor's
+own field doc recorded why the decrypt had not moved onto it: a per-chunk
+ask there would stall bond signing behind bulk redb reads.
+
+**Rulings (Rick, 2026-11-02).**
+
+- **In this PR, fully.** Not only the awaited close: serving body reads
+  move off the shared reader onto messages.
+- **The copy is per chunk.** `serve.rs` records that whole-body copies make
+  `MAX_INFLIGHT` (64) × 3.33 MB = 213 MB resident, which does not fit the
+  rule-76 floor. So the owner hands out one storage chunk (≤ 64 KiB) per
+  reply, an owned copy: resident cost stays one chunk per connection, at
+  about 52 round trips per shard. This narrows Q2's whole-body copy to the
+  granularity the floor allows.
+
+**The design.**
+
+- **One owner, and not the stake actor.** A body-store actor owns the
+  `BodyStore` and its key outright, answers open, read-chunk and erase by
+  message, and drops the store in `on_stop`. One job per actor (rule 05):
+  the reads queue on it, not on bond signing.
+- **What crosses is plain data.** Opening a held shard returns its length
+  and chunk count and nothing that reaches the store; each chunk is an
+  owned plaintext copy. The bodies are public, so this is key locality, as
+  `WSS-Q13` says, not a confidentiality boundary.
+- **The serving path holds a weak handle.** It reaches the owner while the
+  wallet is open and never keeps it alive; a read after the owner stopped
+  is a store fault (the bare 503).
+- **The stake engine erases by message** to the same owner (`WSS-Q8`).
+- **Close awaits it.** The stake engine's shutdown stops the stake actor,
+  then the body-store actor, each awaited with `wait_for_shutdown_result`
+  (a supervision link would not do: §11's kameo note).
+
+**Tests that can fail** (rule 47): a held shard served through the actor
+returns the stored bytes chunk by chunk; after the owner stops, a serve
+read is refused and the `.pstore` path reopens at once; erase through the
+stake engine reaches the store.
+
+**Scope.** `shekyl-p-store` (the reader and its `Arc`-holding body cursor
+are deleted), `shekyl-p-serve` (the provider reads through a source trait),
+`shekyl-p-host` (the serving identity carries that source), and the stake
+engine (the owning actor). Timeframes: now only; the store's format is
+untouched.
 
 ---
 
