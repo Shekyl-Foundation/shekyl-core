@@ -345,6 +345,10 @@ impl Node {
         // one tip source. Publish the tip the watch holds now, then every
         // change; the task ends when the connector drops its sender.
         let mut handshake_tips = tips.clone();
+        // The ban timer is the table's, not the zone host's. An offline
+        // node never starts a zone, and a finite ban would otherwise stay
+        // in force after its deadline (OE-D9: a lookup does not end one).
+        shekyl_ffi::seam_ffi::bans::start(runtime.handle(), sockets.clone());
         runtime.spawn(async move {
             loop {
                 if let Some(tip) = handshake_tips.borrow_and_update().tip {

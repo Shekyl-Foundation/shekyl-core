@@ -18,7 +18,7 @@ use std::thread::Thread;
 use shekyl_capped_stream::Session;
 use shekyl_peer_policy::InboundCeiling;
 use shekyl_timing_engine::Tick;
-use shekyl_transport_layer::{CloseCause, OpenSocket, SocketId};
+use shekyl_transport_layer::{ConnectorId, DialEnd, DialFailure, OpenSocket, SocketId, StreamEnd};
 use tokio::sync::oneshot;
 
 use crate::endpoint::Endpoint;
@@ -40,7 +40,13 @@ pub struct Channel {
 /// A channel still being opened: [`Dial::connect_async`]'s future.
 /// Dropping it before it resolves cancels the connect, and the dialer that
 /// started the connect releases whatever it reserved.
-pub type ConnectFuture = Pin<Box<dyn Future<Output = Result<Channel, CloseCause>> + Send>>;
+pub type ConnectFuture = Pin<Box<dyn Future<Output = Result<Channel, DialEnd>> + Send>>;
+
+/// A connector's stamping of a stream end that shared code observed after
+/// the channel: what [`Dial::stamp_stream_end`] dispatches to. Each
+/// connector's table is its own (`shekyl_clearnet::stamp_stream_end`,
+/// `shekyl_tor::stamp_stream_end`); the seam names none of them.
+pub type StampStreamEnd = fn(ConnectorId, StreamEnd) -> DialFailure;
 
 /// One dial attempt, as the outbound dialer hands it to [`Dial::spawn_attempt`].
 /// It resolves when the attempt has posted its result, or at once when it
@@ -51,12 +57,19 @@ pub type AttemptTask = Pin<Box<dyn Future<Output = ()> + Send>>;
 pub trait Dial: Send + Sync {
     /// Admit and build the channel. `ceiling` and `now` are the hub's,
     /// copied before this call so the dial does not hold the table lock.
+    /// A failure is the end the connector stamped (`DIALER_OUTAGE_EVIDENCE.md`
+    /// §2.2), or this node's own before any I/O.
     fn connect(
         &self,
         endpoint: &Endpoint,
         ceiling: InboundCeiling,
         now: Tick,
-    ) -> Result<Channel, CloseCause>;
+    ) -> Result<Channel, DialEnd>;
+
+    /// What a stream end shared code observed after the channel is evidence
+    /// of, from `connector`'s own table. The hub and the seam's pump ask
+    /// this; no connector-independent code assigns a meaning.
+    fn stamp_stream_end(&self, connector: ConnectorId, end: StreamEnd) -> DialFailure;
 
     /// [`Self::connect`] without blocking the caller: the outbound dialer's
     /// attempt task awaits this, on whatever [`Self::spawn_attempt`] runs it

@@ -267,29 +267,60 @@ pub(crate) fn process_clock() -> Arc<MonotonicClock> {
     Arc::clone(CLOCK.get_or_init(|| Arc::new(MonotonicClock::new())))
 }
 
-/// The process's one timing engine. The zone host and the Tor supervisor
-/// arm deadlines on it. The service lives here so a handle alone cannot
-/// close it.
-pub(crate) fn process_engine() -> Handle<MonotonicClock> {
-    let mut slot = process_engine_slot().lock().expect("process engine");
-    if slot.is_none() {
-        let clock = MonotonicClock::clone(&process_clock());
-        *slot = Some(EngineService::start(clock));
-    }
-    slot.as_ref().expect("the engine was just started").handle()
+/// The process timing engine and how many times one has been started.
+///
+/// The service lives here so a handle alone cannot close it. `started`
+/// advances only when a new engine is created, and a ban timer reads it
+/// under this same lock, so the claim names the engine the task registers
+/// on. Closing the engine does not reuse the number: the next start is the
+/// next generation.
+struct ProcessTiming {
+    service: Option<EngineService<MonotonicClock>>,
+    started: u64,
 }
 
-/// Stop the process engine. The next [`process_engine`] starts another.
+fn process_engine_slot() -> &'static Mutex<ProcessTiming> {
+    static ENGINE: Mutex<ProcessTiming> = Mutex::new(ProcessTiming {
+        service: None,
+        started: 0,
+    });
+    &ENGINE
+}
+
+/// The process's one timing engine. The zone host and the Tor supervisor
+/// arm deadlines on it.
+pub(crate) fn process_engine() -> Handle<MonotonicClock> {
+    process_engine_generation().0
+}
+
+/// The running process engine and the generation a ban timer claims.
+///
+/// Both come from one hold of the engine lock. A timer started from this
+/// pair registers on the engine the generation names, including when a
+/// close and a new engine overlap the start.
+pub(crate) fn process_engine_generation() -> (Handle<MonotonicClock>, u64) {
+    let mut slot = process_engine_slot().lock().expect("process engine");
+    if slot.service.is_none() {
+        let clock = MonotonicClock::clone(&process_clock());
+        slot.service = Some(EngineService::start(clock));
+        slot.started = slot.started.checked_add(1).expect("ban timer generations");
+    }
+    let generation = slot.started;
+    let handle = slot
+        .service
+        .as_ref()
+        .expect("the engine was just started")
+        .handle();
+    (handle, generation)
+}
+
+/// Stop the process engine. The next [`process_engine`] starts another,
+/// and that start is the next ban-timer generation.
 pub(crate) fn close_process_engine() {
-    let engine = process_engine_slot().lock().expect("process engine").take();
-    if let Some(engine) = engine {
+    let mut slot = process_engine_slot().lock().expect("process engine");
+    if let Some(engine) = slot.service.take() {
         engine.close();
     }
-}
-
-fn process_engine_slot() -> &'static Mutex<Option<EngineService<MonotonicClock>>> {
-    static ENGINE: Mutex<Option<EngineService<MonotonicClock>>> = Mutex::new(None);
-    &ENGINE
 }
 
 fn ban_now() -> Tick {
@@ -413,7 +444,7 @@ pub extern "C" fn shekyl_seam_install_loopback() -> i32 {
     let Some(hub) = hub() else {
         return -1;
     };
-    hub.install_loopback(HARNESS_SEND_CAP);
+    hub.install_loopback(HARNESS_SEND_CAP, crate::zone_ffi::connector_tables);
     0
 }
 
@@ -452,7 +483,7 @@ pub unsafe extern "C" fn shekyl_seam_open(
     };
     let attached = match hub.connect(&endpoint) {
         Ok(attached) => attached,
-        Err(cause) => return refused(cause),
+        Err(end) => return refused(end.cause()),
     };
     let id = attached.id;
     hub.drive(id, attached.session);
@@ -620,29 +651,6 @@ pub extern "C" fn shekyl_seam_close(id: u64) {
         return;
     };
     hub.close(id);
-}
-
-/// Record `kind` when the row has no cause yet. An unknown kind records
-/// nothing. The row stays until [`shekyl_seam_reap`].
-#[no_mangle]
-pub extern "C" fn shekyl_seam_record_cause(id: u64, kind: u8, reply: u16) {
-    let Some(hub) = hub() else {
-        return;
-    };
-    let Some(id) = SocketId::from_ffi(id) else {
-        return;
-    };
-    let Some(kind) = CloseKind::from_code(kind) else {
-        return;
-    };
-    let cause = if kind == CloseKind::ProxyRefused {
-        // The C++ has no reply table: a reply recorded here is final and
-        // names nothing. The connectors build their own causes in Rust.
-        CloseCause::proxy_refused(reply, shekyl_transport_layer::Marks::NONE)
-    } else {
-        CloseCause::new(kind)
-    };
-    hub.finish(id, cause);
 }
 
 /// Live sockets for one connector and direction.
@@ -844,14 +852,12 @@ fn post_one(bound: &Bound, item: Post) {
                 );
             }
         }
-        Post::Closed {
-            id,
-            connector,
-            cause,
-        } => {
-            // The dialer hears every close, with the cause. A kept session
-            // leaves its count; SessionRefused is the lists' PayloadRefused.
-            crate::dialer_ffi::on_closed(id, cause);
+        Post::Closed { id, connector, end } => {
+            // The dialer hears every close, with the row's end. A kept
+            // session leaves its count; SessionRefused is the lists'
+            // PayloadRefused. The C side reads the end's D12 cause.
+            crate::dialer_ffi::on_closed(id, end);
+            let cause = end.cause();
             let observed = routing_c(connector);
             unsafe {
                 (bound.post)(

@@ -27,6 +27,8 @@
 
 #[path = "support/log_capture.rs"]
 mod log_capture;
+#[path = "support/tables.rs"]
+mod tables;
 
 use log_capture::log_text;
 use std::collections::VecDeque;
@@ -41,12 +43,13 @@ use shekyl_levin::{
     COMMAND_HANDSHAKE,
 };
 use shekyl_peer_policy::InboundCeiling;
-use shekyl_peerlist::{CloseCause, ConnectorId, ListName, NetworkAddress, RefusedSet, Tick};
+use shekyl_peerlist::{ConnectorId, ListName, NetworkAddress, RefusedSet, Tick};
 use shekyl_seam::{
     Channel, Dial, Endpoint, Hub, Loopback, Route, RoutePublish, SocketId, SyncPayload,
 };
 use shekyl_timing_engine::{Clock, ManualClock};
 use shekyl_transport_layer::Sockets;
+use shekyl_transport_layer::{DialEnd, DialFailure, StreamEnd};
 
 const CLEARNET: ConnectorId = ConnectorId::Clearnet;
 const NETWORK: [u8; 16] = [7; 16];
@@ -133,7 +136,7 @@ struct AnswerDial {
 impl AnswerDial {
     fn answering(answers: Vec<Vec<u8>>) -> Self {
         Self {
-            inner: Loopback::new(Sockets::new(), SEND_CAP),
+            inner: Loopback::new(Sockets::new(), SEND_CAP, tables::tables),
             answers: Mutex::new(answers.into()),
         }
     }
@@ -145,7 +148,7 @@ impl Dial for AnswerDial {
         endpoint: &Endpoint,
         ceiling: InboundCeiling,
         now: Tick,
-    ) -> Result<Channel, CloseCause> {
+    ) -> Result<Channel, DialEnd> {
         let channel = self.inner.connect(endpoint, ceiling, now)?;
         if let Some(answer) = self.answers.lock().expect("answers").pop_front() {
             assert!(
@@ -154,6 +157,10 @@ impl Dial for AnswerDial {
             );
         }
         Ok(channel)
+    }
+
+    fn stamp_stream_end(&self, connector: ConnectorId, end: StreamEnd) -> DialFailure {
+        self.inner.stamp_stream_end(connector, end)
     }
 
     fn inject(&self, id: SocketId, frame: Vec<u8>) -> bool {
@@ -312,9 +319,9 @@ fn a_declared_closed_network_draws_only_its_list_once_its_cooldowns_end() {
     // Past the cooldowns, every wake draws from the declared list: the
     // address named outside it is seated and drawable, and never drawn.
     // A wake's dial fails at once (no connector), so what it drew is the
-    // one address cooling again. The connector holds nothing and opens
-    // nothing, so past the quiet stretch a failure does not climb the
-    // ladder (Rick, 2026-10-26): the count cannot tell the draws apart.
+    // one address cooling again. The failure is this node's own, so the
+    // judge excuses it and nothing climbs the ladder: the count cannot
+    // tell the draws apart.
     let cooling = |address: &NetworkAddress| dialer.shared().lists.is_cooling(address);
     for _ in 1..=4u32 {
         past_cooldowns(&clock);
