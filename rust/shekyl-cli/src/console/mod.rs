@@ -3,34 +3,23 @@
 // All rights reserved.
 // BSD-3-Clause
 
-//! Console rendering for natively-served methods
-//! (`docs/completed/DAEMON_RPC_KV_CUTOVER.md` §3.4, RK-D5).
+//! Console rendering for the daemon's words (`INPUT_GRAMMAR.md` §13, R8).
 //!
-//! `shekyld`'s console has two arms that used to share one C++ struct: the
-//! interactive console inside the daemon (which called
-//! `core_rpc_server::on_*` directly) and `shekyld <command>` from a second
-//! process (which framed the struct as JSON through the loopback client).
-//! When a method's struct moves to Rust, both arms render here through one
-//! export, [`shekyl_daemon_console_run`]: given a live core it calls the
-//! native method directly; given an address it posts through the same
-//! transport `shekyld <command>` already uses and renders the typed reply.
-//! The C++ executor entry becomes a forward and dies with RK-C.
+//! The interactive C++ console and `shekyld <command>` both rendered here.
+//! R8 keeps the remote arm: `shekyl-cli` posts through
+//! [`shekyl_rpc_transport::SyncDaemon`] and renders the typed reply. The
+//! in-process arm is gone with the console.
 
-use std::os::raw::{c_char, c_void};
 use std::sync::Arc;
-use std::time::Duration;
 
 use shekyl_rpc_types::{GetHeightResponse, RestErrorEnvelope};
 use shekyl_units::AtomicUnits;
-
-use crate::core::CoreRpc;
 
 mod alt_chain;
 mod blockchain;
 mod identity;
 mod info;
 mod node;
-mod pop_blocks;
 mod status;
 #[cfg(test)]
 mod tests;
@@ -50,27 +39,35 @@ pub const SHEKYL_DAEMON_CONSOLE_ERR_REQUEST: i32 = -3;
 /// Both a live core and an address were given: the contract is exactly one.
 pub const SHEKYL_DAEMON_CONSOLE_ERR_AMBIGUOUS_SOURCE: i32 = -4;
 
-/// Where a console command gets its facts from.
-enum Source {
-    /// Inside the daemon: the live core.
-    Live(Arc<CoreRpc>),
-    /// A second process: the daemon's RPC address.
-    Remote {
-        address: String,
-        timeout: Duration,
-        /// This process's network, for the identity handshake.
-        nettype: u8,
-        /// The handshake verdict, computed on the **first** request to this
-        /// daemon and reused for the rest of the command. A passed handshake
-        /// keeps the network the daemon reported (RK-Q6).
-        ///
-        /// Placed here rather than before dispatch so an unrecognised
-        /// command still refuses as unknown without opening a socket: a typo
-        /// must not produce a connection error. It is also the honest
-        /// meaning of the check — "before the first request to this daemon"
-        /// — rather than "before the console does anything".
-        checked: std::sync::OnceLock<Result<shekyl_rpc_types::DaemonNetwork, String>>,
-    },
+/// The daemon a command renders from.
+///
+/// The handshake verdict is computed on the first request and reused for
+/// the rest of the command (RK-Q6). It sits here rather than before
+/// dispatch so an unrecognised command refuses as unknown without opening
+/// a socket.
+pub(crate) struct Source {
+    rpc: Arc<shekyl_rpc_transport::SyncDaemon>,
+    /// This process's network, for the identity handshake.
+    nettype: u8,
+    checked: std::sync::OnceLock<Result<shekyl_rpc_types::DaemonNetwork, String>>,
+}
+
+impl Source {
+    pub(crate) fn new(rpc: Arc<shekyl_rpc_transport::SyncDaemon>, nettype: u8) -> Self {
+        Self {
+            rpc,
+            nettype,
+            checked: std::sync::OnceLock::new(),
+        }
+    }
+
+    pub(crate) fn rpc(&self) -> &shekyl_rpc_transport::SyncDaemon {
+        &self.rpc
+    }
+
+    pub(crate) fn nettype(&self) -> u8 {
+        self.nettype
+    }
 }
 
 /// Decode a REST reply body: the success type, else the daemon's error
@@ -203,10 +200,7 @@ fn print_block(
     // In-process the console is the operator's own terminal, so the
     // restricted-listener rule does not apply: the C++ passed
     // `fill_pow_hash` straight through here too.
-    let reply = native_json_rpc(src, "get_block", &request, |_core| {
-        let chain = open_chain()?;
-        crate::methods::get_block(chain.as_chain_facts(), &request, true)
-    })?;
+    let reply: shekyl_rpc_types::GetBlockResponse = native_json_rpc(src, "get_block", &request)?;
     require_ok(&reply.status)?;
 
     // The C++ order: the blob (only with `+hex`) and a blank line, then the
@@ -253,40 +247,21 @@ pub(super) fn json_rpc_result<T: serde::de::DeserializeOwned>(
     serde_json::from_value(result.clone()).map_err(|e| format!("malformed {method} reply: {e}"))
 }
 
-/// Call a natively-served JSON-RPC method on whichever arm this console is on.
-///
-/// Live: the method function directly, so a method leaving this crate is a
-/// compile error. Remote: one `/json_rpc` POST, unwrapped as JSON-RPC 2.0.
-fn native_json_rpc<Req, Res>(
-    src: &Source,
-    method: &str,
-    request: &Req,
-    live: impl FnOnce(&Arc<CoreRpc>) -> Result<Res, crate::methods::RpcFault>,
-) -> Result<Res, String>
+/// One `/json_rpc` POST, unwrapped as JSON-RPC 2.0.
+fn native_json_rpc<Req, Res>(src: &Source, method: &str, request: &Req) -> Result<Res, String>
 where
     Req: serde::Serialize,
     Res: serde::de::DeserializeOwned,
 {
-    match src {
-        Source::Live(core) => live(core).map_err(|e| format!("{e:?}")),
-        Source::Remote { .. } => {
-            let body = serde_json::to_vec(&serde_json::json!({
-                "jsonrpc": "2.0",
-                "id": "0",
-                "method": method,
-                "params": request,
-            }))
-            .map_err(|e| format!("cannot encode the request: {e}"))?;
-            let raw = src.post_remote("/json_rpc", body)?;
-            json_rpc_result::<Res>(&raw, method)
-        }
-    }
-}
-
-fn open_chain() -> Result<crate::handles::ChainReadHandle, crate::methods::RpcFault> {
-    crate::handles::live_chain().ok_or(crate::methods::RpcFault::Facts(
-        crate::chain_facts::FactsFault::NotReady,
-    ))
+    let body = serde_json::to_vec(&serde_json::json!({
+        "jsonrpc": "2.0",
+        "id": "0",
+        "method": method,
+        "params": request,
+    }))
+    .map_err(|e| format!("cannot encode the request: {e}"))?;
+    let raw = src.post_remote("/json_rpc", body)?;
+    json_rpc_result::<Res>(&raw, method)
 }
 
 fn require_ok(status: &shekyl_rpc_types::RpcStatus) -> Result<(), String> {
@@ -308,16 +283,8 @@ fn wide_difficulty_value(wide: &str) -> Option<u128> {
 }
 
 fn print_height(src: &Source) -> Result<String, String> {
-    let reply = match src {
-        Source::Live(_) => {
-            let chain = open_chain().map_err(|e| format!("{e:?}"))?;
-            crate::methods::get_height(chain.as_chain_facts()).map_err(|e| format!("{e:?}"))?
-        }
-        Source::Remote { .. } => {
-            let body = src.post_remote("/get_height", b"{}".to_vec())?;
-            decode_reply::<GetHeightResponse>(&body, "get_height")?
-        }
-    };
+    let body = src.post_remote("/get_height", b"{}".to_vec())?;
+    let reply = decode_reply::<GetHeightResponse>(&body, "get_height")?;
     if !reply.status.is_ok() {
         return Err(reply.status.0);
     }
@@ -333,11 +300,10 @@ fn print_transaction(src: &Source, args: &[String]) -> Result<String, String> {
         return Err("Invalid syntax: At least one parameter expected. For more                     details, use the help command."
             .to_owned());
     };
-    let (mut meta, mut hex_out) = (false, false);
+    let mut hex_out = false;
     for flag in &args[1..] {
         match flag.as_str() {
-            "+meta" => meta = true,
-            "+hex" => hex_out = true,
+            "--body" => hex_out = true,
             other => {
                 return Err(format!(
                     "Invalid syntax: Unexpected parameter: {other}. For more                      details, use the help command."
@@ -430,6 +396,9 @@ fn print_transaction(src: &Source, args: &[String]) -> Result<String, String> {
         }
     }
 
+    // Size, weight and the block time are part of the rendering. `+meta`
+    // was the console's flag for them; §13's `tx show` has no such flag.
+    let meta = true;
     if meta {
         if let shekyl_rpc_types::TxLocation::Mined {
             block_timestamp, ..
@@ -461,24 +430,12 @@ fn is_key_image_spent(src: &Source, args: &[String]) -> Result<String, String> {
     let request = shekyl_rpc_types::IsKeyImageSpentRequest {
         key_images: vec![ki.clone()],
     };
-    let reply = match src {
-        // The operator's own node, over the store and the pool.
-        Source::Live(_) => {
-            let chain = open_chain().map_err(|fault| format!("{fault:?}"))?;
-            crate::read_methods::is_key_image_spent(chain.as_read_facts(), &request, true)
-                .map_err(|fault| format!("{fault:?}"))?
-        }
-        Source::Remote { .. } => {
-            let body = serde_json::to_vec(&request).map_err(|e| e.to_string())?;
-            let raw = src.post_remote("/is_key_image_spent", body)?;
-            // Through `decode_reply`, as `print_height` does: a native handler
-            // reports failure as a `RestErrorEnvelope`, and a success-only
-            // decode turns the server's stated reason into "malformed reply".
-            // Refusing unknown fields made that worse, not better — the
-            // envelope's `error` is exactly the field this type does not model.
-            decode_reply::<shekyl_rpc_types::IsKeyImageSpentResponse>(&raw, "is_key_image_spent")?
-        }
-    };
+    let body = serde_json::to_vec(&request).map_err(|e| e.to_string())?;
+    let raw = src.post_remote("/is_key_image_spent", body)?;
+    // A handler's failure is a `RestErrorEnvelope`. Decoding success-only
+    // would report "malformed" over the reason the server gave.
+    let reply =
+        decode_reply::<shekyl_rpc_types::IsKeyImageSpentResponse>(&raw, "is_key_image_spent")?;
     if !reply.status.is_ok() {
         return Err(reply.status.0);
     }
@@ -516,170 +473,133 @@ fn fetch_transactions(
     src: &Source,
     request: &shekyl_rpc_types::GetTransactionsRequest,
 ) -> Result<shekyl_rpc_types::GetTransactionsResponse, String> {
-    match src {
-        Source::Live(_) => {
-            let chain = open_chain().map_err(|fault| format!("{fault:?}"))?;
-            crate::read_methods::get_transactions(chain.as_read_facts(), request, true)
-                .map_err(|fault| format!("{fault:?}"))
-        }
-        Source::Remote { .. } => {
-            let body = serde_json::to_vec(request).map_err(|e| e.to_string())?;
-            let raw = src.post_remote("/get_transactions", body)?;
-            // See the `is_key_image_spent` arm: a native handler's failure is a
-            // `RestErrorEnvelope`, so decoding success-only reports "malformed"
-            // over the reason the server actually gave.
-            decode_reply::<shekyl_rpc_types::GetTransactionsResponse>(&raw, "get_transactions")
-        }
-    }
+    let body = serde_json::to_vec(request).map_err(|e| e.to_string())?;
+    let raw = src.post_remote("/get_transactions", body)?;
+    decode_reply::<shekyl_rpc_types::GetTransactionsResponse>(&raw, "get_transactions")
 }
 
-/// Run one console command and hand back its rendered output.
-///
-/// * `argv` / `argc` — the command and its arguments; `argv[0]` selects.
-/// * `rpc_server_ptr` — the live `core_rpc_server` when running inside the
-///   daemon, else null.
-/// * `address` — `host:port` of the daemon's RPC when running as
-///   `shekyld <command>`, else null. Exactly one of the two is set.
-/// * `timeout_secs` — per-request bound for the remote arm.
-/// * `out_ptr` / `out_len` — on `OK` the text to print; on `ERR_REQUEST` the
-///   reason. Release with `shekyl_daemon_ctl_free` (null/0 is a no-op).
-///
-/// # Safety
-///
-/// `argv` must point to `argc` valid NUL-terminated C strings; `address`
-/// must be null or a valid C string; `rpc_server_ptr` must be null or a live
-/// `core_rpc_server`; `out_ptr` / `out_len` must be valid for writes.
-#[no_mangle]
-pub unsafe extern "C" fn shekyl_daemon_console_run(
-    argv: *const *const c_char,
-    argc: usize,
-    rpc_server_ptr: *mut c_void,
-    address: *const c_char,
-    timeout_secs: u64,
-    nettype: u8,
-    out_ptr: *mut *mut u8,
-    out_len: *mut usize,
-) -> i32 {
-    if out_ptr.is_null() || out_len.is_null() {
-        return SHEKYL_DAEMON_CONSOLE_ERR_NULL_PTR;
-    }
-    out_ptr.write(std::ptr::null_mut());
-    out_len.write(0);
-    if argv.is_null() || argc == 0 {
-        return SHEKYL_DAEMON_CONSOLE_ERR_NULL_PTR;
-    }
-    let mut args = Vec::with_capacity(argc);
-    for i in 0..argc {
-        let p = *argv.add(i);
-        let Some(s) = shekyl_daemon_ctl::c_string(p) else {
-            return SHEKYL_DAEMON_CONSOLE_ERR_NULL_PTR;
-        };
-        args.push(s);
-    }
-    // Exactly one source. Silently preferring one when both are given would
-    // make the same argv render from different daemons depending on which
-    // caller forgot to null the other — refuse instead.
-    if !rpc_server_ptr.is_null() && !address.is_null() {
-        return SHEKYL_DAEMON_CONSOLE_ERR_AMBIGUOUS_SOURCE;
-    }
-    let source = if !rpc_server_ptr.is_null() {
-        match CoreRpc::from_raw(rpc_server_ptr) {
-            Some(core) => Source::Live(Arc::new(core)),
-            None => return SHEKYL_DAEMON_CONSOLE_ERR_NULL_PTR,
-        }
-    } else {
-        match shekyl_daemon_ctl::c_string(address) {
-            Some(address) => Source::Remote {
-                address,
-                timeout: Duration::from_secs(timeout_secs),
-                nettype,
-                checked: std::sync::OnceLock::new(),
-            },
-            None => return SHEKYL_DAEMON_CONSOLE_ERR_NULL_PTR,
-        }
-    };
+/// Why a command did not render.
+pub(crate) enum ConsoleFault {
+    /// `args` names no command.
+    Unknown,
+    /// The daemon refused, or the reply did not decode. The text is what
+    /// the operator reads.
+    Request(String),
+}
 
-    // The identity handshake, before anything is rendered (VC-3). Remote arm
-    // only: the live arm renders from this process, so every axis would
-    // compare a value to itself and the check could not fail (VC-D6).
-    //
-    // §3.6.2's exemption for `version` is in the command itself
-    // (`node::version`), which asks without the handshake: it exists to show
-    // the operator what they reached.
-    let result = match args[0].as_str() {
-        "print_height" => print_height(&source),
-        "print_block_by_hash" | "print_block_by_height" => {
-            let Some(argument) = args.get(1) else {
-                return SHEKYL_DAEMON_CONSOLE_ERR_UNKNOWN;
-            };
-            let by_hash = args[0] == "print_block_by_hash";
-            let include_hex = args.get(2).is_some_and(|f| f == "+hex");
-            print_block(&source, by_hash, argument, include_hex)
-        }
-        "print_transaction" => print_transaction(&source, &args[1..]),
-        "is_key_image_spent" => is_key_image_spent(&source, &args[1..]),
-        // RK-5a. `now` is read once here rather than inside each renderer, so
-        // a command's whole output describes one instant.
-        "print_peer_list" => {
-            let (white, gray) = peer_list_selection(args.get(1).map(String::as_str));
-            let limit = args.get(2).and_then(|a| a.parse().ok()).unwrap_or(0);
-            print_peer_list(&source, white, gray, limit)
-        }
-        "print_peer_list_stats" => print_peer_list_stats(&source),
-        "print_connections" => print_connections(&source),
-        "print_net_stats" => print_net_stats(&source, unix_now()),
-        "sync_info" => sync_info(&source),
-        // RK-5b. The C++ parser has already validated and normalized these
-        // arguments (`command_parser_executor.cpp`), and the executor
-        // forwards them as strings — so a value that does not parse here is
-        // the bridge disagreeing with itself, not an operator typo, and it
-        // refuses rather than defaulting.
-        "print_blockchain_info" => {
-            let (Some(start), Some(end)) = (
-                args.get(1).and_then(|a| a.parse::<i64>().ok()),
-                args.get(2).and_then(|a| a.parse::<u64>().ok()),
-            ) else {
-                return SHEKYL_DAEMON_CONSOLE_ERR_UNKNOWN;
-            };
-            print_blockchain_info(&source, start, end)
-        }
-        "print_blockchain_dynamic_stats" => {
-            let Some(nblocks) = args.get(1).and_then(|a| a.parse::<u64>().ok()) else {
-                return SHEKYL_DAEMON_CONSOLE_ERR_UNKNOWN;
-            };
-            print_blockchain_dynamic_stats(&source, nblocks)
-        }
-        // The C++ parser resolves the single optional argument into three:
-        // a tip hash, a `>above` filter, or a `-last_blocks` filter.
-        "alt_chain_info" => {
-            let (Some(tip), Some(above), Some(last_blocks)) = (
-                args.get(1),
-                args.get(2).and_then(|a| a.parse::<u64>().ok()),
-                args.get(3).and_then(|a| a.parse::<u64>().ok()),
-            ) else {
-                return SHEKYL_DAEMON_CONSOLE_ERR_UNKNOWN;
-            };
-            alt_chain_info(&source, tip, above, last_blocks, unix_now())
-        }
-        "status" => show_status(&source, unix_now()),
-        // RK-5c. The three commands the C++ console still rendered from
-        // `get_info`.
-        "diff" => node::show_difficulty(&source),
-        "version" => node::version(&source),
-        "print_pool_stats" => node::print_transaction_pool_stats(&source),
-        "pop_blocks" => pop_blocks::pop_blocks(&source, args.get(1)),
-        _ => return SHEKYL_DAEMON_CONSOLE_ERR_UNKNOWN,
-    };
-    match result {
-        Ok(text) => {
-            shekyl_daemon_ctl::emit(text.into_bytes(), out_ptr, out_len);
-            SHEKYL_DAEMON_CONSOLE_OK
-        }
-        Err(reason) => {
-            shekyl_daemon_ctl::emit(reason.into_bytes(), out_ptr, out_len);
-            SHEKYL_DAEMON_CONSOLE_ERR_REQUEST
-        }
+/// Run one command against `source`.
+///
+/// `version` does not handshake first: it exists to show the operator what
+/// they reached. Every other command handshakes on its first request.
+pub(crate) fn render(source: &Source, args: &[String]) -> Result<String, ConsoleFault> {
+    if args.is_empty() {
+        return Err(ConsoleFault::Unknown);
     }
+    // `now` is read once so a command's whole output describes one instant.
+    let result = match args {
+        [a, b] if a == "chain" && b == "height" => print_height(source),
+        [a, b, argument] if a == "block" && b == "show" => {
+            let by_hash = argument.len() == 64;
+            print_block(source, by_hash, argument, false)
+        }
+        [a, b, rest @ ..] if a == "tx" && b == "show" => print_transaction(source, rest),
+        [a, b, rest @ ..] if a == "chain" && b == "spent" => is_key_image_spent(source, rest),
+        [a, b, rest @ ..] if a == "peer" && b == "list" => {
+            let (white, gray, limit) = match peer_list_flags(rest) {
+                Ok(flags) => flags,
+                Err(fault) => return Err(fault),
+            };
+            print_peer_list(source, white, gray, limit)
+        }
+        [a, b] if a == "peer" && b == "stats" => print_peer_list_stats(source),
+        [a, b] if a == "peer" && b == "connections" => print_connections(source),
+        [a, b] if a == "p2p" && b == "stats" => print_net_stats(source, unix_now()),
+        [a, b] if a == "sync" && b == "status" => sync_info(source),
+        [a, b, c, rest @ ..] if a == "block" && b == "header" && c == "list" => {
+            let (start, end) = match from_to(rest) {
+                Ok(window) => window,
+                Err(fault) => return Err(fault),
+            };
+            print_blockchain_info(source, start, end)
+        }
+        [a, b, rest @ ..] if a == "chain" && b == "stats" => {
+            let nblocks = match flag_u64(rest, "--last") {
+                Ok(n) => n,
+                Err(fault) => return Err(fault),
+            };
+            print_blockchain_dynamic_stats(source, nblocks)
+        }
+        // No argument (IG-Q44). The renderer still accepts the old parser's
+        // tip / above / last filters; the word does not.
+        [a, b] if a == "chain" && b == "alt" => alt_chain_info(source, "", 0, 0, unix_now()),
+        [a, b] if a == "daemon" && b == "status" => show_status(source, unix_now()),
+        [a, b] if a == "chain" && b == "difficulty" => node::show_difficulty(source),
+        [a] if a == "version" => node::version(source),
+        [a, b] if a == "txpool" && b == "stats" => node::print_transaction_pool_stats(source),
+        _ => return Err(ConsoleFault::Unknown),
+    };
+    result.map_err(ConsoleFault::Request)
+}
+
+/// `peer list [--white] [--gray] [--max N]`. Neither switch means both lists.
+fn peer_list_flags(args: &[String]) -> Result<(bool, bool, usize), ConsoleFault> {
+    let mut white = false;
+    let mut gray = false;
+    let mut limit = 0usize;
+    let mut i = 0;
+    while i < args.len() {
+        match args[i].as_str() {
+            "--white" => white = true,
+            "--gray" => gray = true,
+            "--max" => {
+                let Some(n) = args.get(i + 1).and_then(|n| n.parse().ok()) else {
+                    return Err(ConsoleFault::Request(
+                        "peer list --max takes an integer".to_owned(),
+                    ));
+                };
+                limit = n;
+                i += 1;
+            }
+            other => {
+                return Err(ConsoleFault::Request(format!(
+                    "peer list: unexpected {other}"
+                )))
+            }
+        }
+        i += 1;
+    }
+    if !white && !gray {
+        white = true;
+        gray = true;
+    }
+    Ok((white, gray, limit))
+}
+
+/// `--from <integer> --to <integer>`, in either order.
+fn from_to(args: &[String]) -> Result<(i64, u64), ConsoleFault> {
+    let from = flag_i64(args, "--from")?;
+    let to = flag_u64(args, "--to")?;
+    Ok((from, to))
+}
+
+fn flag_u64(args: &[String], name: &str) -> Result<u64, ConsoleFault> {
+    flag_text(args, name)?
+        .parse()
+        .map_err(|_| ConsoleFault::Request(format!("{name} takes an integer")))
+}
+
+fn flag_i64(args: &[String], name: &str) -> Result<i64, ConsoleFault> {
+    flag_text(args, name)?
+        .parse()
+        .map_err(|_| ConsoleFault::Request(format!("{name} takes an integer")))
+}
+
+fn flag_text<'a>(args: &'a [String], name: &str) -> Result<&'a str, ConsoleFault> {
+    args.iter()
+        .position(|arg| arg == name)
+        .and_then(|i| args.get(i + 1))
+        .map(String::as_str)
+        .ok_or_else(|| ConsoleFault::Request(format!("{name} is required")))
 }
 
 /// Unix seconds, read once per console command so a whole rendering
@@ -812,20 +732,12 @@ fn fetch_peer_list(
         public_only,
         include_blocked: true,
     };
-    let reply = match src {
-        Source::Live(core) => {
-            let facts = crate::chain_facts::FfiP2pFacts::new(core.clone());
-            crate::methods::get_peer_list(&request, &facts).map_err(|e| format!("{e:?}"))?
-        }
-        Source::Remote { .. } => {
-            let body = serde_json::to_vec(&request).map_err(|e| e.to_string())?;
-            let raw = src.post_remote("/get_peer_list", body)?;
-            decode_reply::<shekyl_rpc_types::P2pReply<shekyl_rpc_types::GetPeerListResponse>>(
-                &raw,
-                "get_peer_list",
-            )?
-        }
-    };
+    let body = serde_json::to_vec(&request).map_err(|e| e.to_string())?;
+    let raw = src.post_remote("/get_peer_list", body)?;
+    let reply = decode_reply::<shekyl_rpc_types::P2pReply<shekyl_rpc_types::GetPeerListResponse>>(
+        &raw,
+        "get_peer_list",
+    )?;
     let shekyl_rpc_types::P2pReply::Running(reply) = reply else {
         return Ok(None);
     };
@@ -947,13 +859,8 @@ fn render_peer_list_stats(
 /// `print_connections`.
 #[deny(clippy::arithmetic_side_effects)]
 fn print_connections(src: &Source) -> Result<String, String> {
-    let reply = native_json_rpc(src, "get_connections", &serde_json::json!({}), |core| {
-        let chain = open_chain()?;
-        crate::methods::get_connections(
-            &crate::chain_facts::FfiP2pFacts::new(core.clone()),
-            chain.as_sync_view(),
-        )
-    })?;
+    let reply: shekyl_rpc_types::P2pReply<shekyl_rpc_types::GetConnectionsResponse> =
+        native_json_rpc(src, "get_connections", &serde_json::json!({}))?;
     let shekyl_rpc_types::P2pReply::Running(reply) = reply else {
         return Ok(OFFLINE_LINE.to_owned());
     };
@@ -1030,17 +937,11 @@ fn rate_limits(src: &Source) -> Result<(Option<u64>, Option<u64>), String> {
     const DOWN: &str = "p2p-download-max";
     const UP: &str = "p2p-upload-max";
     let names = vec![DOWN.to_owned(), UP.to_owned()];
-    let request = crate::options::OptionShowRequest {
+    let request = shekyl_rpc_types::options::OptionShowRequest {
         names: Some(names.clone()),
     };
-    let reply: crate::options::OptionsResponse =
-        native_json_rpc(src, "option_show", &request, |_core| {
-            crate::options::option_show(
-                crate::ffi_exports::options().as_ref(),
-                Some(&names),
-                crate::info::Disclosure::FULL,
-            )
-        })?;
+    let reply: shekyl_rpc_types::options::OptionsResponse =
+        native_json_rpc(src, "option_show", &request)?;
     let bound = |name: &str| -> Result<Option<u64>, String> {
         let row = reply
             .options
@@ -1069,16 +970,8 @@ fn rate_limits(src: &Source) -> Result<(Option<u64>, Option<u64>), String> {
 /// `print_net_stats`.
 #[deny(clippy::arithmetic_side_effects)]
 fn print_net_stats(src: &Source, now: u64) -> Result<String, String> {
-    let stats = match src {
-        Source::Live(core) => {
-            let facts = crate::chain_facts::FfiP2pFacts::new(core.clone());
-            crate::methods::get_net_stats(&facts).map_err(|e| format!("{e:?}"))?
-        }
-        Source::Remote { .. } => {
-            let raw = src.post_remote("/get_net_stats", b"{}".to_vec())?;
-            decode_reply::<shekyl_rpc_types::GetNetStatsResponse>(&raw, "get_net_stats")?
-        }
-    };
+    let raw = src.post_remote("/get_net_stats", b"{}".to_vec())?;
+    let stats = decode_reply::<shekyl_rpc_types::GetNetStatsResponse>(&raw, "get_net_stats")?;
     if !stats.status.is_ok() {
         return Err(stats.status.0);
     }
@@ -1127,11 +1020,8 @@ fn print_net_stats(src: &Source, now: u64) -> Result<String, String> {
 /// `sync_info`: chain sync's view (3.66).
 #[deny(clippy::arithmetic_side_effects)]
 fn sync_info(src: &Source) -> Result<String, String> {
-    let reply = native_json_rpc(src, "sync_info", &serde_json::json!({}), |core| {
-        let chain = open_chain()?;
-        let p2p = crate::chain_facts::FfiP2pFacts::new(core.clone());
-        crate::methods::sync_info(chain.as_chain_facts(), chain.as_sync_view(), &p2p)
-    })?;
+    let reply: shekyl_rpc_types::P2pReply<shekyl_rpc_types::SyncInfoResponse> =
+        native_json_rpc(src, "sync_info", &serde_json::json!({}))?;
     let shekyl_rpc_types::P2pReply::Running(reply) = reply else {
         return Ok(OFFLINE_LINE.to_owned());
     };

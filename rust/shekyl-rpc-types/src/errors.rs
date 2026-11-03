@@ -64,9 +64,53 @@ impl ErrorClass {
     }
 
     /// The class a wire code names, if it names one.
+    ///
+    /// This reads the RW-Q3 codes only. The C++ codes still on the wire
+    /// until `CORE_RPC_VERSION` 4.0 are [`Self::of_legacy_code`].
     #[must_use]
     pub fn of_code(code: i64) -> Option<Self> {
         Self::ALL.into_iter().find(|class| class.code() == code)
+    }
+
+    /// The class a code still spelled `CORE_RPC_ERROR_CODE_*` names.
+    ///
+    /// One place, until the rename at 4.0 deletes it (RW-Q8). A code this
+    /// does not name is not a legacy code this build sends.
+    #[must_use]
+    pub fn of_legacy_code(code: i64) -> Option<Self> {
+        use crate::archival::{
+            CORE_RPC_ERROR_CODE_ARCHIVAL_SHARD_OPEN, CORE_RPC_ERROR_CODE_ARCHIVAL_SKELETON_ABSENT,
+            CORE_RPC_ERROR_CODE_CONFIG_REFUSED,
+        };
+        use crate::chain::{
+            CORE_RPC_ERROR_CODE_ARCHIVAL_UNAVAILABLE, CORE_RPC_ERROR_CODE_CORE_BUSY,
+            CORE_RPC_ERROR_CODE_INTERNAL_ERROR, CORE_RPC_ERROR_CODE_RESTRICTED,
+            CORE_RPC_ERROR_CODE_TOO_BIG_HEIGHT, CORE_RPC_ERROR_CODE_WRONG_PARAM,
+        };
+        use crate::chain_reads::{
+            CORE_RPC_ERROR_CODE_WRONG_BLOCKBLOB, CORE_RPC_ERROR_CODE_WRONG_BLOCKBLOB_SIZE,
+        };
+        match code {
+            CORE_RPC_ERROR_CODE_WRONG_PARAM
+            | CORE_RPC_ERROR_CODE_TOO_BIG_HEIGHT
+            | CORE_RPC_ERROR_CODE_WRONG_BLOCKBLOB
+            | CORE_RPC_ERROR_CODE_WRONG_BLOCKBLOB_SIZE => Some(Self::BadParams),
+            CORE_RPC_ERROR_CODE_RESTRICTED => Some(Self::OutsideTheGrant),
+            CORE_RPC_ERROR_CODE_CORE_BUSY => Some(Self::NotReady),
+            CORE_RPC_ERROR_CODE_INTERNAL_ERROR => Some(Self::Internal),
+            CORE_RPC_ERROR_CODE_ARCHIVAL_UNAVAILABLE
+            | CORE_RPC_ERROR_CODE_ARCHIVAL_SHARD_OPEN
+            | CORE_RPC_ERROR_CODE_ARCHIVAL_SKELETON_ABSENT
+            | CORE_RPC_ERROR_CODE_CONFIG_REFUSED => Some(Self::RefusedByMethod),
+            _ => None,
+        }
+    }
+
+    /// The class of a code on the wire today: an RW-Q3 class, or a legacy
+    /// code still served until the rename.
+    #[must_use]
+    pub fn of_wire_code(code: i64) -> Option<Self> {
+        Self::of_code(code).or_else(|| Self::of_legacy_code(code))
     }
 }
 
@@ -116,6 +160,47 @@ impl RpcError {
     pub const fn new(class: ErrorClass, diagnostic: Diagnostic) -> Self {
         Self { class, diagnostic }
     }
+
+    /// The line a person reads: the class and the diagnostic's code.
+    /// The English rendering follows, and is never what a caller matches.
+    #[must_use]
+    pub fn report(&self) -> String {
+        format!(
+            "{:?} {}: {}",
+            self.class, self.diagnostic.code, self.diagnostic.message
+        )
+    }
+}
+
+/// Read a JSON-RPC `error` object.
+///
+/// The class comes from the numeric code ([`ErrorClass::of_wire_code`]).
+/// `data`, when it is a [`Diagnostic`], is the diagnostic. A legacy object
+/// with no `data` still has a class; its diagnostic code is `legacy.<n>`
+/// and the object's `message` is carried as text, not matched.
+#[must_use]
+pub fn read_error_object(error: &serde_json::Value) -> Option<RpcError> {
+    let code = error.get("code")?.as_i64()?;
+    let class = ErrorClass::of_wire_code(code)?;
+    let diagnostic = error
+        .get("data")
+        .cloned()
+        .and_then(|data| serde_json::from_value::<Diagnostic>(data).ok())
+        .unwrap_or_else(|| {
+            let message = error
+                .get("message")
+                .and_then(serde_json::Value::as_str)
+                .unwrap_or("the daemon refused");
+            Diagnostic::new(format!("legacy.{code}"), message)
+        });
+    Some(RpcError { class, diagnostic })
+}
+
+/// The refusal in a JSON body, when the body is a JSON-RPC error object.
+#[must_use]
+pub fn read_refusal(body: &[u8]) -> Option<RpcError> {
+    let value: serde_json::Value = serde_json::from_slice(body).ok()?;
+    read_error_object(value.get("error")?)
 }
 
 #[cfg(test)]
@@ -134,6 +219,16 @@ mod tests {
             None,
             "the C++ codes are not classes"
         );
+        assert_eq!(
+            ErrorClass::of_wire_code(-26),
+            Some(ErrorClass::RefusedByMethod)
+        );
+        assert_eq!(ErrorClass::of_wire_code(-1), Some(ErrorClass::BadParams));
+        assert_eq!(
+            ErrorClass::of_wire_code(-19),
+            Some(ErrorClass::OutsideTheGrant)
+        );
+        assert_eq!(ErrorClass::of_wire_code(-9), Some(ErrorClass::NotReady));
     }
 
     /// JSON-RPC 2.0 reserves -32602 and -32603 for these two meanings, and

@@ -8,6 +8,7 @@
 
 pub mod catalog;
 pub mod commands;
+pub(crate) mod console;
 pub mod daemon;
 pub mod display;
 pub mod grammar;

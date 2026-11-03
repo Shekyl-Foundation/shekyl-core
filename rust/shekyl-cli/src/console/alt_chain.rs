@@ -21,24 +21,14 @@ use shekyl_rpc_types::{AltChainInfo, GetAlternateChainsResponse};
 /// Fetch `get_alternate_chains`. In-process it is the store. Remote, it is
 /// one `/json_rpc` post.
 fn fetch_alt_chains(src: &Source) -> Result<Vec<AltChainInfo>, String> {
-    let reply: GetAlternateChainsResponse = match src {
-        Source::Live(_) => {
-            let chain =
-                crate::handles::live_chain().ok_or_else(|| "the node is not open".to_owned())?;
-            crate::read_methods::get_alternate_chains(chain.as_read_facts())
-                .map_err(|fault| format!("{fault:?}"))?
-        }
-        Source::Remote { .. } => {
-            let body = serde_json::to_vec(&serde_json::json!({
-                "jsonrpc": "2.0",
-                "id": "0",
-                "method": "get_alternate_chains",
-            }))
-            .map_err(|e| format!("cannot encode the request: {e}"))?;
-            let raw = src.post_remote("/json_rpc", body)?;
-            json_rpc_result::<GetAlternateChainsResponse>(&raw, "get_alternate_chains")?
-        }
-    };
+    let body = serde_json::to_vec(&serde_json::json!({
+        "jsonrpc": "2.0",
+        "id": "0",
+        "method": "get_alternate_chains",
+    }))
+    .map_err(|e| format!("cannot encode the request: {e}"))?;
+    let raw = src.post_remote("/json_rpc", body)?;
+    let reply = json_rpc_result::<GetAlternateChainsResponse>(&raw, "get_alternate_chains")?;
     if reply.status.is_ok() {
         Ok(reply.chains)
     } else {
@@ -55,10 +45,8 @@ fn fetch_block_headers_by_hash(
         hashes,
         fill_pow_hash: false,
     };
-    let reply = native_json_rpc(src, "get_block_header_by_hash", &request, |_core| {
-        let chain = super::open_chain()?;
-        crate::methods::get_block_header_by_hash(chain.as_chain_facts(), &request, false)
-    })?;
+    let reply: shekyl_rpc_types::GetBlockHeaderByHashResponse =
+        native_json_rpc(src, "get_block_header_by_hash", &request)?;
     require_ok(&reply.status)?;
     Ok(reply.block_headers)
 }
@@ -233,7 +221,7 @@ pub(super) fn alt_chain_info(
                     .to_owned(),
             );
         } else {
-            let target = crate::consensus::DAA_TARGET_SECONDS;
+            let target = shekyl_economics::economic_params().daa_target_seconds;
             #[expect(
                 clippy::cast_precision_loss,
                 reason = "a percentage for a human, from a block count and a timespan"

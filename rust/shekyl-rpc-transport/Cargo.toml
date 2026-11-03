@@ -27,7 +27,7 @@ digest_auth = { version = "0.3", default-features = false }
 # sync = Mutex (auth serialization), time = request timeout, net = the TCP
 # stream the SOCKS connector dials. Previously pulled in transitively via
 # simple-request; made explicit now that it is gone.
-tokio = { version = "1", default-features = false, features = ["sync", "time", "net", "io-util"] }
+tokio = { version = "1", default-features = false, features = ["sync", "time", "net", "io-util", "rt"] }
 
 # Small hyper client owned in `http_client` (re-absorbed from simple-request so
 # a SOCKS5h connector can be added). Feature flags mirror what simple-request's

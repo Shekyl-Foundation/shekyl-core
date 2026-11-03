@@ -27,6 +27,12 @@ shekyl-shard-visual = { path = "../shekyl-shard-visual" }
 # `--rpc-url` validation shares with it; already in this binary's graph
 # through shekyl-wallet-rpc.
 shekyl-rpc-transport = { path = "../shekyl-rpc-transport" }
+# The console renderers read the block target from the economics
+# parameters, the peer-list caps, and the daemon's option table.
+shekyl-economics = { path = "../shekyl-economics" }
+shekyl-peerlist = { path = "../shekyl-peerlist" }
+shekyl-daemon-config = { path = "../shekyl-daemon-config" }
+shekyl-options = { path = "../shekyl-options" }
 clap = { version = "4", features = ["derive"] }
 rustyline = "15"
 tokio = { version = "1", features = ["full"] }
@@ -47,6 +53,9 @@ shekyl-logging = { path = "../shekyl-logging" }
 # `OffsetDateTime::now_local`) instead of a hand-rolled calendar.
 time = { version = "0.3", default-features = false, features = ["std", "local-offset"] }
 shekyl-units = { path = "../shekyl-units" }
+# The console binds a transaction body and recomputes its id (`tx show`).
+shekyl-wire = { path = "../shekyl-wire" }
+hex = "0.4"
 
 # WP-W2: the self-hosted transport's dial (`open_verified`, which runs the
 # peer check before handing back a handle) and the seed file's owner-only
@@ -59,6 +68,9 @@ shekyl-win-sec = { path = "../shekyl-win-sec" }
 [dev-dependencies]
 proptest = "1"
 tempfile = "3"
+# Console fixtures that build a reply the daemon would send
+# (`project_transactions`, a view-listener refusal).
+shekyl-daemon-rpc = { path = "../shekyl-daemon-rpc" }
 
 [lints]
 workspace = true

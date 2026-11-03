@@ -25,10 +25,8 @@ fn fetch_block_headers_range(
     };
     // In-process the console is the operator's own terminal, so the
     // restricted rule does not apply — as `print_block` says.
-    let reply = native_json_rpc(src, "get_block_headers_range", &request, |_core| {
-        let chain = super::open_chain()?;
-        crate::methods::get_block_headers_range(chain.as_chain_facts(), &request, false)
-    })?;
+    let reply: shekyl_rpc_types::GetBlockHeadersRangeResponse =
+        native_json_rpc(src, "get_block_headers_range", &request)?;
     require_ok(&reply.status)?;
     Ok(reply.headers)
 }
@@ -103,10 +101,8 @@ fn render_blockchain_info_entry(h: &shekyl_rpc_types::BlockHeader) -> String {
 /// Fetch `get_fee_estimate` — native here, over `/json_rpc` remotely.
 fn fetch_fee_estimate(src: &Source) -> Result<shekyl_rpc_types::GetFeeEstimateResponse, String> {
     let request = shekyl_rpc_types::GetFeeEstimateRequest::default();
-    let reply = native_json_rpc(src, "get_fee_estimate", &request, |_core| {
-        let chain = super::open_chain()?;
-        crate::methods::get_fee_estimate(chain.as_chain_facts(), &request)
-    })?;
+    let reply: shekyl_rpc_types::GetFeeEstimateResponse =
+        native_json_rpc(src, "get_fee_estimate", &request)?;
     require_ok(&reply.status)?;
     Ok(reply)
 }
@@ -151,7 +147,7 @@ pub(super) fn print_blockchain_dynamic_stats(src: &Source, nblocks: u64) -> Resu
     // read the scalar, so it reads tier 0.
     let dynamic_fee =
         AtomicUnits::from_raw(fees.fees.get(shekyl_rpc_types::FeeTier::Low)).to_skl_string();
-    let target = crate::consensus::DAA_TARGET_SECONDS;
+    let target = shekyl_economics::economic_params().daa_target_seconds;
     let mut out = Vec::new();
     out.push(format!(
         "Height: {}, diff {}, cum. diff {}, target {target} sec, dyn fee {dynamic_fee}/byte",

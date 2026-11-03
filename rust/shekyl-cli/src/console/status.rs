@@ -52,44 +52,23 @@ enum MiningReadout {
 /// would either turn a view listener into an error or hide a real local
 /// fault.
 fn fetch_mining_status(src: &Source) -> Result<MiningReadout, String> {
-    let raw = match src {
-        Source::Live(_) => {
-            let handles =
-                crate::handles::live_handles().ok_or_else(|| "the node is not open".to_owned())?;
-            let reply = crate::mining_methods::mining_status(handles.mining.as_ref())
-                .map_err(|fault| format!("{fault:?}"))?;
-            serde_json::to_string(&reply).map_err(|e| e.to_string())?
-        }
-        Source::Remote {
-            address, timeout, ..
-        } => {
-            src.ensure_identity()?;
-            match shekyl_daemon_ctl::post_blocking(
-                address,
-                "/mining_status",
-                b"{}".to_vec(),
-                *timeout,
-            ) {
-                // Two ordinary refusals, before any parse. An empty body is
-                // a route the daemon does not serve: the control transport
-                // does not surface the HTTP status, and axum's fallback is
-                // 404 with no body. A grant refusal is HTTP 200 with the
-                // JSON-RPC error object, which is what a view listener
-                // answers for `/mining_status` (`mining-control`). Any other
-                // body has to be the readout, and a body that is not is a
-                // fault.
-                Ok(raw) if raw.is_empty() => return Ok(MiningReadout::Unavailable),
-                Ok(raw) => {
-                    let text = String::from_utf8_lossy(&raw).into_owned();
-                    if crate::authority::grant_refusal_message(&text).is_some() {
-                        return Ok(MiningReadout::Unavailable);
-                    }
-                    text
-                }
-                // The daemon is not answering at all — no host, no listener.
-                Err(_) => return Ok(MiningReadout::Unavailable),
+    // A view listener answers `/mining_status` (`mining-control`) with a
+    // grant refusal. An absent route is an empty body. Either is an
+    // ordinary posture: the status line says mining info is unavailable
+    // and still prints everything else it knows. A daemon that is not
+    // answering at all is the same line, not a hung command.
+    src.ensure_identity()?;
+    let raw = match src.rpc().post("/mining_status", b"{}".to_vec()) {
+        Ok(raw) if raw.is_empty() => return Ok(MiningReadout::Unavailable),
+        Ok(raw) => {
+            if shekyl_rpc_types::errors::read_refusal(&raw).is_some_and(|error| {
+                error.class == shekyl_rpc_types::errors::ErrorClass::OutsideTheGrant
+            }) {
+                return Ok(MiningReadout::Unavailable);
             }
+            String::from_utf8_lossy(&raw).into_owned()
         }
+        Err(_) => return Ok(MiningReadout::Unavailable),
     };
     let reply: MiningStatusProvisional =
         serde_json::from_str(&raw).map_err(|e| format!("malformed mining_status reply: {e}"))?;
@@ -167,7 +146,7 @@ pub(super) fn sync_percentage(height: u64, target_height: u64) -> f64 {
 pub(super) fn show_status(src: &Source, now: u64) -> Result<String, String> {
     let info = fetch_get_info(src)?;
     let mining = fetch_mining_status(src)?;
-    let target = crate::consensus::DAA_TARGET_SECONDS;
+    let target = shekyl_economics::economic_params().daa_target_seconds;
 
     let height = info.health.height;
     // The core's target is shown, not judged. With none, or one this node

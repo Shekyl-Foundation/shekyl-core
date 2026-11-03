@@ -18,65 +18,30 @@ use super::{json_rpc_result, Source};
 impl Source {
     /// Run the identity handshake once, then reuse its verdict (`VC-3`).
     pub(super) fn ensure_identity(&self) -> Result<(), String> {
-        match self {
-            Source::Live(_) => Ok(()),
-            Source::Remote { .. } => self.network().map(|_| ()),
-        }
+        self.network().map(|_| ())
     }
 
-    /// The daemon's network, from the one place a daemon names it (RK-Q6).
-    ///
-    /// Remote, it is what the daemon answered `get_version` with, kept from
-    /// the identity handshake: no second request, and never this console's
-    /// own flag read back. In-process, it is the identity facts `get_version`
-    /// itself is built from.
+    /// The daemon's network, from the one place a daemon names it (RK-Q6):
+    /// what it answered `get_version` with, kept from the identity handshake.
     pub(super) fn network(&self) -> Result<DaemonNetwork, String> {
-        match self {
-            Source::Live(_) => {
-                let chain = crate::handles::live_chain()
-                    .ok_or_else(|| "the node is not open".to_owned())?;
-                chain
-                    .as_chain_facts()
-                    .identity()
-                    .map(|identity| identity.nettype)
-                    .map_err(|fault| format!("the daemon's network cannot be read: {fault:?}"))
-            }
-            Source::Remote {
-                address,
-                timeout,
-                nettype,
-                checked,
-            } => checked
-                .get_or_init(|| handshake(address, *timeout, *nettype))
-                .clone(),
-        }
+        self.checked
+            .get_or_init(|| handshake(self.rpc(), self.nettype()))
+            .clone()
     }
 
-    /// POST on the remote arm. The identity handshake runs first.
-    ///
-    /// Live arm: an internal error — call the native method instead.
+    /// POST. The identity handshake runs first.
     pub(super) fn post_remote(&self, path: &str, body: Vec<u8>) -> Result<Vec<u8>, String> {
-        let (address, timeout) = match self {
-            Source::Live(_) => {
-                return Err("internal: remote POST on the live console arm".to_owned())
-            }
-            Source::Remote {
-                address, timeout, ..
-            } => (address.as_str(), *timeout),
-        };
         self.ensure_identity()?;
-        shekyl_daemon_ctl::post_blocking(address, path, body, timeout).map_err(|(_, reason)| reason)
+        self.rpc()
+            .post(path, body)
+            .map_err(|error| error.to_string())
     }
 }
 
 /// The identity handshake against a remote daemon. Its verdict is the
 /// network the daemon reported, which the expectation has checked is this
 /// console's own.
-fn handshake(
-    address: &str,
-    timeout: std::time::Duration,
-    nettype: u8,
-) -> Result<DaemonNetwork, String> {
+fn handshake(rpc: &shekyl_rpc_transport::SyncDaemon, nettype: u8) -> Result<DaemonNetwork, String> {
     let network = DaemonNetwork::from_cryptonote(nettype).ok_or_else(|| {
         format!(
             "refusing to render: this console was given network code {nettype}, which this \
@@ -84,7 +49,7 @@ fn handshake(
         )
     })?;
 
-    let result = get_version_result(address, timeout)?;
+    let result = get_version_result(rpc)?;
     IdentityExpectation::exact(network)
         .read(&result)
         .map(|reply| reply.nettype)
@@ -104,15 +69,15 @@ fn handshake(
 /// command to [`shekyl_rpc_types::daemon_rpc_version`]. A daemon that
 /// answers with a JSON-RPC error is reported in its own words.
 pub(super) fn get_version_result(
-    address: &str,
-    timeout: std::time::Duration,
+    rpc: &shekyl_rpc_transport::SyncDaemon,
 ) -> Result<serde_json::Value, String> {
     let body = serde_json::to_vec(&serde_json::json!({
         "jsonrpc": "2.0", "id": "0", "method": "get_version", "params": {},
     }))
     .map_err(|e| format!("cannot encode the handshake request: {e}"))?;
-    let raw = shekyl_daemon_ctl::post_blocking(address, "/json_rpc", body, timeout)
-        .map_err(|(_, reason)| reason)?;
+    let raw = rpc
+        .post("/json_rpc", body)
+        .map_err(|error| error.to_string())?;
     json_rpc_result(&raw, "get_version").map_err(|reason| {
         if reason.starts_with("get_version failed:") {
             reason

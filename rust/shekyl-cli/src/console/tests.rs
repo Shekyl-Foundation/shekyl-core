@@ -7,10 +7,10 @@ use super::alt_chain::headers_in_correspondence;
 use super::blockchain::median;
 use super::status::{mining_speed, sync_percentage};
 use super::*;
-use std::ffi::CString;
 use std::io::{Read, Write};
 use std::net::TcpListener;
-use std::os::raw::c_char;
+use std::sync::Arc;
+use std::time::Duration;
 
 use shekyl_rpc_types::mining::MineSpeed;
 use shekyl_rpc_types::{HashHex, RpcStatus};
@@ -28,33 +28,47 @@ fn run_on(
     args: &[&str],
     address: Option<&str>,
 ) -> (i32, String) {
-    let cstrs: Vec<CString> = args.iter().map(|a| CString::new(*a).unwrap()).collect();
-    let ptrs: Vec<*const c_char> = cstrs.iter().map(|c| c.as_ptr()).collect();
-    let addr = address.map(|a| CString::new(a).unwrap());
-    let mut ptr: *mut u8 = std::ptr::null_mut();
-    let mut len: usize = 0;
-    // SAFETY: valid argv/address/out pointers; null core (remote arm).
-    let code = unsafe {
-        shekyl_daemon_console_run(
-            ptrs.as_ptr(),
-            ptrs.len(),
-            std::ptr::null_mut(),
-            addr.as_ref().map_or(std::ptr::null(), |a| a.as_ptr()),
-            5,
-            network.to_cryptonote(),
-            &raw mut ptr,
-            &raw mut len,
-        )
+    let Some(address) = address else {
+        return (SHEKYL_DAEMON_CONSOLE_ERR_REQUEST, "no daemon".to_owned());
     };
-    let text = if ptr.is_null() {
-        String::new()
-    } else {
-        // SAFETY: the export produced this pair.
-        unsafe { String::from_utf8_lossy(std::slice::from_raw_parts(ptr, len)).into_owned() }
+    let rpc = shekyl_rpc_transport::SyncDaemon::connect(
+        format!("http://{address}"),
+        None,
+        Duration::from_secs(5),
+    );
+    let Ok(rpc) = rpc else {
+        return (
+            SHEKYL_DAEMON_CONSOLE_ERR_REQUEST,
+            "the daemon client did not build".to_owned(),
+        );
     };
-    // SAFETY: freeing exactly the produced pair.
-    unsafe { shekyl_daemon_ctl::shekyl_daemon_ctl_free(ptr, len) };
-    (code, text)
+    let source = Source::new(Arc::new(rpc), network.to_cryptonote());
+    let words: Vec<String> = args.iter().map(|word| (*word).to_owned()).collect();
+    match render(&source, &words) {
+        Ok(text) => (SHEKYL_DAEMON_CONSOLE_OK, text),
+        Err(ConsoleFault::Unknown) => (SHEKYL_DAEMON_CONSOLE_ERR_UNKNOWN, String::new()),
+        Err(ConsoleFault::Request(text)) => (SHEKYL_DAEMON_CONSOLE_ERR_REQUEST, text),
+    }
+}
+
+/// The moved renderer's tip and length filters. `chain alt` takes no
+/// argument (IG-Q44); these tests call the renderer with the filter the
+/// old parser used to pass.
+fn render_alt(address: &str, tip: &str, above: u64, last: u64) -> (i32, String) {
+    let rpc = shekyl_rpc_transport::SyncDaemon::connect(
+        format!("http://{address}"),
+        None,
+        Duration::from_secs(5),
+    )
+    .expect("client");
+    let source = Source::new(
+        Arc::new(rpc),
+        shekyl_rpc_types::DaemonNetwork::Mainnet.to_cryptonote(),
+    );
+    match super::alt_chain::alt_chain_info(&source, tip, above, last, unix_now()) {
+        Ok(text) => (SHEKYL_DAEMON_CONSOLE_OK, text),
+        Err(text) => (SHEKYL_DAEMON_CONSOLE_ERR_REQUEST, text),
+    }
 }
 
 /// One-request HTTP acceptor answering `reply` with 200.
@@ -247,7 +261,7 @@ fn read_request(s: &mut std::net::TcpStream) -> Option<(String, String)> {
 /// console must ask for the full form, and a fixture that always returned
 /// the whole body would pass whatever form the console asked for. Serving
 /// the projection makes the request an input rather than a formality.
-fn one_shot_projected(slot: crate::core::TxSlot, txid: TxHash) -> String {
+fn one_shot_projected(slot: shekyl_daemon_rpc::core::TxSlot, txid: TxHash) -> String {
     let listener = TcpListener::bind("127.0.0.1:0").unwrap();
     let address = listener.local_addr().unwrap().to_string();
     std::thread::spawn(move || {
@@ -274,7 +288,12 @@ fn one_shot_projected(slot: crate::core::TxSlot, txid: TxHash) -> String {
         let body = raw.split("\r\n\r\n").nth(1).unwrap_or("").to_owned();
         let request: shekyl_rpc_types::GetTransactionsRequest =
             serde_json::from_str(&body).expect("the console sends a typed request");
-        let reply = crate::methods::project_transactions(&request, &[txid.to_bytes()], &[slot], 9);
+        let reply = shekyl_daemon_rpc::methods::project_transactions(
+            &request,
+            &[txid.to_bytes()],
+            &[slot],
+            9,
+        );
         let out = serde_json::to_string(&reply).unwrap();
         let head = format!(
             "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n",
@@ -353,26 +372,26 @@ fn console_spend() -> shekyl_wire::Transaction {
 
 /// [`console_spend`] as the store holds it: its skeleton and its archival
 /// good, cut by the wire crate's segmenter and bound by its `txid_parts`.
-fn console_spend_body() -> crate::core::TxBody {
+fn console_spend_body() -> shekyl_daemon_rpc::core::TxBody {
     let tx = console_spend();
     let segments = tx.write_segments().expect("segments");
     let parts = tx.txid_parts();
-    crate::core::TxBody {
+    shekyl_daemon_rpc::core::TxBody {
         skeleton: shekyl_wire::SkeletonTx {
             unprunable: segments.pruned,
             prunable_hash: parts.prunable_hash,
             pqc_auth_hash: parts.pqc_auth_hash,
             archival_len: parts.archival_len,
         },
-        good: crate::core::ArchivalGood::Retained {
+        good: shekyl_daemon_rpc::core::ArchivalGood::Retained {
             pqc_auths: parts.pqc_auth_hash.map(|_| segments.pqc_auths),
             prunable: segments.prunable,
         },
     }
 }
 
-fn mined_slot(body: crate::core::TxBody) -> crate::core::TxSlot {
-    crate::core::TxSlot::Chain {
+fn mined_slot(body: shekyl_daemon_rpc::core::TxBody) -> shekyl_daemon_rpc::core::TxSlot {
+    shekyl_daemon_rpc::core::TxSlot::Chain {
         body,
         block_height: 3,
         block_timestamp: 1_700_000_000,
@@ -387,10 +406,7 @@ fn mined_slot(body: crate::core::TxBody) -> crate::core::TxSlot {
 fn a_retained_transaction_prints_from_its_whole_body() {
     let txid = console_spend().hash();
     let addr = one_shot_projected(mined_slot(console_spend_body()), txid);
-    let (_, out) = run(
-        &["print_transaction", &hex::encode(txid), "+hex"],
-        Some(&addr),
-    );
+    let (_, out) = run(&["tx", "show", &hex::encode(txid), "--body"], Some(&addr));
     assert!(
         out.contains("Found in blockchain at height 3"),
         "expected the confirmed line, got: {out}"
@@ -407,14 +423,14 @@ fn a_retained_transaction_prints_from_its_whole_body() {
 #[test]
 fn an_archived_transaction_names_its_shard() {
     let txid = console_spend().hash();
-    let body = crate::core::TxBody {
+    let body = shekyl_daemon_rpc::core::TxBody {
         skeleton: console_spend_body().skeleton,
-        good: crate::core::ArchivalGood::Discarded {
+        good: shekyl_daemon_rpc::core::ArchivalGood::Discarded {
             shard: shekyl_types::ShardId::from_raw(3),
         },
     };
     let addr = one_shot_projected(mined_slot(body), txid);
-    let (code, out) = run(&["print_transaction", &hex::encode(txid)], Some(&addr));
+    let (code, out) = run(&["tx", "show", &hex::encode(txid)], Some(&addr));
     assert_eq!(code, SHEKYL_DAEMON_CONSOLE_ERR_REQUEST);
     assert!(
         out.contains("archived") && out.contains("shard 3"),
@@ -450,7 +466,7 @@ fn an_echoed_label_over_a_substituted_body_is_refused() {
         archived: Vec::new(),
         unavailable_tx: Vec::new(),
     });
-    let (code, out) = run(&["print_transaction", &hex::encode(requested)], Some(&addr));
+    let (code, out) = run(&["tx", "show", &hex::encode(requested)], Some(&addr));
     assert_eq!(code, SHEKYL_DAEMON_CONSOLE_ERR_REQUEST);
     assert!(
         out.contains("a label is not an identity"),
@@ -481,7 +497,7 @@ fn a_pruned_form_answer_to_a_full_form_request_is_refused() {
         archived: Vec::new(),
         unavailable_tx: Vec::new(),
     });
-    let (code, out) = run(&["print_transaction", &hex::encode(txid)], Some(&addr));
+    let (code, out) = run(&["tx", "show", &hex::encode(txid)], Some(&addr));
     assert_eq!(code, SHEKYL_DAEMON_CONSOLE_ERR_REQUEST);
     assert!(
         out.contains("in the pruned form"),
@@ -503,7 +519,7 @@ fn extra_transaction_entries_are_a_malformed_reply() {
         unavailable_tx: Vec::new(),
     };
     let addr = one_shot(typed_reply(&reply));
-    let (code, out) = run(&["print_transaction", &hex::encode(txid)], Some(&addr));
+    let (code, out) = run(&["tx", "show", &hex::encode(txid)], Some(&addr));
     assert_eq!(code, SHEKYL_DAEMON_CONSOLE_ERR_REQUEST);
     assert!(
         out.contains("asked about 1 transaction, got 2"),
@@ -613,10 +629,7 @@ fn a_handler_error_envelope_reaches_the_operator() {
         s.write_all(head.as_bytes()).unwrap();
         s.write_all(out.as_bytes()).unwrap();
     });
-    let (_, out) = run(
-        &["print_transaction", &hex::encode([0x31u8; 32])],
-        Some(&address),
-    );
+    let (_, out) = run(&["tx", "show", &hex::encode([0x31u8; 32])], Some(&address));
     assert!(
         out.contains("the store is inconsistent at height 7"),
         "the daemon's own reason must reach the operator, not be replaced \
@@ -639,7 +652,7 @@ fn an_entry_for_a_different_hash_is_refused() {
         archived: Vec::new(),
         unavailable_tx: Vec::new(),
     });
-    let (_, out) = run(&["print_transaction", &hex::encode(asked)], Some(&addr));
+    let (_, out) = run(&["tx", "show", &hex::encode(asked)], Some(&addr));
     assert!(
         out.contains("asked about") && !out.contains("Found in blockchain"),
         "an entry for another hash must be refused, not rendered: {out}"
@@ -658,7 +671,7 @@ fn an_entry_alongside_a_missed_hash_is_not_found() {
         archived: Vec::new(),
         unavailable_tx: Vec::new(),
     });
-    let (_, out) = run(&["print_transaction", &hex::encode(asked)], Some(&addr));
+    let (_, out) = run(&["tx", "show", &hex::encode(asked)], Some(&addr));
     assert!(
         out.contains("wasn't found"),
         "a contradictory reply must not render as a hit: {out}"
@@ -776,7 +789,7 @@ fn print_height_renders_the_remote_reply() {
         height: 42,
         hash: HashHex::from_bytes([7u8; 32]),
     }));
-    let (code, text) = run(&["print_height"], Some(&address));
+    let (code, text) = run(&["chain", "height"], Some(&address));
     assert_eq!(code, SHEKYL_DAEMON_CONSOLE_OK, "{text}");
     assert_eq!(text, "42");
 }
@@ -791,10 +804,10 @@ fn an_offline_daemon_prints_the_state_on_every_peer_command() {
         serde_json::json!({ "jsonrpc": "2.0", "id": "0", "result": { "status": "offline" } })
             .to_string();
     for (args, reply) in [
-        (&["print_peer_list"][..], off.to_owned()),
-        (&["print_peer_list_stats"][..], off.to_owned()),
-        (&["print_connections"][..], rpc_off.clone()),
-        (&["sync_info"][..], rpc_off.clone()),
+        (&["peer", "list"][..], off.to_owned()),
+        (&["peer", "stats"][..], off.to_owned()),
+        (&["peer", "connections"][..], rpc_off.clone()),
+        (&["sync", "status"][..], rpc_off.clone()),
     ] {
         let address = one_shot(reply);
         let (code, text) = run(args, Some(&address));
@@ -810,7 +823,7 @@ fn non_ok_status_is_a_request_failure_with_the_status_as_reason() {
         height: 0,
         hash: HashHex::ZERO,
     }));
-    let (code, text) = run(&["print_height"], Some(&address));
+    let (code, text) = run(&["chain", "height"], Some(&address));
     assert_eq!(code, SHEKYL_DAEMON_CONSOLE_ERR_REQUEST);
     assert_eq!(text, "BUSY");
 }
@@ -824,7 +837,7 @@ fn error_envelope_reason_is_surfaced() {
         status: RpcStatus("ERROR".to_owned()),
         error: "chain facts unavailable".to_owned(),
     }));
-    let (code, text) = run(&["print_height"], Some(&address));
+    let (code, text) = run(&["chain", "height"], Some(&address));
     assert_eq!(code, SHEKYL_DAEMON_CONSOLE_ERR_REQUEST);
     assert_eq!(text, "get_height failed: chain facts unavailable");
 }
@@ -835,7 +848,7 @@ fn error_envelope_reason_is_surfaced() {
 fn malformed_reply_is_named_as_such() {
     // Deliberately raw: this fixture's point is that it is not a reply.
     let address = one_shot(r#"<html>not json</html>"#.to_owned());
-    let (code, text) = run(&["print_height"], Some(&address));
+    let (code, text) = run(&["chain", "height"], Some(&address));
     assert_eq!(code, SHEKYL_DAEMON_CONSOLE_ERR_REQUEST);
     assert!(
         text.starts_with("malformed get_height reply: <html>"),
@@ -845,45 +858,15 @@ fn malformed_reply_is_named_as_such() {
 
 #[test]
 fn refused_connection_is_a_request_failure_with_a_reason() {
-    let (code, text) = run(&["print_height"], Some("127.0.0.1:1"));
+    let (code, text) = run(&["chain", "height"], Some("127.0.0.1:1"));
     assert_eq!(code, SHEKYL_DAEMON_CONSOLE_ERR_REQUEST);
     assert!(!text.is_empty());
 }
 
-/// Both sources given: refused before either is touched (the live
-/// pointer is never dereferenced — it is a sentinel here).
 #[test]
-fn both_sources_is_ambiguous_and_refused() {
-    let cmd = CString::new("print_height").unwrap();
-    let argv = [cmd.as_ptr()];
-    let address = CString::new("127.0.0.1:1").unwrap();
-    let mut ptr: *mut u8 = std::ptr::null_mut();
-    let mut len: usize = 0;
-    let sentinel = std::ptr::dangling_mut::<c_void>();
-    // SAFETY: valid argv/address/out pointers; the non-null core pointer
-    // is refused before any dereference.
-    let code = unsafe {
-        shekyl_daemon_console_run(
-            argv.as_ptr(),
-            1,
-            sentinel,
-            address.as_ptr(),
-            1,
-            0,
-            &raw mut ptr,
-            &raw mut len,
-        )
-    };
-    assert_eq!(code, SHEKYL_DAEMON_CONSOLE_ERR_AMBIGUOUS_SOURCE);
-    assert!(ptr.is_null());
-}
-
-#[test]
-fn unknown_command_and_null_arguments_refuse() {
+fn unknown_command_refuses_without_a_daemon() {
     let (code, _) = run(&["no_such_command"], Some("127.0.0.1:1"));
     assert_eq!(code, SHEKYL_DAEMON_CONSOLE_ERR_UNKNOWN);
-    let (code, _) = run(&["print_height"], None);
-    assert_eq!(code, SHEKYL_DAEMON_CONSOLE_ERR_NULL_PTR);
 }
 
 // ── RK-5a: the ported format helpers ───────────────────────────────────
@@ -1060,7 +1043,7 @@ fn net_stats_renders_the_option_show_limits_beside_the_native_counters() {
             option_show_rates("8KiB/s", "4KiB/s"),
         ),
     ]);
-    let (code, out) = run(&["print_net_stats"], Some(&address));
+    let (code, out) = run(&["p2p", "stats"], Some(&address));
     assert_eq!(code, SHEKYL_DAEMON_CONSOLE_OK, "{out}");
     assert!(out.contains("Received 4096 bytes"), "{out}");
     assert!(out.contains("Sent 2048 bytes"), "{out}");
@@ -1079,7 +1062,7 @@ fn net_stats_prints_an_unlimited_direction_as_no_limit() {
             option_show_rates("unlimited", "4KiB/s"),
         ),
     ]);
-    let (code, out) = run(&["print_net_stats"], Some(&address));
+    let (code, out) = run(&["p2p", "stats"], Some(&address));
     assert_eq!(code, SHEKYL_DAEMON_CONSOLE_OK, "{out}");
     assert!(out.contains("Received 4096 bytes"), "{out}");
     assert!(out.contains("average 0 B/s, no limit"), "{out}");
@@ -1098,7 +1081,7 @@ fn an_option_show_reply_without_a_rate_is_refused_rather_than_defaulted() {
         ("/get_net_stats", net_stats_reply("OK")),
         ("json_rpc:option_show", only_down.to_owned()),
     ]);
-    let (code, out) = run(&["print_net_stats"], Some(&address));
+    let (code, out) = run(&["p2p", "stats"], Some(&address));
     assert_eq!(code, SHEKYL_DAEMON_CONSOLE_ERR_REQUEST, "{out}");
     assert!(out.contains("did not answer p2p-upload-max"), "{out}");
 
@@ -1106,7 +1089,7 @@ fn an_option_show_reply_without_a_rate_is_refused_rather_than_defaulted() {
         ("/get_net_stats", net_stats_reply("OK")),
         ("json_rpc:option_show", option_show_rates("8KiB/s", "fast")),
     ]);
-    let (code, out) = run(&["print_net_stats"], Some(&address));
+    let (code, out) = run(&["p2p", "stats"], Some(&address));
     assert_eq!(code, SHEKYL_DAEMON_CONSOLE_ERR_REQUEST, "{out}");
     assert!(out.contains("not a rate"), "{out}");
     assert!(!out.contains("limit of 0 B/s"), "{out}");
@@ -1137,7 +1120,7 @@ fn info_reply(height: u64) -> String {
         chain: InfoChain {
             difficulty: 0x1_e240,
             cumulative_difficulty: 0x2d_c6c0,
-            target: crate::consensus::DAA_TARGET_SECONDS,
+            target: shekyl_economics::economic_params().daa_target_seconds,
             tx_count: 0,
             block_weight_limit: 600_000,
             block_weight_median: 300_000,
@@ -1226,7 +1209,10 @@ fn blockchain_info_lists_the_window_it_was_given() {
         "json_rpc:get_block_headers_range",
         headers_range_reply(&[2, 3]),
     )]);
-    let (code, out) = run(&["print_blockchain_info", "2", "3"], Some(&address));
+    let (code, out) = run(
+        &["block", "header", "list", "--from", "2", "--to", "3"],
+        Some(&address),
+    );
     assert_eq!(code, SHEKYL_DAEMON_CONSOLE_OK, "{out}");
     assert!(out.contains("height: 2, timestamp: 1600000002"), "{out}");
     assert!(out.contains("height: 3, timestamp: 1600000003"), "{out}");
@@ -1253,7 +1239,10 @@ fn a_non_negative_start_needs_no_tip_read() {
             headers_range_reply(&[2, 3]),
         ),
     ]);
-    let (code, out) = run(&["print_blockchain_info", "2", "3"], Some(&address));
+    let (code, out) = run(
+        &["block", "header", "list", "--from", "2", "--to", "3"],
+        Some(&address),
+    );
     assert_eq!(code, SHEKYL_DAEMON_CONSOLE_OK, "{out}");
     // The identity handshake is a request too (VC-3), and it is not one of
     // this command's legs — filter it out so the assertions stay about the
@@ -1291,7 +1280,10 @@ fn a_negative_start_counts_back_from_the_tip() {
             headers_range_reply(&[97, 98, 99]),
         ),
     ]);
-    let (code, out) = run(&["print_blockchain_info", "-3", "3"], Some(&address));
+    let (code, out) = run(
+        &["block", "header", "list", "--from", "-3", "--to", "3"],
+        Some(&address),
+    );
     assert_eq!(code, SHEKYL_DAEMON_CONSOLE_OK, "{out}");
     assert!(out.contains("height: 97"), "{out}");
     assert!(out.contains("height: 99"), "{out}");
@@ -1325,7 +1317,10 @@ fn a_negative_start_counts_back_from_the_tip() {
 #[test]
 fn a_window_longer_than_the_chain_is_refused_by_name() {
     let address = route_server(vec![("/get_info", info_reply(3))]);
-    let (code, out) = run(&["print_blockchain_info", "-10", "10"], Some(&address));
+    let (code, out) = run(
+        &["block", "header", "list", "--from", "-10", "--to", "10"],
+        Some(&address),
+    );
     assert_eq!(code, SHEKYL_DAEMON_CONSOLE_ERR_REQUEST, "{out}");
     assert!(out.contains("larger than blockchain height"), "{out}");
 }
@@ -1340,7 +1335,10 @@ fn a_get_info_reply_missing_a_field_is_refused_rather_than_defaulted() {
     let mut info: serde_json::Value = serde_json::from_str(&info_reply(100)).unwrap();
     info.as_object_mut().unwrap().remove("height");
     let address = route_server(vec![("/get_info", info.to_string())]);
-    let (code, out) = run(&["print_blockchain_info", "-3", "3"], Some(&address));
+    let (code, out) = run(
+        &["block", "header", "list", "--from", "-3", "--to", "3"],
+        Some(&address),
+    );
     assert_eq!(code, SHEKYL_DAEMON_CONSOLE_ERR_REQUEST, "{out}");
     assert!(out.contains("malformed get_info reply"), "{out}");
     assert!(out.contains("height"), "{out}");
@@ -1403,7 +1401,7 @@ fn a_range_reply_that_misses_the_window_is_refused() {
         ("json_rpc:get_fee_estimate", fee_reply([20, 80, 4000])),
         ("json_rpc:get_block_headers_range", short),
     ]);
-    let (code, out) = run(&["print_blockchain_dynamic_stats", "3"], Some(&address));
+    let (code, out) = run(&["chain", "stats", "--last", "3"], Some(&address));
     assert_eq!(code, SHEKYL_DAEMON_CONSOLE_ERR_REQUEST, "{out}");
     assert!(out.contains("answered 1 headers for the 3 blocks"), "{out}");
 
@@ -1422,7 +1420,7 @@ fn a_range_reply_that_misses_the_window_is_refused() {
         ("json_rpc:get_fee_estimate", fee_reply([20, 80, 4000])),
         ("json_rpc:get_block_headers_range", wrong),
     ]);
-    let (code, out) = run(&["print_blockchain_dynamic_stats", "3"], Some(&address));
+    let (code, out) = run(&["chain", "stats", "--last", "3"], Some(&address));
     assert_eq!(code, SHEKYL_DAEMON_CONSOLE_ERR_REQUEST, "{out}");
     assert!(out.contains("starting at height 100"), "{out}");
     assert!(!out.contains("Last 3:"), "{out}");
@@ -1462,7 +1460,7 @@ fn dynamic_stats_reports_the_window_it_summarized() {
         ("json_rpc:get_fee_estimate", fee_reply([20, 80, 4000])),
         ("json_rpc:get_block_headers_range", range),
     ]);
-    let (code, out) = run(&["print_blockchain_dynamic_stats", "3"], Some(&address));
+    let (code, out) = run(&["chain", "stats", "--last", "3"], Some(&address));
     assert_eq!(code, SHEKYL_DAEMON_CONSOLE_OK, "{out}");
 
     // The header line: `wide_difficulty` 0x1e240 is 123456, the
@@ -1533,7 +1531,7 @@ fn dynamic_stats_clamps_a_window_longer_than_the_chain() {
             headers_range_reply(&[0, 1]),
         ),
     ]);
-    let (code, out) = run(&["print_blockchain_dynamic_stats", "500"], Some(&address));
+    let (code, out) = run(&["chain", "stats", "--last", "500"], Some(&address));
     assert_eq!(code, SHEKYL_DAEMON_CONSOLE_OK, "{out}");
     assert!(out.contains("Last 2:"), "{out}");
     // The identity handshake is a request too (VC-3), and it is not one of
@@ -1623,7 +1621,7 @@ fn alt_chain_info_lists_and_filters() {
             ])),
         ),
     ]);
-    let (code, out) = run(&["alt_chain_info", "", "0", "0"], Some(&address));
+    let (code, out) = run(&["chain", "alt"], Some(&address));
     assert_eq!(code, SHEKYL_DAEMON_CONSOLE_OK, "{out}");
     assert!(out.starts_with("2 alternate chains found:"), "{out}");
     // Sorted by height: the height-50 chain first.
@@ -1645,7 +1643,7 @@ fn alt_chain_info_lists_and_filters() {
             ])),
         ),
     ]);
-    let (code, out) = run(&["alt_chain_info", "", "1", "0"], Some(&address));
+    let (code, out) = render_alt(&address, "", 1, 0);
     assert_eq!(code, SHEKYL_DAEMON_CONSOLE_OK, "{out}");
     assert!(out.starts_with("1 alternate chains found:"), "{out}");
     assert!(out.contains("from height 89"), "{out}");
@@ -1668,7 +1666,7 @@ fn alt_chain_info_reports_one_chain_by_tip() {
             slots_reply(vec![slot(8, 1000), slot(9, 1240), slot(7, 880)]),
         ),
     ]);
-    let (code, out) = run(&["alt_chain_info", &tip, "0", "0"], Some(&address));
+    let (code, out) = render_alt(&address, &tip, 0, 0);
     assert_eq!(code, SHEKYL_DAEMON_CONSOLE_OK, "{out}");
     assert!(
         out.contains(&format!("Found alternate chain with tip {tip}")),
@@ -1716,7 +1714,7 @@ fn a_chain_declaring_more_blocks_than_it_lists_is_refused() {
             slots_reply(vec![slot(8, 1000), slot(9, 1240), slot(7, 880)]),
         ),
     ]);
-    let (code, out) = run(&["alt_chain_info", &tip, "0", "0"], Some(&address));
+    let (code, out) = render_alt(&address, &tip, 0, 0);
     assert_eq!(code, SHEKYL_DAEMON_CONSOLE_ERR_REQUEST, "{out}");
     assert!(out.contains("declared a 10-block alt chain"), "{out}");
     assert!(out.contains("listed 2"), "{out}");
@@ -1770,7 +1768,7 @@ fn a_hash_with_no_header_is_named_rather_than_counted() {
             ]),
         ),
     ]);
-    let (code, out) = run(&["alt_chain_info", &tip, "0", "0"], Some(&address));
+    let (code, out) = render_alt(&address, &tip, 0, 0);
     assert_eq!(code, SHEKYL_DAEMON_CONSOLE_ERR_REQUEST, "{out}");
     assert!(
         out.contains(&format!("no block header for {missing}")),
@@ -1833,7 +1831,7 @@ fn a_zero_span_reports_why_rather_than_dividing() {
             slots_reply(vec![slot(8, 1000), slot(9, 1000), slot(7, 1000)]),
         ),
     ]);
-    let (code, out) = run(&["alt_chain_info", &tip, "0", "0"], Some(&address));
+    let (code, out) = render_alt(&address, &tip, 0, 0);
     assert_eq!(code, SHEKYL_DAEMON_CONSOLE_OK, "{out}");
     assert!(out.contains("share a timestamp"), "{out}");
     assert!(!out.contains("inf"), "{out}");
@@ -1850,7 +1848,7 @@ fn an_unknown_tip_is_named() {
             alt_chains_reply(&serde_json::json!([])),
         ),
     ]);
-    let (code, out) = run(&["alt_chain_info", &tip, "0", "0"], Some(&address));
+    let (code, out) = render_alt(&address, &tip, 0, 0);
     assert_eq!(code, SHEKYL_DAEMON_CONSOLE_ERR_REQUEST, "{out}");
     assert!(
         out.contains("is not the tip of any known alternate chain"),
@@ -1924,7 +1922,7 @@ fn the_status_line_names_the_network_get_version_reported() {
             }),
         ),
     ]);
-    let (code, out) = run_on(Testnet, &["status"], Some(&address));
+    let (code, out) = run_on(Testnet, &["daemon", "status"], Some(&address));
     assert_eq!(code, SHEKYL_DAEMON_CONSOLE_OK, "{out}");
     assert!(out.contains("Height: 100/100 (100.0%) on testnet"), "{out}");
     let asked = log.lock().unwrap();
@@ -1951,7 +1949,7 @@ fn the_status_line_reads_the_way_the_daemon_has_always_printed_it() {
             ),
         ),
     ]);
-    let (code, out) = run(&["status"], Some(&address));
+    let (code, out) = run(&["daemon", "status"], Some(&address));
     assert_eq!(code, SHEKYL_DAEMON_CONSOLE_OK, "{out}");
     assert!(out.contains("Height: 100/100 (100.0%) on mainnet"), "{out}");
     assert!(out.contains("mining at 2.50 kH/s"), "{out}");
@@ -1983,7 +1981,7 @@ fn a_miner_below_one_hash_a_second_reads_as_a_fraction() {
             ),
         ),
     ]);
-    let (code, out) = run(&["status"], Some(&address));
+    let (code, out) = run(&["daemon", "status"], Some(&address));
     assert_eq!(code, SHEKYL_DAEMON_CONSOLE_OK, "{out}");
     assert!(out.contains("mining at 0.80 H/s"), "{out}");
 }
@@ -2005,7 +2003,7 @@ fn a_daemon_that_withholds_status_is_not_shown_as_zero_connections() {
         ("/get_info", info.to_string()),
         ("/mining_status", mining_reply(false, MineSpeed::NONE)),
     ]);
-    let (code, out) = run(&["status"], Some(&address));
+    let (code, out) = run(&["daemon", "status"], Some(&address));
     assert_eq!(code, SHEKYL_DAEMON_CONSOLE_OK, "{out}");
     assert!(out.contains("not mining"), "{out}");
     // The disclosure clause is the end of the line: the uptime clause is
@@ -2037,7 +2035,7 @@ fn an_offline_daemon_that_withholds_status_prints_the_state() {
         ("/get_info", info.to_string()),
         ("/mining_status", mining_reply(false, MineSpeed::NONE)),
     ]);
-    let (code, out) = run(&["status"], Some(&address));
+    let (code, out) = run(&["daemon", "status"], Some(&address));
     assert_eq!(code, SHEKYL_DAEMON_CONSOLE_OK, "{out}");
     assert!(
         out.trim_end().ends_with("P2P: offline"),
@@ -2060,7 +2058,7 @@ fn a_shown_zero_connection_count_prints_as_zero() {
         ("/get_info", info.to_string()),
         ("/mining_status", mining_reply(false, MineSpeed::NONE)),
     ]);
-    let (code, out) = run(&["status"], Some(&address));
+    let (code, out) = run(&["daemon", "status"], Some(&address));
     assert_eq!(code, SHEKYL_DAEMON_CONSOLE_OK, "{out}");
     assert!(out.contains("0(out)+0(in) connections, uptime "), "{out}");
 }
@@ -2074,7 +2072,7 @@ fn a_shown_zero_connection_count_prints_as_zero() {
 #[test]
 fn a_restricted_remote_daemon_still_reports_its_status() {
     let address = route_server(vec![("/get_info", info_reply(100))]);
-    let (code, out) = run(&["status"], Some(&address));
+    let (code, out) = run(&["daemon", "status"], Some(&address));
     assert_eq!(code, SHEKYL_DAEMON_CONSOLE_OK, "{out}");
     assert!(out.contains("mining info unavailable"), "{out}");
     assert!(out.contains("Height: 100/100"), "{out}");
@@ -2086,16 +2084,19 @@ fn a_restricted_remote_daemon_still_reports_its_status() {
 #[test]
 fn a_view_listener_refuses_mining_status_and_status_still_prints() {
     let row = shekyl_rpc_types::methods::rest_path("/mining_status").expect("a row");
-    let error = crate::authority::Authority::VIEW_LISTENER
+    let error = shekyl_daemon_rpc::authority::Authority::VIEW_LISTENER
         .admit(row)
         .expect_err("mining-control");
-    let body = serde_json::to_string(&crate::authority::refusal(serde_json::Value::Null, &error))
-        .expect("the envelope");
+    let body = serde_json::to_string(&shekyl_daemon_rpc::authority::refusal(
+        serde_json::Value::Null,
+        &error,
+    ))
+    .expect("the envelope");
     let address = route_server(vec![
         ("/get_info", info_reply(100)),
         ("/mining_status", body),
     ]);
-    let (code, out) = run(&["status"], Some(&address));
+    let (code, out) = run(&["daemon", "status"], Some(&address));
     assert_eq!(code, SHEKYL_DAEMON_CONSOLE_OK, "{out}");
     assert!(out.contains("mining info unavailable"), "{out}");
     assert!(out.contains("Height: 100/100"), "{out}");
@@ -2118,50 +2119,9 @@ fn a_mining_status_fault_is_not_unavailable() {
             .to_string(),
         ),
     ]);
-    let (code, out) = run(&["status"], Some(&address));
+    let (code, out) = run(&["daemon", "status"], Some(&address));
     assert_eq!(code, SHEKYL_DAEMON_CONSOLE_ERR_REQUEST, "{out}");
     assert!(!out.contains("mining info unavailable"), "{out}");
-}
-
-#[test]
-fn pop_blocks_on_a_remote_daemon_prints_the_new_height() {
-    let body = serde_json::json!({"status": "OK", "height": 42}).to_string();
-    let address = route_server(vec![("/pop_blocks", body)]);
-    let (code, out) = run(&["pop_blocks", "3"], Some(&address));
-    assert_eq!(code, SHEKYL_DAEMON_CONSOLE_OK, "{out}");
-    assert_eq!(out, "new height: 42");
-}
-
-#[test]
-fn pop_blocks_on_a_view_listener_says_the_grant_refusal() {
-    let row = shekyl_rpc_types::methods::rest_path("/pop_blocks").expect("a row");
-    let error = crate::authority::Authority::VIEW_LISTENER
-        .admit(row)
-        .expect_err("host only");
-    let body = serde_json::to_string(&crate::authority::refusal(serde_json::Value::Null, &error))
-        .expect("the envelope");
-    let address = route_server(vec![("/pop_blocks", body)]);
-    let (code, out) = run(&["pop_blocks", "1"], Some(&address));
-    assert_eq!(code, SHEKYL_DAEMON_CONSOLE_ERR_REQUEST, "{out}");
-    assert_eq!(out, error.diagnostic.message);
-}
-
-#[test]
-fn pop_blocks_reports_a_failed_status() {
-    let address = route_server(vec![(
-        "/pop_blocks",
-        r#"{"status":"ERROR","height":7}"#.to_owned(),
-    )]);
-    let (code, out) = run(&["pop_blocks", "1"], Some(&address));
-    assert_eq!(code, SHEKYL_DAEMON_CONSOLE_ERR_REQUEST, "{out}");
-    assert_eq!(out, "pop_blocks failed -- ERROR");
-}
-
-#[test]
-fn pop_blocks_refuses_zero_before_it_asks() {
-    let (code, out) = run(&["pop_blocks", "0"], Some("127.0.0.1:1"));
-    assert_eq!(code, SHEKYL_DAEMON_CONSOLE_ERR_REQUEST, "{out}");
-    assert!(out.contains("at least one"), "{out}");
 }
 
 /// A syncing daemon answers `BUSY`, which is neither mining nor idle.
@@ -2179,7 +2139,7 @@ fn a_busy_mining_status_reads_as_syncing() {
             .to_string(),
         ),
     ]);
-    let (code, out) = run(&["status"], Some(&address));
+    let (code, out) = run(&["daemon", "status"], Some(&address));
     assert_eq!(code, SHEKYL_DAEMON_CONSOLE_OK, "{out}");
     assert!(out.contains(", syncing,"), "{out}");
 }
@@ -2201,7 +2161,7 @@ fn a_foreign_target_does_not_warn_and_does_not_change_the_arithmetic() {
         ("/get_info", info.to_string()),
         ("/mining_status", mining_reply(false, MineSpeed::NONE)),
     ]);
-    let (code, out) = run(&["status"], Some(&address));
+    let (code, out) = run(&["daemon", "status"], Some(&address));
     assert_eq!(code, SHEKYL_DAEMON_CONSOLE_OK, "{out}");
     assert!(!out.contains("WARNING:"), "{out}");
     // net hash = 123456 / 120 = 1028 -> 1.03 kH/s, the build's T. Under
@@ -2222,7 +2182,7 @@ fn the_alt_chain_share_uses_the_build_t() {
         ("/get_info", info.to_string()),
         ("json_rpc:get_alternate_chains", chains.clone()),
     ]);
-    let (code, listing) = run(&["alt_chain_info", "", "0", "0"], Some(&address));
+    let (code, listing) = run(&["chain", "alt"], Some(&address));
     assert_eq!(code, SHEKYL_DAEMON_CONSOLE_OK, "{listing}");
     assert!(
         !listing.contains("WARNING:"),
@@ -2238,7 +2198,7 @@ fn the_alt_chain_share_uses_the_build_t() {
             slots_reply(vec![slot(8, 1000), slot(9, 1240), slot(7, 880)]),
         ),
     ]);
-    let (code, detail) = run(&["alt_chain_info", &tip, "0", "0"], Some(&address));
+    let (code, detail) = render_alt(&address, &tip, 0, 0);
     assert_eq!(code, SHEKYL_DAEMON_CONSOLE_OK, "{detail}");
     assert!(!detail.contains("WARNING:"), "{detail}");
     // And the share is computed with the build's T, not the daemon's 60:
@@ -2255,7 +2215,7 @@ fn the_alt_chain_share_uses_the_build_t() {
 #[test]
 fn a_method_the_daemon_does_not_serve_fails_loudly() {
     let address = route_server(vec![("/get_net_stats", net_stats_reply("OK"))]);
-    let (code, out) = run(&["print_net_stats"], Some(&address));
+    let (code, out) = run(&["p2p", "stats"], Some(&address));
     assert_eq!(code, SHEKYL_DAEMON_CONSOLE_ERR_REQUEST, "{out}");
     assert!(!out.contains("limit of 0 B/s"), "{out}");
 }
@@ -2291,7 +2251,7 @@ fn an_older_daemon_is_refused_and_named_as_the_older_one() {
         "json_rpc:get_version",
         get_version_but(|r| r.version -= 1),
     )]);
-    let (code, out) = run(&["print_height"], Some(&addr));
+    let (code, out) = run(&["chain", "height"], Some(&addr));
     assert_eq!(code, SHEKYL_DAEMON_CONSOLE_ERR_REQUEST, "{out}");
     assert!(out.contains("RPC contract mismatch"), "{out}");
     assert!(
@@ -2306,7 +2266,7 @@ fn a_newer_daemon_names_this_build_as_the_older_one() {
         "json_rpc:get_version",
         get_version_but(|r| r.version += 1),
     )]);
-    let (_, out) = run(&["print_height"], Some(&addr));
+    let (_, out) = run(&["chain", "height"], Some(&addr));
     assert!(
         out.contains("this build is the older one"),
         "the ordering must work in both directions: {out}"
@@ -2321,7 +2281,7 @@ fn a_different_rules_digest_is_refused_without_inventing_an_ordering() {
             r.consensus_constants_digest = shekyl_rpc_types::HashHex::from_bytes([0x99; 32]);
         }),
     )]);
-    let (code, out) = run(&["print_height"], Some(&addr));
+    let (code, out) = run(&["chain", "height"], Some(&addr));
     assert_eq!(code, SHEKYL_DAEMON_CONSOLE_ERR_REQUEST, "{out}");
     assert!(out.contains("consensus-constant mismatch"), "{out}");
     // VC-D15: a hash carries no ordering, so the refusal must NOT claim one.
@@ -2344,7 +2304,7 @@ fn a_wrong_network_daemon_is_refused_even_though_every_other_axis_agrees() {
         "json_rpc:get_version",
         get_version_but(|r| r.nettype = shekyl_rpc_types::DaemonNetwork::Testnet),
     )]);
-    let (code, out) = run(&["print_height"], Some(&addr));
+    let (code, out) = run(&["chain", "height"], Some(&addr));
     assert_eq!(code, SHEKYL_DAEMON_CONSOLE_ERR_REQUEST, "{out}");
     assert!(out.contains("network mismatch"), "{out}");
     assert!(out.contains("mainnet") && out.contains("testnet"), "{out}");
@@ -2358,7 +2318,7 @@ fn a_foreign_genesis_daemon_is_refused() {
             r.genesis_hash = shekyl_rpc_types::HashHex::from_bytes([0xff; 32]);
         }),
     )]);
-    let (code, out) = run(&["print_height"], Some(&addr));
+    let (code, out) = run(&["chain", "height"], Some(&addr));
     assert_eq!(code, SHEKYL_DAEMON_CONSOLE_ERR_REQUEST, "{out}");
     assert!(out.contains("genesis mismatch"), "{out}");
     assert!(out.contains("different chain"), "{out}");
@@ -2378,7 +2338,7 @@ fn a_get_version_that_does_not_parse_is_reported_as_a_wire_mismatch() {
             "json_rpc:get_version",
             serde_json::json!({"jsonrpc": "2.0", "id": "0", "result": result}).to_string(),
         )]);
-        let (code, out) = run(&["print_height"], Some(&addr));
+        let (code, out) = run(&["chain", "height"], Some(&addr));
         assert_eq!(code, SHEKYL_DAEMON_CONSOLE_ERR_REQUEST, "{out}");
         assert!(
             out.contains("does not match the RPC contract"),
@@ -2411,7 +2371,7 @@ fn a_daemon_of_another_version_is_named_though_its_reply_does_not_decode() {
             }})
             .to_string(),
         )]);
-        let (code, out) = run(&["print_height"], Some(&addr));
+        let (code, out) = run(&["chain", "height"], Some(&addr));
         assert_eq!(code, SHEKYL_DAEMON_CONSOLE_ERR_REQUEST, "{out}");
         assert!(out.contains("RPC contract mismatch"), "{out}");
         assert!(
@@ -2435,35 +2395,19 @@ fn an_unrecognised_network_code_refuses_rather_than_defaulting() {
     // in cryptonote::network_type, so it is the value a miswired hop would
     // most plausibly deliver.
     let addr = route_server(vec![]);
-    let ptrs: Vec<CString> = ["print_height"]
-        .iter()
-        .map(|a| CString::new(*a).unwrap())
-        .collect();
-    let raw: Vec<*const c_char> = ptrs.iter().map(|a| a.as_ptr()).collect();
-    let address = CString::new(addr).unwrap();
-    let mut ptr: *mut u8 = std::ptr::null_mut();
-    let mut len: usize = 0;
-    // SAFETY: valid argv/address/out pointers; null core (remote arm).
-    let code = unsafe {
-        shekyl_daemon_console_run(
-            raw.as_ptr(),
-            raw.len(),
-            std::ptr::null_mut(),
-            address.as_ptr(),
-            5,
-            255,
-            &raw mut ptr,
-            &raw mut len,
-        )
+    let rpc = shekyl_rpc_transport::SyncDaemon::connect(
+        format!("http://{addr}"),
+        None,
+        Duration::from_secs(5),
+    )
+    .expect("client");
+    let source = Source::new(Arc::new(rpc), 255);
+    let text =
+        render(&source, &["chain".to_owned(), "height".to_owned()]).expect_err("unknown network");
+    let ConsoleFault::Request(text) = text else {
+        panic!("expected a request failure");
     };
-    let text = if ptr.is_null() {
-        String::new()
-    } else {
-        // SAFETY: the export wrote `len` bytes at `ptr`.
-        let out = unsafe { std::slice::from_raw_parts(ptr, len) }.to_vec();
-        unsafe { shekyl_daemon_ctl::shekyl_daemon_ctl_free(ptr, len) };
-        String::from_utf8(out).unwrap()
-    };
+    let code = SHEKYL_DAEMON_CONSOLE_ERR_REQUEST;
     assert_eq!(code, SHEKYL_DAEMON_CONSOLE_ERR_REQUEST, "{text}");
     assert!(
         text.contains("network code 255"),
@@ -2487,7 +2431,7 @@ fn an_unknown_command_refuses_without_opening_a_socket() {
 #[test]
 fn diff_prints_the_tip_the_difficulties_and_the_hash_rate() {
     let address = route_server(vec![("/get_info", info_reply(100))]);
-    let (code, out) = run(&["diff"], Some(&address));
+    let (code, out) = run(&["chain", "difficulty"], Some(&address));
     assert_eq!(code, SHEKYL_DAEMON_CONSOLE_OK, "{out}");
     // Difficulty 0x1e240 = 123456, cumulative 0x2dc6c0 = 3000000, and
     // 123456 / 120 = 1028.
@@ -2535,7 +2479,7 @@ fn version_answers_from_a_daemon_the_handshake_refuses() {
         ]
     };
 
-    let (code, out) = run(&["diff"], Some(&route_server(routes())));
+    let (code, out) = run(&["chain", "difficulty"], Some(&route_server(routes())));
     assert_eq!(code, SHEKYL_DAEMON_CONSOLE_ERR_REQUEST, "{out}");
     assert!(out.contains("genesis mismatch"), "{out}");
 
@@ -2662,7 +2606,7 @@ fn print_pool_stats_reads_the_stats_and_the_weight_limit() {
         ("/get_transaction_pool_stats", stats),
         ("/get_info", info_reply(100)),
     ]);
-    let (code, out) = run(&["print_pool_stats"], Some(&address));
+    let (code, out) = run(&["txpool", "stats"], Some(&address));
     assert_eq!(code, SHEKYL_DAEMON_CONSOLE_OK, "{out}");
     assert!(out.starts_with("3 tx(es), 700001 bytes total"), "{out}");
     assert!(out.contains("2 not relayed"), "{out}");
@@ -2686,7 +2630,7 @@ fn a_pool_stats_reply_missing_a_member_is_refused_on_the_console() {
         ("/get_transaction_pool_stats", stats),
         ("/get_info", info_reply(100)),
     ]);
-    let (code, out) = run(&["print_pool_stats"], Some(&address));
+    let (code, out) = run(&["txpool", "stats"], Some(&address));
     assert_eq!(code, SHEKYL_DAEMON_CONSOLE_ERR_REQUEST, "{out}");
     assert!(
         out.contains("malformed get_transaction_pool_stats reply"),

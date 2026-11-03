@@ -512,6 +512,54 @@ impl Rpc for HttpRpc {
     }
 }
 
+/// A daemon client a synchronous caller can hold.
+///
+/// The renderers and `shekyl-cli` issue a handful of requests and then
+/// return to a prompt. One current-thread runtime owns the [`HttpRpc`]
+/// for the life of the client, so a call is not inside whatever runtime
+/// a wallet session happens to be using.
+pub struct SyncDaemon {
+    runtime: tokio::runtime::Runtime,
+    rpc: HttpRpc,
+}
+
+impl SyncDaemon {
+    /// Connect to `url` (`http://` or `https://`), optionally through a
+    /// SOCKS5h proxy. Nothing is dialed until [`Self::post`].
+    ///
+    /// # Errors
+    ///
+    /// The URL or the proxy does not parse, or this thread is already
+    /// inside a Tokio runtime (a second runtime there would panic).
+    pub fn connect(
+        url: String,
+        proxy: Option<String>,
+        timeout: Duration,
+    ) -> Result<Self, RpcError> {
+        if tokio::runtime::Handle::try_current().is_ok() {
+            return Err(RpcError::InternalError(
+                "the daemon client was constructed inside an async runtime".to_owned(),
+            ));
+        }
+        let runtime = tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+            .map_err(|e| RpcError::InternalError(format!("runtime: {e}")))?;
+        let rpc = runtime.block_on(HttpRpc::with_options(url, timeout, proxy))?;
+        Ok(Self { runtime, rpc })
+    }
+
+    /// POST `body` to `route` (a leading `/` is ignored) and return the body.
+    ///
+    /// # Errors
+    ///
+    /// The transport failed: connect, send, receive, or the request timeout.
+    pub fn post(&self, route: &str, body: Vec<u8>) -> Result<Vec<u8>, RpcError> {
+        let route = route.trim_start_matches('/');
+        self.runtime.block_on(self.rpc.post(route, body))
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

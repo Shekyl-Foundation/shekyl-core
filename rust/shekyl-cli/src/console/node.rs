@@ -27,7 +27,7 @@ use super::Source;
 #[deny(clippy::arithmetic_side_effects)]
 pub(super) fn show_difficulty(src: &Source) -> Result<String, String> {
     let info = fetch_get_info(src)?;
-    let target = u128::from(crate::consensus::DAA_TARGET_SECONDS);
+    let target = u128::from(shekyl_economics::economic_params().daa_target_seconds);
     let hash_rate = info
         .chain
         .difficulty
@@ -67,24 +67,17 @@ const VERSION_UNAVAILABLE: &str = "The daemon software version is not available.
 /// version is not that: the reply type refuses a shown Status whose version
 /// is empty, so one never reaches this function.
 pub(super) fn version(src: &Source) -> Result<String, String> {
-    let info = match src {
-        Source::Live(_) => fetch_get_info(src)?,
-        Source::Remote {
-            address, timeout, ..
-        } => {
-            let result = get_version_result(address, *timeout)?;
-            let theirs = daemon_rpc_version(&result).map_err(|unreadable| {
-                format!("the daemon's RPC version cannot be read: {unreadable}")
-            })?;
-            if theirs != CORE_RPC_VERSION {
-                return Err(rpc_version_difference(CORE_RPC_VERSION, theirs));
-            }
-            let raw =
-                shekyl_daemon_ctl::post_blocking(address, "/get_info", b"{}".to_vec(), *timeout)
-                    .map_err(|(_, reason)| reason)?;
-            decode_get_info_ok(&raw)?
-        }
-    };
+    let result = get_version_result(src.rpc())?;
+    let theirs = daemon_rpc_version(&result)
+        .map_err(|unreadable| format!("the daemon's RPC version cannot be read: {unreadable}"))?;
+    if theirs != CORE_RPC_VERSION {
+        return Err(rpc_version_difference(CORE_RPC_VERSION, theirs));
+    }
+    let raw = src
+        .rpc()
+        .post("/get_info", b"{}".to_vec())
+        .map_err(|error| error.to_string())?;
+    let info = decode_get_info_ok(&raw)?;
     info.node
         .shown()
         .map(|status| status.version.clone())
@@ -109,27 +102,13 @@ fn rpc_version_difference(ours: u32, theirs: u32) -> String {
 /// `/get_transaction_pool_stats`'s `pool_stats`. The pool does not record
 /// when a transaction arrived (S7), so there is no age and no histogram.
 fn fetch_pool_stats(src: &Source) -> Result<TxpoolStats, String> {
-    match src {
-        Source::Live(_) => {
-            let handles =
-                crate::handles::live_handles().ok_or_else(|| "the node is not open".to_owned())?;
-            let reply = crate::pool_methods::get_transaction_pool_stats(
-                handles.pool.as_ref(),
-                crate::info_facts::PoolScope::WithUnbroadcast,
-            )
-            .map_err(|fault| format!("{fault:?}"))?;
-            Ok(reply.pool_stats)
-        }
-        Source::Remote { .. } => {
-            let raw = src.post_remote("/get_transaction_pool_stats", b"{}".to_vec())?;
-            let reply: GetTransactionPoolStatsResponse = serde_json::from_slice(&raw)
-                .map_err(|e| format!("malformed get_transaction_pool_stats reply: {e}"))?;
-            if reply.status.is_ok() {
-                Ok(reply.pool_stats)
-            } else {
-                Err(reply.status.0)
-            }
-        }
+    let raw = src.post_remote("/get_transaction_pool_stats", b"{}".to_vec())?;
+    let reply: GetTransactionPoolStatsResponse = serde_json::from_slice(&raw)
+        .map_err(|e| format!("malformed get_transaction_pool_stats reply: {e}"))?;
+    if reply.status.is_ok() {
+        Ok(reply.pool_stats)
+    } else {
+        Err(reply.status.0)
     }
 }
 
@@ -165,7 +144,7 @@ fn render_pool_stats(stats: &TxpoolStats, block_weight_limit: u64) -> String {
         let backlog = stats.bytes_total.div_ceil(full_reward_zone);
         format!(
             "estimated {backlog} block ({} minutes) backlog",
-            backlog.saturating_mul(crate::consensus::DAA_TARGET_SECONDS) / 60
+            backlog.saturating_mul(shekyl_economics::economic_params().daa_target_seconds) / 60
         )
     };
 
