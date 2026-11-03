@@ -733,7 +733,7 @@ mod tests {
     fn the_sync_facts_read_the_latch() {
         let dir = tempfile::tempdir().expect("temp");
         let (_sync_tx, sync) = tokio::sync::watch::channel(SyncState::Synced);
-        let evidence = FollowingDegraded::HeavierRefused {
+        let evidence = FollowingDegraded {
             fork_at: BlockHeight::from_raw(3),
             tip: BlockHash::from_bytes([0x11; 32]),
             work: shekyl_difficulty::CumulativeDifficulty::from_raw(9),

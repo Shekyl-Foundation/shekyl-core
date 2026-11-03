@@ -1352,7 +1352,7 @@ mod tests {
     }
 
     fn evidence() -> shekyl_chain_store::codec::FollowingDegraded {
-        shekyl_chain_store::codec::FollowingDegraded::HeavierRefused {
+        shekyl_chain_store::codec::FollowingDegraded {
             fork_at: shekyl_types::BlockHeight::from_raw(1),
             tip: shekyl_types::BlockHash::from_bytes([2u8; 32]),
             work: shekyl_difficulty::CumulativeDifficulty::from_raw(3),

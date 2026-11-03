@@ -204,13 +204,15 @@ async fn a_promoted_block_that_fails_validate_rolls_back_and_removes_its_suffix(
 }
 
 /// Switch `x` (which mines `depth` blocks above the prefix) onto `y`'s
-/// heavier branch of `depth + 1`, and return what the latch holds after.
+/// heavier branch of `depth + 1`. Returns both branches, the deep-reorg
+/// record and the following-degraded latch after the switch.
 async fn switch_of_depth(
     name: &str,
     depth: usize,
 ) -> (
     Vec<Mined>,
     Vec<Mined>,
+    Option<crate::connector::DeepReorg>,
     Option<shekyl_chain_store::codec::FollowingDegraded>,
 ) {
     let mut x = with_prefix(&format!("{name}-x"), PREFIX).await;
@@ -224,32 +226,42 @@ async fn switch_of_depth(
         panic!("the switch did not land");
     };
     assert_eq!(done.demoted.len(), depth, "the switch popped {depth}");
+    let record = x.last_deep_reorg().await;
     let latch = x.following_degraded().await;
     x.close().await;
     y.close().await;
-    (a, b, latch)
+    (a, b, record, latch)
 }
 
-/// S1's deep-reorg alarm: a switch that pops exactly the lock window raises
-/// nothing; one block deeper lands and raises the latch with its evidence —
-/// the depth, the fork height, and the tips it left and connected. The
-/// window is `shekyl_consensus::DEFAULT_LOCK_WINDOW`, never restated.
+/// S1's deep-reorg event: a switch that pops exactly the lock window leaves
+/// no record; one block deeper writes the record (depth, fork height, the
+/// tips it left and connected) and leaves `following_degraded` clear, so a
+/// persona still reads the daemon as following. The window is
+/// `shekyl_consensus::DEFAULT_LOCK_WINDOW`, never restated.
 #[tokio::test]
-async fn a_switch_deeper_than_the_lock_window_raises_the_alarm_and_lands() {
+async fn a_switch_deeper_than_the_lock_window_is_recorded_and_the_node_still_follows() {
     let window = shekyl_consensus::DEFAULT_LOCK_WINDOW;
-    let (_, _, at_window) = switch_of_depth("switch-alarm-at", window).await;
-    assert_eq!(at_window, None, "a switch of exactly the window is quiet");
-
-    let (a, b, deeper) = switch_of_depth("switch-alarm-past", window + 1).await;
+    let (_, _, record, latch) = switch_of_depth("switch-deep-at", window).await;
     assert_eq!(
-        deeper,
-        Some(shekyl_chain_store::codec::FollowingDegraded::DeepReorg {
+        record, None,
+        "a switch of exactly the window leaves no record"
+    );
+    assert_eq!(latch, None);
+
+    let (a, b, record, latch) = switch_of_depth("switch-deep-past", window + 1).await;
+    assert_eq!(
+        record,
+        Some(crate::connector::DeepReorg {
             depth: shekyl_types::BlockCount::from_raw(u64::try_from(window + 1).expect("fits")),
             fork_at: BlockHeight::from_raw(PREFIX - 1),
             old_tip: a.last().expect("A").hash,
             new_tip: b.last().expect("B").hash,
         }),
-        "one block deeper reports the switch it made"
+        "one block deeper records the switch it made"
+    );
+    assert_eq!(
+        latch, None,
+        "a deep reorganization the node followed does not mark it degraded"
     );
 }
 
@@ -500,8 +512,8 @@ async fn a_switch_popping_exactly_the_cap_lands_and_one_more_is_refused_locally(
             assert_eq!(beyond.cap.to_raw(), LEVERED_CAP);
             let latch = x2.following_degraded().await;
             assert_eq!(
-                latch,
-                Some(evidence),
+                latch.map(|held| held.tip),
+                Some(evidence.tip),
                 "a stored fork past the cap sets following_degraded; \
                  skipping note_degraded on BeyondCap leaves it clear"
             );
@@ -552,8 +564,8 @@ async fn a_pop_below_the_undo_floor_is_a_local_fail_stop_not_a_verdict() {
             );
             let latch = x.following_degraded().await;
             assert_eq!(
-                latch,
-                Some(evidence),
+                latch.map(|held| (held.fork_at, held.tip)),
+                Some((evidence.fork_at, evidence.tip)),
                 "a BelowFloor switch sets following_degraded; \
                  skipping note_degraded on BelowFloor leaves the cell clear"
             );

@@ -419,7 +419,7 @@ impl Message<OfferAlt> for Connector {
         msg: OfferAlt,
         _ctx: &mut Context<Self, Self::Reply>,
     ) -> Self::Reply {
-        let (rules, trust) = (self.rules, self.trust);
+        let (rules, trust) = (self.rules, self.rules.trust());
         let offered = self
             .writer
             .with_store(|store| offer(store, rules, trust, msg.0))?;
@@ -438,19 +438,21 @@ impl Message<Reorganize> for Connector {
         msg: Reorganize,
         _ctx: &mut Context<Self, Self::Reply>,
     ) -> Self::Reply {
-        let (rules, trust) = (self.rules, self.trust);
+        let (rules, trust) = (self.rules, self.rules.trust());
         let memo = &mut self.memo;
         let switched = self
             .writer
             .with_store(|store| switch(store, rules, trust, memo, msg))?;
-        if matches!(switched, Switched::Done(_)) {
+        if let Switched::Done(done) = &switched {
             self.tip_moved();
+            if let Some(reorg) = deep_reorg(done) {
+                self.note_deep_reorg(reorg);
+            }
         }
         let evidence = match &switched {
             Switched::BeyondCap { evidence, .. } | Switched::BelowFloor { evidence, .. } => {
                 Some(*evidence)
             }
-            Switched::Done(done) => deep_reorg(done),
             _ => None,
         };
         if let Some(evidence) = evidence {
@@ -671,20 +673,41 @@ fn heavier(chain: &AltChain) -> shekyl_chain_store::codec::FollowingDegraded {
         .entries()
         .last()
         .expect("a heavier alternative names its tip");
-    shekyl_chain_store::codec::FollowingDegraded::HeavierRefused {
+    shekyl_chain_store::codec::FollowingDegraded {
         fork_at: chain.root().height,
         tip: tip.id,
         work: tip.block.cumulative_difficulty(),
     }
 }
 
-/// The deep-reorg alarm (S1, design review 2026-11-03): a switch that
-/// popped more blocks than the lock window un-confirms outputs a wallet
-/// already treated as spendable (`shekyl_consensus::DEFAULT_LOCK_WINDOW`,
-/// the wallet's `SPENDABLE_AGE` and curve-tree maturity). The switch
-/// landed; the latch reports it and refuses nothing. `None` for a switch at
-/// or inside the window.
-fn deep_reorg(done: &SwitchDone) -> Option<shekyl_chain_store::codec::FollowingDegraded> {
+/// A switch that popped more blocks than the lock window (S1, design review
+/// 2026-11-03): `shekyl_consensus::DEFAULT_LOCK_WINDOW`, the single source
+/// for the wallet's `SPENDABLE_AGE` and curve-tree maturity, so a switch
+/// this deep un-confirms outputs a wallet already treated as spendable.
+///
+/// An event, not a state. The switch landed and the node follows the
+/// heavier chain; the connector logs a warning and keeps the most recent
+/// one (`WatchDeepReorg`), which the next overwrites. Nothing that decides
+/// whether the node is following reads it: the `following_degraded` latch
+/// keeps its one meaning, a heavier chain this node refused, because a
+/// latch here would mark every node that followed a legitimate deep
+/// reorganization degraded until a resync, and a degraded daemon stops its
+/// personas serving.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct DeepReorg {
+    /// The recorded blocks the switch popped.
+    pub depth: BlockCount,
+    /// The last height both chains share.
+    pub fork_at: BlockHeight,
+    /// The tip the switch left.
+    pub old_tip: BlockHash,
+    /// The tip the switch connected.
+    pub new_tip: BlockHash,
+}
+
+/// The [`DeepReorg`] a landed switch makes, or `None` for one at or inside
+/// the lock window.
+fn deep_reorg(done: &SwitchDone) -> Option<DeepReorg> {
     let window = u64::try_from(shekyl_consensus::DEFAULT_LOCK_WINDOW).expect("the window fits u64");
     let depth = u64::try_from(done.demoted.len()).expect("a pop count fits u64");
     if depth <= window {
@@ -693,7 +716,7 @@ fn deep_reorg(done: &SwitchDone) -> Option<shekyl_chain_store::codec::FollowingD
     let (first, _) = *done.demoted.first()?;
     let (_, old_tip) = *done.demoted.last()?;
     let (_, new_tip) = *done.promoted.last()?;
-    Some(shekyl_chain_store::codec::FollowingDegraded::DeepReorg {
+    Some(DeepReorg {
         depth: BlockCount::from_raw(depth),
         fork_at: first
             .checked_sub_count(BlockCount::ONE)
@@ -1006,22 +1029,6 @@ fn claimed_seed(view: &AltView<'_>, height: BlockHeight) -> Result<BlockHash, Ru
         AtHeight::AboveTip => unreachable!(
             "the seed height sits below the block, and this view reaches at least the block's parent"
         ),
-    }
-}
-
-/// Replace the run's trust with a fixture table — test-only, so the fork
-/// choice's checkpoint arm (CEN-K6/K7) can be reached on a regtest chain,
-/// which no release anchors.
-#[cfg(test)]
-#[derive(Clone, Copy, Debug)]
-pub struct AnchorForTests(pub Trust);
-
-#[cfg(test)]
-impl Message<AnchorForTests> for Connector {
-    type Reply = ();
-
-    async fn handle(&mut self, msg: AnchorForTests, _ctx: &mut Context<Self, Self::Reply>) {
-        self.trust = msg.0;
     }
 }
 

@@ -19,7 +19,7 @@ use std::time::{Duration, Instant};
 
 use shekyl_chain_ingest::ProductionSubstrate;
 use shekyl_chain_rules::{form_header, target_claim, FormAttempt, Substrate};
-use shekyl_chain_store::codec::{FollowingDegraded, FollowingDegradedCell};
+use shekyl_chain_store::codec::FollowingDegradedCell;
 use shekyl_chain_store::store::SnapshotView;
 use shekyl_chain_sync::SyncState;
 use shekyl_levin::{
@@ -306,16 +306,8 @@ async fn a_past_cap_heavier_fork_raises_the_alarm_and_the_latch_reads_back() {
         .get_property::<FollowingDegradedCell>()
         .expect("a read")
         .expect("the latch is set");
-    let FollowingDegraded::HeavierRefused {
-        fork_at: latched_at,
-        work: latched_work,
-        ..
-    } = latch
-    else {
-        panic!("past-cap evidence is a refused heavier chain: {latch:?}");
-    };
-    assert!(latched_at.to_raw() <= fork_at, "{latch:?}");
-    assert!(latched_work.to_raw() > work);
+    assert!(latch.fork_at.to_raw() <= fork_at, "{latch:?}");
+    assert!(latch.work.to_raw() > work);
     drop(snap);
     assert_eq!(node.count(), count, "nothing past the cap connected");
     node.stop().await;

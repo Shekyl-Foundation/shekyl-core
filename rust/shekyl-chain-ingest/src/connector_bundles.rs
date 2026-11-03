@@ -642,7 +642,7 @@ impl Message<ApplyAdmitting> for Connector {
         _ctx: &mut Context<Self, Self::Reply>,
     ) -> Self::Reply {
         let rules = self.rules;
-        let trust = self.trust;
+        let trust = self.rules.trust();
         let memo = &mut self.memo;
         let out = self.writer.write(|batch| {
             let mut applied = super::Applied::default();

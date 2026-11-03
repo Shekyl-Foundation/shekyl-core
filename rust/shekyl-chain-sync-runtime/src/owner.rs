@@ -932,7 +932,7 @@ where
                     // The latch watch carries the write back as `Latch`.
                     let alarm = self.alarm.clone();
                     tokio::spawn(async move {
-                        let evidence = FollowingDegraded::HeavierRefused { fork_at, tip, work };
+                        let evidence = FollowingDegraded { fork_at, tip, work };
                         if let Err(err) = alarm.raise(evidence).await {
                             tracing::error!(?err, "the latch could not be written");
                         }
