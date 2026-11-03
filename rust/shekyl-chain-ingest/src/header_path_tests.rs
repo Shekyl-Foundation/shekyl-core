@@ -728,7 +728,7 @@ fn an_anchored_height_with_the_wrong_hash_is_e1_on_both_paths() {
     let (dir, manifest) = captured_chains().into_iter().next().expect("a chain");
     let chain = load(&dir, &manifest.shape);
     let rules = rules_for(&manifest);
-    let anchors = ReleaseAnchors::for_tests(Some(BlockHash::from_bytes([0xab; 32])), &[]);
+    let anchors = ReleaseAnchors::for_tests(Some(BlockHash::from_bytes([0xab; 32])));
     let trust = Trust::full(anchors);
     let substrate = mock_with_the_real_clock();
     let path = tmp("header-path-anchor");

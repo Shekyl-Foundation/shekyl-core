@@ -314,16 +314,12 @@ pub enum StoreCannot {
         /// The schedule this session runs.
         session: SettlementEpochBlocks,
     },
-    /// The recorded chain contradicts a pin this binary carries (CEN-E5).
+    /// The recorded chain's genesis is not the one this binary pins
+    /// (CEN-E5): the file is another network's, or a remint.
     ///
     /// The file is coherent; this session is the wrong one for it — the
-    /// same class as [`Self::SettlementEpochMismatch`]. Genesis
-    /// ([`AnchorConflict::remedy`] is refuse-to-run) is another network's
-    /// file, or a remint. A later checkpoint carries a pop the ingest
-    /// driver still owes; this open reports that conflict and does not
-    /// pop, so a session cannot start on a chain that disagrees with its
-    /// pins and then forget to rewind. The payload is the rules crate's
-    /// conflict, not a second shape of it.
+    /// same class as [`Self::SettlementEpochMismatch`]. The payload is the
+    /// rules crate's conflict, not a second shape of it.
     ReleasePin(AnchorConflict),
     /// The session's undo-log retention is not strictly inside its
     /// settlement epoch — zero, or `≥ SEB` (DRS-E1 S-PRUNE, `DRS_E1_SPRUNE.md`
@@ -652,18 +648,16 @@ impl core::fmt::Display for StoreCannot {
                 Some(recorded) => write!(
                     f,
                     "block {height} is {recorded} but this binary pins {expected}; \
-                     the file is not this release's chain ({remedy:?})",
+                     the file is another network's chain, and this node does not run on it",
                     height = conflict.height,
                     expected = conflict.expected,
-                    remedy = conflict.remedy(),
                 ),
                 None => write!(
                     f,
                     "block {height} is absent below the tip but this binary pins {expected}; \
-                     the file is not this release's chain ({remedy:?})",
+                     the file is not a chain this node can run on",
                     height = conflict.height,
                     expected = conflict.expected,
-                    remedy = conflict.remedy(),
                 ),
             },
             Self::Pool(cannot) => write!(f, "pool store: {cannot}"),

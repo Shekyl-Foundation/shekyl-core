@@ -3,35 +3,24 @@
 // All rights reserved.
 // BSD-3-Clause
 
-//! Census 4.E — the anchor model's rules (`CHAIN_RULES_SLICE_3.md`).
+//! Census 4.E — the genesis pin's rules.
 //!
-//! The rows of [`ReleaseAnchors`](crate::ReleaseAnchors), `PDM-Q5`'s
-//! release-carried table. Two are this crate's; one is not yet:
+//! The rows of [`ReleaseAnchors`](crate::ReleaseAnchors), the release's
+//! genesis pin. No coded checkpoint pins anything above it (S1, design
+//! review 2026-11-03):
 //!
-//! - **CEN-E5** — the binary's anchors agree with the file it opens. Not a
-//!   per-block predicate: it is run **once, at open**, over the recorded
-//!   chain ([`E5::conflict_over`]; [`E5::conflict_with`] is that walk over a
-//!   [`HeaderView`]), and its finding is an [`AnchorConflict`] the writer
-//!   remedies (pop to a chain count, or refuse to run) rather than a
-//!   consensus verdict. The check, the conflict, and the remedy live in
-//!   this module; the table ([`ReleaseAnchors`](crate::ReleaseAnchors))
-//!   stays data. The first row this crate enforces at a site other than
-//!   `validate` — `RowStatus::EnforcedAt` is its registry status (slice 3
-//!   Q4), excluded from per-block completeness because no per-block
-//!   coverage could ever contain it.
-//! - **CEN-E1** — a block connecting at an anchored height carries that
-//!   anchor's hash. Per block, view-bound ([`E1`], a header rule: the
-//!   anchors are header facts and the view is not read); reads the anchors
-//!   from the `Trust` input that carries them into `validate`.
-//! - **CEN-E2** — an alternative rooted below the current anchor is
-//!   refused, and so is one that would pop more than `D_max` recorded
-//!   blocks: `PDM-Q11`'s two bands, one function. Its home is the alt
-//!   tier's module ([`crate::rules::alt::E2`]), run by `crate::alt_against`
-//!   before any header is read; it has no main-chain arm because on the
-//!   main chain the floor holds by construction (a candidate at `tip + 1`
-//!   is above every anchor `≤ tip`) and nothing is popped.
+//! - **CEN-E5** — the file a node opens records this network's genesis.
+//!   Not a per-block predicate: it is run **once, at open**, over the
+//!   recorded chain ([`E5::conflict_over`]; [`E5::conflict_with`] is that
+//!   walk over a [`HeaderView`]), and its finding is an [`AnchorConflict`]:
+//!   the file is another network's, and the writer does not run. The first
+//!   row this crate enforces at a site other than `validate` —
+//!   `RowStatus::EnforcedAt` is its registry status (slice 3 Q4).
+//! - **CEN-E1** — a genesis candidate is the pinned genesis. Per block,
+//!   view-bound ([`E1`], a header rule); reads the pin from the `Trust`
+//!   input that carries it into `validate`.
 
-use shekyl_types::{BlockCount, BlockHash, BlockHeight, ChainCount};
+use shekyl_types::{BlockHash, BlockHeight};
 
 use crate::anchors::ReleaseAnchors;
 use crate::census::CenRow;
@@ -40,23 +29,15 @@ use crate::rules::{HeaderContext, HeaderRule, Rule};
 use crate::verdict::{refused, Locus, Verdict};
 use crate::view::{AtHeight, HeaderView, Tip};
 
-/// CEN-E1: a block connecting at an anchored height carries that anchor's
-/// hash — the anchor's own rule (`PDM-Q11`), the `assumevalid` argument
-/// made a predicate.
+/// CEN-E1: a block connecting at height 0 is the genesis the release pins.
 ///
-/// Reads the release's anchors through the [`Trust`](crate::Trust) input
-/// (`cx.trust`) and the block's identity through the token (`form` derived
-/// it once, CEN-B6). At an unanchored height — every height today — the
-/// rule is vacuously satisfied and **recorded as evaluated**, which the C++
-/// (`blockchain.cpp:5545` main, `:2186` alt: `check_block`) does not do;
-/// the coverage says the row ran. One predicate for both C++ arms: the
-/// main arm's `is_in_checkpoint_zone` guard is a lookup short-cut, not a
-/// rule (slice 3 F11). The alt arm's *forced reorg on a match* is an
-/// alt-chain consequence and lands with CEN-E2's alt home (slice 9).
+/// Reads the pin through the [`Trust`](crate::Trust) input (`cx.trust`) and
+/// the block's identity through the token (`form` derived it once,
+/// CEN-B6). Above genesis nothing is pinned, and the rule is vacuously
+/// satisfied and **recorded as evaluated**: the coverage says the row ran.
 ///
-/// `form` cannot evaluate it: the connecting height is the view's
-/// (F12) — the C++ files the refusal as `reject_block_form`, the Rust as a
-/// view-bound `InvalidBlock { rule: E1, locus: Block }`.
+/// `form` cannot evaluate it: the connecting height is the view's (F12),
+/// so the refusal is a view-bound `InvalidBlock { rule: E1, locus: Block }`.
 pub(crate) struct E1;
 
 impl Rule for E1 {
@@ -75,17 +56,13 @@ impl HeaderRule for E1 {
     }
 }
 
-/// CEN-E5: at open, every anchor the binary carries at or below the
-/// recorded tip names the block the file actually recorded there.
+/// CEN-E5: at open, the file's block 0 is the genesis the binary pins.
 ///
 /// What survives of the census row after `PDM-Q-F23` removed the runtime
-/// checkpoint file: C2-R1b clause (3), run once at open over the
-/// release-carried table. The check is [`E5::conflict_over`];
-/// [`E5::conflict_with`] is that walk over a [`ChainView`]. The remedy is
-/// [`AnchorConflict::remedy`]. The writer executes the remedy. This crate
-/// has no store handle and cannot pop. The store's public-network open
-/// refuses on the conflict and does not pop; the pop stays the ingest
-/// driver's (`docs/FOLLOWUPS.md`).
+/// checkpoint file and S1 removed coded checkpoints: C2-R1b clause (3)'s
+/// genesis arm, run once at open. The check is [`E5::conflict_over`];
+/// [`E5::conflict_with`] is that walk over a [`ChainView`]. A conflict is
+/// a file from another network, and the store refuses to open it.
 pub(crate) struct E5;
 
 impl Rule for E5 {
@@ -93,8 +70,8 @@ impl Rule for E5 {
 }
 
 impl E5 {
-    /// The first pin the recorded chain contradicts, if any, in height
-    /// order — the genesis identity at 0, then the anchors.
+    /// The pin the recorded chain contradicts, if any: the genesis
+    /// identity at height 0.
     ///
     /// `tip` is the recorded tip. `None` is an empty file, which
     /// contradicts nothing: there is no block for a pin to disagree with
@@ -137,7 +114,7 @@ impl E5 {
 
     /// [`conflict_over`](Self::conflict_over) over `view`: the tip, then
     /// each pinned block's identity — header facts, so a header view
-    /// suffices (an alt chain's anchors are checked the same way).
+    /// suffices (an alt chain's genesis is checked the same way).
     pub(crate) fn conflict_with<'id, H: HeaderView<'id>>(
         anchors: &ReleaseAnchors,
         view: &H,
@@ -151,12 +128,12 @@ impl E5 {
     }
 }
 
-/// A recorded chain that contradicts a release-carried anchor (CEN-E5's
-/// finding). Carries what the binary vouched for and what the file holds.
-/// [`remedy`](Self::remedy) says what the writer does about it.
+/// A recorded chain whose genesis is not the one the release pins (CEN-E5's
+/// finding): the file is another network's, and the writer does not run.
+/// No pop can resolve it: genesis cannot be popped.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct AnchorConflict {
-    /// The anchored height.
+    /// The pinned height: genesis.
     pub height: BlockHeight,
     /// The identity the release vouches for there.
     pub expected: BlockHash,
@@ -166,47 +143,8 @@ pub struct AnchorConflict {
     pub recorded: Option<BlockHash>,
 }
 
-impl AnchorConflict {
-    /// What the writer does with this conflict (C2-R1b clause (3)).
-    ///
-    /// Genesis refuses to run: the floor that fixes every later conflict
-    /// would leave the height-0 block in place. Every other height pops
-    /// to the chain count [`Remedy::PopTo`] carries.
-    #[must_use]
-    pub const fn remedy(&self) -> Remedy {
-        if self.height.is_zero() {
-            Remedy::RefuseToRun
-        } else {
-            Remedy::PopTo(rollback_count(self.height))
-        }
-    }
-}
-
-/// The writer's response to an [`AnchorConflict`].
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub enum Remedy {
-    /// The conflict is at genesis. No pop can resolve it: genesis cannot be
-    /// popped, and a chain that still holds that block still mismatches.
-    /// The file is on the wrong network for this binary; the writer does
-    /// not run.
-    RefuseToRun,
-    /// Pop until the chain has this many blocks, then resync.
-    ///
-    /// The payload is a block count, not a tip height. The tip it leaves
-    /// is [`ChainCount::tip`]: the conflicting block and the two blocks
-    /// before it are gone, and a chain too short for that keeps genesis
-    /// alone. A conflict at height 1, 2, or 3 therefore leaves genesis.
-    /// Reading the count as a tip height keeps a height-1 conflict.
-    ///
-    /// A pop the store refuses (`StoreCannot::PopBelowFloor`, the undo-log
-    /// watermark, `≥ D_max` once S-PRUNE raises it) is itself a reason not
-    /// to run (C2-R1b F-1(b)). The writer applies this; this crate has no
-    /// store.
-    PopTo(ChainCount),
-}
-
 impl ReleaseAnchors {
-    /// **CEN-E5.** The first pin the recorded chain contradicts, if any.
+    /// **CEN-E5.** The pin the recorded chain contradicts, if any.
     ///
     /// `tip` is the recorded tip (`None`: an empty file, which contradicts
     /// nothing). `recorded_at` answers a pinned height at or below that
@@ -246,39 +184,6 @@ impl ReleaseAnchors {
         view: &H,
     ) -> Result<Option<AnchorConflict>, H::Fault> {
         E5::conflict_with(self, view)
-    }
-}
-
-/// Blocks a CEN-E5 rollback discards: the conflicting anchor and the two
-/// blocks before it (C2-R1b clause (3), "a couple of blocks before").
-const ROLLBACK_DEPTH: BlockCount = {
-    const BEFORE_THE_ANCHOR: u64 = 2;
-    const THE_ANCHOR: u64 = 1;
-    BlockCount::from_raw(BEFORE_THE_ANCHOR + THE_ANCHOR)
-};
-
-/// The chain length at which a pop stops.
-///
-/// The kept tip is [`ROLLBACK_DEPTH`] below `conflict_at`. The length of
-/// the chain whose newest block is that tip is one more than
-/// [`ChainCount::from_next_height`] of it — the inverse of
-/// [`ChainCount::tip`]. A chain that cannot rewind that far keeps genesis
-/// alone ([`ChainCount`] of one). `conflict_at` of zero is not a pop;
-/// [`AnchorConflict::remedy`] refuses it.
-pub(crate) const fn rollback_count(conflict_at: BlockHeight) -> ChainCount {
-    chain_with_tip(conflict_at.saturating_sub_count(ROLLBACK_DEPTH))
-}
-
-/// The chain whose newest block is `tip`.
-///
-/// Inverse of [`ChainCount::tip`]. [`ChainCount::from_next_height`] is the
-/// chain whose *next* block would be `tip`; this chain also holds `tip`.
-const fn chain_with_tip(tip: BlockHeight) -> ChainCount {
-    match ChainCount::from_next_height(tip).checked_add(BlockCount::ONE) {
-        Some(count) => count,
-        // `tip` is `BlockHeight::MAX`. The rollback depth is non-zero, so
-        // a kept tip is at most `MAX - 1` and this arm does not run.
-        None => panic!("a chain whose tip is BlockHeight::MAX does not fit in ChainCount"),
     }
 }
 

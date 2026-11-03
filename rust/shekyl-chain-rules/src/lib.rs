@@ -159,8 +159,8 @@ mod view;
 pub mod harness;
 pub mod relay_floor;
 
-pub use alt::{alt_against, anchor_band, AltChainView, AltValid, AnchorBand, Fork, InvertedFork};
-pub use anchors::{Anchor, ReleaseAnchors};
+pub use alt::{alt_against, AltChainView, AltValid, Fork, InvertedFork};
+pub use anchors::ReleaseAnchors;
 pub use archival::{
     admission_plan, closed_and_final, drawable_epoch_walked_back, remember_window_epochs,
     shard_close, shard_close_height, Accrual, AdmissionPlan, AdmissionPlanFault, ArchivalDelta,
@@ -216,7 +216,7 @@ pub use rule_set::{
     ResponseWindowOutrunsAnchor, RuleSchedule, RuleSet, RuleSetId, SettlementEpochBlocks,
     SettlementSchedule,
 };
-pub use rules::anchors::{AnchorConflict, Remedy};
+pub use rules::anchors::AnchorConflict;
 pub use rules::block_weight::{
     block_weight_limit_at, effective_median_at, effective_median_at_windows, even_pair_median,
     median, medians_from, medians_over, medians_over_window, EffectiveMedian, Weights,

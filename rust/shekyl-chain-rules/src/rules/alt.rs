@@ -44,12 +44,9 @@
 
 use shekyl_wire::Input;
 
-use crate::alt::Fork;
 use crate::census::CenRow;
 use crate::coverage::RuleCoverage;
-use crate::rule_set::RuleSet;
 use crate::rules::{FormContext, FormRule, Rule};
-use crate::trust::Trust;
 use crate::verdict::{InvalidBlock, Locus, Verdict};
 
 /// CEN-K1b: an alternative block whose coinbase claims height 0 is
@@ -118,73 +115,6 @@ impl K4 {
     /// Record the row: the ladder ran to its end.
     pub(crate) fn record(coverage: &mut RuleCoverage) {
         coverage.insert(Self::ROW);
-    }
-}
-
-/// CEN-E2: the anchor floor and the rolling reorg cap (`PDM-Q11`, one
-/// function, two bands), over the fork an alternative block would cause.
-///
-/// **Band 1 — the floor.** Refused when the fork's root is below the
-/// release's current anchor (`ReleaseAnchors::current`, the last
-/// checkpoint the binary carries): the alternative's first block sits at
-/// `root + 1 ≤ C`, so accepting it would replace the anchored block, and
-/// a chain that replaces the anchored block cannot carry the anchor's hash
-/// at `C` (CEN-E1 would refuse it there). The C++
-/// (`is_alternative_block_allowed`, `checkpoints.cpp:97`–`:109`) tested the
-/// *candidate's claimed* height against the last checkpoint below the
-/// recorded height; this tests the *fork root*, a derived fact, so a chain
-/// whose earlier blocks were admitted before a release shipped the anchor
-/// is refused at its next block rather than extended past it.
-///
-/// **Band 2 — the cap.** Refused when the recorded blocks the alternative
-/// would pop — `recorded_tip − root` — exceed the rule set's
-/// [`reorg_cap`](RuleSet::reorg_cap) (`D_max`; read from the rule set,
-/// never the constant, so a Fakechain set and its store agree). `D_max` is
-/// a detectability boundary, not a security margin: below it an adversary
-/// who can afford the work reorganises silently; at it, the rewrite is a
-/// split the operator can see. The cap **binds only when anchored**: a node
-/// whose release carries no checkpoint has no cap (`PDM-Q11`, binding
-/// condition — the anchor is the cap's precondition, not its sibling).
-///
-/// Neither band reads the view: the fork is the caller's derivation
-/// ([`Fork`]), the anchor is the [`Trust`]'s, the cap is the rule set's.
-/// So this is not a [`HeaderRule`](crate::rules::HeaderRule) — it is run
-/// by the alt tier before any header is read, and records its row here.
-pub(crate) struct E2;
-
-impl Rule for E2 {
-    const ROW: CenRow = CenRow::E2;
-}
-
-impl E2 {
-    /// Judge `fork` under `trust`'s anchors and `rule_set`'s cap, recording
-    /// the row when it passes.
-    pub(crate) fn check(
-        fork: &Fork,
-        rule_set: &RuleSet,
-        trust: &Trust,
-        coverage: &mut RuleCoverage,
-    ) -> Verdict<()> {
-        // The floor is the last anchor the recorded chain has reached — the
-        // census row's "last anchor preceding the current height", read as
-        // at or below the recorded tip — not the table's last entry: an
-        // anchor above the tip is no floor yet, and treating it as one
-        // would refuse the very alternative block it names (CEN-K6's
-        // checkpoint arm, DRS-E5 a5). The C++ (`is_alternative_block_allowed`
-        // over `get_current_blockchain_height()`, the block COUNT) also
-        // floors on an anchor at `tip + 1`; that divergence is adjudicated
-        // against the specification, not toward the C++ (census CEN-E2,
-        // ruled 2026-10-15): an unreached anchor is no floor, and a block at
-        // its height that does not match it is CEN-E1's refusal.
-        //
-        // A hit records nothing: the row did not pass. No reached anchor,
-        // and a fork inside the band, record the row and pass. The cap does
-        // not bind on an unanchored chain (`anchor_band`).
-        if crate::alt::anchor_band(fork, rule_set, trust).is_some() {
-            return Err(InvalidBlock::new(Self::ROW, Locus::Block));
-        }
-        coverage.insert(Self::ROW);
-        Ok(())
     }
 }
 

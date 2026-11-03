@@ -3,12 +3,12 @@
 // All rights reserved.
 // BSD-3-Clause
 
-//! Census 4.E fixtures (`CHAIN_RULES_SLICE_3.md` §5). CEN-E5 is judged over
-//! a recorded chain, not a candidate: the negative fixture is a chain whose
-//! block at an anchored height is not the anchor.
+//! Census 4.E fixtures (`CHAIN_RULES_SLICE_3.md` §5): the genesis pin, per
+//! block (CEN-E1) and at open (CEN-E5). CEN-E5 is judged over a recorded
+//! chain, not a candidate: the negative fixture is a chain whose block 0
+//! is not the pinned genesis.
 
 use super::*;
-use crate::anchors::Anchor;
 use crate::harness::fixture::{candidate_on, recorded, root};
 use crate::harness::{assert_refused, formed_on, infallible, judged, FaultingView, MockChain};
 use crate::rule_set::RuleSet;
@@ -16,88 +16,19 @@ use crate::trust::Trust;
 use crate::validate::validate;
 use shekyl_types::BlockHash;
 
-// ---- CEN-E1: the anchor's equality, per block, through `validate` -------
+// ---- CEN-E1: the genesis pin's equality, per block, through `validate` --
 
-/// A one-entry table anchoring `height` (`≥ 1`) at `hash`, no genesis pin.
-fn anchoring(height: u64, hash: BlockHash) -> ReleaseAnchors {
-    ReleaseAnchors::for_tests(None, checkpoints(&[(height, hash)]))
-}
-
-/// A table pinning genesis at `hash` and anchoring nothing — a public
-/// network's shape before its first checkpoint release.
+/// A table pinning genesis at `hash`: a public network's shape.
 fn pinning_genesis(hash: BlockHash) -> ReleaseAnchors {
-    ReleaseAnchors::for_tests(Some(hash), &[])
+    ReleaseAnchors::for_tests(Some(hash))
 }
 
-/// Leaked checkpoint entries for a fixture table.
-fn checkpoints(entries: &[(u64, BlockHash)]) -> &'static [Anchor] {
-    Box::leak(
-        entries
-            .iter()
-            .map(|&(height, hash)| Anchor {
-                height: BlockHeight::from_raw(height),
-                hash,
-            })
-            .collect::<Vec<_>>()
-            .into_boxed_slice(),
-    )
-}
-
-/// Refusal fixture: a valid candidate connecting at an anchored height whose
-/// identity is not the anchor is refused on E1, at the block.
-#[test]
-fn a_block_at_an_anchored_height_that_is_not_the_anchor_is_refused() {
-    let chain = five_blocks();
-    // Anchor the connecting height (5) at a hash the candidate cannot have.
-    let trust = Trust::full(anchoring(5, OTHER));
-    chain.with_view(|view| {
-        let formed = formed_on(&chain, candidate_on(&chain, Vec::new()));
-        let verdict = judged(validate(formed, &view, &RuleSet::GENESIS, &trust));
-        assert_refused(verdict, CenRow::E1, Locus::Block);
-    });
-}
-
-/// A candidate whose identity *is* the anchor passes, and E1 is in the
-/// coverage — the row ran.
-#[test]
-fn a_block_that_is_the_anchor_passes_with_e1_recorded() {
-    let chain = five_blocks();
-    let candidate = candidate_on(&chain, Vec::new());
-    let identity = candidate.block.hash();
-    let trust = Trust::full(anchoring(5, identity));
-    chain.with_view(|view| {
-        let formed = formed_on(&chain, candidate);
-        let valid = judged(validate(formed, &view, &RuleSet::GENESIS, &trust))
-            .expect("the anchored block is the anchor");
-        assert_eq!(valid.block().hash(), identity);
-        assert!(valid.coverage().contains(CenRow::E1));
-    });
-}
-
-/// At an unanchored height — every height today — E1 is vacuously
-/// satisfied and still recorded as evaluated: the coverage says the row
-/// ran, which the C++ never records.
-#[test]
-fn an_unanchored_height_passes_vacuously_and_is_recorded() {
-    let chain = five_blocks();
-    for trust in [Trust::UNANCHORED, Trust::full(anchoring(3, OTHER))] {
-        chain.with_view(|view| {
-            let formed = formed_on(&chain, candidate_on(&chain, Vec::new()));
-            let valid = judged(validate(formed, &view, &RuleSet::GENESIS, &trust))
-                .expect("no anchor at the connecting height");
-            assert!(valid.coverage().contains(CenRow::E1));
-        });
-    }
-}
-
-/// E1 at genesis: the genesis pin judges the height-0 candidate by
-/// equality — a foreign genesis is refused on E1 — with no anchor in the
-/// table at all (`current()` is `None`; genesis is in no trust band).
+/// E1 at genesis: the pin judges the height-0 candidate by equality, and a
+/// foreign genesis is refused on E1, at the block.
 #[test]
 fn the_genesis_pin_judges_the_genesis_candidate() {
     let chain = MockChain::default();
     let wrong = Trust::full(pinning_genesis(OTHER));
-    assert_eq!(wrong.anchors().current(), None);
     chain.with_view(|view| {
         let formed = formed_on(&chain, candidate_on(&chain, Vec::new()));
         assert_refused(
@@ -108,7 +39,39 @@ fn the_genesis_pin_judges_the_genesis_candidate() {
     });
 }
 
-// ---- CEN-E5: the binary's anchors agree with the file, at open ---------
+/// A genesis candidate that *is* the pin passes, and E1 is in the coverage:
+/// the row ran.
+#[test]
+fn the_pinned_genesis_passes_with_e1_recorded() {
+    let chain = MockChain::default();
+    let candidate = candidate_on(&chain, Vec::new());
+    let identity = candidate.block.hash();
+    let trust = Trust::full(pinning_genesis(identity));
+    chain.with_view(|view| {
+        let formed = formed_on(&chain, candidate);
+        let valid = judged(validate(formed, &view, &RuleSet::GENESIS, &trust))
+            .expect("the genesis candidate is the pin");
+        assert_eq!(valid.block().hash(), identity);
+        assert!(valid.coverage().contains(CenRow::E1));
+    });
+}
+
+/// Above genesis nothing is pinned: E1 is vacuously satisfied and still
+/// recorded as evaluated, under a pinned genesis or none.
+#[test]
+fn a_height_above_genesis_passes_vacuously_and_is_recorded() {
+    let chain = five_blocks();
+    for trust in [Trust::UNANCHORED, Trust::full(pinning_genesis(OTHER))] {
+        chain.with_view(|view| {
+            let formed = formed_on(&chain, candidate_on(&chain, Vec::new()));
+            let valid = judged(validate(formed, &view, &RuleSet::GENESIS, &trust))
+                .expect("nothing is pinned above genesis");
+            assert!(valid.coverage().contains(CenRow::E1));
+        });
+    }
+}
+
+// ---- CEN-E5: the file's genesis is the pinned one, at open -------------
 
 /// A five-block chain (heights 0–4), timestamps 100–104.
 fn five_blocks() -> MockChain {
@@ -133,43 +96,15 @@ fn conflict(chain: &MockChain, anchors: &ReleaseAnchors) -> Option<AnchorConflic
     chain.with_view(|view| infallible(anchors.conflict_with(&view)))
 }
 
-/// The refusal fixture the registry names: a recorded block at an anchored
-/// height that is not the anchor is the conflict, and it names both hashes.
-#[test]
-fn a_recorded_block_that_is_not_the_anchor_is_the_conflict() {
-    let chain = five_blocks();
-    let anchors = anchoring(3, OTHER);
-    assert_eq!(
-        conflict(&chain, &anchors),
-        Some(AnchorConflict {
-            height: BlockHeight::from_raw(3),
-            expected: OTHER,
-            recorded: Some(hash_at(&chain, 3)),
-        })
-    );
-}
-
-/// A chain that carries its pins agrees — the genesis pin at 0 and the
-/// anchor at height 3.
-#[test]
-fn a_chain_that_carries_its_pins_has_no_conflict() {
-    let chain = five_blocks();
-    let anchors = ReleaseAnchors::for_tests(
-        Some(hash_at(&chain, 0)),
-        checkpoints(&[(3, hash_at(&chain, 3))]),
-    );
-    assert_eq!(conflict(&chain, &anchors), None);
-}
-
-/// A file whose genesis is not the pinned one is the conflict at height 0
-/// — another network's file, or a remint — before any anchor is consulted.
-/// This is F11's "as configured" half at open (slice 4 Q3).
+/// The refusal fixture the registry names: a file whose genesis is not the
+/// pinned one is the conflict at height 0 — another network's file, or a
+/// remint — and it names both hashes. F11's "as configured" half at open
+/// (slice 4 Q3).
 #[test]
 fn a_foreign_genesis_is_the_conflict_at_height_zero() {
     let chain = five_blocks();
-    let anchors = ReleaseAnchors::for_tests(Some(OTHER), checkpoints(&[(3, OTHER)]));
     assert_eq!(
-        conflict(&chain, &anchors),
+        conflict(&chain, &pinning_genesis(OTHER)),
         Some(AnchorConflict {
             height: BlockHeight::ZERO,
             expected: OTHER,
@@ -178,23 +113,11 @@ fn a_foreign_genesis_is_the_conflict_at_height_zero() {
     );
 }
 
-/// An anchor above the tip is not yet checkable: skipped, not a conflict
-/// (the C++ `continue`s past `pt.first >= blockchain_height`).
+/// A chain that carries the pinned genesis agrees.
 #[test]
-fn an_anchor_above_the_tip_is_not_yet_checkable() {
+fn a_chain_that_carries_its_genesis_has_no_conflict() {
     let chain = five_blocks();
-    assert_eq!(conflict(&chain, &anchoring(9, OTHER)), None);
-}
-
-/// The first conflict in height order is reported, not the last.
-#[test]
-fn the_first_conflict_in_height_order_is_reported() {
-    let chain = five_blocks();
-    let anchors = ReleaseAnchors::for_tests(None, checkpoints(&[(1, OTHER), (4, OTHER)]));
-    assert_eq!(
-        conflict(&chain, &anchors).map(|c| c.height),
-        Some(BlockHeight::from_raw(1))
-    );
+    assert_eq!(conflict(&chain, &pinning_genesis(hash_at(&chain, 0))), None);
 }
 
 /// An empty file contradicts nothing — not even a genesis pin — and an
@@ -209,8 +132,7 @@ fn an_empty_chain_or_an_empty_table_has_no_conflict() {
 }
 
 /// `conflict_with` is the view face of `conflict_over`. A second walk
-/// would let the store's open and the view's open disagree about which
-/// pin is first.
+/// would let the store's open and the view's open disagree.
 #[test]
 fn conflict_with_is_the_view_face_of_the_one_walk() {
     let chain = five_blocks();
@@ -225,10 +147,7 @@ fn conflict_with_is_the_view_face_of_the_one_walk() {
             })
         }));
         assert_eq!(via_view, via_walk);
-        assert_eq!(
-            via_walk.map(|conflict| conflict.remedy()),
-            Some(Remedy::RefuseToRun)
-        );
+        assert!(via_walk.is_some(), "a foreign genesis is a conflict");
     });
 }
 
@@ -237,44 +156,4 @@ fn conflict_with_is_the_view_face_of_the_one_walk() {
 fn a_faulting_view_is_a_fault_not_a_verdict() {
     let view = FaultingView::default();
     assert!(ReleaseAnchors::EMPTY.conflict_with(&view).is_err());
-}
-
-/// The remedy is C2-R1b clause (3), as a chain count. Genesis refuses.
-/// Every other conflict pops until this many blocks remain: the count whose
-/// tip is the conflict and the two blocks before it, or genesis alone when
-/// the chain is shorter than that. A conflict at height 1 leaves genesis,
-/// so the conflicting block is removed.
-#[test]
-fn the_remedy_refuses_at_genesis_and_pops_to_a_chain_count() {
-    let at = |height: u64| AnchorConflict {
-        height: BlockHeight::from_raw(height),
-        expected: OTHER,
-        recorded: None,
-    };
-    assert_eq!(at(0).remedy(), Remedy::RefuseToRun);
-    // conflict ordinal, stop count, tip that count leaves
-    for (conflict, count, tip) in [
-        (1, 1, 0),
-        (2, 1, 0),
-        (3, 1, 0),
-        (4, 2, 1),
-        (5, 3, 2),
-        (1000, 998, 997),
-        (u64::MAX, u64::MAX - 2, u64::MAX - 3),
-    ] {
-        let Remedy::PopTo(got) = at(conflict).remedy() else {
-            panic!("conflict at {conflict} pops");
-        };
-        assert_eq!(got, ChainCount::from_raw(count), "count at {conflict}");
-        assert_eq!(
-            got.tip(),
-            Some(BlockHeight::from_raw(tip)),
-            "tip at {conflict}"
-        );
-        assert_eq!(
-            rollback_count(BlockHeight::from_raw(conflict)),
-            got,
-            "remedy and rollback_count agree at {conflict}"
-        );
-    }
 }

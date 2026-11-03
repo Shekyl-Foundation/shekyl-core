@@ -777,10 +777,9 @@ where
     }
     let store = Arc::clone(&shared.store);
     let rules = shared.rules;
-    let trust = rules.trust();
     let for_claims = candidate.clone();
     let claimed =
-        tokio::task::spawn_blocking(move || claim_alt(&store, rules, &for_claims, &trust))
+        tokio::task::spawn_blocking(move || claim_alt(&store, rules, &for_claims))
             .await
             .expect("the claim reader does not panic");
     let (claims, prepare) = match claimed {
@@ -954,7 +953,6 @@ where
 {
     match spend {
         AltSpend::Hash | AltSpend::Prepare => unreachable!("a hash is the ready arm"),
-        AltSpend::Refused(verdict) => refuse(arrival, verdict),
         AltSpend::BeyondCap(beyond) => {
             arrival.slot.send(Reply::BeyondCap(beyond));
             Next::Continue

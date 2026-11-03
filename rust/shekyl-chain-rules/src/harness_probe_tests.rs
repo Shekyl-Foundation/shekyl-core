@@ -264,12 +264,12 @@ fn probe_passes_a_good_candidate() {
 }
 
 #[test]
-#[should_panic(expected = "expected CEN-E2 at block, but CEN-J1 refused at block")]
+#[should_panic(expected = "expected CEN-E1 at block, but CEN-J1 refused at block")]
 fn probe_harness_bites_wrong_row() {
     one_block().with_view(|view| {
         assert_refused(
             infallible(probe_cen_j1(&with_timestamp(0), &view)),
-            CenRow::E2,
+            CenRow::E1,
             Locus::Block,
         );
     });

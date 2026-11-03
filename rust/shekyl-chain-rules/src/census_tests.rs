@@ -295,10 +295,10 @@ fn the_implemented_rows_are_exactly_the_landed_slices() {
         .collect();
     assert_eq!(
         at_open,
-        [CenRow::D5, CenRow::E2, CenRow::E5, CenRow::K1b, CenRow::K4],
+        [CenRow::D5, CenRow::E5, CenRow::K1b, CenRow::K4],
         "slice 3 Q4 (a): E5 at writer open; DRS-E5 slice 9: the alt tier's target over the \
-         stitched window (D5), the anchor floor and reorg cap over the fork (E2), the \
-         height-0 claim (K1b) and the tier as the set and order of its steps (K4)"
+         stitched window (D5), the height-0 claim (K1b) and the tier as the set and order of \
+         its steps (K4)"
     );
     let held_by_store: Vec<CenRow> = CenRow::ALL
         .iter()

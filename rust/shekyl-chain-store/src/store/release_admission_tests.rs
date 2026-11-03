@@ -10,20 +10,13 @@
 //! `connect` recorded, and the table is what the open was given.
 
 use shekyl_address::Network;
-use shekyl_chain_rules::{Anchor, AnchorConflict, ReleaseAnchors, Remedy};
-use shekyl_types::{BlockHash, BlockHeight, ChainCount};
+use shekyl_chain_rules::{AnchorConflict, ReleaseAnchors};
+use shekyl_types::{BlockHash, BlockHeight};
 
 use super::connect_fixtures::connect_chain;
 use super::store_tests::{cleanup, production_horizons, tmp, EPOCH};
 use super::*;
 use crate::apply_policy::ApplyPolicy;
-
-/// A block id no release pins. The name is the meaning; the bytes are a
-/// fixture, not a protocol constant.
-const FOREIGN_BLOCK: BlockHash = BlockHash::from_bytes([0xA5; 32]);
-
-/// The second block, the lowest height a checkpoint may name.
-const FIRST_CHECKPOINT: u64 = 1;
 
 fn record(path: &std::path::Path, blocks: usize) -> Vec<BlockHash> {
     let store = ChainStore::create(path, EPOCH).expect("unanchored create");
@@ -68,7 +61,7 @@ fn an_empty_file_agrees_with_a_public_table() {
 fn a_file_whose_genesis_is_the_pin_opens() {
     let path = tmp("release-match");
     let recorded = record(&path, 1);
-    let anchors = ReleaseAnchors::for_tests(Some(recorded[0]), &[]);
+    let anchors = ReleaseAnchors::for_tests(Some(recorded[0]));
     let store = released(&path, &anchors).expect("the recorded genesis is the pin");
     let tip = store
         .begin_read()
@@ -103,7 +96,6 @@ fn a_foreign_genesis_is_refused_on_every_public_network() {
                 recorded: Some(recorded[0]),
             }
         );
-        assert_eq!(conflict.remedy(), Remedy::RefuseToRun);
         assert_ne!(
             expected, recorded[0],
             "{network:?} must not be the fixture id"
@@ -168,50 +160,10 @@ fn a_reader_admits_the_same_pins() {
     assert_eq!(conflict.height, BlockHeight::ZERO);
     assert_eq!(conflict.expected, pin_of(&mainnet));
     assert_eq!(conflict.recorded, Some(recorded[0]));
-    assert_eq!(conflict.remedy(), Remedy::RefuseToRun);
 
-    let matching = ReleaseAnchors::for_tests(Some(recorded[0]), &[]);
+    let matching = ReleaseAnchors::for_tests(Some(recorded[0]));
     let store = ChainStore::open_read_only_with_release(&path, production_horizons(), &matching)
         .expect("a reader opens a file that carries the pin");
     assert!(store.is_read_only());
-    cleanup(&path);
-}
-
-/// Red if admission only looks at genesis, or if it applies the pop
-/// itself. The file's tip must still be the checkpointed block.
-#[test]
-fn a_checkpoint_conflict_is_reported_and_the_chain_is_not_popped() {
-    let path = tmp("release-checkpoint");
-    let recorded = record(&path, 2);
-    let rows: &'static [Anchor] = Box::leak(Box::new([Anchor {
-        height: BlockHeight::from_raw(FIRST_CHECKPOINT),
-        hash: FOREIGN_BLOCK,
-    }]));
-    let anchors = ReleaseAnchors::for_tests(Some(recorded[0]), rows);
-    let conflict = release_pin(released(&path, &anchors).expect_err("the checkpoint differs"));
-    assert_eq!(
-        conflict,
-        AnchorConflict {
-            height: BlockHeight::from_raw(FIRST_CHECKPOINT),
-            expected: FOREIGN_BLOCK,
-            recorded: Some(recorded[1]),
-        }
-    );
-    assert_eq!(
-        conflict.remedy(),
-        Remedy::PopTo(ChainCount::from_raw(1)),
-        "a height-1 conflict leaves genesis; the store reports that and does not apply it"
-    );
-
-    let store = ChainStore::create(&path, EPOCH).expect("the file was not rewritten");
-    let tip = store
-        .begin_read()
-        .expect("read")
-        .tip()
-        .expect("tip")
-        .recorded
-        .expect("both blocks");
-    assert_eq!(tip.height, BlockHeight::from_raw(FIRST_CHECKPOINT));
-    assert_eq!(tip.hash, recorded[1]);
     cleanup(&path);
 }

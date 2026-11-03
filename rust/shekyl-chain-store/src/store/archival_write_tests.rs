@@ -555,7 +555,7 @@ fn the_injector_opens_only_unanchored_and_writes_an_unjournaled_bit_at_the_tip()
     );
     let tip = BlockHeight::from_raw(FIRST_SPEND_HEIGHT);
 
-    let anchored = Trust::full(ReleaseAnchors::for_tests(Some(grown.hashes[0]), &[]));
+    let anchored = Trust::full(ReleaseAnchors::for_tests(Some(grown.hashes[0])));
     let off = store
         .regtest_inject_serve_credit(anchored, p, shard(3), epoch(0))
         .unwrap_err();
@@ -844,7 +844,7 @@ fn the_draw_issue_opens_only_unanchored_for_a_bonded_persona_and_adds_each_draw_
         &[Listed::Join { slot: P_SLOT }],
         RuleSet::GENESIS,
     );
-    let anchored = Trust::full(ReleaseAnchors::for_tests(Some(grown.hashes[0]), &[]));
+    let anchored = Trust::full(ReleaseAnchors::for_tests(Some(grown.hashes[0])));
     let off = store
         .regtest_issue_draws(anchored, epoch(0), &[draw(0, false)], digest)
         .unwrap_err();

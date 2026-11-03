@@ -26,8 +26,8 @@
 //! slot, and every build takes a hasher permit.
 
 use shekyl_chain_rules::{
-    anchor_band, seed_height, AnchorBand, AtHeight, CenRow, Corrupt, Fork, InvalidBlock, Locus,
-    PerHeightRecord, RuleSet, Trust, ViewRead, D_MAX,
+    seed_height, AtHeight, Corrupt, Fork,
+    PerHeightRecord, RuleSet, ViewRead, D_MAX,
 };
 use shekyl_chain_store::store::{ChainStore, ReadSnapshot, StoreError};
 use shekyl_difficulty::SEEDHASH_EPOCH_BLOCKS;
@@ -89,11 +89,8 @@ pub(crate) enum AltSpend {
     /// arrival's permit, never pinned, and hash with the cache that
     /// returns.
     Prepare,
-    /// Below a reached checkpoint, or past the cap on an anchored chain.
-    /// CEN-E2. Nothing is stored.
-    Refused(InvalidBlock),
-    /// Past the cap on a chain where the cap does not bind as consensus.
-    /// Local. Nothing is stored and nothing is hashed.
+    /// Past the reorg cap. Local, not a consensus verdict: this node cannot
+    /// switch that deep. Nothing is stored and nothing is hashed.
     BeyondCap(PopBeyondReorgCap),
     /// A seed below the fork that the pair does not hold. The window's
     /// arithmetic says it cannot happen inside the cap: a driver defect,
@@ -211,22 +208,18 @@ pub(crate) fn spend(
     side: SeedSide,
     height: BlockHeight,
     rule_set: &RuleSet,
-    trust: &Trust,
     window: &SeedPair,
 ) -> AltSpend {
-    match anchor_band(fork, rule_set, trust) {
-        Some(AnchorBand::BelowAnchor { .. } | AnchorBand::BeyondCap { .. }) => {
-            AltSpend::Refused(InvalidBlock::new(CenRow::E2, Locus::Block))
-        }
-        None if fork.pops() > rule_set.reorg_cap() => AltSpend::BeyondCap(PopBeyondReorgCap {
+    if fork.pops() > rule_set.reorg_cap() {
+        return AltSpend::BeyondCap(PopBeyondReorgCap {
             depth: fork.pops(),
             cap: rule_set.reorg_cap(),
-        }),
-        None => match side {
-            SeedSide::OnBranch => AltSpend::Prepare,
-            SeedSide::BelowFork if window.holds(seed) => AltSpend::Hash,
-            SeedSide::BelowFork => AltSpend::SeedNotInWindow { height },
-        },
+        });
+    }
+    match side {
+        SeedSide::OnBranch => AltSpend::Prepare,
+        SeedSide::BelowFork if window.holds(seed) => AltSpend::Hash,
+        SeedSide::BelowFork => AltSpend::SeedNotInWindow { height },
     }
 }
 
@@ -253,7 +246,7 @@ mod tests {
     }
 
     #[test]
-    fn an_unanchored_fork_past_the_cap_is_not_hashed_and_not_an_invalid_block() {
+    fn a_fork_past_the_cap_is_not_hashed_and_not_an_invalid_block() {
         let fork = popping(BlockCount::from_raw(D_MAX.to_raw() + 1));
         let window = SeedPair {
             canonical: BlockHash::NULL,
@@ -265,7 +258,6 @@ mod tests {
             SeedSide::BelowFork,
             BlockHeight::from_raw(1),
             &RuleSet::GENESIS,
-            &Trust::UNANCHORED,
             &window,
         );
         assert!(
@@ -286,14 +278,12 @@ mod tests {
         };
         let other = BlockHash::from_bytes([9; 32]);
         let at = BlockHeight::from_raw(2);
-        let rules = (&RuleSet::GENESIS, &Trust::UNANCHORED);
         let below = spend(
             &fork,
             &other,
             SeedSide::BelowFork,
             at,
-            rules.0,
-            rules.1,
+            &RuleSet::GENESIS,
             &window,
         );
         assert!(
@@ -305,8 +295,7 @@ mod tests {
             &other,
             SeedSide::OnBranch,
             at,
-            rules.0,
-            rules.1,
+            &RuleSet::GENESIS,
             &window,
         );
         assert!(matches!(branch, AltSpend::Prepare), "{branch:?}");
@@ -326,11 +315,10 @@ mod tests {
             SeedSide::BelowFork,
             BlockHeight::from_raw(2),
             &RuleSet::GENESIS,
-            &Trust::UNANCHORED,
             &window,
         );
         assert!(matches!(gated, AltSpend::Hash), "{gated:?}");
-        // At the cap, still hashed: the cap binds only when anchored.
+        // At the cap, still hashed: the cap refuses only past it.
         let at_cap = popping(D_MAX);
         assert!(matches!(
             spend(
@@ -339,8 +327,7 @@ mod tests {
                 SeedSide::BelowFork,
                 BlockHeight::from_raw(2),
                 &RuleSet::GENESIS,
-                &Trust::UNANCHORED,
-                &window,
+                    &window,
             ),
             AltSpend::Hash
         ));

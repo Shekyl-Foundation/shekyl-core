@@ -695,7 +695,6 @@ impl Message<ApplyAdmitting> for Connector {
             };
             applied.exercised.extend(judged.exercised());
             batch.connect_admitting(judged.valid, in_force, Some((&*memo, &admitted)))?;
-            super::retire_below_the_anchor(batch, &trust, height)?;
             for entry in &entries {
                 batch.unqueue_bundle(entry.h)?;
             }

@@ -14,7 +14,7 @@
 //! timestamp, cumulative difficulty — and no other. So this tier runs the
 //! [`HeaderRule`](crate::rules::HeaderRule)s of `validate`'s ladder, the
 //! three rows only an alternative has ([`rules::alt`](crate::rules::alt):
-//! CEN-K1b, CEN-E2, CEN-D5), and nothing whose operand is chain state —
+//! CEN-K1b, CEN-D5), and nothing whose operand is chain state —
 //! which set, in which order, is itself a row (CEN-K4, recorded when the
 //! ladder ends). Any
 //! check that reads executed state — a bonded key, a bond snapshot, a tree
@@ -64,8 +64,7 @@
 //!
 //! The C++'s `handle_alternative_block` (`blockchain.cpp:1974`–`:2358`), in
 //! its order where the order is a rule: the height-0 claim first
-//! (CEN-K1b, before any header is read); the anchor floor and reorg cap
-//! (CEN-E2, before any header is read); then the definitions over the
+//! (CEN-K1b, before any header is read); then the definitions over the
 //! stitched view — the seed (CEN-D3), the newest-11 window (CEN-C3, the
 //! C++'s `timestamps.resize(11)`), the target (CEN-D5 over D4, D6 the zero
 //! guard), the cumulative difficulty after the block — and the header
@@ -85,7 +84,7 @@ use crate::coverage::RuleCoverage;
 use crate::fault::{Fault, Stale};
 use crate::header_ladder;
 use crate::rule_set::RuleSet;
-use crate::rules::alt::{K1b, D5, E2, K4};
+use crate::rules::alt::{K1b, D5, K4};
 use crate::rules::block_weight::block_weight;
 use crate::rules::{self, FormContext};
 use crate::trust::Trust;
@@ -168,53 +167,6 @@ impl Fork {
             .checked_sub(self.root.height)
             .expect("Fork::new refused a root above its recorded tip")
     }
-}
-
-/// Why CEN-E2 refuses an alternative, before any header is read and before
-/// any coverage is recorded.
-///
-/// [`anchor_band`] returns `None` when E2 does not refuse: no anchor at or
-/// below the recorded tip (the cap does not bind as consensus, `PDM-Q11`),
-/// or the fork sits inside the band. A caller that still declines a deep
-/// unanchored fork is making a local decision, not minting this row.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub enum AnchorBand {
-    /// The fork point sits below the last anchor the recorded chain has
-    /// reached.
-    BelowAnchor {
-        /// That anchor's height.
-        anchor: BlockHeight,
-    },
-    /// An anchored chain, and the pop is past the rule set's reorg cap.
-    BeyondCap {
-        /// Recorded blocks the alternative would pop.
-        pops: BlockCount,
-        /// The cap in force.
-        cap: BlockCount,
-    },
-}
-
-/// The two bands of CEN-E2, as a pure predicate. Records nothing.
-///
-/// `None` is not "inside the cap" alone. It is "E2 does not refuse": either
-/// no anchor has been reached, or the fork is inside both bands. The row's
-/// coverage is the caller's, at the site that judged it.
-#[must_use]
-pub fn anchor_band(fork: &Fork, rule_set: &RuleSet, trust: &Trust) -> Option<AnchorBand> {
-    let anchor = trust
-        .anchors()
-        .last_at_or_below(fork.recorded_tip().height)?;
-    if fork.root().height < anchor.height {
-        return Some(AnchorBand::BelowAnchor {
-            anchor: anchor.height,
-        });
-    }
-    let pops = fork.pops();
-    let cap = rule_set.reorg_cap();
-    if pops > cap {
-        return Some(AnchorBand::BeyondCap { pops, cap });
-    }
-    None
 }
 
 /// An alternative block the cheap tier admitted: what the store's AL1
@@ -378,13 +330,9 @@ pub fn alt_against<'id, H: AltChainView<'id>>(
     let mut coverage = *formed.coverage();
 
     // Before any header is read: the height-0 claim (CEN-K1b, the C++'s
-    // first exit) and the two bands over the fork the view states (CEN-E2).
-    // Neither reads a header; both are the cheapest refusals the tier has.
+    // first exit), the cheapest refusal the tier has.
     let form_cx = FormContext::new(formed.candidate(), rule_set);
     if let Err(refused) = rules::run_form::<K1b>(&form_cx, &mut coverage) {
-        return Ok(Err(refused));
-    }
-    if let Err(refused) = E2::check(&alt_view.fork(), rule_set, trust, &mut coverage) {
         return Ok(Err(refused));
     }
 
