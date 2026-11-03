@@ -19,7 +19,6 @@ Connect-path regression for the hash-gated FCMP++ proof-skip (`CEN-M8` fix wirin
 `get_archival_emission_claim_source` walks the entire serve-credit table per unauthenticated RPC
 `shekyl-ffi` has 105 undocumented items, so `missing_docs` cannot gate detached-doc drift.
 `release_readiness` query (frozen §2 surface) deferred — blocker: persona addressing.
-LMDB unbond-journal naming excluded from the Unbond → Release rename — carried by the DRS redb port.
 `LmdbHashKey::from_bytes` / `Key::compare` still `expect` on redb's fixed-width promise.
 Collected-total earmark warning (§12.3 carve UX, ruled 2026-09-04 with the carve countersign).
 §12.3 carve UNMEASURED bound — rule-21 measurement obligation with a named expected resolution.

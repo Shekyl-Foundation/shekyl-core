@@ -9,6 +9,8 @@
 //! function through itself does not: the file's block hash is what
 //! `connect` recorded, and the table is what the open was given.
 
+use std::time::Duration;
+
 use shekyl_address::Network;
 use shekyl_chain_rules::{Anchor, AnchorConflict, ReleaseAnchors, Remedy};
 use shekyl_types::{BlockHash, BlockHeight, ChainCount};
@@ -17,6 +19,7 @@ use super::connect_fixtures::connect_chain;
 use super::store_tests::{cleanup, production_horizons, tmp, EPOCH};
 use super::*;
 use crate::apply_policy::ApplyPolicy;
+use crate::redb_recovery::{bytes_and_mtime, mark_recovery_required};
 
 /// A block id no release pins. The name is the meaning; the bytes are a
 /// fixture, not a protocol constant.
@@ -24,6 +27,10 @@ const FOREIGN_BLOCK: BlockHash = BlockHash::from_bytes([0xA5; 32]);
 
 /// The second block, the lowest height a checkpoint may name.
 const FIRST_CHECKPOINT: u64 = 1;
+
+/// Far enough behind the clock that a write cannot share the snapshot's
+/// timestamp on a filesystem whose modification-time tick is a second or two.
+const BEFORE_THE_SNAPSHOT: Duration = Duration::from_secs(120);
 
 fn record(path: &std::path::Path, blocks: usize) -> Vec<BlockHash> {
     let store = ChainStore::create(path, EPOCH).expect("unanchored create");
@@ -42,6 +49,23 @@ fn pin_of(anchors: &ReleaseAnchors) -> BlockHash {
     anchors
         .expected_at(BlockHeight::ZERO)
         .expect("a public table pins genesis")
+}
+
+/// Set `path`'s modification time to [`BEFORE_THE_SNAPSHOT`] ago.
+///
+/// The handle is read-write, and the open does not truncate. Windows
+/// refuses [`std::fs::File::set_modified`] on a read-only handle.
+fn age_mtime(path: &std::path::Path) {
+    let aged = std::time::SystemTime::now()
+        .checked_sub(BEFORE_THE_SNAPSHOT)
+        .expect("the clock reaches back");
+    std::fs::OpenOptions::new()
+        .read(true)
+        .write(true)
+        .open(path)
+        .expect("the store file")
+        .set_modified(aged)
+        .expect("age the modification time");
 }
 
 fn release_pin(err: StoreError) -> AnchorConflict {
@@ -113,6 +137,55 @@ fn a_foreign_genesis_is_refused_on_every_public_network() {
     assert_ne!(pins[0], pins[1]);
     assert_ne!(pins[0], pins[2]);
     assert_ne!(pins[1], pins[2]);
+    cleanup(&path);
+}
+
+/// Red if admission runs only after the writable open: a writable open
+/// writes into the file even with nothing committed (the engine records
+/// its allocator state when it closes), so a store from another network
+/// would be refused after it had been changed.
+#[test]
+fn a_foreign_genesis_is_refused_with_the_file_untouched() {
+    let path = tmp("release-foreign-untouched");
+    let recorded = record(&path, 1);
+    // A filesystem tick of a second or two would hide a write that lands
+    // in the same tick as the snapshot. Age the file first, then snapshot,
+    // so any later write moves the modification time.
+    age_mtime(&path);
+    let before = bytes_and_mtime(&path);
+    let testnet = ReleaseAnchors::for_network(Network::Testnet);
+    let conflict = release_pin(released(&path, &testnet).expect_err("another network's store"));
+    assert_eq!(conflict.recorded, Some(recorded[0]));
+    assert_eq!(conflict.expected, pin_of(&testnet));
+    assert_eq!(
+        bytes_and_mtime(&path),
+        before,
+        "a refused store keeps its bytes and its modification time"
+    );
+    cleanup(&path);
+}
+
+/// Red if a file that needs repair is refused by losing its blocks. The
+/// repair writes — redb repairs in place before the screen can run — and
+/// the recorded block is what the refusal keeps.
+#[test]
+fn a_foreign_genesis_that_needs_repair_is_refused_and_the_block_remains() {
+    let path = tmp("release-foreign-repair");
+    let recorded = record(&path, 1);
+    mark_recovery_required(&path);
+    let testnet = ReleaseAnchors::for_network(Network::Testnet);
+    let conflict = release_pin(released(&path, &testnet).expect_err("another network's store"));
+    assert_eq!(conflict.recorded, Some(recorded[0]));
+    assert_eq!(conflict.expected, pin_of(&testnet));
+    let store = ChainStore::create(&path, EPOCH).expect("the block is still the file's");
+    let tip = store
+        .begin_read()
+        .expect("read")
+        .tip()
+        .expect("tip")
+        .recorded
+        .expect("block 0");
+    assert_eq!(tip.hash, recorded[0]);
     cleanup(&path);
 }
 

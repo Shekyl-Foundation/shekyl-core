@@ -2351,6 +2351,21 @@ schema-version cell is one of the idioms DRS-D3d keeps **per store**, and it
 did not travel with the value contract — D3d's 2026-09-18 narrowing admits
 that one edge and no other, this one included.
 
+**What the node does with a refusal (S3, design review 2026-11-03).** The store
+refuses a mismatch in both directions; the node decides what follows. A
+**newer** layout is refused and the file left as it is
+(`OpenError::NewerChainLayout`, naming both versions and that the binary is
+older than the store): an older binary run over a newer node's data must not
+destroy it. An **older** layout is removed and a fresh store opened, the
+pre-genesis alpha wipe, marked temporary in `open_chain` with its FOLLOWUPS row
+(trigger: before mainnet genesis), where the permanent policy is a DRS round: a
+layout bump ships with its migration, a store with no path is refused and never
+removed, and the daemon deletes nothing. An existing store is also admitted
+against the release's pins on the read-only open, before any writable one
+(CEN-E5: block 0 against this network's genesis), so a store from another
+network is refused with its bytes unchanged; the admission runs again under the
+writable open's lock.
+
 **(b) A bump is required for any change that alters stored bytes — including a
 value-codec change.** Adding, removing or re-keying a table bumps; so does
 changing a value encoding, because under the accumulator design the redb value

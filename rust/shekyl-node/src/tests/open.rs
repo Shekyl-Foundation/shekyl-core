@@ -227,18 +227,52 @@ fn the_stop_handle_asks_the_latch_and_the_absent_one_does_not() {
     );
     node.stop();
 }
-/// A chain file at another layout is removed and a fresh store holds
-/// genesis. A file that is not a store is refused and left in place.
-/// Red edit: refuse the version mismatch, or wipe a corrupt header.
+/// A chain file at a newer layout is refused and left byte for byte: an
+/// older binary over a newer node's data must not destroy it (S3). A
+/// chain file at an older layout is removed and a fresh store holds
+/// genesis: the pre-genesis alpha wipe, temporary (FOLLOWUPS, trigger:
+/// before mainnet genesis). A file that is not a store is refused and
+/// left in place. Red edits: wipe the newer layout, refuse the older one,
+/// or wipe a corrupt header.
 #[test]
-fn a_foreign_chain_file_is_replaced_and_a_corrupt_one_is_kept() {
-    use shekyl_chain_store::codec::SCHEMA_VERSION;
+fn a_newer_chain_file_is_refused_an_older_one_replaced_and_a_corrupt_one_kept() {
+    use shekyl_chain_store::codec::{SchemaVersion, SCHEMA_VERSION};
     let dir = tempfile::tempdir().expect("temp");
     let node = open_at(dir.path(), Arc::new(|| {}));
     node.stop();
     let chain = dir.path().join("chain.db");
-    put_chain_version(&chain, SCHEMA_VERSION.get() + 1);
-    let node = open_at(dir.path(), Arc::new(|| {}));
+    let config = config_at(dir.path());
+    let open = || {
+        Node::open(OpenArgs {
+            config: &config,
+            version: "test".to_owned(),
+            protocol_version: 1,
+            release_build: false,
+            request_stop: Arc::new(|| {}),
+        })
+    };
+
+    let newer = SchemaVersion::new(SCHEMA_VERSION.get() + 1);
+    put_chain_version(&chain, newer.get());
+    let before = std::fs::read(&chain).expect("the newer file");
+    match open() {
+        Err(OpenError::NewerChainLayout { found, expected }) => {
+            assert_eq!((found, expected), (newer, SCHEMA_VERSION));
+        }
+        Err(other) => panic!("a newer layout is its own refusal, got {other}"),
+        Ok(node) => {
+            node.stop();
+            panic!("a newer layout opened");
+        }
+    }
+    assert_eq!(
+        std::fs::read(&chain).expect("still there"),
+        before,
+        "a newer layout is left as it was"
+    );
+
+    put_chain_version(&chain, SCHEMA_VERSION.get() - 1);
+    let node = open().expect("an older layout is replaced");
     assert_eq!(
         node.handles()
             .chain
@@ -248,19 +282,11 @@ fn a_foreign_chain_file_is_replaced_and_a_corrupt_one_is_kept() {
         Some(genesis_hash())
     );
     node.stop();
-    put_chain_version(&chain, SCHEMA_VERSION.get());
+
     let garbage = b"not a chain store";
     std::fs::write(&chain, garbage).expect("overwrite");
-    let config = config_at(dir.path());
-    let opened = Node::open(OpenArgs {
-        config: &config,
-        version: "test".to_owned(),
-        protocol_version: 1,
-        release_build: false,
-        request_stop: Arc::new(|| {}),
-    });
     assert!(
-        opened.is_err(),
+        open().is_err(),
         "a corrupt chain file is not a layout mismatch"
     );
     assert_eq!(std::fs::read(&chain).expect("still there"), garbage);
