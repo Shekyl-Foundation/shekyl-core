@@ -1200,7 +1200,7 @@ is landed code the `WSS-13` unwind re-keys to the shard unit (`WALLET_SIDE_STORE
 
 ---
 
-## 11. The curve-tree store, owned by one actor — PROPOSED 2026-11-02, for review
+## 11. The curve-tree store, owned by one actor — RULED 2026-11-02 (Rick)
 
 **The problem.** A wallet's curve-tree store is one redb file, locked for as
 long as its `Database` lives. Today that `Database` sits in a `LeafStore`
@@ -1221,10 +1221,15 @@ it is released, and the code is left guessing. A6 (`RefreshHandle::join`
 returning while its producer still held the engine `Arc`) was the same
 defect on a different resource.
 
-**The rule this section proposes, for the engine generally:** *a resource
+**The rule is not new.** It is the wallet's architecture since the
+redesign (`V3_WALLET_DECISION_LOG.md`, 2026-04-27, "Engine architecture:
+actor model with staged migration from composition", and its Path B entry,
+"pure message-passing over shared handle"): subsystems are actors with
+private state reached by typed messages. Applied to a resource: *a resource
 whose release matters has exactly one owning actor; others reach it by
 message, never by a shared handle; and the owner's stop is awaited.* When
-the await returns, the resource is gone.
+the await returns, the resource is gone. The shared `Arc<LeafStore>` is a
+departure from that rule, not a gap in it.
 
 **What kameo guarantees** (read at source, `kameo` 0.20.0,
 `src/actor/spawn.rs`; rule 17). The actor loop ends; linked children are
@@ -1296,22 +1301,21 @@ and then drops the engine (`engine_session.rs:304`, `:450`) as the wallet
 RPC does, and must await the close instead (a cross-repo change). That is a design round with its own PRs,
 not a fix.
 
-**Questions for the ruling.**
+**Rulings (Rick, 2026-11-02).**
 
-- **Q1 — the rule's reach.** Adopt "one owning actor, message access,
-  awaited stop" as the engine's rule for every resource whose release
-  matters (this store, the wallet file lock, the `.pstore`, the stake
-  engine), recorded in `25-rust-architecture.mdc` or its own rule; or
-  apply it to this store first and generalise after.
-- **Q2 — the serve copy.** One owned copy per serve (≤ 3.33 MB) in
-  exchange for no shared read handle. If that copy is too costly at the
-  floor device, the alternative is a reader actor that owns its own read
-  transaction per request and is stopped and awaited before the owner,
-  which needs its own lifecycle message.
-- **Q3 — the order of work.** Ship the awaited close first (it removes the
-  timer and the flake while the readers still share the store, by having
-  `close` stop the serving tasks and await them before stopping the
-  owner), then move serving reads to messages; or do both in one round.
+- **Q1 — the rule's reach: it is the wallet's rule, period**, and has been
+  since the redesign (the decision-log entry above). This store is brought
+  back to it; nothing new is adopted.
+- **Q2 — the serve copy: yes.** One owned copy per serve, measured at the
+  floor device in testing; if it proves too costly there, the reader actor
+  is the fallback and is designed then.
+- **Q3 — both together, in one PR.** The awaited close and the
+  message-based serving reads land as one PR, as many commits as the work
+  needs; only the PR's end state has to hold the property.
+
+*Records-was (2026-11-02, the same day):* a first draft proposed a
+process-wide residency table with owner leases and a condition variable;
+Rick rejected it as a state machine beside an actor.
 
 Timeframes (`05-system-thinking.mdc`): now only. The store's format, the
 chain and V4 are untouched.
