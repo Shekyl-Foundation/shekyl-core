@@ -18,7 +18,8 @@
     "",
     "Last regenerated: 2026-11-03, 'One secret, one derivation (NI-R7, NI-R10)'",
     "— see V3_WALLET_DECISION_LOG.md 2026-11-03. Format 0x02: region 1 stores",
-    "the wallet's 32-byte seed and no seed format. WALLET_FILE_FORMAT_V1/full.hex",
+    "the wallet's 32-byte seed and no seed format, and the region wrap keys use",
+    "the -v2 labels (WALLET_FILE_FORMAT_V1.md §2.6). WALLET_FILE_FORMAT_V1/full.hex",
     "is kept as the retired format's file, the input to",
     "a_retired_format_file_is_refused_with_its_reason."
   ],

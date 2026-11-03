@@ -6837,7 +6837,11 @@ reason, never reinterpreted.
 `ADDRESS_DERIVATION_V2` becomes `ADDRESS_DERIVATION_V3` and
 `ARCHIVAL_P_DERIVE_V1` becomes `ARCHIVAL_P_DERIVE_V2`; the keys-file
 vectors move to `WALLET_FILE_FORMAT_V2`, with the `V1` file kept as the
-refused input. Addresses derived from an existing seed move, mainnet's
+refused input. Format `0x02` also mints the region wrap-key labels
+`shekyl-region1-aead-v2` and `shekyl-region2-aead-v2`, as
+`WALLET_FILE_FORMAT_V1.md` §2.6 requires of a format bump; the prefs HMAC
+label stays `-v1`, because the prefs format did not change. Addresses
+derived from an existing seed move, mainnet's
 genesis recipients included; their custodians re-derive at the genesis
 ceremony (NI-R11). The wallet RPC returns the 24 words on every network
 and no longer a raw seed. Raw 32-byte seeds remain only as harness input.

@@ -32,7 +32,7 @@
 //!                                   aad      = bytes [0..29)
 //!   [102..126) 24 region1_nonce
 //!   [126..N)   _  region1_ct_with_tag = AEAD(plaintext, tag)  under wrap_key_region_1
-//!                                       wrap_key_region_1 = HKDF(file_kek, "shekyl-region1-aead-v1")
+//!                                       wrap_key_region_1 = HKDF(file_kek, "shekyl-region1-aead-v2")
 //!                                       nonce = region1_nonce
 //!                                       aad   = bytes [0..9)
 //!
@@ -59,7 +59,7 @@
 //!   [8..9)   1   state_version = 0x01                      │ AAD
 //!   [9..33)  24  region2_nonce (fresh per save)
 //!   [33..M)  _   region2_ct_with_tag = AEAD(state, tag)    under wrap_key_region_2
-//!                                       wrap_key_region_2 = HKDF(file_kek, "shekyl-region2-aead-v1" || addr)
+//!                                       wrap_key_region_2 = HKDF(file_kek, "shekyl-region2-aead-v2" || addr)
 //!                                       nonce = region2_nonce
 //!                                       aad   = bytes [0..9)
 //!                                               || state_tag_of_seed_block[16]
@@ -158,10 +158,12 @@ const FILE_KEK_BYTES: usize = 32;
 /// HKDF `info` label for region 1 AEAD. Label-only (no `|| addr`) so open
 /// can derive the decrypt key before reading `addr` from ciphertext.
 /// Normative: [`docs/WALLET_FILE_FORMAT_V1.md`](../../docs/WALLET_FILE_FORMAT_V1.md) §2.6.
-pub const HKDF_INFO_REGION1_AEAD_V1: &[u8] = b"shekyl-region1-aead-v1";
+/// The suffix follows `file_version` (0x02), so a region key is never
+/// shared across file formats.
+pub const HKDF_INFO_REGION1_AEAD_V2: &[u8] = b"shekyl-region1-aead-v2";
 
 /// HKDF `info` prefix for region 2 AEAD; implementations concatenate `addr`.
-pub const HKDF_INFO_REGION2_AEAD_V1: &[u8] = b"shekyl-region2-aead-v1";
+pub const HKDF_INFO_REGION2_AEAD_V2: &[u8] = b"shekyl-region2-aead-v2";
 /// Argon2id-derived wrap_key length, matching XChaCha20-Poly1305 key size.
 const WRAP_KEY_BYTES: usize = 32;
 /// Argon2id salt length. 16 bytes is above the birthday bound for any
@@ -455,7 +457,7 @@ fn hkdf_expand_32(file_kek: &[u8; FILE_KEK_BYTES], info: &[u8]) -> Zeroizing<[u8
 pub fn derive_wrap_key_region_1(
     file_kek: &[u8; FILE_KEK_BYTES],
 ) -> Zeroizing<[u8; FILE_KEK_BYTES]> {
-    hkdf_expand_32(file_kek, HKDF_INFO_REGION1_AEAD_V1)
+    hkdf_expand_32(file_kek, HKDF_INFO_REGION1_AEAD_V2)
 }
 
 /// Region 2 AEAD key per WALLET_FILE_FORMAT_V1 §2.6 (`info || addr`).
@@ -464,8 +466,8 @@ pub fn derive_wrap_key_region_2(
     expected_classical_address: &[u8; EXPECTED_CLASSICAL_ADDRESS_BYTES],
 ) -> Zeroizing<[u8; FILE_KEK_BYTES]> {
     let mut info =
-        Vec::with_capacity(HKDF_INFO_REGION2_AEAD_V1.len() + EXPECTED_CLASSICAL_ADDRESS_BYTES);
-    info.extend_from_slice(HKDF_INFO_REGION2_AEAD_V1);
+        Vec::with_capacity(HKDF_INFO_REGION2_AEAD_V2.len() + EXPECTED_CLASSICAL_ADDRESS_BYTES);
+    info.extend_from_slice(HKDF_INFO_REGION2_AEAD_V2);
     info.extend_from_slice(expected_classical_address);
     hkdf_expand_32(file_kek, &info)
 }
@@ -1212,12 +1214,12 @@ mod tests {
     #[test]
     fn hkdf_golden_outputs_pinned_tripwire() {
         const R1: [u8; FILE_KEK_BYTES] = [
-            146, 74, 110, 113, 243, 58, 14, 95, 184, 29, 119, 97, 7, 191, 250, 191, 14, 164, 133,
-            22, 152, 170, 137, 68, 159, 190, 195, 234, 226, 85, 160, 18,
+            150, 50, 252, 9, 2, 156, 4, 138, 204, 20, 94, 103, 28, 200, 30, 84, 138, 205, 132, 198,
+            20, 115, 108, 118, 227, 115, 212, 98, 253, 14, 78, 132,
         ];
         const R2: [u8; FILE_KEK_BYTES] = [
-            200, 171, 223, 169, 7, 117, 109, 9, 112, 251, 12, 186, 60, 96, 136, 137, 182, 233, 134,
-            176, 218, 122, 95, 106, 251, 69, 182, 143, 58, 49, 203, 65,
+            246, 110, 246, 15, 231, 139, 172, 84, 255, 124, 83, 138, 167, 45, 28, 237, 130, 116,
+            78, 48, 34, 16, 229, 212, 227, 24, 180, 95, 54, 79, 240, 101,
         ];
         let r1 = derive_wrap_key_region_1(&FIXTURE_FILE_KEK_SEED);
         let r2 = derive_wrap_key_region_2(&FIXTURE_FILE_KEK_SEED, &TRIPWIRE_ADDR);
@@ -1254,9 +1256,9 @@ mod tests {
 
         // Spec §2.6 "Normative info labels" table: byte-exact, 22 bytes
         // each. Spelled here from the spec, independently of the module's
-        // HKDF_INFO_REGION{1,2}_AEAD_V1 constants.
-        const SPEC_LABEL_R1: &[u8] = b"shekyl-region1-aead-v1";
-        const SPEC_LABEL_R2: &[u8] = b"shekyl-region2-aead-v1";
+        // HKDF_INFO_REGION{1,2}_AEAD_V2 constants.
+        const SPEC_LABEL_R1: &[u8] = b"shekyl-region1-aead-v2";
+        const SPEC_LABEL_R2: &[u8] = b"shekyl-region2-aead-v2";
         assert_eq!(SPEC_LABEL_R1.len(), 22, "spec table pins 22 bytes");
         assert_eq!(SPEC_LABEL_R2.len(), 22, "spec table pins 22 bytes");
 

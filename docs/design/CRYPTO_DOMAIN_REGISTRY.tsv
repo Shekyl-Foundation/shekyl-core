@@ -202,8 +202,8 @@
 2	shekyl-v31-multisig-kem	rust/shekyl-crypto-pq/src/multisig_receiving.rs	LABEL_MULTISIG_KEM	shekyl-live		info
 2	shekyl/msg-sign-seed-slh-dsa-192s-v1	rust/shekyl-crypto-pq/src/message_signing.rs	MSG_SIGN_SEED_DOMAIN	shekyl-live		info (HKDF expand)
 2	shekyl-prefs-hmac-v1	rust/shekyl-engine-prefs/src/hmac_key.rs	HKDF_INFO_LABEL	shekyl-live		info
-2	shekyl-region1-aead-v1	rust/shekyl-crypto-pq/src/wallet_envelope.rs	HKDF_INFO_REGION1_AEAD_V1	shekyl-live		info
-2	shekyl-region2-aead-v1	rust/shekyl-crypto-pq/src/wallet_envelope.rs	HKDF_INFO_REGION2_AEAD_V1	shekyl-live		info
+2	shekyl-region1-aead-v2	rust/shekyl-crypto-pq/src/wallet_envelope.rs	HKDF_INFO_REGION1_AEAD_V2	shekyl-live		info
+2	shekyl-region2-aead-v2	rust/shekyl-crypto-pq/src/wallet_envelope.rs	HKDF_INFO_REGION2_AEAD_V2	shekyl-live		info
 2	nonce	rust/shekyl-multisig/src/encryption.rs	(inline info prefix)	shekyl-live		info; also a schnorr sub-label elsewhere (cross-mechanism reuse, safe: different mechanism)
 #
 # ── Mechanism 3 — FROST transcript label ───────────────────────────────

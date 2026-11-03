@@ -64,7 +64,7 @@ operational properties the envelope guarantees.
 | Range        | Bytes | Field                   | Visibility                              |
 |--------------|-------|-------------------------|-----------------------------------------|
 | `[0..8)`     | 8     | `magic = "SHEKYLWT"`    | Plaintext. AAD to every AEAD in file.   |
-| `[8..9)`     | 1     | `file_version = 0x01`   | Plaintext. AAD to every AEAD.           |
+| `[8..9)`     | 1     | `file_version = 0x02`   | Plaintext. AAD to every AEAD.           |
 | `[9..10)`    | 1     | `kdf_algo = 0x01`       | Plaintext. AAD to wrap AEAD only.       |
 | `[10..11)`   | 1     | `kdf_m_log2`            | Plaintext. AAD to wrap AEAD only.       |
 | `[11..12)`   | 1     | `kdf_t`                 | Plaintext. AAD to wrap AEAD only.       |
@@ -109,19 +109,20 @@ union:
 | Offset in region 1 | Bytes | Field                      |
 |--------------------|-------|----------------------------|
 | `[0..1)`           | 1     | `mode_byte`                |
-| `[1..2)`           | 1     | `network`                  |
-| `[2..3)`           | 1     | `seed_format`              |
-| `[3..68)`          | 65    | `expected_classical_address` |
-| `[68..70)`         | 2     | `cap_content_len` (u16 LE) |
-| `[70..70+L)`       | L     | `cap_content`              |
-| `[70+L..78+L)`     | 8     | `creation_timestamp` (u64 LE) |
-| `[78+L..82+L)`     | 4     | `restore_height_hint` (u32 LE) |
+| `[1..2)`           | 1     | `network` (the network's code) |
+| `[2..67)`          | 65    | `expected_classical_address` |
+| `[67..69)`         | 2     | `cap_content_len` (u16 LE) |
+| `[69..69+L)`       | L     | `cap_content`              |
+| `[69+L..77+L)`     | 8     | `creation_timestamp` (u64 LE) |
+| `[77+L..81+L)`     | 4     | `restore_height_hint` (u32 LE) |
+
+The plaintext is `81 + L` bytes.
 
 `expected_classical_address` is the canonical 65-byte classical address
 (`version(1) || spend_pk(32) || view_pk(32)`). A loader that
 successfully decrypts region 1 compares this field against the address
-it would derive from `cap_content` under the declared
-`(network, seed_format)`; a mismatch is treated as corruption.
+it would derive from `cap_content` under the declared `network`; a
+mismatch is treated as corruption.
 `restore_height_hint` is the block height at wallet creation; the lost
 `.wallet` recovery path uses it as the rescan floor.
 
@@ -137,17 +138,18 @@ were AAD-bound to region 1, rotation would require re-encrypting region
 
 | `mode_byte` | Status                    | `cap_content` layout                        | `cap_content_len` |
 |-------------|---------------------------|---------------------------------------------|-------------------|
-| `0x01`      | `FULL` — the only live mode | `master_seed[64]`                         | 64                |
+| `0x01`      | `FULL` — the only live mode | `seed[32]`                                | 32                |
 | `0x02`      | RETIRED — never reuse     | parser refuses with `UnknownCapabilityMode` | —                 |
 | `0x03`      | RETIRED — never reuse     | parser refuses with `UnknownCapabilityMode` | —                 |
 | `0x04`      | RESERVED                  | parser refuses with `UnknownCapabilityMode` | —                 |
 | other       | unknown                   | parser refuses with `UnknownCapabilityMode` | —                 |
 
-**FULL** is the canonical — and only — mode: a 64-byte `master_seed`
-from which the entire Shekyl key tree (`spend_sk`, `view_sk`,
-`ml_kem_dk`) is derived per
-[POST_QUANTUM_CRYPTOGRAPHY.md](POST_QUANTUM_CRYPTOGRAPHY.md). Every
-wallet open re-runs the derivation; `ml_kem_dk` is not stored.
+**FULL** is the canonical — and only — mode: the wallet's 32-byte
+seed, the one secret its 24 words spell, from which the entire Shekyl
+key tree (`spend_sk`, `view_sk`, `ml_kem_dk`) is derived under the
+network's name (`rust/shekyl-crypto-pq/src/account.rs`;
+[FCMP_PLUS_PLUS.md](FCMP_PLUS_PLUS.md) "Wallet Restore from Seed"). Every
+wallet open re-runs the derivation; no derived key is stored.
 
 **Retired bytes carry no layout.** `0x02` (formerly a view-only layout;
 capability REJECTED per the decision log, 2026-09-07) and `0x03`
@@ -198,7 +200,7 @@ than falling back:
    `UnknownCapabilityMode` error. No refusal names a specific future
    arm, and no other decoder runs on a byte it was not handed.
 3. **`cap_content_len` is validated against the declared mode.**
-   `validate_cap_content` enforces FULL: `cap_len == 64` exactly (no
+   `validate_cap_content` enforces FULL: `cap_len == 32` exactly (no
    trailing bytes, no truncation). Any mismatch fails with
    `CapContentLenMismatch { mode, len }`, the typed equivalent of the
    audit plan's "CapabilityPayloadMismatch" refusal. No
@@ -235,9 +237,11 @@ via HKDF-SHA-256 in **expand-only** mode with `file_kek` as the PRK
 (`HKDF-Expand`; no Extract step; no salt). Implementations MUST NOT use
 extract-then-expand with a separate salt. The derivation matches the prefs HMAC
 pattern in [`WALLET_PREFS.md`](WALLET_PREFS.md) §2.2: domain-separated `info`
-strings, `-v1` suffix aligned with `file_version` 0x01. A future format bump
-(`file_version` 0x02) gets new labels (e.g. `-v2`); info strings are not
-reused across versions.
+strings with a version suffix. The region labels' suffix follows
+`file_version`: format `0x02` uses `-v2`, and a later format bump mints new
+labels again; a region info string is never reused across file formats.
+The prefs HMAC label follows the prefs format, not `file_version`, and
+stays `-v1`.
 
 **`file_kek` provenance (normative).** `file_kek` MUST be generated from a
 cryptographically secure random source at wallet creation (see §2.1). It MUST
@@ -249,8 +253,8 @@ properties of per-region HKDF labels.
 
 | Label | Bytes | Used in |
 |-------|-------|---------|
-| `shekyl-region1-aead-v1` | 22 | Region 1 only — label-only, no `\|\| addr` |
-| `shekyl-region2-aead-v1` | 22 | Region 2 — concatenated with `addr` below |
+| `shekyl-region1-aead-v2` | 22 | Region 1 only — label-only, no `\|\| addr` |
+| `shekyl-region2-aead-v2` | 22 | Region 2 — concatenated with `addr` below |
 
 Let `addr` be the 65-byte `expected_classical_address` inside region 1 plaintext
 (§2.2). Region 1 uses **label-only** HKDF so open can derive the decrypt key
@@ -261,13 +265,13 @@ before deriving their keys.
 ```
 wrap_key_region_1 = HKDF-Expand(
     prk  = file_kek,
-    info = b"shekyl-region1-aead-v1",
+    info = b"shekyl-region1-aead-v2",
     L    = 32,
 )
 
 wrap_key_region_2 = HKDF-Expand(
     prk  = file_kek,
-    info = b"shekyl-region2-aead-v1" || addr,
+    info = b"shekyl-region2-aead-v2" || addr,
     L    = 32,
 )
 ```
@@ -391,16 +395,23 @@ action : log "state cache missing or unreadable; rebuilding from chain
 ### 4.6 Lost `.wallet.keys`
 
 The wallet is dead. `.wallet` alone is undecryptable: `file_kek` only
-lives wrapped inside `.wallet.keys`. A mainnet / stagenet user restores
-from their BIP-39 seed phrase; a testnet / fakechain user restores from
-the 32-byte raw seed hex. V3 does not attempt silent recovery.
+lives wrapped inside `.wallet.keys`. The user restores from the
+wallet's 24 seed words, on every network. V3 does not attempt silent
+recovery.
 
 ### 4.7 Pre-v1 refusal
 
 V3 refuses every file that does not begin with `SHEKYLWT`. There is no
 silent migration from Monero-lineage keys-file formats. The refusal
-surfaces as `BadMagic` with a message pointing at the BIP-39 /
-raw-seed restore flow.
+surfaces as `BadMagic` with a message pointing at the seed-word restore
+flow.
+
+A `SHEKYLWT` file of any format other than this build's is refused by its
+`file_version` before any decryption: a newer one as
+`FormatVersionTooNew`, an older one (format `0x01`, which stored a
+derived 64-byte master seed and a seed-format byte) as
+`FormatVersionRetired`. Neither is reinterpreted; an older wallet is
+restored from its 24 seed words.
 
 ## 5. Error taxonomy
 
@@ -414,6 +425,7 @@ reused with a different meaning:
 | `TooShort`                   | 1    | "wallet file truncated" |
 | `BadMagic`                   | 2    | "not a Shekyl V3 wallet file — please restore from seed" |
 | `FormatVersionTooNew`        | 3    | "wallet file written by a newer Shekyl; please upgrade" |
+| `FormatVersionRetired`       | 13   | "wallet file format predates this build; restore the wallet from its 24 seed words" |
 | `UnsupportedKdfAlgo`         | 4    | "unknown KDF algorithm id" |
 | `KdfParamsOutOfRange`        | 5    | "KDF parameters out of policy range" |
 | `UnsupportedWrapCount`       | 6    | "unexpected wrap-key count" |
