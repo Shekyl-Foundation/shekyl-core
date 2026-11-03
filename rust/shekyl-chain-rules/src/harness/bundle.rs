@@ -45,7 +45,9 @@ use shekyl_archival_retention::{
     sign_bundle_commitment, BundleBody, BundleKept, BundleRecord, BundleRef, DrawableEpoch,
     DrawablePair, PassBitmap, BUNDLE_SIGNATURE_LEN, BUNDLE_WITNESS_KEY_LEN,
 };
-use shekyl_crypto_pq::fn_dsa_hybrid::{FnDsaHybridSecretKey, HybridEd25519FnDsa};
+use shekyl_crypto_pq::fn_dsa_hybrid::{
+    FnDsaHybridPublicKey, FnDsaHybridSecretKey, HybridEd25519FnDsa,
+};
 use shekyl_crypto_pq::signature::{SignatureScheme as _, SCHEME_DOMAIN_RECEIPT};
 use shekyl_types::archival::ReceiptSignPk;
 use shekyl_types::{BlockHash, BlockHeight, PCanonicalId, SettlementEpoch, ShardId};
@@ -103,7 +105,7 @@ pub struct FixtureBundleView {
     /// Complete trees scheduled at a block, in bitmap order.
     pub support_roster: BTreeMap<BlockHeight, Vec<crate::archival::SupportSeat>>,
     /// The archive width a support draw selects from.
-    pub archive_width: BTreeMap<BlockHeight, u64>,
+    pub archive_width: BTreeMap<BlockHeight, std::num::NonZeroU64>,
     /// The one read that faults, if any.
     pub fault: Option<BundleRead>,
     /// Every read made, in order.
@@ -218,9 +220,12 @@ impl BundleView for FixtureBundleView {
         ))
     }
 
-    fn archive_width(&self, h: BlockHeight) -> Result<Option<u64>, BundleReadFaulted> {
+    fn archive_width(
+        &self,
+        h: BlockHeight,
+    ) -> Result<Option<std::num::NonZeroU64>, BundleReadFaulted> {
         self.read(BundleRead::ArchiveWidth)?;
-        Ok(Some(self.archive_width.get(&h).copied().unwrap_or(0)))
+        Ok(self.archive_width.get(&h).copied())
     }
 }
 
@@ -236,6 +241,19 @@ pub struct FixturePersona {
     pub receipt_secret_key: FnDsaHybridSecretKey,
     /// The shards it holds at `h_open(E)`.
     pub shards: Vec<u64>,
+}
+
+impl FixturePersona {
+    /// The persona's receipt key, parsed, as a seat carries it.
+    ///
+    /// # Panics
+    ///
+    /// Never for a fixture persona: its key came from a keypair.
+    #[must_use]
+    pub fn receipt_key(&self) -> FnDsaHybridPublicKey {
+        FnDsaHybridPublicKey::from_receipt_sign_pk(&self.receipt_public_key)
+            .expect("a fixture key parses")
+    }
 }
 
 /// A record's anchor: the block a read was anchored to, and its hash.
@@ -367,8 +385,17 @@ impl BundleWorld {
             .expect("the canonical key length");
 
         let epoch = rule_set.settlement_schedule().epoch_at(h);
+        // The archive spans every fixture shard; no complete tree is a
+        // member (a test seats one through `support_roster`).
+        let roster = personas
+            .iter()
+            .flat_map(|p| p.shards.iter().copied())
+            .max()
+            .and_then(|top| std::num::NonZeroU64::new(top + 1))
+            .map(shekyl_archival_retention::SupportRoster::empty);
         let drawable = DrawableEpoch::new(
             epoch,
+            roster,
             personas.iter().map(|p| (p.persona, &p.receipt_public_key)),
             personas.iter().flat_map(|p| {
                 p.shards.iter().map(|shard| DrawablePair {

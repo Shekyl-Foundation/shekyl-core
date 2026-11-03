@@ -17,7 +17,7 @@ use shekyl_archival_retention::{support_challenge_nonce, PassBitmap, PassStream}
 use super::*;
 use crate::harness::bundle::{fixture_block_hash, BundleReadFaulted, BundleWorld};
 
-const WIDTH: u64 = 64;
+const WIDTH: std::num::NonZeroU64 = std::num::NonZeroU64::new(64).expect("non-zero");
 
 fn targets(world: &BundleWorld) -> Result<DrawTargets, BundleRefused<BundleReadFaulted>> {
     draw_targets(&world.view, world.h, &world.seed, &RuleSet::GENESIS)
@@ -26,7 +26,7 @@ fn targets(world: &BundleWorld) -> Result<DrawTargets, BundleRefused<BundleReadF
 fn seat(world: &BundleWorld, n: usize) -> SupportSeat {
     SupportSeat {
         persona: world.personas[n].persona,
-        receipt_key: world.personas[n].receipt_public_key.clone(),
+        receipt_key: world.personas[n].receipt_key(),
     }
 }
 

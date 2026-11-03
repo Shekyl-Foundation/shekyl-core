@@ -4,7 +4,8 @@
 // BSD-3-Clause
 
 //! [`DrawableEpoch`]: an epoch's drawable set `D` and each pair's receipt
-//! key, as one value.
+//! key, its support members with theirs, and the archive width, as one
+//! value.
 //!
 //! The spec calls this the `h_open(E)` snapshot. The type is not named
 //! that: `shekyl-chain-rules`' emission gather is already `EpochSnapshot`
@@ -36,6 +37,30 @@
 //! different digest (`SO-D12` ruling B, 2026-10-17). One function on the
 //! type, so the writer and the check cannot hash different encodings.
 //!
+//! # The support stream reads the same value
+//!
+//! A complete tree is drawn on its own stream, not from `D`
+//! (`ARCHIVAL_SUPPORT_DRAW.md`). The schedule seats the trees that were
+//! members at `h_open(E)` and selects each draw's shard from the archive
+//! width at that block, and the bundle rule verifies a support bit under
+//! the member's receipt key. Those are the same kind of fact as `D`: state
+//! at `h_open(E)` that the bundle rule reads and admission never rebuilds.
+//! So they are filed with it, under its digest (`SO-D12` S1, ruled
+//! 2026-11-01), as one [`SupportRoster`].
+//!
+//! # No shards, no support stream
+//!
+//! The width is the count of shards closed and final at `h_open(E)`, the
+//! prefix `0..width`. Every pair's shard is inside it. No support draw is
+//! made while the archive has no closed shard (Rick, 2026-11-02: "you can't
+//! draw from an empty pool"), and that is a fact of the type, not a check:
+//! a [`SupportRoster`]'s width is a [`NonZeroU64`], and the snapshot holds
+//! `Option<SupportRoster>`, present only when the archive has a shard. A
+//! roster with members at width zero is not a value, so the seats, the
+//! view's width answer and [`crate::select_support_shard`] never meet one.
+//! The economy has the same shape without a guard: with no shards `D` is
+//! empty and the count rule draws zero.
+//!
 //! # Who builds it
 //!
 //! `shekyl-chain-rules`' drawable-epoch builder, from the post-state at
@@ -44,6 +69,7 @@
 //! (§9.6, §11).
 
 use std::borrow::Borrow;
+use std::num::NonZeroU64;
 
 use shekyl_crypto_pq::fn_dsa_hybrid::FnDsaHybridPublicKey;
 use shekyl_types::archival::{DrawableDigest, ReceiptSignPk, RECEIPT_SIGN_PK_LEN};
@@ -54,7 +80,7 @@ use crate::hash::cshake256_32;
 
 /// cSHAKE256 customization for [`DrawableEpoch::digest`] (rule 30: one
 /// label, one function, versioned).
-pub const DRAWABLE_EPOCH_DIGEST_CUSTOMIZATION: &[u8] = b"shekyl/archival-drawable-epoch-v1";
+pub const DRAWABLE_EPOCH_DIGEST_CUSTOMIZATION: &[u8] = b"shekyl/archival-drawable-epoch-v2";
 
 /// Why a [`DrawableEpoch`] could not be built. Each is a defect of the
 /// state the caller read, never a verdict on a block.
@@ -89,10 +115,132 @@ pub enum DrawableEpochError {
         /// The shard.
         shard: ShardId,
     },
+    /// A pair's shard is not below the archive width.
+    #[error("persona {persona:?} holds shard {shard}, outside an archive of {width}")]
+    PairOutsideArchive {
+        /// The persona.
+        persona: PCanonicalId,
+        /// The shard.
+        shard: ShardId,
+        /// The archive width: zero when the snapshot has no roster, the
+        /// archive having no closed shard.
+        width: u64,
+    },
+    /// A support member was supplied twice.
+    #[error("support member {persona:?} was given twice")]
+    DuplicateSupportMember {
+        /// The persona.
+        persona: PCanonicalId,
+    },
+    /// A support member's receipt key does not parse.
+    #[error("support member {persona:?}'s receipt key does not parse")]
+    SupportKeyMalformed {
+        /// The persona.
+        persona: PCanonicalId,
+    },
+    /// A support member also holds a drawable pair. A record is a
+    /// complete tree or a compact set, never both.
+    #[error("support member {persona:?} also holds a drawable pair")]
+    SupportMemberHoldsPair {
+        /// The persona.
+        persona: PCanonicalId,
+    },
+}
+
+/// The support stream's half of an epoch snapshot: the archive width at
+/// `h_open(E)` and the complete trees that were members then, each with its
+/// parsed receipt key, ascending by persona id (`SO-D12` S1).
+///
+/// The width is a [`NonZeroU64`]: a roster exists only over an archive with
+/// a closed shard. An epoch whose archive has none has no roster at all, so
+/// "members at width zero" cannot be written down:
+///
+/// ```compile_fail,E0308
+/// use shekyl_archival_retention::SupportRoster;
+/// use shekyl_types::{archival::ReceiptSignPk, PCanonicalId};
+///
+/// let members: Vec<(PCanonicalId, ReceiptSignPk)> = Vec::new();
+/// // A width of zero is not a `NonZeroU64`.
+/// let _ = SupportRoster::new(0u64, members);
+/// ```
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct SupportRoster {
+    width: NonZeroU64,
+    members: Vec<(PCanonicalId, FnDsaHybridPublicKey)>,
+}
+
+impl SupportRoster {
+    /// The roster over an archive of `width` shards with these members:
+    /// each complete tree that was a member at `h_open(E)` with its bond
+    /// record's receipt key, in any order.
+    ///
+    /// A member's key is parsed here, as a pair holder's is in
+    /// [`DrawableEpoch::new`]: the bundle rule verifies a support bit under
+    /// it.
+    ///
+    /// # Errors
+    ///
+    /// - [`DrawableEpochError::DuplicateSupportMember`]: a persona appears
+    ///   twice.
+    /// - [`DrawableEpochError::SupportKeyMalformed`]: a member's key does
+    ///   not parse.
+    pub fn new<K: Borrow<ReceiptSignPk>>(
+        width: NonZeroU64,
+        members: impl IntoIterator<Item = (PCanonicalId, K)>,
+    ) -> Result<Self, DrawableEpochError> {
+        let mut offered: Vec<(PCanonicalId, K)> = members.into_iter().collect();
+        offered.sort_unstable_by(|a, b| a.0.cmp(&b.0));
+        if let Some(twice) = offered.windows(2).find(|w| w[0].0 == w[1].0) {
+            return Err(DrawableEpochError::DuplicateSupportMember {
+                persona: twice[0].0,
+            });
+        }
+        let mut members = Vec::with_capacity(offered.len());
+        for (persona, key) in offered {
+            let key = FnDsaHybridPublicKey::from_receipt_sign_pk(key.borrow())
+                .map_err(|_| DrawableEpochError::SupportKeyMalformed { persona })?;
+            members.push((persona, key));
+        }
+        Ok(Self { width, members })
+    }
+
+    /// A roster over an archive of `width` shards with no member: an
+    /// archive with a closed shard and no complete tree.
+    #[must_use]
+    pub const fn empty(width: NonZeroU64) -> Self {
+        Self {
+            width,
+            members: Vec::new(),
+        }
+    }
+
+    /// The archive width at `h_open(E)`: a support draw selects its shard
+    /// from `0..width`.
+    #[must_use]
+    pub const fn width(&self) -> NonZeroU64 {
+        self.width
+    }
+
+    /// The members, ascending by persona id, each with its receipt key.
+    #[must_use]
+    pub fn members(&self) -> &[(PCanonicalId, FnDsaHybridPublicKey)] {
+        &self.members
+    }
+
+    /// The receipt key of member `persona`, or `None` when it is not one.
+    #[must_use]
+    pub fn key(&self, persona: &PCanonicalId) -> Option<&FnDsaHybridPublicKey> {
+        let at = self
+            .members
+            .binary_search_by(|(member, _)| member.cmp(persona))
+            .ok()?;
+        Some(&self.members[at].1)
+    }
 }
 
 /// The `h_open(E)` state the draw and the bundle rule both read: the
-/// drawable pairs in canonical order, and each pair's receipt key.
+/// drawable pairs in canonical order with each pair's receipt key, and the
+/// support roster when the archive has a closed shard.
 ///
 /// Canonical order is persona canonical-id bytes, then the shard
 /// numerically (§4.1) — [`DrawablePair`]'s `Ord`. `index(P, s)` is a
@@ -105,10 +253,15 @@ pub struct DrawableEpoch {
     /// One parsed key per persona that holds a pair, ascending by persona
     /// id. A key is stored once and returned per pair.
     receipt_keys: Vec<(PCanonicalId, FnDsaHybridPublicKey)>,
+    /// The archive width and the support members. `None` exactly when no
+    /// shard was closed and final at `h_open(E)`.
+    roster: Option<SupportRoster>,
 }
 
 impl DrawableEpoch {
-    /// The drawable epoch of `epoch` with these receipt keys and these pairs.
+    /// The drawable epoch of `epoch` with this support roster (`None` when
+    /// the archive has no closed shard), these receipt keys and these
+    /// pairs.
     ///
     /// `receipt_keys` is one entry per persona: its id and its bond
     /// record's receipt key at `h_open(E)`. `pairs` is `D` in any order.
@@ -129,17 +282,31 @@ impl DrawableEpoch {
     ///   not in `receipt_keys`.
     /// - [`DrawableEpochError::ReceiptKeyMalformed`]: the key of a persona
     ///   that holds a pair does not parse.
+    /// - [`DrawableEpochError::PairOutsideArchive`]: a pair's shard is not
+    ///   below the roster's width, or there is a pair and no roster.
+    /// - [`DrawableEpochError::SupportMemberHoldsPair`]: a support member
+    ///   holds a pair of `D`. A record is a complete tree or a compact set,
+    ///   never both.
     pub fn new<K: Borrow<ReceiptSignPk>>(
         epoch: SettlementEpoch,
+        roster: Option<SupportRoster>,
         receipt_keys: impl IntoIterator<Item = (PCanonicalId, K)>,
         pairs: impl IntoIterator<Item = DrawablePair>,
     ) -> Result<Self, DrawableEpochError> {
+        let archive_width = roster.as_ref().map_or(0, |roster| roster.width.get());
         let mut pairs: Vec<DrawablePair> = pairs.into_iter().collect();
         pairs.sort_unstable();
         if let Some(twice) = pairs.windows(2).find(|w| w[0] == w[1]) {
             return Err(DrawableEpochError::DuplicatePair {
                 persona: twice[0].persona,
                 shard: twice[0].shard,
+            });
+        }
+        if let Some(outside) = pairs.iter().find(|p| p.shard.to_raw() >= archive_width) {
+            return Err(DrawableEpochError::PairOutsideArchive {
+                persona: outside.persona,
+                shard: outside.shard,
+                width: archive_width,
             });
         }
 
@@ -173,25 +340,44 @@ impl DrawableEpoch {
             parsed.push((persona, key));
         }
 
+        if let Some((persona, _)) = roster
+            .iter()
+            .flat_map(SupportRoster::members)
+            .find(|(m, _)| parsed.binary_search_by(|(holder, _)| holder.cmp(m)).is_ok())
+        {
+            return Err(DrawableEpochError::SupportMemberHoldsPair { persona: *persona });
+        }
+
         Ok(Self {
             epoch,
             pairs,
             receipt_keys: parsed,
+            roster,
         })
     }
 
-    /// An epoch with no drawable pair.
+    /// An epoch with no drawable pair and no support roster.
     ///
-    /// The same value as [`Self::new`] with no keys and no pairs. An open
-    /// with no bonds writes this set's digest. There is no pair that could
-    /// lack a key, so this constructor does not fail.
+    /// The same value as [`Self::new`] with no roster, no keys and no
+    /// pairs: the open of a chain that has no bonds and has closed no
+    /// shard. There is no pair that could lack a key, so this constructor
+    /// does not fail.
     #[must_use]
     pub const fn empty(epoch: SettlementEpoch) -> Self {
         Self {
             epoch,
             pairs: Vec::new(),
             receipt_keys: Vec::new(),
+            roster: None,
         }
+    }
+
+    /// The support roster: the archive width and the members. `None` when
+    /// the archive had no closed shard at `h_open(E)`, and then this epoch
+    /// has no support stream.
+    #[must_use]
+    pub const fn support_roster(&self) -> Option<&SupportRoster> {
+        self.roster.as_ref()
     }
 
     /// The epoch this is the `h_open(E)` state of.
@@ -232,15 +418,19 @@ impl DrawableEpoch {
     }
 
     /// The digest the store keeps for this epoch's drawable set (spec §9.5
-    /// check 2; `SO-D12` ruling B):
+    /// check 2; `SO-D12` ruling B, widened by S1 of 2026-11-01):
     ///
     /// ```text
-    /// cSHAKE256_32("shekyl/archival-drawable-epoch-v1",
+    /// cSHAKE256_32("shekyl/archival-drawable-epoch-v2",
     ///       E_le8
     ///     ‖ n_pairs_le8
     ///     ‖ for each pair, canonical order:     p_canonical_id[32] ‖ shard_id_le8
     ///     ‖ n_personas_le8
     ///     ‖ for each persona, ascending by id:  p_canonical_id[32] ‖ receipt_sign_pk[1837]
+    ///     ‖ roster_tag[1]                       0x00: no roster; 0x01: a roster, then
+    ///     ‖ archive_width_le8                   (the roster's width, never zero)
+    ///     ‖ n_members_le8
+    ///     ‖ for each member, ascending by id:   p_canonical_id[32] ‖ receipt_sign_pk[1837]
     /// )
     /// ```
     ///
@@ -249,17 +439,29 @@ impl DrawableEpoch {
     /// hold a pair, which are the keys this value keeps; a key is hashed
     /// once per persona, as its canonical encoding. The pair list fixes
     /// every `index(P, s)`, and the persona list fixes the key each
-    /// index's receipt is verified under. A plain hash over the whole
-    /// value, computed once: `D` is never extended a draw at a time, as
-    /// the issued-draw index is.
+    /// index's receipt is verified under. The roster tag tells "no roster"
+    /// (an archive with no closed shard) from "a roster with no members"
+    /// (a closed shard and no complete tree); the width fixes the set a
+    /// support draw selects from, and the member list fixes who is seated
+    /// and the key each support bit is verified under. A member holds no
+    /// pair, so it is in the member list and not the persona list. A plain
+    /// hash over the whole value, computed once: `D` is never extended a
+    /// draw at a time, as the issued-draw index is.
     #[must_use]
     pub fn digest(&self) -> DrawableDigest {
-        // The epoch and the two counts are each one little-endian `u64`.
+        // The epoch, the width and the three counts are each one
+        // little-endian `u64`; the roster tag is one byte.
         const WORD: usize = size_of::<u64>();
         const PAIR_LEN: usize = size_of::<PCanonicalId>() + WORD;
         const PERSONA_LEN: usize = size_of::<PCanonicalId>() + RECEIPT_SIGN_PK_LEN;
+        const ROSTER_ABSENT: u8 = 0x00;
+        const ROSTER_PRESENT: u8 = 0x01;
+        let members = self.roster.as_ref().map_or(0, |r| r.members.len());
         let mut input = Vec::with_capacity(
-            3 * WORD + self.pairs.len() * PAIR_LEN + self.receipt_keys.len() * PERSONA_LEN,
+            5 * WORD
+                + 1
+                + self.pairs.len() * PAIR_LEN
+                + (self.receipt_keys.len() + members) * PERSONA_LEN,
         );
         input.extend_from_slice(&self.epoch.to_raw().to_le_bytes());
         input.extend_from_slice(&self.len().to_le_bytes());
@@ -271,6 +473,18 @@ impl DrawableEpoch {
         for (persona, key) in &self.receipt_keys {
             input.extend_from_slice(persona.as_bytes());
             input.extend_from_slice(key.to_receipt_sign_pk().as_bytes());
+        }
+        match &self.roster {
+            None => input.push(ROSTER_ABSENT),
+            Some(roster) => {
+                input.push(ROSTER_PRESENT);
+                input.extend_from_slice(&roster.width.get().to_le_bytes());
+                input.extend_from_slice(&(roster.members.len() as u64).to_le_bytes());
+                for (persona, key) in &roster.members {
+                    input.extend_from_slice(persona.as_bytes());
+                    input.extend_from_slice(key.to_receipt_sign_pk().as_bytes());
+                }
+            }
         }
         DrawableDigest::from_bytes(cshake256_32(DRAWABLE_EPOCH_DIGEST_CUSTOMIZATION, &input))
     }

@@ -14,16 +14,17 @@
 # ignore string names the job. The set: the scenarios that fill shards
 # with real proofs (the archival pop round trips, the emission claims, the
 # levered slash chain, the join, the two pool-shim posts, a produced
-# bundle through the staged door), the miner over real RandomX, a service
-# run across the first seed boundary, the captured-chain replay under the
-# production substrate, and the measurements (the switch at the genesis
-# cap, the miner's rate, the H19 batch cost). An `#[ignore]`d test no
-# scheduled lane runs is a deleted test with a comment on it. Before this
-# job none of these ran, and its first run found five red on `dev`: the
-# four switch-timing tests asserted an alt table the death rule
-# (0999f8726) had since emptied, and the five-block miner test never
-# pinned its seed, which the miner has required since e1c39b882. Both were
-# repaired in DRS-X PR 3e.
+# bundle and a produced support bundle through the staged door), the miner
+# over real RandomX, a service run across the first seed boundary, a spend
+# read by the wallet and the RPC after its shard was discarded, the
+# captured-chain replay under the production substrate, and the
+# measurements (the switch at the genesis cap, the miner's rate, the H19
+# batch cost). An `#[ignore]`d test no scheduled lane runs is a deleted
+# test with a comment on it. Before this job none of these ran, and its
+# first run found five red on `dev`: the four switch-timing tests asserted
+# an alt table the death rule (0999f8726) had since emptied, and the
+# five-block miner test never pinned its seed, which the miner has required
+# since e1c39b882. Both were repaired in DRS-X PR 3e.
 #
 # Budget: the whole set took 44 minutes in release on a 16-core workstation
 # under heavy load (the two RandomX switch measurements dominate); the job
@@ -46,10 +47,12 @@ subjects=(
   'archival_pop_roundtrip_tests::a_popped_claim_restores_the_epoch_its_prune_dropped_and_a_second_claim_is_refused'
   'archival_slash_tests::the_levered_slash_chain_judges_each_row_on_one_record'
   'bundle_producer_gate_tests::a_produced_bundle_is_admitted_and_connects_through_the_staged_door'
+  'bundle_producer_gate_tests::a_produced_support_bundle_is_admitted_and_connects_through_the_staged_door'
   'miner_tests::the_miner_extends_the_chain_block_after_block'
   'miner_tests::the_miners_rate_per_worker'
   'pool_submit_tests::join_posts_are_accepted_through_the_rust_pool_shim'
   'pool_submit_tests::two_posts_by_one_persona_are_held_and_the_template_selects_one'
+  'rpc_store_facts_tests::below_horizon::the_wallet_and_the_rpc_read_a_spend_whose_shard_the_store_discarded'
   'scenario::scenario_tests::a_chain_mines_under_the_production_substrate'
   'service::service_tests::a_run_across_a_seed_boundary_lands_in_one_commit'
   'scenario_emission_tests::a_claim_verifies_after_the_epochs_complete_trees_are_released_and_slashed'
