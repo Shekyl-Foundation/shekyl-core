@@ -32,7 +32,7 @@ use shekyl_transport_layer::{
 };
 use tokio::io::AsyncWriteExt;
 use tokio::net::tcp::{OwnedReadHalf, OwnedWriteHalf};
-use tokio::net::{TcpListener, TcpStream};
+use tokio::net::{TcpListener, TcpSocket, TcpStream};
 use tokio::sync::{mpsc, oneshot};
 
 use crate::handshake::{self, Setup};
@@ -319,13 +319,17 @@ where
     let mut wake = std::pin::pin!(owner.wait_wake_async());
     let connect = async {
         let dialed = Instant::now();
-        let mut stream = match TcpStream::connect(target).await {
+        // `target` is the proxy when one is configured, and the peer when it
+        // is not (`Observed::connect_error`). A socket the system cannot make
+        // is read as the connect's own error, as `TcpStream::connect` reported
+        // it: an address family this host lacks depends on the destination.
+        let socket = match dial_socket(target) {
+            Ok(socket) => socket,
+            Err(err) => return Err(Observed::connect_error(err.kind(), proxy.is_some())),
+        };
+        let mut stream = match socket.connect(target).await {
             Ok(stream) => stream,
-            Err(err) => {
-                // `target` is the proxy when one is configured, and the peer
-                // when it is not (`Observed::connect_error`).
-                return Err(Observed::connect_error(err.kind(), proxy.is_some()));
-            }
+            Err(err) => return Err(Observed::connect_error(err.kind(), proxy.is_some())),
         };
         if let Some(proxy) = &proxy {
             match socks_connect(&mut stream, proxy.isolation(), Destination::Ip(dest)).await {
@@ -914,6 +918,42 @@ pub fn zero_tally() -> HandshakeTally {
     }
 }
 
+/// The dial socket's SYN retransmissions, where the system lets the dial set
+/// them (Windows): one resend of a lost SYN, at +1.0 s inside the 1.415 s
+/// dial deadline, as Linux makes, and one retry after a reset, so a refusal
+/// is reported in about 0.5 s. Windows' default retries a refusal for about
+/// 2.0 s, past the deadline, and a refusing peer then ended as the deadline's
+/// timeout instead of its refusal (measured on Windows 11, shekyl-dev
+/// `data/windows-refused-connect/`, 2026-11-03).
+#[cfg(windows)]
+const SYN_RETRANSMISSIONS: u8 = 1;
+
+/// The socket for one dial to `target`: the peer, or the operator's proxy.
+fn dial_socket(target: SocketAddr) -> std::io::Result<TcpSocket> {
+    let socket = if target.is_ipv4() {
+        TcpSocket::new_v4()?
+    } else {
+        TcpSocket::new_v6()?
+    };
+    #[cfg(windows)]
+    cap_syn_retransmissions(&socket);
+    Ok(socket)
+}
+
+/// Apply [`SYN_RETRANSMISSIONS`]. A system that refuses the option still
+/// dials, with its default retries, and says so once.
+#[cfg(windows)]
+fn cap_syn_retransmissions(socket: &TcpSocket) {
+    static WARNED: AtomicBool = AtomicBool::new(false);
+    if let Err(err) = shekyl_win_sec::cap_syn_retransmissions(socket, SYN_RETRANSMISSIONS) {
+        if !WARNED.swap(true, Ordering::Relaxed) {
+            tracing::warn!(
+                "clearnet: the system refused the dial socket's SYN retry cap ({err}); a refused connect then takes about 2 s and ends as the dial deadline's timeout"
+            );
+        }
+    }
+}
+
 #[cfg(test)]
 #[path = "close_tests.rs"]
 mod close_tests;
@@ -921,6 +961,30 @@ mod close_tests;
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// On Windows a refused connect is reported well inside the 1.415 s dial
+    /// deadline: about 0.5 s at the dial socket's cap of one SYN retry, where
+    /// the system's default takes about 2.0 s. Dropping the cap from
+    /// `dial_socket` makes this red on Windows.
+    #[cfg(windows)]
+    #[tokio::test]
+    async fn a_refused_connect_is_reported_inside_the_dial_deadline() {
+        let port = {
+            let listener =
+                std::net::TcpListener::bind((std::net::Ipv4Addr::LOCALHOST, 0)).expect("bind");
+            listener.local_addr().expect("addr").port()
+        };
+        let target = SocketAddr::from((std::net::Ipv4Addr::LOCALHOST, port));
+        let started = Instant::now();
+        let err = dial_socket(target)
+            .expect("a socket")
+            .connect(target)
+            .await
+            .expect_err("nothing listens");
+        let took = started.elapsed();
+        assert_eq!(err.kind(), std::io::ErrorKind::ConnectionRefused);
+        assert!(took < Duration::from_secs(1), "refused after {took:?}");
+    }
 
     #[tokio::test]
     async fn a_joined_writer_is_not_polled_again() {
