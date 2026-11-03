@@ -18,8 +18,6 @@
 
 use std::sync::Arc;
 
-use serde::{Deserialize, Serialize};
-
 use crate::info::Disclosure;
 use crate::methods::{RpcFault, RpcRefusal};
 

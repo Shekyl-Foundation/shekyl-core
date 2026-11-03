@@ -84,7 +84,9 @@ static ARMED: AtomicBool = AtomicBool::new(false);
 static OPTIONS: Mutex<Option<OptionsHandle>> = Mutex::new(None);
 
 /// The options handle the daemon configured, or the absent handle before
-/// any was.
+/// any was. The in-process console was the reader; the remote arm does
+/// not call it.
+#[allow(dead_code)]
 pub(crate) fn options() -> OptionsHandle {
     slot(&OPTIONS)
         .clone()
@@ -108,7 +110,9 @@ fn store_offline(offline: bool) {
 }
 
 /// Whether this daemon was started with `dev-rpc`. The in-process console
-/// admits an armed lever under this bit. Default false.
+/// admitted an armed lever under this bit. The remote arm does not read
+/// it. Default false.
+#[allow(dead_code)]
 #[must_use]
 pub(crate) fn armed() -> bool {
     ARMED.load(Ordering::Acquire)
@@ -291,6 +295,37 @@ pub fn stop() {
 #[no_mangle]
 pub extern "C" fn shekyl_daemon_rpc_stop() {
     stop();
+}
+
+/// The C++ console still calls this (`rpc_command_executor.cpp`). The
+/// renderer moved to `shekyl-cli`; this returns unknown, with an empty
+/// buffer `shekyl_daemon_ctl_free` treats as a no-op, until that caller
+/// is deleted (R8).
+///
+/// # Safety
+///
+/// `out_ptr` and `out_len`, when non-null, are written. The other
+/// pointers are not read.
+#[no_mangle]
+#[allow(dead_code)]
+pub unsafe extern "C" fn shekyl_daemon_console_run(
+    _argv: *const *const std::os::raw::c_char,
+    _argc: usize,
+    _rpc_server_ptr: *mut c_void,
+    _address: *const std::os::raw::c_char,
+    _timeout_secs: u64,
+    _nettype: u8,
+    out_ptr: *mut *mut u8,
+    out_len: *mut usize,
+) -> i32 {
+    if !out_ptr.is_null() {
+        *out_ptr = std::ptr::null_mut();
+    }
+    if !out_len.is_null() {
+        *out_len = 0;
+    }
+    // `SHEKYL_DAEMON_CONSOLE_ERR_UNKNOWN`.
+    -2
 }
 
 #[cfg(test)]
