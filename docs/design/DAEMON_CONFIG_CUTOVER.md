@@ -167,19 +167,10 @@ What crosses the FFI after the cutover, and nothing else:
    binary's entry runs `lang_start`, so `args_os` agrees with the process
    argv on every target, the stack-overflow guard is installed, and
    RT-16's SCM dispatcher has its process entry.
-   **Client mode.** When positional command words are given, `shekyld` is a
-   client of a daemon that is already running, as the remnant's client branch
-   in `shekyl_remnant_run` (`src/daemon/daemon.cpp`) is
-   today: it takes no lock, checks no marker, creates no data directory,
-   writes no log file and makes no announcement. Rust logs to standard
-   error only, fills a snapshot holding the words, the network and the
-   first `rpc-admin-listen` endpoint, and calls the remnant's
-   `run(snapshot)`, which runs the C++ console client against that endpoint
-   (its transport is already Rust's: `rust/shekyl-daemon-ctl`,
-   `rust/shekyl-daemon-rpc/src/console/mod.rs`) and returns its status. A command with
-   `rpc-admin-listen = none` has no daemon to reach and is refused at parse
-   with a typed code naming the option. Steps 3 onward are for a daemon
-   start only. Client mode dies with the C++ console (R8, DC-N2).
+   **Client mode — deleted 2026-11-03 (R8, DC-N2).** A positional word used
+   to make `shekyld` a client of a running daemon. That path is gone. A
+   positional word is refused at parse, before the daemon loads. The words
+   live on `shekyl-cli` (`INPUT_GRAMMAR.md` §13).
    **The walk, and the configuration check** (`INPUT_GRAMMAR.md` IG-Q58…
    IG-Q62). Before step 3 creates anything, Rust walks every refusal steps
    3 to 6 make, with nothing created, locked or latched: whether the
@@ -955,7 +946,7 @@ chain-sync lanes do not touch the option surface.
 | Carry | Target |
 | --- | --- |
 | DC-F1, the genesis-at-open check on a store's contents (no longer a blocker) | [`DAEMON_REDB_STORE.md`](DAEMON_REDB_STORE.md) |
-| DC-N2, the console moves to `shekyl-cli` | RT-15, [`RPC_CHANNEL.md`](RPC_CHANNEL.md) |
+| DC-N2, the console moves to `shekyl-cli` — LANDED 2026-11-03 (PR #1259) | [`INPUT_GRAMMAR.md`](INPUT_GRAMMAR.md) §13 |
 | the blockchain utilities' option sets | IG Part B; this brief §9 |
 | the inherited default of `rpc-connections-max` (IG-Q12) | RT-O9.4, [`RPC_CHANNEL.md`](RPC_CHANNEL.md) |
 | the `removed_flags` shim sunset | this brief §4; the row leaves with the files |

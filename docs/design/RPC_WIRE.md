@@ -103,7 +103,7 @@
   - `RESTRICTED_METHODS` (`:49`) and its spec test;
   - `RPC_CHANNEL.md` §6.1's grant table, as prose;
   - the route list in `server.rs`;
-  - each client's own constants. `shekyl-cli` even runs its own HTTP client (ureq) with its own reply types (`rust/shekyl-cli/src/daemon.rs`), against RK-D1.
+  - each client's own constants. `shekyl-cli`'s daemon client used to post through ureq and decode its own reply types (`rust/shekyl-cli/src/daemon.rs`); that client now posts through `SyncDaemon` and decodes `shekyl-rpc-types` (R8, 2026-11-03). The wallet session's HTTP agent is still ureq.
 
   RK-D6 asked for one list, and the FOLLOWUPS dual-list row is still open.
 - **Ruling.** There is one method table in `shekyl-rpc-types`.
@@ -147,7 +147,7 @@
 
 The KV cutover is retired (record: [`DAEMON_RPC_KV_CUTOVER.md`](../completed/DAEMON_RPC_KV_CUTOVER.md)). These of its decisions stay in force on the wire, with their IDs.
 
-- **RK-D1 — Rust owns the wire types, once.** `shekyl-rpc-types` is the single definition of every daemon method's request and reply, consumed by `shekyl-daemon-rpc` (the server), `shekyl-rpc-client` (the wallet), `shekyl-cli` and the GUI. A client's own reply types are a duplicate: delete them, never synchronize them. `shekyl-cli`'s private HTTP client and its reply types go with R8 (`RPC_CHANNEL.md` RT-W15). One definition is the only one that cannot drift.
+- **RK-D1 — Rust owns the wire types, once.** `shekyl-rpc-types` is the single definition of every daemon method's request and reply, consumed by `shekyl-daemon-rpc` (the server), `shekyl-rpc-client` (the wallet), `shekyl-cli` and the GUI. A client's own reply types are a duplicate: delete them, never synchronize them. `shekyl-cli`'s private daemon HTTP client and its reply types went with R8 (`RPC_CHANNEL.md` RT-W15, 2026-11-03): the daemon client posts through `SyncDaemon` and decodes these types. One definition is the only one that cannot drift.
 - **RK-D6 — restricted-mode policy is single-sourced in Rust.** Carried by RW-Q7's method table, whose grant column is the policy, and by RT-W10's grant table, which reads it.
 - **RK-D7 — store-agnostic handlers.** Each family's facts arrive through a trait (`ChainFacts`, `InfoFacts`, `P2pFacts`, `ChainReadFacts`, …), so a handler and its tests do not know which store answers. The chain and info facts are `StoreFacts` over the Rust chain store (`rust/shekyl-daemon-rpc/src/store_facts.rs`). The FFI shims `FfiChainFacts` and `FfiInfoFacts` are deleted. `FfiP2pFacts` remains the sync half — connections, sync spans, and net stats — until CS-5. Handlers and tests do not change.
 - **RK-D10 — a hash on this wire is `HashHex`.** 32 bytes, 64 lowercase hex characters: one wire-level type that validates the hex once, in the deserializer. It wraps raw bytes, not a domain newtype, because one block header carries hashes of four kinds; consumers name the kind at their edge (rule 18). Where a field's absent form is `""` (`block_header.pow_hash`), the type is `Option<HashHex>` with an explicit `""`-as-absent serde until RW-Q4's three states replace it.

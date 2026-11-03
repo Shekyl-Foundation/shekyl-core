@@ -614,7 +614,7 @@ A command's last term is a verb or a view, and a command that changes state ends
 
 ## 13. The daemon console
 
-The catalog the Rust console and `shekyl-cli` serve (IG-Q25). The interim C++ console (`src/daemon/command_server.cpp`) is not renamed and is deleted with R8 (DC-N2).
+The catalog `shekyl-cli` serves (IG-Q25). The C++ console is deleted (R8, DC-N2, 2026-11-03). These words are the shell's.
 
 | Today | New | Positionals / flags | Notes |
 |---|---|---|---|
