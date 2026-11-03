@@ -18,7 +18,7 @@ use std::sync::Arc;
 
 use shekyl_rpc_types::errors::Diagnostic;
 
-use shekyl_types::{BlockHash, BlockHeight, KeyImage, PCanonicalId, TxHash};
+use shekyl_types::{BlockHash, BlockHeight, KeyImage, PCanonicalId, PowHash, TxHash};
 
 use crate::chain_facts::{
     BlockAt, BlockHashAt, BlockHeaderAt, BlockLookup, ChainFacts, ChainTip, DaemonIdentity,
@@ -30,8 +30,8 @@ use crate::info_facts::{
 };
 use crate::mining_facts::{LocalOutcome, MiningState, Pending, PopOutcome, PostedTemplate};
 use crate::read_facts::{
-    AltChainFacts, BlocksAt, ChainReadFacts, ClaimSource, CoinbaseRange, CurveTreeFacts, PowAt,
-    PowSeed, ShardCoverage, SpentAt,
+    AdmittedPow, AltChainFacts, BlocksAt, ChainReadFacts, ClaimSource, CoinbaseRange,
+    CurveTreeFacts, PowAdmission, PowSeed, ShardCoverage, SpentAt,
 };
 
 /// The chain reads. One object, the three traits the handlers call.
@@ -490,7 +490,15 @@ impl ChainReadFacts for ChainReadAbsent {
         Err(FactsFault::NotReady)
     }
 
-    fn pow_hash(&self, _pow_blob: &[u8], _seed: PowSeed) -> Result<PowAt, FactsFault> {
+    fn admit_pow(&self, _seed: PowSeed) -> Result<PowAdmission, FactsFault> {
+        Err(FactsFault::NotReady)
+    }
+
+    fn hash_admitted(
+        &self,
+        _pow_blob: &[u8],
+        _admitted: &AdmittedPow,
+    ) -> Result<PowHash, FactsFault> {
         Err(FactsFault::NotReady)
     }
 

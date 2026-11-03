@@ -21,6 +21,7 @@ use tokio::io::{duplex, AsyncReadExt, AsyncWriteExt, DuplexStream};
 use super::*;
 
 mod inbound_shape;
+mod stall;
 
 /// Two ends of one session: the client's (send, receive) and the daemon's.
 fn directions() -> (

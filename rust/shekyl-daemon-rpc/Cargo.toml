@@ -103,6 +103,12 @@ shekyl-pow-randomx = { path = "../shekyl-pow-randomx" }
 # The daemon's one hasher budget (PR2-Q3): calc_pow hashes under a permit
 # in its class, below the chain's and above the miner's.
 shekyl-hash-budget = { path = "../shekyl-hash-budget" }
+# Plaintext listeners set hyper's header-read timer. Axum's `serve` does not
+# expose it. The listener is hyper's HTTP/1 builder: that timer is HTTP/1's,
+# and HTTP/2 is not a feature of this crate. Its preface has no such timer,
+# and linking `h2` brought in RUSTSEC-2026-0258.
+hyper = { version = "1", default-features = false, features = ["http1", "server"] }
+hyper-util = { version = "0.1.20", default-features = false, features = ["tokio", "service"] }
 
 [dev-dependencies]
 # Real consensus-valid spend fixture for the production-verifier oracle test
@@ -122,6 +128,9 @@ rand_chacha = { workspace = true }
 rand_core = { version = "0.6", features = ["std"] }
 tower = { version = "0.5", features = ["util"] }
 http = "1"
+# `start_paused` for the plaintext header-bound and write-stall tests.
+# Production tokio stays `full` without `test-util`.
+tokio = { version = "1", features = ["full", "test-util"] }
 
 [build-dependencies]
 # Consensus-constant generation from config/consensus_constants.json (the
