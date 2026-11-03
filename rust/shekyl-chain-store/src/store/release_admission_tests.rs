@@ -52,11 +52,17 @@ fn pin_of(anchors: &ReleaseAnchors) -> BlockHash {
 }
 
 /// Set `path`'s modification time to [`BEFORE_THE_SNAPSHOT`] ago.
+///
+/// The handle is read-write, and the open does not truncate. Windows
+/// refuses [`std::fs::File::set_modified`] on a read-only handle.
 fn age_mtime(path: &std::path::Path) {
     let aged = std::time::SystemTime::now()
         .checked_sub(BEFORE_THE_SNAPSHOT)
         .expect("the clock reaches back");
-    std::fs::File::open(path)
+    std::fs::OpenOptions::new()
+        .read(true)
+        .write(true)
+        .open(path)
         .expect("the store file")
         .set_modified(aged)
         .expect("age the modification time");
