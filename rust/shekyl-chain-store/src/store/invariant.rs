@@ -515,13 +515,14 @@ pub enum StoreInvariant {
         /// The height the reduction was counted below.
         height: shekyl_types::BlockHeight,
     },
-    /// **SI-40** — `archival_support_block` holds one row per connected
-    /// height. A second insert is a rewrite. The count is how many support
-    /// draws the block issued. While the support schedule is not on the
-    /// transition the row is [`shekyl_types::archival::SupportCount::NONE`]:
-    /// the block issued none. A missing row is a height the writer did not
-    /// run for, and that absence is not the zero. The row retires with the
-    /// draw rows (SI-34). Fatal, never a verdict on the block.
+    /// **SI-40** — `archival_support_block` holds one seat row per
+    /// connected height. A second insert is a rewrite. The row is the
+    /// complete trees the block seated, in persona order; its length is how
+    /// many support draws the block issued. A block that seated nobody has
+    /// the empty row, [`shekyl_types::archival::SupportSeats::EMPTY`]. A
+    /// missing row is a height the writer did not run for, and that absence
+    /// is not the empty row. The row retires with the draw rows (SI-34).
+    /// Fatal, never a verdict on the block.
     SupportBlockNotSingular {
         /// The height whose row was being written.
         height: shekyl_types::BlockHeight,
@@ -548,6 +549,22 @@ pub enum StoreInvariant {
         id: crate::ids::TxStorageId,
         /// Which region is held; the other is not.
         held: HeldRegion,
+    },
+    /// **SI-43** — a block's seat row equals its epoch's schedule
+    /// ([`shekyl_chain_rules::scheduled_seats`], compared by
+    /// [`shekyl_types::archival::SupportSeats::first_one_sided`]; `SO-D12`
+    /// S1). The
+    /// store's bundle view checks it when admission reads a roster. A
+    /// persona on only one side is this halt: a member the schedule does
+    /// not seat, a stranger, and a scheduled member the row dropped. The
+    /// carry is staged and is not consulted; when it joins the transition
+    /// the seats it writes are the schedule this comparison takes. Raised
+    /// before any write. Fatal, never a verdict on the block.
+    SupportSeatsNotScheduled {
+        /// The height whose roster was read.
+        height: shekyl_types::BlockHeight,
+        /// The first persona, in persona order, present on only one side.
+        persona: shekyl_types::PCanonicalId,
     },
 }
 
@@ -827,6 +844,7 @@ impl StoreInvariant {
             Self::SupportBlockNotSingular { .. } => 40,
             Self::BundleBodyHolder(_) => 41,
             Self::ArchivalGoodHalfHeld { .. } => 42,
+            Self::SupportSeatsNotScheduled { .. } => 43,
         }
     }
 }
@@ -1135,7 +1153,7 @@ impl core::fmt::Display for StoreInvariant {
             Self::SupportBlockNotSingular { height } => write!(
                 f,
                 "archival_support_block already holds height {height}; a block records its \
-                 support count once"
+                 support seats once"
             ),
             Self::BundleBodyHolder(BodyHolderFault::EntryWithoutBody { h }) => write!(
                 f,
@@ -1164,6 +1182,11 @@ impl core::fmt::Display for StoreInvariant {
                      archival good is one unit, held or discarded together"
                 )
             }
+            Self::SupportSeatsNotScheduled { height, persona } => write!(
+                f,
+                "the seat row at height {height} is not the schedule: {persona:?} is on only \
+                 one side"
+            ),
             Self::DrawableMemoMiss { epoch } => write!(
                 f,
                 "the admission view has no drawable set for epoch {epoch} under the opening \
@@ -1234,6 +1257,7 @@ impl core::error::Error for StoreInvariant {
             | Self::SupportBlockNotSingular { .. }
             | Self::BundleBodyHolder(_)
             | Self::ArchivalGoodHalfHeld { .. }
+            | Self::SupportSeatsNotScheduled { .. }
             | Self::UndoLogIncoherent { .. } => None,
         }
     }

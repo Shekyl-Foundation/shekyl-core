@@ -9,7 +9,7 @@
 
 use shekyl_types::archival::{
     BlockDraws, BondRecord, CompleteTreeSet, DrawableDigest, RMarket, SettlementRow,
-    SigmaWorkMilli, SlashLogEntry, SupportCount,
+    SigmaWorkMilli, SlashLogEntry, SupportSeats,
 };
 use shekyl_types::{PCanonicalId, SettlementEpoch, ShardId};
 use shekyl_units::AtomicUnits;
@@ -64,10 +64,10 @@ pub struct ArchivalDelta {
     /// The draw count of the connecting block. Present at every height,
     /// including a schedule with no response window, which records zeros.
     pub(super) draws: BlockDraws,
-    /// How many support draws the connecting block issued. Present at
-    /// every height. [`SupportCount::NONE`] while the schedule does not
-    /// draw support: the row is that zero, and a missing row is the hole.
-    pub(super) support_count: SupportCount,
+    /// The complete trees the connecting block seated on the support
+    /// stream, in persona order. Present at every height; the empty row is
+    /// a block that seated nobody, and a missing row is the hole.
+    pub(super) support_seats: SupportSeats,
 }
 
 impl ArchivalDelta {
@@ -172,11 +172,13 @@ impl ArchivalDelta {
         self.draws
     }
 
-    /// How many support draws the connecting block issued
-    /// (`ARCHIVAL_SUPPORT_DRAW.md` §5). Written at every height.
+    /// The complete trees the connecting block seated on the support
+    /// stream, in persona order (`ARCHIVAL_SUPPORT_DRAW.md` §5; `SO-D12`
+    /// S1). Written at every height. The length is the number of support
+    /// draws the block issued.
     #[must_use]
-    pub const fn support_count(&self) -> SupportCount {
-        self.support_count
+    pub const fn support_seats(&self) -> &SupportSeats {
+        &self.support_seats
     }
 }
 

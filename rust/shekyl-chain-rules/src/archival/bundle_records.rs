@@ -20,7 +20,6 @@ use shekyl_archival_retention::{
     BundleBody, BundleRecord, DrawableEpoch, PassStream, CHALLENGE_READS,
 };
 use shekyl_crypto_pq::fn_dsa_hybrid::{FnDsaHybridPublicKey, FnDsaHybridSignature};
-use shekyl_types::archival::ReceiptSignPk;
 use shekyl_types::BlockHash;
 
 use super::{
@@ -44,8 +43,10 @@ pub(super) struct BoundPass {
 enum PassKey {
     /// [`DrawableEpoch::receipt_key`] at this index.
     Economy { index: u64 },
-    /// The complete tree's receipt key, as the roster holds it.
-    Support(ReceiptSignPk),
+    /// The complete tree's receipt key, as the roster holds it: parsed when
+    /// the epoch snapshot was built. Boxed: a parsed key is far larger than
+    /// the economy arm's index.
+    Support(Box<FnDsaHybridPublicKey>),
 }
 
 impl BoundPass {
@@ -62,13 +63,18 @@ impl BoundPass {
 
     /// A support set bit. `key` is the seat's, cloned so the roster the
     /// view returned can drop before the receipt pass runs.
-    pub(super) fn support(draw: u32, record: BundleRecord, shard: u64, key: ReceiptSignPk) -> Self {
+    pub(super) fn support(
+        draw: u32,
+        record: BundleRecord,
+        shard: u64,
+        key: FnDsaHybridPublicKey,
+    ) -> Self {
         Self {
             stream: PassStream::Support,
             draw,
             record,
             shard,
-            key: PassKey::Support(key),
+            key: PassKey::Support(Box::new(key)),
         }
     }
 }
@@ -139,13 +145,10 @@ fn verify_one<F>(
             let nonce = challenge_nonce(&kept.seed, hash_at_h, pass.draw, pass.record.attempt);
             verify_transcript(pass, anchor_hash, key, &nonce)
         }
-        PassKey::Support(receipt_key) => {
-            let Ok(key) = FnDsaHybridPublicKey::from_receipt_sign_pk(receipt_key) else {
-                return unanswered();
-            };
+        PassKey::Support(key) => {
             let nonce =
                 support_challenge_nonce(&kept.seed, hash_at_h, pass.draw, pass.record.attempt);
-            verify_transcript(pass, anchor_hash, &key, &nonce)
+            verify_transcript(pass, anchor_hash, key, &nonce)
         }
     }
 }
@@ -224,7 +227,7 @@ pub(super) struct SeatDraw {
     pub(super) draw: u32,
     pub(super) persona: shekyl_types::PCanonicalId,
     pub(super) shard: shekyl_types::ShardId,
-    pub(super) receipt_key: ReceiptSignPk,
+    pub(super) receipt_key: FnDsaHybridPublicKey,
 }
 
 /// Every support draw of `h` when it issued `issued`: seat `j` of the

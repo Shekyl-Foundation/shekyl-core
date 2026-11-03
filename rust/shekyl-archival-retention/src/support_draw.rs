@@ -12,6 +12,8 @@
 //! economy's shortfall is a different value, and this module never reads
 //! or writes it.
 
+use std::num::NonZeroU64;
+
 use shekyl_types::archival::{IssuedDraw, SettlementRow, SettlementRowError, COUNTED_DRAWS};
 use shekyl_types::{PCanonicalId, SettlementEpoch, ShardId};
 
@@ -50,6 +52,13 @@ impl SupportUnissued {
     #[must_use]
     pub const fn get(self) -> u32 {
         self.0
+    }
+
+    /// One carried draw re-seated: the tree is owed one fewer. Zero stays
+    /// zero.
+    #[must_use]
+    pub const fn reseated(self) -> Self {
+        Self(self.0.saturating_sub(1))
     }
 
     /// One scheduled block the producer did not file. The cap is `c`;
@@ -106,23 +115,39 @@ pub fn support_slot(
     Some(offset.wrapping_add(step) % span)
 }
 
+/// Whether `persona`'s schedule seats it at epoch-relative height
+/// `relative`: some `r_i`, `i` in `0..c`, is `relative`. A tree takes at
+/// most one seat on a block however many of its `r_i` land there (§2: one
+/// draw per tree per chosen block). `false` for every height when the
+/// window is not shorter than the epoch.
+#[must_use]
+pub fn support_seated_at(
+    persona: &PCanonicalId,
+    relative: u64,
+    seb: u64,
+    response_window: u64,
+) -> bool {
+    (0..SUPPORT_DRAWS_PER_EPOCH)
+        .any(|index| support_slot(persona, index, seb, response_window) == Some(relative))
+}
+
 /// The shard a support draw names, uniform in `0..final_count`.
 ///
 /// Rejection sampling on the first eight bytes of
 /// `cSHAKE256(shekyl/archival-support-draw-v1, seed ‖ block_hash ‖ persona ‖ j ‖ final_count)`.
-/// `None` when `final_count` is zero or every attempt fell in the
-/// rejected tail, which a non-zero count below `2^63` does not.
+/// `final_count` is the roster's width, never zero: an archive with no
+/// closed shard has no support stream ([`crate::SupportRoster`]). `None`
+/// only when every one of the eight attempts fell in the rejected tail,
+/// below `(final_count / 2^64)^8`.
 #[must_use]
 pub fn select_support_shard(
     seed: &[u8; 32],
     block_hash: &[u8; 32],
     persona: &PCanonicalId,
     draw: u32,
-    final_count: u64,
+    final_count: NonZeroU64,
 ) -> Option<u64> {
-    if final_count == 0 {
-        return None;
-    }
+    let final_count = final_count.get();
     let limit = u64::MAX - (u64::MAX % final_count);
     for attempt in 0..8u32 {
         let word = support_word(seed, block_hash, persona, draw, final_count, attempt);
@@ -234,6 +259,10 @@ mod tests {
     const SEED: [u8; 32] = [0x11; 32];
     const HASH: [u8; 32] = [0x22; 32];
 
+    fn width(n: u64) -> NonZeroU64 {
+        NonZeroU64::new(n).expect("a non-zero test width")
+    }
+
     fn persona(byte: u8) -> PCanonicalId {
         PCanonicalId::from_bytes([byte; 32])
     }
@@ -292,14 +321,14 @@ mod tests {
         let tree = persona(0x3C);
         let mut differed = false;
         for draw in 0..16u32 {
-            let small = select_support_shard(&SEED, &HASH, &tree, draw, 8).expect("count 8");
-            let large = select_support_shard(&SEED, &HASH, &tree, draw, 64).expect("count 64");
+            let small = select_support_shard(&SEED, &HASH, &tree, draw, width(8)).expect("count 8");
+            let large =
+                select_support_shard(&SEED, &HASH, &tree, draw, width(64)).expect("count 64");
             assert!(small < 8, "draw {draw}");
             assert!(large < 64, "draw {draw}");
             differed |= small != large;
         }
         assert!(differed, "the archive size did not change a shard");
-        assert!(select_support_shard(&SEED, &HASH, &tree, 0, 0).is_none());
     }
 
     /// Eleven unfiled blocks carry `c`, not `c` times a multiple.

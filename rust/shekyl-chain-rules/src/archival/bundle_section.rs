@@ -553,11 +553,16 @@ impl<'a> CandidateWalk<'a> {
         Ok(draws)
     }
 
-    /// Keep `reference` on the epoch it opens. A third epoch inside one
-    /// window would cross `W₂ < SEB`, so the reference is passed over.
+    /// Keep `reference` on the epoch it opens. A window holds at most two
+    /// epochs: `W₂ = SEB / 20` is shorter than an epoch, so it crosses at
+    /// most one boundary, and the walk's references ascend. A third epoch
+    /// is not a state the walk reaches.
     fn accept(&mut self, reference: &'a BundleRef, epoch: SettlementEpoch, d: u64) {
         match self.span {
-            SpannedEpochs::Two { later, .. } if later.epoch != epoch => return,
+            SpannedEpochs::Two { later, .. } => debug_assert_eq!(
+                later.epoch, epoch,
+                "a window of W₂ < SEB crosses at most one epoch boundary"
+            ),
             SpannedEpochs::One(earlier) if earlier.epoch != epoch => {
                 self.span = SpannedEpochs::Two {
                     earlier,
@@ -568,7 +573,7 @@ impl<'a> CandidateWalk<'a> {
             SpannedEpochs::None => {
                 self.span = SpannedEpochs::One(OpenedEpoch { epoch, d });
             }
-            SpannedEpochs::One(_) | SpannedEpochs::Two { .. } => {}
+            SpannedEpochs::One(_) => {}
         }
         self.refs.push(reference);
     }

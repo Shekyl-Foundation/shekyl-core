@@ -106,6 +106,15 @@ pub const SETTLED_PAIRS: u64 = 2;
 /// reads its issued-draw index before it reads a settlement (rule 47):
 /// the derivation is the reason to expect the pair to be full, and the
 /// index is the evidence.
+///
+/// **No producer test belongs on this schedule.** Its `W₂` is `SEB / 20`,
+/// 15 blocks at the derived 300, below the producer's `FILING_MARGIN`
+/// (`M`, 30 blocks, `shekyl-bundle-producer`): no read may start after
+/// `h + W₂ − M`, so the producer's read plan collapses to one read. A
+/// chain on it drives admission with its own witness
+/// (`chain_drive::mine_serving`); the producer's gate runs on its own
+/// longer epoch (`bundle_producer_gate_tests`). The settled window test
+/// holds the relation, so a longer derived epoch reopens this paragraph.
 pub fn settled_epoch_blocks() -> u64 {
     static SETTLED: std::sync::OnceLock<u64> = std::sync::OnceLock::new();
     *SETTLED.get_or_init(|| {
@@ -526,6 +535,23 @@ mod settled_tests {
             "an epoch with no response window draws nothing"
         );
         let _ = settled_rules();
+    }
+
+    /// `W₂` on the settled schedule is below the producer's filing margin,
+    /// so a producer read plan here collapses to one read and no producer
+    /// test belongs on it. Red edit: lower the margin to the window (the
+    /// assertion fails, and [`settled_epoch_blocks`]'s paragraph is stale).
+    #[cfg(feature = "producer")]
+    #[test]
+    fn the_settled_window_is_shorter_than_the_filing_margin() {
+        let blocks = settled_epoch_blocks();
+        let window = settled_schedule()
+            .challenge_response_blocks()
+            .expect("the settled epoch has a response window");
+        assert!(
+            window.get() < shekyl_bundle_producer::FILING_MARGIN.to_raw(),
+            "{blocks} blocks: W₂ reaches the filing margin; revisit settled_epoch_blocks' doc"
+        );
     }
 
     fn counted_draws() -> u64 {

@@ -513,6 +513,15 @@ pub enum DrawableEpochFault {
         /// `h_open(E)`.
         h_open: BlockHeight,
     },
+    /// The snapshot handed in for a height of this epoch is another
+    /// epoch's. The memo is keyed by the epoch and its opening hash, so a
+    /// conforming lookup cannot return one; a caller that reads the support
+    /// seats of a height over the wrong snapshot would seat another epoch's
+    /// members.
+    OtherEpoch {
+        /// The epoch the snapshot is for.
+        held: SettlementEpoch,
+    },
 }
 
 impl fmt::Display for DrawableEpochFault {
@@ -535,6 +544,10 @@ impl fmt::Display for DrawableEpochFault {
                 f,
                 "the epoch has not opened: h_open {h_open} is above this view's tip, so there \
                  is no post-state to rebuild"
+            ),
+            Self::OtherEpoch { held } => write!(
+                f,
+                "the snapshot read for this epoch's support seats is epoch {held}'s"
             ),
         }
     }
