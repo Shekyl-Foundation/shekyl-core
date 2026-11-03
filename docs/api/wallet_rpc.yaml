@@ -874,8 +874,9 @@ components:
           -29015 CURVE_TREE_UNAVAILABLE   build/refresh: the wallet's curve-tree
                                           membership data is unavailable for
                                           this session (its actor stopped, or
-                                          its store would not resume; a
-                                          respawn did not recover it). Close
+                                          its store would not resume; an
+                                          in-place rebuild did not recover
+                                          it). Close
                                           and reopen the wallet; a store that
                                           cannot be used is then -29016
           -29016 CURVE_TREE_STORE_UNUSABLE open: the wallet's curve-tree store

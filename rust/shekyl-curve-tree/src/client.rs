@@ -1027,6 +1027,15 @@ impl CurveTreeClient {
         Ok(())
     }
 
+    /// Test fixture: put the client in the poisoned state a post-commit
+    /// rollback failure leaves, so a caller's recovery can be driven
+    /// without staging that failure. Compiled only under `test-tamper`
+    /// (see `Cargo.toml`), never by a production dependency edge.
+    #[cfg(feature = "test-tamper")]
+    pub fn test_tamper_poison(&mut self) {
+        self.poisoned = true;
+    }
+
     /// Release pins so the prune can reclaim those segments.
     ///
     /// A store **write**, so it runs on the actor's object for the same reason

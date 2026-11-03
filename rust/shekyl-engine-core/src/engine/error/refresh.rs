@@ -258,10 +258,10 @@ pub enum RefreshError {
     /// here; this variant covers the tree-feed-specific steps (backfill
     /// block decode, the actor ingest/rollback handshake).
     ///
-    /// Whether a respawn can heal it is a property of the fault
-    /// ([`CurveTreeIngestFault::recoverable_by_respawn`]), read by
-    /// [`Engine::ingest_scan_result_with_respawn`](crate::engine::Engine::ingest_scan_result_with_respawn)
-    /// to decide whether to respawn-and-retry once. The bounded retry budget
+    /// Whether rebuilding the client in place can heal it is a property of
+    /// the fault ([`CurveTreeIngestFault::recoverable_by_rebuild`]), read by
+    /// [`Engine::ingest_scan_result_with_recovery`](crate::engine::Engine::ingest_scan_result_with_recovery)
+    /// to decide whether to rebuild and retry once. The bounded retry budget
     /// and escalation for a deterministically-corrupt store (O3-sub) is CT-5d.
     #[error("curve-tree ingest failed: {fault}")]
     CurveTreeIngest {
@@ -321,22 +321,22 @@ pub enum RefreshError {
 /// per remedy, so what a caller does next is read from the value.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, thiserror::Error)]
 pub enum CurveTreeIngestFault {
-    /// The curve-tree actor fail-stopped. A respawn over the held store heals
-    /// it (R1-Q4).
+    /// The curve-tree actor has stopped. Terminal for the session: the actor
+    /// is not restarted, and reopening the wallet is the remedy.
     #[error("curve-tree actor unavailable")]
     ActorUnavailable,
     /// A rollback committed but failed before the client's memory was
     /// rebuilt ([`ClientError::Poisoned`](shekyl_curve_tree::ClientError::Poisoned));
-    /// its documented recovery is to resume over the same store.
+    /// its recovery is to rebuild the client in place over the same store.
     #[error("curve-tree client poisoned")]
     ClientPoisoned,
-    /// The respawn could not resume a writer over the held store. Reopening
+    /// The in-place rebuild could not resume over the held store. Reopening
     /// the wallet reopens the store, which names its own fault.
-    #[error("curve-tree respawn resume failed")]
-    RespawnFailed,
+    #[error("curve-tree rebuild failed")]
+    RebuildFailed,
     /// The rebuilt root disagrees with the root the block header commits to
     /// (§3.3, CT-5b O5): the daemon served leaves its own header does not
-    /// commit to. A respawn re-derives the same root.
+    /// commit to. A rebuild re-derives the same root.
     #[error("curve-tree root mismatch vs header")]
     RootMismatch,
     /// A backfill block the daemon served did not decode into leaves.
@@ -361,12 +361,13 @@ impl From<CurveTreeIngestFault> for RefreshError {
 }
 
 impl CurveTreeIngestFault {
-    /// Whether a drop-and-reopen respawn of the actor can heal the failure.
-    /// Every other fault reproduces on a resume, so it surfaces terminally
-    /// rather than livelocking a retry.
+    /// Whether rebuilding the client in place can heal the failure: only a
+    /// poisoned client. A stopped actor is terminal, and every other fault
+    /// reproduces on a rebuild, so it surfaces rather than livelocking a
+    /// retry.
     #[must_use]
-    pub const fn recoverable_by_respawn(self) -> bool {
-        matches!(self, Self::ActorUnavailable | Self::ClientPoisoned)
+    pub const fn recoverable_by_rebuild(self) -> bool {
+        matches!(self, Self::ClientPoisoned)
     }
 }
 
@@ -409,21 +410,21 @@ pub(crate) enum LedgerError {}
 mod tests {
     use super::CurveTreeIngestFault as F;
 
-    /// Only a fail-stopped actor and a poisoned client heal on a respawn;
-    /// every other fault reproduces on resume and must surface terminally.
+    /// Only a poisoned client heals on an in-place rebuild; a stopped actor
+    /// is terminal, and every other fault reproduces on a rebuild.
     #[test]
-    fn only_a_stopped_or_poisoned_client_is_respawn_recoverable() {
+    fn only_a_poisoned_client_is_recoverable_by_rebuild() {
         for (fault, recoverable) in [
-            (F::ActorUnavailable, true),
+            (F::ActorUnavailable, false),
             (F::ClientPoisoned, true),
-            (F::RespawnFailed, false),
+            (F::RebuildFailed, false),
             (F::RootMismatch, false),
             (F::BackfillBlockUndecodable, false),
             (F::ClientRejected, false),
             (F::TipHeightOverflow, false),
             (F::BackfillHeightOverflow, false),
         ] {
-            assert_eq!(fault.recoverable_by_respawn(), recoverable, "{fault:?}");
+            assert_eq!(fault.recoverable_by_rebuild(), recoverable, "{fault:?}");
         }
     }
 }

@@ -1232,13 +1232,17 @@ the await returns, the resource is gone. The shared `Arc<LeafStore>` is a
 departure from that rule, not a gap in it.
 
 **What kameo guarantees** (read at source, `kameo` 0.20.0,
-`src/actor/spawn.rs`; rule 17). The actor loop ends; linked children are
-told to stop and their mailboxes awaited closed; `on_stop` runs; then
-`shutdown_result` is set, which is what `wait_for_shutdown` awaits; the
-actor value is dropped only after that. So:
+`src/actor/spawn.rs` and `src/actor/actor_ref.rs`; rule 17). The actor loop
+ends; linked children are told to stop and their mailboxes awaited closed;
+the actor's own mailbox is handed to `notify_links` and closes; `on_stop`
+runs; then `shutdown_result` is set; the actor value is dropped only after
+that. `wait_for_shutdown` waits for the mailbox to close, so it can return
+before `on_stop` has run; `wait_for_shutdown_result` waits for
+`shutdown_result`. So:
 
 - anything the actor releases **in `on_stop`** is released before
-  `wait_for_shutdown` returns;
+  `wait_for_shutdown_result` returns, and possibly after
+  `wait_for_shutdown` does;
 - anything it releases in its own `Drop` is not (today's polling exists
   for exactly this);
 - a supervision tree does not extend the guarantee to children: a child's
@@ -1269,7 +1273,7 @@ actor value is dropped only after that. So:
   pin. *Records-was (this section's proposal, 2026-11-02):* serving reads
   were described as shard-body copies of up to 3.33 MB.
 - **Close is a message, and it is awaited.** `Engine::close` becomes
-  `async`: it stops the actor and awaits `wait_for_shutdown`. `on_stop`
+  `async`: it stops the actor and awaits `wait_for_shutdown_result`. `on_stop`
   takes the client out (`Option::take`) and drops it, so the `Database` and
   the file lock are gone before the await returns. The wallet RPC's close
   awaits it instead of `drop(engine)`.

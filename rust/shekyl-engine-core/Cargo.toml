@@ -253,6 +253,10 @@ kameo = { workspace = true }
 shekyl-win-sec = { path = "../shekyl-win-sec" }
 
 [dev-dependencies]
+# `test-tamper` compiles `CurveTreeClient::test_tamper_poison`, which the
+# curve-tree actor's in-place recovery tests poison a client with. Test
+# builds only (resolver v2); production keeps the plain dependency above.
+shekyl-curve-tree = { path = "../shekyl-curve-tree", features = ["test-tamper"] }
 # Test doubles answer with the daemon's own wire types (RK-D1), so a double
 # cannot drift from the contract the way a hand-written JSON literal can.
 shekyl-rpc-types = { path = "../shekyl-rpc-types" }
