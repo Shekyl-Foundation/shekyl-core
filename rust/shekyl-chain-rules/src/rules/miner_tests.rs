@@ -63,13 +63,8 @@ fn judge_on(chain: &MockChain, candidate: Candidate) -> Verdict<()> {
         Err(Faulted) => unreachable!("the default MockSubstrate never faults"),
     };
     chain.with_view(|view| {
-        judged(validate(
-            formed,
-            &view,
-            &RuleSet::GENESIS,
-            &Trust::UNPINNED,
-        ))
-        .map(|_valid: ChainValid<_>| ())
+        judged(validate(formed, &view, &RuleSet::GENESIS, &Trust::UNPINNED))
+            .map(|_valid: ChainValid<_>| ())
     })
 }
 
@@ -424,14 +419,9 @@ fn cen_f11_genesis_takes_the_configured_emission_and_recomputes_nothing() {
     assert_eq!(emission.tx_volume, TxVolume::window(0, 0));
     let formed = formed_on(&MockChain::default(), candidate(Vec::new()));
     let coverage = MockChain::default().with_view(|view| {
-        *judged(validate(
-            formed,
-            &view,
-            &RuleSet::GENESIS,
-            &Trust::UNPINNED,
-        ))
-        .expect("genesis fixture")
-        .coverage()
+        *judged(validate(formed, &view, &RuleSet::GENESIS, &Trust::UNPINNED))
+            .expect("genesis fixture")
+            .coverage()
     });
     for row in [CenRow::F11, CenRow::F13, CenRow::F15, CenRow::F20] {
         assert!(coverage.contains(row), "{row} recorded at genesis");

@@ -104,7 +104,7 @@
 //! (commit 7) is a pipeline barrier for the same reason.
 
 use shekyl_chain_rules::{
-    ArchivalDelta, ChainValid, ChainView, RecordWriteKind, GenesisPin, Trust,
+    ArchivalDelta, ChainValid, ChainView, GenesisPin, RecordWriteKind, Trust,
 };
 use shekyl_types::archival::{AttestationWitness, IndexedDraw, IssuedDigest};
 use shekyl_types::{BlockHeight, PCanonicalId, SettlementEpoch, ShardId};

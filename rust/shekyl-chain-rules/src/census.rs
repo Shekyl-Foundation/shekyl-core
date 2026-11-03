@@ -603,7 +603,7 @@ census_rows! {
         K5 held_by_store("shekyl-chain-ingest", "a_promoted_block_that_fails_validate_rolls_back_and_removes_its_suffix"),
         K5b held_by_store("shekyl-chain-ingest", "a_tampered_witness_on_an_alt_row_fails_promotion_k5b"),
         K6 held_by_store("shekyl-chain-ingest", "a_heavier_branch_switches_and_equals_the_branch_connected_directly"),
-        K7 held_by_store("shekyl-chain-ingest", "a_checkpoint_forced_switch_discards_the_demoted_chain"),
+        K7 held_by_store("shekyl-chain-ingest", "a_heavier_branch_switches_and_equals_the_branch_connected_directly"),
         K8 held_by_store("shekyl-chain-store", "an_alt_row_has_no_supply_word"),
         // K9: an alternative block's bodies (DRS-E5 PR-b b4; the review of
         // #1102, B1) — held by the store beside its row and promoted from

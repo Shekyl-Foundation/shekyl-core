@@ -888,12 +888,9 @@ fn an_alt_block_with_a_witness_moves_no_digest() {
 
 /// SI-27's arm: a demotion the cheap tier refused halts the writer at that
 /// height on that row, every later write is refused, and reads stay open.
-/// The switch arms it (`shekyl-chain-ingest`'s demotion tier); no fixture
-/// reaches that call, because a demoted block's history is read from blobs
-/// that must hash to their `block_info` identity (CEN-B6), so a store edited
-/// to fail its own rules trips that check first (the register row). This is
-/// the arm's witness. Red if `refuse_demotion` returns the error without
-/// arming the halt.
+/// The switch arms it (`shekyl-chain-ingest`'s demotion tier, whose own
+/// test reaches it through a recorded chain that fails its timestamp rule).
+/// Red if `refuse_demotion` returns the error without arming the halt.
 #[test]
 fn a_refused_demotion_halts_the_writer_si27() {
     let path = tmp("alt-si27");

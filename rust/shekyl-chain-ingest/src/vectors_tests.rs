@@ -54,7 +54,7 @@ use std::sync::Arc;
 
 use serde::Deserialize;
 use shekyl_chain_rules::harness::MockSubstrate;
-use shekyl_chain_rules::{InvalidBlock, GenesisPin, Substrate};
+use shekyl_chain_rules::{GenesisPin, InvalidBlock, Substrate};
 use shekyl_types::{BlockCount, BlockHeight};
 
 use crate::corpus::CorpusReader;

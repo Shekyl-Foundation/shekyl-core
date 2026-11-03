@@ -456,6 +456,8 @@ were never discarded; only bodies are refetched.
 
 ### `PDM-Q5` RULED 2026-09-18, AMENDED 2026-09-22 twice (`assumevalid = 0` is no anchor; genesis is in no band — and band 2 under the epoch horizon) — The anchor, the bands, the launch window; `Trust::BelowAnchor` confirmed
 
+> **REJECTED 2026-11-03 (S1, design review): no coded checkpoints.** A release-carried checkpoint is a maintainer choosing the chain. The release pins genesis and nothing above it (`GenesisPin`); the cost of a deep reorganization while little work is behind the chain is answered by the honest hashrate floor (`RANDOMX_V2_MINING_ASYMMETRY.md`), not a pin. `PDM-Q11`'s reversion (b) fired with it. The ruling below is kept as written.
+
 **Grounded at** `dev@20ebdf1e5`; `connect.rs:281-329` and `error.rs:273` read
 at source.
 
@@ -1480,6 +1482,14 @@ then this closes by reference and the derivers re-point; (b) the anchor
 model in `PDM-Q5` is rejected, since without a precondition the
 fresh-node argument returns to `D_max` and the detectability framing no
 longer holds for syncing nodes.
+
+**Reversion (b) fired 2026-11-03** (S1, design review: no coded
+checkpoints, so the anchor model is rejected). `D_max` stays the switch's
+local limit from the pruning horizon (`PopBeyondReorgCap`), which raises
+the following-degraded latch; it is not a consensus refusal, and CEN-E2 is
+REJECTED. A node that returns to a heavier chain forking deeper than
+`D_max` cannot follow it by switching and re-bootstraps; that cost is
+pruning's.
 
 **Falsifiers.** A fork of depth `D_max + 1` accepted on an anchored
 node is red. A fork below `C` accepted on any node is red. `undo_log`

@@ -22,9 +22,9 @@
 
 use shekyl_types::{BlockHash, BlockHeight};
 
-use crate::genesis_pin::GenesisPin;
 use crate::census::CenRow;
 use crate::fault::ViewRead;
+use crate::genesis_pin::GenesisPin;
 use crate::rules::{HeaderContext, HeaderRule, Rule};
 use crate::verdict::{refused, Locus, Verdict};
 use crate::view::{AtHeight, HeaderView, Tip};

@@ -26,8 +26,7 @@
 //! slot, and every build takes a hasher permit.
 
 use shekyl_chain_rules::{
-    seed_height, AtHeight, Corrupt, Fork,
-    PerHeightRecord, RuleSet, ViewRead, D_MAX,
+    seed_height, AtHeight, Corrupt, Fork, PerHeightRecord, RuleSet, ViewRead, D_MAX,
 };
 use shekyl_chain_store::store::{ChainStore, ReadSnapshot, StoreError};
 use shekyl_difficulty::SEEDHASH_EPOCH_BLOCKS;
@@ -327,7 +326,7 @@ mod tests {
                 SeedSide::BelowFork,
                 BlockHeight::from_raw(2),
                 &RuleSet::GENESIS,
-                    &window,
+                &window,
             ),
             AltSpend::Hash
         ));

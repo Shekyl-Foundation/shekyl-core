@@ -556,8 +556,7 @@ mod tests {
         .expect("mock")
         .expect("the header forms");
         let judged = deep.with_view(|view| {
-            match judge_header(&formed, &view, &RuleSet::GENESIS, &Trust::UNPINNED).expect("view")
-            {
+            match judge_header(&formed, &view, &RuleSet::GENESIS, &Trust::UNPINNED).expect("view") {
                 Ok(judged) => judged,
                 Err(refused) => panic!("honest header refused: {refused:?}"),
             }
@@ -598,8 +597,7 @@ mod tests {
         .expect("mock")
         .expect("the header forms");
         let judged = claimed_on.with_view(|view| {
-            match judge_header(&formed, &view, &RuleSet::GENESIS, &Trust::UNPINNED).expect("view")
-            {
+            match judge_header(&formed, &view, &RuleSet::GENESIS, &Trust::UNPINNED).expect("view") {
                 Ok(judged) => judged,
                 Err(refused) => panic!("honest header refused: {refused:?}"),
             }

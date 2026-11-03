@@ -81,9 +81,9 @@ fn five_blocks() -> MockChain {
 }
 
 /// The identity the fixture chain recorded at `height`.
-fn hash_at(chain: &MockChain, height: u64) -> BlockHash {
+fn hash_at(chain: &MockChain, height: BlockHeight) -> BlockHash {
     chain.with_view(
-        |view| match infallible(view.header_at(BlockHeight::from_raw(height))) {
+        |view| match infallible(view.header_at(height)) {
             AtHeight::Recorded(record) => record.hash,
             AtHeight::AboveTip => panic!("fixture chain has a block at {height}"),
         },
@@ -108,7 +108,7 @@ fn a_foreign_genesis_is_the_conflict_at_height_zero() {
         Some(GenesisConflict {
             height: BlockHeight::ZERO,
             expected: OTHER,
-            recorded: Some(hash_at(&chain, 0)),
+            recorded: Some(hash_at(&chain, BlockHeight::ZERO)),
         })
     );
 }
@@ -117,7 +117,7 @@ fn a_foreign_genesis_is_the_conflict_at_height_zero() {
 #[test]
 fn a_chain_that_carries_its_genesis_has_no_conflict() {
     let chain = five_blocks();
-    assert_eq!(conflict(&chain, &pinning_genesis(hash_at(&chain, 0))), None);
+    assert_eq!(conflict(&chain, &pinning_genesis(hash_at(&chain, BlockHeight::ZERO))), None);
 }
 
 /// An empty file contradicts nothing — not even a genesis pin — and an

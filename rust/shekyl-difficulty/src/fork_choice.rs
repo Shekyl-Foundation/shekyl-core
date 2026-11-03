@@ -59,27 +59,18 @@ mod tests {
 
     #[test]
     fn strictly_greater_switches() {
-        assert_eq!(
-            fork_choice(cd(10), cd(11)),
-            ForkChoiceVerdict::Switch
-        );
+        assert_eq!(fork_choice(cd(10), cd(11)), ForkChoiceVerdict::Switch);
     }
 
     #[test]
     fn equality_keeps_the_incumbent() {
         // The boundary the ruling names: equal weight is NOT a reorg.
-        assert_eq!(
-            fork_choice(cd(11), cd(11)),
-            ForkChoiceVerdict::KeepCurrent
-        );
+        assert_eq!(fork_choice(cd(11), cd(11)), ForkChoiceVerdict::KeepCurrent);
     }
 
     #[test]
     fn lighter_keeps_the_incumbent() {
-        assert_eq!(
-            fork_choice(cd(11), cd(10)),
-            ForkChoiceVerdict::KeepCurrent
-        );
+        assert_eq!(fork_choice(cd(11), cd(10)), ForkChoiceVerdict::KeepCurrent);
     }
 
     #[test]
@@ -87,10 +78,7 @@ mod tests {
         // Above-u64 halves must participate: a hi-word difference decides.
         let lo_heavy = cd(u128::from(u64::MAX));
         let hi_heavy = cd(1u128 << 64);
-        assert_eq!(
-            fork_choice(lo_heavy, hi_heavy),
-            ForkChoiceVerdict::Switch
-        );
+        assert_eq!(fork_choice(lo_heavy, hi_heavy), ForkChoiceVerdict::Switch);
         assert_eq!(
             fork_choice(hi_heavy, lo_heavy),
             ForkChoiceVerdict::KeepCurrent

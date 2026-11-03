@@ -312,13 +312,7 @@ impl ChainStore {
         apply_policy: ApplyPolicy,
         horizons: Horizons,
     ) -> Result<Self, StoreError> {
-        open_at(
-            path.as_ref(),
-            apply_policy,
-            horizons,
-            &GenesisPin::NONE,
-        )
-        .map(|(store, _cut)| store)
+        open_at(path.as_ref(), apply_policy, horizons, &GenesisPin::NONE).map(|(store, _cut)| store)
     }
 
     /// The settlement-epoch schedule this file is pinned to — equal to the

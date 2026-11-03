@@ -661,8 +661,8 @@ fn two_fakechain_targets_are_distinct_sets() {
         &crate::block::ReferenceClaims::EMPTY,
     );
     MockChain::default().with_view(|view| {
-        let fault = validate(formed, &view, &seven, &Trust::UNPINNED)
-            .expect_err("different Fixed targets");
+        let fault =
+            validate(formed, &view, &seven, &Trust::UNPINNED).expect_err("different Fixed targets");
         assert!(matches!(fault, Fault::Stale(Stale::RuleSet { .. })));
     });
 }

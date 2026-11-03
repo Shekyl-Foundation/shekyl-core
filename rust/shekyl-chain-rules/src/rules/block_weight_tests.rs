@@ -382,13 +382,8 @@ fn validated_on(chain: &MockChain, candidate: Candidate) -> Weights {
         Err(Faulted) => unreachable!("the default MockSubstrate never faults"),
     };
     chain.with_view(|view| {
-        let valid = judged(validate(
-            formed,
-            &view,
-            &RuleSet::GENESIS,
-            &Trust::UNPINNED,
-        ))
-        .expect("the fixture must validate");
+        let valid = judged(validate(formed, &view, &RuleSet::GENESIS, &Trust::UNPINNED))
+            .expect("the fixture must validate");
         assert!(valid.coverage().contains(CenRow::G6), "G6 recorded");
         assert!(valid.coverage().contains(CenRow::G6b), "G6b recorded");
         *valid.block().weights()

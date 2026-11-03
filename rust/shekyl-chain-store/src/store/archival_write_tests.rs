@@ -35,8 +35,8 @@ use std::collections::BTreeSet;
 use shekyl_chain_rules::harness::{assert_refused, fixture};
 use shekyl_chain_rules::{
     form, validate, ArchivalDelta, AtHeight, Candidate, CenRow, FakechainSchedule, Fault,
-    FormAttempt, HeaderView, Locus, RecordWriteKind, ReferenceClaims, GenesisPin, RuleSet,
-    Trust, TxSlot, Verdict,
+    FormAttempt, GenesisPin, HeaderView, Locus, RecordWriteKind, ReferenceClaims, RuleSet, Trust,
+    TxSlot, Verdict,
 };
 use shekyl_types::archival::{AttestationWitness, IndexedDraw, IssuedDigest, IssuedDraw};
 use shekyl_types::{BlockCount, BlockHeight, PCanonicalId, SettlementEpoch, ShardId};

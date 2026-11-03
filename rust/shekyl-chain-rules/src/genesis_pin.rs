@@ -123,7 +123,9 @@ impl GenesisPin {
     /// The pin as `(height, hash)`: what CEN-E5 holds the recorded chain to
     /// at open. Crate-private: callers read through the named accessors.
     pub(crate) fn pins(&self) -> impl Iterator<Item = (BlockHeight, BlockHash)> + '_ {
-        self.genesis.map(|hash| (BlockHeight::ZERO, hash)).into_iter()
+        self.genesis
+            .map(|hash| (BlockHeight::ZERO, hash))
+            .into_iter()
     }
 }
 

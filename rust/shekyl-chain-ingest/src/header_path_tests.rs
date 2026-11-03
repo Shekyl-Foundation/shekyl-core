@@ -19,8 +19,8 @@ use shekyl_chain_rules::harness::fixture::{coinbase_extra, TWO_G};
 use shekyl_chain_rules::harness::MockSubstrate;
 use shekyl_chain_rules::{
     bind_body, form, form_header, form_judged, judge_header, judge_header_cheap, seed_height,
-    target_claim, validate, AtHeight, Candidate, CenRow, ChainView, Fault, FormAttempt, HeaderView,
-    OpenHeader, ProspectFault, ReferenceClaims, GenesisPin, RuleSet, Stale, Target, Trust,
+    target_claim, validate, AtHeight, Candidate, CenRow, ChainView, Fault, FormAttempt, GenesisPin,
+    HeaderView, OpenHeader, ProspectFault, ReferenceClaims, RuleSet, Stale, Target, Trust,
 };
 use shekyl_chain_store::apply_policy::ApplyPolicy;
 use shekyl_chain_store::store::{StoreError, WriteBatch};

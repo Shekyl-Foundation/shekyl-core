@@ -87,12 +87,7 @@ fn j4_refuses_the_same_credit_listed_before_the_fold_reaches_it() {
             candidate_on(&chain, vec![anchored_on(&chain, serve_credit_only(P))]),
         );
         assert_refused(
-            judged(validate(
-                formed,
-                &view,
-                &RuleSet::GENESIS,
-                &Trust::UNPINNED,
-            )),
+            judged(validate(formed, &view, &RuleSet::GENESIS, &Trust::UNPINNED)),
             CenRow::J4,
             Locus::Input {
                 slot: TxSlot::Listed(0),
@@ -385,12 +380,7 @@ fn j14_refuses_the_same_under_bonded_join_listed() {
         });
         let formed = formed_on(&chain, candidate_on(&chain, vec![join]));
         assert_refused(
-            judged(validate(
-                formed,
-                &view,
-                &RuleSet::GENESIS,
-                &Trust::UNPINNED,
-            )),
+            judged(validate(formed, &view, &RuleSet::GENESIS, &Trust::UNPINNED)),
             CenRow::J14,
             Locus::Input {
                 slot: TxSlot::Listed(0),
@@ -417,12 +407,7 @@ fn j13_refuses_the_same_mis_keyed_join_listed() {
         let join = signed_as(anchored_on(&chain, join_market(BOND_KI, WHO)), &stranger);
         let formed = formed_on(&chain, candidate_on(&chain, vec![join]));
         assert_refused(
-            judged(validate(
-                formed,
-                &view,
-                &RuleSet::GENESIS,
-                &Trust::UNPINNED,
-            )),
+            judged(validate(formed, &view, &RuleSet::GENESIS, &Trust::UNPINNED)),
             CenRow::J13,
             Locus::Input {
                 slot: TxSlot::Listed(0),
@@ -647,12 +632,7 @@ fn j15_refuses_the_same_unpriced_join_listed() {
         let join = compact_join(&chain, 0);
         let formed = formed_on(&chain, candidate_on(&chain, vec![join]));
         assert_refused(
-            judged(validate(
-                formed,
-                &view,
-                &RuleSet::GENESIS,
-                &Trust::UNPINNED,
-            )),
+            judged(validate(formed, &view, &RuleSet::GENESIS, &Trust::UNPINNED)),
             CenRow::J15,
             Locus::Input {
                 slot: TxSlot::Listed(0),

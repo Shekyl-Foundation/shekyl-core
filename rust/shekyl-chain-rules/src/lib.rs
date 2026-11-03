@@ -121,7 +121,6 @@
 #![deny(unsafe_code)]
 
 mod alt;
-mod genesis_pin;
 mod archival;
 mod archival_reads;
 mod block;
@@ -130,6 +129,7 @@ mod coverage;
 mod drain;
 mod epoch_floor;
 mod fault;
+mod genesis_pin;
 mod header_facts;
 mod header_ladder;
 mod header_path;
@@ -160,7 +160,6 @@ pub mod harness;
 pub mod relay_floor;
 
 pub use alt::{alt_against, AltChainView, AltValid, Fork, InvertedFork};
-pub use genesis_pin::GenesisPin;
 pub use archival::{
     admission_plan, closed_and_final, drawable_epoch_walked_back, remember_window_epochs,
     shard_close, shard_close_height, Accrual, AdmissionPlan, AdmissionPlanFault, ArchivalDelta,
@@ -168,6 +167,7 @@ pub use archival::{
     RecordWrite, RecordWriteKind, ReleasePreImage, ServeCreditKey, Settlement, Slash,
     SupportSettlement, WALK_BACK_EPOCHS,
 };
+pub use genesis_pin::GenesisPin;
 // The support stream's schedule on the connect path (`SO-D12` S1): the
 // transition writes a block's seats with it, and the store's bundle view
 // requires the stored row to equal it (SI-43).
@@ -216,13 +216,13 @@ pub use rule_set::{
     ResponseWindowOutrunsAnchor, RuleSchedule, RuleSet, RuleSetId, SettlementEpochBlocks,
     SettlementSchedule,
 };
-pub use rules::genesis::GenesisConflict;
 pub use rules::block_weight::{
     block_weight_limit_at, effective_median_at, effective_median_at_windows, even_pair_median,
     median, medians_from, medians_over, medians_over_window, EffectiveMedian, Weights,
 };
 pub use rules::body::{ArchivalKey, BlockArchivalKeys};
 pub use rules::difficulty::{cumulative_difficulty_after, target_claim, Target};
+pub use rules::genesis::GenesisConflict;
 pub use rules::miner::{
     closed_shards_before, closed_shards_through, tx_volume_span, tx_volume_span_of,
     tx_volume_window, TxVolumeSpan,

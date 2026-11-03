@@ -89,12 +89,12 @@
 //! hole there is a [`ViewRead`] at the function that walked the heights.
 
 pub(crate) mod alt;
-pub(crate) mod genesis;
 pub(crate) mod attestation;
 pub(crate) mod block_weight;
 pub(crate) mod body;
 pub(crate) mod bundle_admission;
 pub(crate) mod difficulty;
+pub(crate) mod genesis;
 pub(crate) mod header;
 pub(crate) mod miner;
 pub(crate) mod pow;

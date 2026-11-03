@@ -33,7 +33,11 @@ fn every_public_network_pins_its_own_genesis_and_nothing_above_it() {
         assert_ne!(table, GenesisPin::NONE, "{network:?}");
         let genesis = table.expected_at(height(0)).expect("genesis is pinned");
         for above in [1, 2, 1_000, u64::MAX] {
-            assert_eq!(table.expected_at(height(above)), None, "{network:?} at {above}");
+            assert_eq!(
+                table.expected_at(height(above)),
+                None,
+                "{network:?} at {above}"
+            );
         }
         assert_eq!(
             table.pins().collect::<Vec<_>>(),

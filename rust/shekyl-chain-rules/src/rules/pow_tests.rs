@@ -266,13 +266,8 @@ fn cen_d3_records_and_the_pow_rows_cover_on_a_passing_block() {
     .expect("no fault")
     .expect("passes");
     chain.with_view(|view| {
-        let valid = judged(validate(
-            formed,
-            &view,
-            &RuleSet::GENESIS,
-            &Trust::UNPINNED,
-        ))
-        .expect("passes");
+        let valid =
+            judged(validate(formed, &view, &RuleSet::GENESIS, &Trust::UNPINNED)).expect("passes");
         for row in [CenRow::D1, CenRow::D1b, CenRow::D2, CenRow::D3] {
             assert!(valid.coverage().contains(row), "{row}");
         }

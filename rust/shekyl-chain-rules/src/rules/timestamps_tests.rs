@@ -76,13 +76,8 @@ fn judge_at(chain: &MockChain, candidate: Candidate, clock: u64) -> Verdict<()> 
         Err(Faulted) => unreachable!("the mock substrate never faults"),
     };
     chain.with_view(|view| {
-        judged(validate(
-            formed,
-            &view,
-            &RuleSet::GENESIS,
-            &Trust::UNPINNED,
-        ))
-        .map(|_valid: ChainValid<_>| ())
+        judged(validate(formed, &view, &RuleSet::GENESIS, &Trust::UNPINNED))
+            .map(|_valid: ChainValid<_>| ())
     })
 }
 
@@ -377,13 +372,8 @@ fn at_genesis_all_three_rows_record_as_applied_and_refuse_nothing() {
     .expect("no fault")
     .expect("passes the stateless stage");
     chain.with_view(|view| {
-        let valid = judged(validate(
-            formed,
-            &view,
-            &RuleSet::GENESIS,
-            &Trust::UNPINNED,
-        ))
-        .expect("genesis is exempt from both timestamp legs");
+        let valid = judged(validate(formed, &view, &RuleSet::GENESIS, &Trust::UNPINNED))
+            .expect("genesis is exempt from both timestamp legs");
         for row in [CenRow::C1, CenRow::C2, CenRow::C3] {
             assert!(valid.coverage().contains(row), "{row} recorded at genesis");
         }

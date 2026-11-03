@@ -778,10 +778,9 @@ where
     let store = Arc::clone(&shared.store);
     let rules = shared.rules;
     let for_claims = candidate.clone();
-    let claimed =
-        tokio::task::spawn_blocking(move || claim_alt(&store, rules, &for_claims))
-            .await
-            .expect("the claim reader does not panic");
+    let claimed = tokio::task::spawn_blocking(move || claim_alt(&store, rules, &for_claims))
+        .await
+        .expect("the claim reader does not panic");
     let (claims, prepare) = match claimed {
         Ok(ClaimedAlt::Ready { claims, prepare }) => (claims, prepare),
         Ok(ClaimedAlt::Spend(spend)) => return answer_spend(shared, arrival, spend),

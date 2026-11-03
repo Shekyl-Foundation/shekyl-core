@@ -52,13 +52,9 @@ fn judge_at(shape: TxShape, slot: TxSlot, tx: &Transaction) {
         let mut candidate = candidate_on(&chain, Vec::new());
         candidate.block.miner_transaction = tx.clone();
         let formed = formed_on(&chain, repriced(&chain, candidate));
-        judged(validate(
-            formed,
-            &view,
-            &RuleSet::GENESIS,
-            &Trust::UNPINNED,
-        ))
-        .unwrap_or_else(|refused| panic!("{}", refused_message(shape, slot, "validate", &refused)));
+        judged(validate(formed, &view, &RuleSet::GENESIS, &Trust::UNPINNED)).unwrap_or_else(
+            |refused| panic!("{}", refused_message(shape, slot, "validate", &refused)),
+        );
     });
 }
 

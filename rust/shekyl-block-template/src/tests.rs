@@ -171,13 +171,8 @@ fn admitted(chain: &MockChain, template: Template) -> Vec<CenRow> {
     .expect("the default substrate never faults")
     .unwrap_or_else(|refused| panic!("the template was refused by a stateless rule: {refused}"));
     chain.with_view(|view| {
-        let valid = judged(validate(
-            formed,
-            &view,
-            &RuleSet::GENESIS,
-            &Trust::UNPINNED,
-        ))
-        .unwrap_or_else(|refused| panic!("the template was refused by a view rule: {refused}"));
+        let valid = judged(validate(formed, &view, &RuleSet::GENESIS, &Trust::UNPINNED))
+            .unwrap_or_else(|refused| panic!("the template was refused by a view rule: {refused}"));
         CenRow::ALL
             .iter()
             .copied()
@@ -592,12 +587,7 @@ fn the_builders_c1_refusal_is_the_validators() {
     .expect("the stateless stage does not judge C1");
     chain.with_view(|view| {
         assert_refused(
-            judged(validate(
-                formed,
-                &view,
-                &RuleSet::GENESIS,
-                &Trust::UNPINNED,
-            )),
+            judged(validate(formed, &view, &RuleSet::GENESIS, &Trust::UNPINNED)),
             CenRow::C1,
             Locus::Block,
         );
