@@ -129,6 +129,40 @@ fn a_foreign_genesis_is_refused_with_the_file_untouched() {
     cleanup(&path);
 }
 
+/// A foreign store a crash left needing recovery cannot be judged on a
+/// read-only open (redb refuses one, `RepairAborted`). The writable open
+/// repairs it, the engine restoring the file's own committed state, and
+/// the admission after it refuses the store: still another network's
+/// chain, with its block 0 intact. The one refusal that writes
+/// (`open_existing`). Red if the repair arm skips the admission.
+#[test]
+fn a_foreign_genesis_that_needs_repair_is_repaired_then_refused_with_its_chain_intact() {
+    let path = tmp("release-foreign-repair");
+    let recorded = record(&path, 1);
+    crate::redb_recovery::mark_recovery_required(&path);
+    assert!(crate::redb_recovery::read_only_open_is_repair_aborted(
+        &path
+    ));
+    let testnet = GenesisPin::for_network(Network::Testnet);
+    let conflict = release_pin(released(&path, &testnet).expect_err("another network's store"));
+    assert_eq!(conflict.expected, pin_of(&testnet));
+    assert_eq!(conflict.recorded, Some(recorded[0]));
+    let store = ChainStore::create(&path, EPOCH).expect("the repaired file is a store");
+    let tip = store
+        .begin_read()
+        .expect("read")
+        .tip()
+        .expect("tip")
+        .recorded
+        .expect("block 0");
+    assert_eq!(
+        tip.hash, recorded[0],
+        "nothing lost: its own chain is intact"
+    );
+    drop(store);
+    cleanup(&path);
+}
+
 /// The file's bytes and modification time.
 fn file_state(path: &std::path::Path) -> (Vec<u8>, std::time::SystemTime) {
     let bytes = std::fs::read(path).expect("read the store file");

@@ -403,26 +403,25 @@ impl ChainStore {
         })
     }
 
-    /// Create or open the store and admit `anchors` (CEN-E5).
+    /// Create or open the store and admit `genesis` (CEN-E5).
     ///
-    /// The unanchored doors — [`create`](Self::create),
+    /// The unpinned doors — [`create`](Self::create),
     /// [`with_apply_policy`](Self::with_apply_policy),
-    /// [`with_horizons`](Self::with_horizons) — do not do this. Harness
-    /// chains, synthetic block ids, and Fakechain open there.
-    /// [`GenesisPin::NONE`] agrees with any chain the snapshot can
-    /// read, which is what those files are. A public network passes the
-    /// table [`GenesisPin::for_network`] returns. The store does not
-    /// know which networks exist: the table is the data, and nettype does
-    /// not select a branch here (rule 71).
+    /// [`with_horizons`](Self::with_horizons) — do not do this; harness
+    /// chains with synthetic block ids open there. A node passes its
+    /// network's pin ([`GenesisPin::for_network`], or
+    /// [`GenesisPin::FAKECHAIN`] for regtest). The store does not know which
+    /// networks exist: the pin is the data, and nettype does not select a
+    /// branch here (rule 71).
     ///
-    /// Admission runs once, in this constructor. An empty file agrees:
-    /// there is no block for a pin to contradict. A recorded pin that is
-    /// not the table's is [`StoreCannot::ForeignGenesis`]. The open does not
-    /// pop. A genesis conflict's remedy is refuse-to-run, which is this
-    /// error. A later checkpoint's remedy is a pop the ingest driver still
-    /// owes (`docs/FOLLOWUPS.md`); this door reports that conflict the same
-    /// way, so a session cannot start on a chain that disagrees with its
-    /// pins and then forget to rewind.
+    /// An existing file is admitted on a read-only open, before any
+    /// writable one, so another network's store is refused with nothing
+    /// written; the admission runs again under the writable open's lock. A
+    /// file the engine must repair first cannot be judged read-only, and is
+    /// repaired (its own committed state, nothing lost) before it is
+    /// refused (`open_existing`). An empty file agrees: there is no block for
+    /// a pin to contradict. A recorded block 0 that is not the pin is
+    /// [`StoreCannot::ForeignGenesis`].
     ///
     /// The walk is [`GenesisPin::conflict_over`], the same one
     /// [`GenesisPin::conflict_with`] runs over a `ChainView`. The
@@ -434,34 +433,33 @@ impl ChainStore {
     /// # Errors
     ///
     /// The header refusals of [`with_horizons`](Self::with_horizons);
-    /// [`StoreCannot::ForeignGenesis`] when a pin at or below the tip is not
-    /// the block recorded there; a read fault when the snapshot cannot
-    /// answer.
+    /// [`StoreCannot::ForeignGenesis`] when block 0 is not the pinned
+    /// genesis; a read fault when the snapshot cannot answer.
     ///
     /// The open also reports what it finished when the file was a creation
     /// a power loss cut short ([`CutShort`]). `None` is an ordinary create
-    /// or reopen. The daemon logs the report; the unanchored doors drop it.
+    /// or reopen. The daemon logs the report; the unpinned doors drop it.
     pub fn with_genesis(
         path: impl AsRef<Path>,
         apply_policy: ApplyPolicy,
         horizons: Horizons,
-        anchors: &GenesisPin,
+        genesis: &GenesisPin,
     ) -> Result<(Self, Option<CutShort>), StoreError> {
         // An existing file is admitted on a read-only open first, so a store
         // from another network is refused unwritten (`open_existing`). The
         // admission here is the one under the writable open's lock: the
         // file can change between the two opens.
-        let (store, cut) = open_at(path.as_ref(), apply_policy, horizons, anchors)?;
-        store.admit(anchors)?;
+        let (store, cut) = open_at(path.as_ref(), apply_policy, horizons, genesis)?;
+        store.admit(genesis)?;
         Ok((store, cut))
     }
 
-    /// Open an existing store read-only and admit `anchors`.
+    /// Open an existing store read-only and admit `genesis`.
     ///
     /// The reader twin of [`with_genesis`](Self::with_genesis): the same
     /// admission, and no write. [`open_read_only`](Self::open_read_only)
     /// does not admit, so a reader of a public file cannot skip the pin
-    /// by opening the unanchored door and calling it a check.
+    /// by opening the unpinned door and calling it a check.
     ///
     /// # Errors
     ///
@@ -470,10 +468,10 @@ impl ChainStore {
     pub fn open_read_only_with_genesis(
         path: impl AsRef<Path>,
         horizons: Horizons,
-        anchors: &GenesisPin,
+        genesis: &GenesisPin,
     ) -> Result<Self, StoreError> {
         let store = Self::open_read_only(path, horizons)?;
-        store.admit(anchors)?;
+        store.admit(genesis)?;
         Ok(store)
     }
 
@@ -481,10 +479,10 @@ impl ChainStore {
     /// empty table. A contradiction is [`StoreCannot::ForeignGenesis`]. A read
     /// that cannot answer is that read's error: a fault is not agreement
     /// and not a pin mismatch.
-    fn admit(&self, anchors: &GenesisPin) -> Result<(), StoreError> {
+    fn admit(&self, genesis: &GenesisPin) -> Result<(), StoreError> {
         let snap = self.begin_read()?;
         let tip = snap.tip()?.recorded;
-        match anchors.conflict_over(tip, |height| -> Result<_, StoreError> {
+        match genesis.conflict_over(tip, |height| -> Result<_, StoreError> {
             Ok(match snap.block_info(height)? {
                 AtHeight::Recorded(info) => Some(info.hash),
                 AtHeight::AboveTip => None,
@@ -737,7 +735,7 @@ fn open_existing(
     path: &Path,
     policy: ApplyPolicy,
     horizons: Horizons,
-    anchors: &GenesisPin,
+    genesis: &GenesisPin,
     guard: &crate::creation::PathGuard,
 ) -> Result<(Database, Provenance, Option<CutShort>), StoreError> {
     let epoch = horizons.epoch();
@@ -754,9 +752,17 @@ fn open_existing(
                     horizons,
                     shared: Shared::new(provenance),
                 }
-                .admit(anchors)?;
+                .admit(genesis)?;
             }
         }
+        // A file the engine must repair cannot be judged on a read-only open
+        // (redb refuses one). The writable open below repairs it, restoring
+        // the file's own committed state with nothing lost, and the
+        // admission after it refuses another network's store. That is the
+        // one refusal that writes: judging a repaired copy instead would
+        // cost a second copy of the store at every start after a crash
+        // (PB-S3), and refusing to repair would stop a node recovering its
+        // own store.
         Err(redb::DatabaseError::RepairAborted) => {}
         Err(refused) if crate::creation::open_is_foreign(&refused) => {
             return finish_uninitialized(builder, path, policy, epoch, guard, refused);
@@ -825,7 +831,7 @@ fn open_at(
     path: &Path,
     apply_policy: ApplyPolicy,
     horizons: Horizons,
-    anchors: &GenesisPin,
+    genesis: &GenesisPin,
 ) -> Result<(ChainStore, Option<CutShort>), StoreError> {
     let epoch = horizons.epoch();
     apply_policy
@@ -837,7 +843,7 @@ fn open_at(
     builder.set_cache_size(CACHE_SIZE);
     let (db, provenance, cut) = match create_fresh(&builder, path, apply_policy, epoch)? {
         Some((db, provenance)) => (db, provenance, None),
-        None => open_existing(&builder, path, apply_policy, horizons, anchors, &guard)?,
+        None => open_existing(&builder, path, apply_policy, horizons, genesis, &guard)?,
     };
     Ok((
         ChainStore {

@@ -2364,7 +2364,11 @@ removed, and the daemon deletes nothing. An existing store is also admitted
 against its network's genesis pin on the read-only open, before any writable
 one (CEN-E5: block 0 against `GenesisPin`, every network's including regtest's,
 S1 2026-11-03), so a store from another network is refused with its bytes
-unchanged; the admission runs again under the writable open's lock.
+unchanged; the admission runs again under the writable open's lock. The one
+exception is a file redb must repair first, which a read-only open refuses
+(`RepairAborted`): the writable open repairs it, restoring its own committed
+state with nothing lost, and then refuses it. Judging a repaired copy instead
+would cost a second copy of the store at every start after a crash (PB-S3).
 
 **(b) A bump is required for any change that alters stored bytes — including a
 value-codec change.** Adding, removing or re-keying a table bumps; so does
