@@ -74,6 +74,7 @@ compile_error!(
 );
 
 mod actor;
+pub(crate) mod body_store_actor;
 mod bond;
 mod bond_post_assemble;
 mod claim;

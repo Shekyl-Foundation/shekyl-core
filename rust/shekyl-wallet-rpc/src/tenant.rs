@@ -264,7 +264,7 @@ impl Tenant {
     }
 
     /// Clear the in-flight close reservation after the engine has been
-    /// successfully persisted and dropped (close success path). The failure
+    /// successfully persisted and released (close success path). The failure
     /// paths clear it implicitly by re-installing via
     /// [`set_open`](Self::set_open) / [`restore_open`](Self::restore_open).
     pub fn clear_closing(&mut self) {

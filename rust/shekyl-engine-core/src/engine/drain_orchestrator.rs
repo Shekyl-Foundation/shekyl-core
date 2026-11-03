@@ -486,8 +486,8 @@ pub(crate) enum DrainOrchestrationError {
     #[error(transparent)]
     Plan(#[from] DrainError),
     /// A curve-tree handle call failed while assembling membership paths (a
-    /// client refusal or a stopped actor) — terminal until the engine
-    /// respawns the actor, or a resync for a lagging-ingest refusal.
+    /// client refusal or a stopped actor) — a stopped actor is terminal for
+    /// the session; a lagging-ingest refusal clears on a resync.
     #[error("curve tree unavailable or refused: {0:?}")]
     Tree(CurveTreeHandleError),
     /// The path assembly returned a set that does not match the selection

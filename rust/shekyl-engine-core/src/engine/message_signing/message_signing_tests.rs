@@ -197,7 +197,7 @@ async fn sign_message_round_trips_through_wallet_file() {
         Err(VerifyMessageError::ClassicalOnly)
     ));
 
-    wallet.close(&creds).expect("close");
+    wallet.close(&creds).await.expect("close");
 }
 
 /// A stopped key actor is terminal and gets its own variant, because it
