@@ -68,6 +68,15 @@ fn timed(call: impl FnOnce()) -> Sample {
     Sample { wall_ns, cpu_ns }
 }
 
+/// The value recorded at a height this run holds. [`AtHeight`] is matched
+/// so a height above the tip fails the run instead of being dropped.
+fn recorded<T, E: std::fmt::Debug>(read: Result<AtHeight<T>, E>, what: &'static str) -> T {
+    match read.expect(what) {
+        AtHeight::Recorded(value) => value,
+        AtHeight::AboveTip => panic!("{what} is above the tip"),
+    }
+}
+
 #[test]
 #[ignore = "RT-W10 floor-device coinbase span; docs/benchmarks/rt_w10_request_cost_20261102.md"]
 fn rt_w10_coinbase_span_cost() {
@@ -86,10 +95,7 @@ fn rt_w10_coinbase_span_cost() {
     let listed = prefix_to(BlockHeight::from_raw(CHAIN_BLOCKS), Vec::new());
     connect_chain(&store, &listed);
     let snap = store.begin_read().expect("read");
-    let genesis = match snap.block(BlockHeight::ZERO).expect("genesis") {
-        AtHeight::Recorded(body) => body,
-        AtHeight::AboveTip => panic!("genesis is recorded"),
-    };
+    let genesis = recorded(snap.block(BlockHeight::ZERO), "genesis");
     let miner = genesis.block.miner_transaction.hash();
 
     let mut rows = String::new();
@@ -98,8 +104,8 @@ fn rt_w10_coinbase_span_cost() {
 
     for _ in 0..WARMUP {
         let height = BlockHeight::from_raw(0);
-        let _ = black_box(snap.block(height).expect("warmup block"));
-        let _ = black_box(snap.block_info(height).expect("warmup info"));
+        black_box(recorded(snap.block(height), "warmup block"));
+        black_box(recorded(snap.block_info(height), "warmup info"));
         let _ = black_box(snap.tx_record(&miner).expect("warmup tx"));
     }
     for iteration in 1..=SAMPLES {
@@ -108,10 +114,10 @@ fn rt_w10_coinbase_span_cost() {
                 .expect("a height index fits u64"),
         );
         let block = timed(|| {
-            let _ = black_box(snap.block(height).expect("block"));
+            black_box(recorded(snap.block(height), "block"));
         });
         let info = timed(|| {
-            let _ = black_box(snap.block_info(height).expect("info"));
+            black_box(recorded(snap.block_info(height), "info"));
         });
         let tx = timed(|| {
             let _ = black_box(snap.tx_record(&miner).expect("tx"));
