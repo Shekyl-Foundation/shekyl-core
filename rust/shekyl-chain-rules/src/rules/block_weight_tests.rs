@@ -386,7 +386,7 @@ fn validated_on(chain: &MockChain, candidate: Candidate) -> Weights {
             formed,
             &view,
             &RuleSet::GENESIS,
-            &Trust::UNANCHORED,
+            &Trust::UNPINNED,
         ))
         .expect("the fixture must validate");
         assert!(valid.coverage().contains(CenRow::G6), "G6 recorded");

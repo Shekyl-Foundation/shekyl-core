@@ -104,7 +104,7 @@
 //! (commit 7) is a pipeline barrier for the same reason.
 
 use shekyl_chain_rules::{
-    ArchivalDelta, ChainValid, ChainView, RecordWriteKind, ReleaseAnchors, Trust,
+    ArchivalDelta, ChainValid, ChainView, RecordWriteKind, GenesisPin, Trust,
 };
 use shekyl_types::archival::{AttestationWitness, IndexedDraw, IssuedDigest};
 use shekyl_types::{BlockHeight, PCanonicalId, SettlementEpoch, ShardId};
@@ -683,10 +683,10 @@ impl ChainStore {
     /// height — the C++'s `regtest_inject_archival_serve_credit`
     /// (`blockchain.cpp:4708`), the Gate-6 stand-in that lets a regtest
     /// reach a closed epoch with a credit in it. Refused off Fakechain as
-    /// the C++ refuses it: `trust` must be [`Trust::UNANCHORED`] — the one
+    /// the C++ refuses it: `trust` must be [`Trust::UNPINNED`] — the one
     /// posture no release vouches for, which is what a Fakechain node
     /// always is and a public-network node never is
-    /// ([`ReleaseAnchors`] has no constructor from arbitrary entries, so
+    /// ([`GenesisPin`] has no constructor from arbitrary entries, so
     /// the empty table cannot be minted for a public network). The store
     /// holds no nettype (rule 71); it reads the posture the caller runs
     /// under, and the ingest maps `ChainRules::Regtest` to it.
@@ -713,7 +713,7 @@ impl ChainStore {
         shard: ShardId,
         epoch: SettlementEpoch,
     ) -> Result<BlockHeight, StoreError> {
-        if *trust.anchors() != ReleaseAnchors::EMPTY {
+        if *trust.genesis_pin() != GenesisPin::NONE {
             return Err(StoreCannot::InjectionOffFakechain.into());
         }
         self.write(|batch| {
@@ -776,7 +776,7 @@ impl ChainStore {
         draws: &[IndexedDraw],
         digest: IssuedDigest,
     ) -> Result<(), StoreError> {
-        if *trust.anchors() != ReleaseAnchors::EMPTY {
+        if *trust.genesis_pin() != GenesisPin::NONE {
             return Err(StoreCannot::InjectionOffFakechain.into());
         }
         self.write(|batch| {

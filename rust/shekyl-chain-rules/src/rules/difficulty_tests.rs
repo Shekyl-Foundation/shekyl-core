@@ -413,7 +413,7 @@ fn cen_d7_fakechain_validate_mints_past_n() {
             formed,
             &view,
             &seven,
-            &Trust::UNANCHORED,
+            &Trust::UNPINNED,
         ))
         .expect("fakechain past N mints");
         assert!(valid.coverage().covers_landed(&seven));

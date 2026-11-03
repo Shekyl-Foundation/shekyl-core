@@ -48,7 +48,7 @@
 use core::num::NonZeroU128;
 
 use shekyl_address::Network;
-use shekyl_chain_rules::{FakechainSchedule, ReleaseAnchors, RuleSchedule, RuleSet, Trust};
+use shekyl_chain_rules::{FakechainSchedule, GenesisPin, RuleSchedule, RuleSet, Trust};
 use shekyl_types::BlockHeight;
 
 use crate::corpus::CorpusNet;
@@ -182,8 +182,8 @@ impl ChainRules {
     #[must_use]
     pub const fn trust(&self) -> Trust {
         match *self {
-            Self::Scheduled(net) => Trust::full(ReleaseAnchors::for_network(net)),
-            Self::Regtest { .. } => Trust::UNANCHORED,
+            Self::Scheduled(net) => Trust::full(GenesisPin::for_network(net)),
+            Self::Regtest { .. } => Trust::UNPINNED,
         }
     }
 }
@@ -238,10 +238,10 @@ mod tests {
                 "both pulled: the difficulty is named first"
             );
             // The release's anchors for that network — empty today, so
-            // equal to UNANCHORED by value; the *resolution* is what this
+            // equal to UNPINNED by value; the *resolution* is what this
             // pins (the first anchor entry moves the left side, not the
             // right).
-            assert_eq!(rules.trust(), Trust::full(ReleaseAnchors::for_network(net)));
+            assert_eq!(rules.trust(), Trust::full(GenesisPin::for_network(net)));
         }
     }
 
@@ -261,9 +261,9 @@ mod tests {
         assert_eq!(set.reorg_cap(), BlockCount::from_raw(64));
         assert_eq!(set.id(), RuleSet::GENESIS.id());
         // No release vouches for a regtest chain, lever or no lever.
-        assert_eq!(plain.trust(), Trust::UNANCHORED);
-        assert_eq!(fixed.trust(), Trust::UNANCHORED);
-        assert_eq!(scheduled.trust(), Trust::UNANCHORED);
+        assert_eq!(plain.trust(), Trust::UNPINNED);
+        assert_eq!(fixed.trust(), Trust::UNPINNED);
+        assert_eq!(scheduled.trust(), Trust::UNPINNED);
     }
 
     #[test]

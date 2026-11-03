@@ -19,8 +19,8 @@ use shekyl_types::BlockHash;
 // ---- CEN-E1: the genesis pin's equality, per block, through `validate` --
 
 /// A table pinning genesis at `hash`: a public network's shape.
-fn pinning_genesis(hash: BlockHash) -> ReleaseAnchors {
-    ReleaseAnchors::for_tests(Some(hash))
+fn pinning_genesis(hash: BlockHash) -> GenesisPin {
+    GenesisPin::for_tests(Some(hash))
 }
 
 /// E1 at genesis: the pin judges the height-0 candidate by equality, and a
@@ -61,7 +61,7 @@ fn the_pinned_genesis_passes_with_e1_recorded() {
 #[test]
 fn a_height_above_genesis_passes_vacuously_and_is_recorded() {
     let chain = five_blocks();
-    for trust in [Trust::UNANCHORED, Trust::full(pinning_genesis(OTHER))] {
+    for trust in [Trust::UNPINNED, Trust::full(pinning_genesis(OTHER))] {
         chain.with_view(|view| {
             let formed = formed_on(&chain, candidate_on(&chain, Vec::new()));
             let valid = judged(validate(formed, &view, &RuleSet::GENESIS, &trust))
@@ -92,7 +92,7 @@ fn hash_at(chain: &MockChain, height: u64) -> BlockHash {
 
 const OTHER: BlockHash = BlockHash::from_bytes([0xEE; 32]);
 
-fn conflict(chain: &MockChain, anchors: &ReleaseAnchors) -> Option<AnchorConflict> {
+fn conflict(chain: &MockChain, anchors: &GenesisPin) -> Option<GenesisConflict> {
     chain.with_view(|view| infallible(anchors.conflict_with(&view)))
 }
 
@@ -105,7 +105,7 @@ fn a_foreign_genesis_is_the_conflict_at_height_zero() {
     let chain = five_blocks();
     assert_eq!(
         conflict(&chain, &pinning_genesis(OTHER)),
-        Some(AnchorConflict {
+        Some(GenesisConflict {
             height: BlockHeight::ZERO,
             expected: OTHER,
             recorded: Some(hash_at(&chain, 0)),
@@ -128,7 +128,7 @@ fn an_empty_chain_or_an_empty_table_has_no_conflict() {
         conflict(&MockChain::default(), &pinning_genesis(OTHER)),
         None
     );
-    assert_eq!(conflict(&five_blocks(), &ReleaseAnchors::EMPTY), None);
+    assert_eq!(conflict(&five_blocks(), &GenesisPin::NONE), None);
 }
 
 /// `conflict_with` is the view face of `conflict_over`. A second walk
@@ -155,5 +155,5 @@ fn conflict_with_is_the_view_face_of_the_one_walk() {
 #[test]
 fn a_faulting_view_is_a_fault_not_a_verdict() {
     let view = FaultingView::default();
-    assert!(ReleaseAnchors::EMPTY.conflict_with(&view).is_err());
+    assert!(GenesisPin::NONE.conflict_with(&view).is_err());
 }

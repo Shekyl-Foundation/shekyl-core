@@ -54,7 +54,7 @@
 //! [`Substrate`], and ten rows (C1–C3, D1, D1b, D2, D3, D4, D6, D7; D5 is
 //! the alt window, recorded by the cheap tier beside D4 — slice 9); slice 3
 //! (`CHAIN_RULES_SLICE_3.md`) housed `PDM-Q5`'s anchor model — the
-//! release-carried [`ReleaseAnchors`], the [`Trust`] input to `validate`,
+//! release-carried [`GenesisPin`], the [`Trust`] input to `validate`,
 //! CEN-E1 per block and CEN-E5 at writer open (the first `enforced_at` row;
 //! E2 waits on the alt view and `D_max`); slice 4 (`CHAIN_RULES_SLICE_4.md`)
 //! landed 4.F's sixteen operand-complete rows — the coinbase's shape and
@@ -62,7 +62,7 @@
 //! definitions derived and recorded in coverage (the priced value stays
 //! off the verdict until F14b's paid reward), four rows `by_construction`
 //! (the first of that status), every public network's genesis pinned in
-//! [`ReleaseAnchors`] — verified by equality, in no trust band — and
+//! [`GenesisPin`] — verified by equality, in no trust band — and
 //! `RuleSet::mined_money_unlock_window` (the split epoch is
 //! `shekyl_economics::EMISSION_SPLIT_EPOCH`, read by the split itself); F14/F14b/F16/F18 wait on CEN-G6's
 //! median (slice 7) and F17 on the curve tree's writer (DRS-E3); slice 5
@@ -121,7 +121,7 @@
 #![deny(unsafe_code)]
 
 mod alt;
-mod anchors;
+mod genesis_pin;
 mod archival;
 mod archival_reads;
 mod block;
@@ -160,7 +160,7 @@ pub mod harness;
 pub mod relay_floor;
 
 pub use alt::{alt_against, AltChainView, AltValid, Fork, InvertedFork};
-pub use anchors::ReleaseAnchors;
+pub use genesis_pin::GenesisPin;
 pub use archival::{
     admission_plan, closed_and_final, drawable_epoch_walked_back, remember_window_epochs,
     shard_close, shard_close_height, Accrual, AdmissionPlan, AdmissionPlanFault, ArchivalDelta,
@@ -216,7 +216,7 @@ pub use rule_set::{
     ResponseWindowOutrunsAnchor, RuleSchedule, RuleSet, RuleSetId, SettlementEpochBlocks,
     SettlementSchedule,
 };
-pub use rules::anchors::AnchorConflict;
+pub use rules::genesis::GenesisConflict;
 pub use rules::block_weight::{
     block_weight_limit_at, effective_median_at, effective_median_at_windows, even_pair_median,
     median, medians_from, medians_over, medians_over_window, EffectiveMedian, Weights,

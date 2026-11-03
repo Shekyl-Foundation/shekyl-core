@@ -180,7 +180,7 @@ fn cen_b4_empty_set_against_the_empty_root_is_a_judged_pass() {
             formed,
             &view,
             &RuleSet::GENESIS,
-            &Trust::UNANCHORED,
+            &Trust::UNPINNED,
         ))
         .expect("the fixture candidate is valid")
         .coverage()

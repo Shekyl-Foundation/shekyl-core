@@ -5,14 +5,14 @@
 
 //! Census 4.E — the genesis pin's rules.
 //!
-//! The rows of [`ReleaseAnchors`](crate::ReleaseAnchors), the release's
+//! The rows of [`GenesisPin`](crate::GenesisPin), the release's
 //! genesis pin. No coded checkpoint pins anything above it (S1, design
 //! review 2026-11-03):
 //!
 //! - **CEN-E5** — the file a node opens records this network's genesis.
 //!   Not a per-block predicate: it is run **once, at open**, over the
 //!   recorded chain ([`E5::conflict_over`]; [`E5::conflict_with`] is that
-//!   walk over a [`HeaderView`]), and its finding is an [`AnchorConflict`]:
+//!   walk over a [`HeaderView`]), and its finding is an [`GenesisConflict`]:
 //!   the file is another network's, and the writer does not run. The first
 //!   row this crate enforces at a site other than `validate` —
 //!   `RowStatus::EnforcedAt` is its registry status (slice 3 Q4).
@@ -22,7 +22,7 @@
 
 use shekyl_types::{BlockHash, BlockHeight};
 
-use crate::anchors::ReleaseAnchors;
+use crate::genesis_pin::GenesisPin;
 use crate::census::CenRow;
 use crate::fault::ViewRead;
 use crate::rules::{HeaderContext, HeaderRule, Rule};
@@ -49,7 +49,7 @@ impl HeaderRule for E1 {
         cx: &HeaderContext<'_, P>,
         _view: &H,
     ) -> Result<Verdict<()>, ViewRead<H::Fault>> {
-        match cx.trust.anchors().expected_at(cx.connecting) {
+        match cx.trust.genesis_pin().expected_at(cx.connecting) {
             Some(expected) if expected != cx.facts.identity() => refused(Self::ROW, Locus::Block),
             Some(_) | None => Ok(Ok(())),
         }
@@ -84,10 +84,10 @@ impl E5 {
     /// `Err` is the reader failing to answer — a fault, not a conflict.
     /// [`conflict_with`](Self::conflict_with) is this walk over a view.
     pub(crate) fn conflict_over<E>(
-        anchors: &ReleaseAnchors,
+        anchors: &GenesisPin,
         tip: Option<Tip>,
         mut recorded_at: impl FnMut(BlockHeight) -> Result<Option<BlockHash>, E>,
-    ) -> Result<Option<AnchorConflict>, E> {
+    ) -> Result<Option<GenesisConflict>, E> {
         let Some(tip) = tip else {
             return Ok(None);
         };
@@ -102,7 +102,7 @@ impl E5 {
             // and that stays a fault.
             let recorded = recorded_at(height)?;
             if recorded != Some(expected) {
-                return Ok(Some(AnchorConflict {
+                return Ok(Some(GenesisConflict {
                     height,
                     expected,
                     recorded,
@@ -116,9 +116,9 @@ impl E5 {
     /// each pinned block's identity — header facts, so a header view
     /// suffices (an alt chain's genesis is checked the same way).
     pub(crate) fn conflict_with<'id, H: HeaderView<'id>>(
-        anchors: &ReleaseAnchors,
+        anchors: &GenesisPin,
         view: &H,
-    ) -> Result<Option<AnchorConflict>, H::Fault> {
+    ) -> Result<Option<GenesisConflict>, H::Fault> {
         Self::conflict_over(anchors, view.tip()?, |height| {
             Ok(match view.header_at(height)? {
                 AtHeight::Recorded(record) => Some(record.hash),
@@ -132,7 +132,7 @@ impl E5 {
 /// finding): the file is another network's, and the writer does not run.
 /// No pop can resolve it: genesis cannot be popped.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub struct AnchorConflict {
+pub struct GenesisConflict {
     /// The pinned height: genesis.
     pub height: BlockHeight,
     /// The identity the release vouches for there.
@@ -143,7 +143,7 @@ pub struct AnchorConflict {
     pub recorded: Option<BlockHash>,
 }
 
-impl ReleaseAnchors {
+impl GenesisPin {
     /// **CEN-E5.** The pin the recorded chain contradicts, if any.
     ///
     /// `tip` is the recorded tip (`None`: an empty file, which contradicts
@@ -165,7 +165,7 @@ impl ReleaseAnchors {
         &self,
         tip: Option<Tip>,
         recorded_at: impl FnMut(BlockHeight) -> Result<Option<BlockHash>, E>,
-    ) -> Result<Option<AnchorConflict>, E> {
+    ) -> Result<Option<GenesisConflict>, E> {
         E5::conflict_over(self, tip, recorded_at)
     }
 
@@ -182,11 +182,11 @@ impl ReleaseAnchors {
     pub fn conflict_with<'id, H: HeaderView<'id>>(
         &self,
         view: &H,
-    ) -> Result<Option<AnchorConflict>, H::Fault> {
+    ) -> Result<Option<GenesisConflict>, H::Fault> {
         E5::conflict_with(self, view)
     }
 }
 
 #[cfg(test)]
-#[path = "anchors_tests.rs"]
-mod anchors_tests;
+#[path = "genesis_tests.rs"]
+mod genesis_tests;

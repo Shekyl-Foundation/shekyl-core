@@ -10,7 +10,7 @@
 use shekyl_address::Network;
 use shekyl_types::{BlockHash, BlockHeight};
 
-use super::ReleaseAnchors;
+use super::GenesisPin;
 
 const NETWORKS: [Network; 3] = [Network::Mainnet, Network::Testnet, Network::Stagenet];
 
@@ -29,8 +29,8 @@ const fn hash(fill: u8) -> BlockHash {
 fn every_public_network_pins_its_own_genesis_and_nothing_above_it() {
     let mut seen = std::collections::BTreeSet::new();
     for network in NETWORKS {
-        let table = ReleaseAnchors::for_network(network);
-        assert_ne!(table, ReleaseAnchors::EMPTY, "{network:?}");
+        let table = GenesisPin::for_network(network);
+        assert_ne!(table, GenesisPin::NONE, "{network:?}");
         let genesis = table.expected_at(height(0)).expect("genesis is pinned");
         for above in [1, 2, 1_000, u64::MAX] {
             assert_eq!(table.expected_at(height(above)), None, "{network:?} at {above}");
@@ -65,7 +65,7 @@ fn the_genesis_pin_is_the_configured_genesis_block() {
         let tx = shekyl_wire::Transaction::from_bytes(&tx_bytes).expect("GENESIS_TX decodes");
         let block = genesis_block(tx, pin.genesis_nonce).expect("genesis block assembles");
         assert_eq!(
-            ReleaseAnchors::for_network(network).expected_at(height(0)),
+            GenesisPin::for_network(network).expected_at(height(0)),
             Some(block.hash()),
             "{network:?}: the pin is the block cryptonote_config.h configures"
         );
@@ -84,13 +84,26 @@ fn the_genesis_pin_agrees_with_the_client_identity_pins() {
         (Network::Stagenet, DaemonNetwork::Stagenet),
     ] {
         assert_eq!(
-            ReleaseAnchors::for_network(network).expected_at(height(0)),
+            GenesisPin::for_network(network).expected_at(height(0)),
             Some(BlockHash::from_bytes(shekyl_rpc_types::genesis_hash_for(
                 daemon
             ))),
             "{network:?}"
         );
     }
+}
+
+/// Regtest's pin is the genesis a regtest node connects: the client
+/// identity's fakechain genesis, which is mainnet's configured block.
+#[test]
+fn the_fakechain_pin_is_the_genesis_a_regtest_node_connects() {
+    use shekyl_rpc_types::DaemonNetwork;
+    assert_eq!(
+        GenesisPin::FAKECHAIN.expected_at(height(0)),
+        Some(BlockHash::from_bytes(shekyl_rpc_types::genesis_hash_for(
+            DaemonNetwork::Fakechain
+        )))
+    );
 }
 
 /// Lowercase hex to bytes, for the `GENESIS_TX` pin. Local so the crate does
@@ -106,22 +119,22 @@ fn unhex(hex: &str) -> Vec<u8> {
 /// A fixture pin answers at height 0 only, and the empty table nowhere.
 #[test]
 fn expected_at_is_genesis_only() {
-    const PINNED: ReleaseAnchors = ReleaseAnchors::for_tests(Some(hash(0x60)));
+    const PINNED: GenesisPin = GenesisPin::for_tests(Some(hash(0x60)));
     assert_eq!(PINNED.expected_at(height(0)), Some(hash(0x60)));
     assert_eq!(PINNED.expected_at(height(1)), None);
-    assert_eq!(ReleaseAnchors::EMPTY.expected_at(height(0)), None);
-    assert_eq!(ReleaseAnchors::EMPTY.pins().count(), 0);
+    assert_eq!(GenesisPin::NONE.expected_at(height(0)), None);
+    assert_eq!(GenesisPin::NONE.pins().count(), 0);
 }
 
 /// `Debug` prints whether genesis is pinned, never the hash.
 #[test]
 fn debug_says_whether_genesis_is_pinned() {
     assert_eq!(
-        format!("{:?}", ReleaseAnchors::EMPTY),
-        "ReleaseAnchors { genesis: \"none\" }"
+        format!("{:?}", GenesisPin::NONE),
+        "GenesisPin { genesis: \"none\" }"
     );
     assert_eq!(
-        format!("{:?}", ReleaseAnchors::for_network(Network::Mainnet)),
-        "ReleaseAnchors { genesis: \"pinned\" }"
+        format!("{:?}", GenesisPin::for_network(Network::Mainnet)),
+        "GenesisPin { genesis: \"pinned\" }"
     );
 }

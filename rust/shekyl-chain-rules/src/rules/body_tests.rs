@@ -151,7 +151,7 @@ fn judge_on(chain: &crate::harness::MockChain, candidate: Candidate) -> Verdict<
             formed_on(chain, candidate),
             &view,
             &RuleSet::GENESIS,
-            &Trust::UNANCHORED,
+            &Trust::UNPINNED,
         ))
         .map(|_valid| ())
     })

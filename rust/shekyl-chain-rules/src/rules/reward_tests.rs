@@ -453,7 +453,7 @@ fn validated_on(chain: &MockChain, candidate: Candidate) -> Verdict<(Weights, Pa
             formed,
             &view,
             &RuleSet::GENESIS,
-            &Trust::UNANCHORED,
+            &Trust::UNPINNED,
         ))
         .map(|valid| {
             for row in [

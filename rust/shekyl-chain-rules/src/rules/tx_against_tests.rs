@@ -143,7 +143,7 @@ fn i7_at_a_listed_slot_the_refusal_names_the_slot() {
                 formed,
                 &view,
                 &RuleSet::GENESIS,
-                &Trust::UNANCHORED,
+                &Trust::UNPINNED,
             )),
             CenRow::I7,
             Locus::Input {
@@ -230,7 +230,7 @@ fn i7_is_vacuous_on_the_coinbase() {
             formed,
             &view,
             &RuleSet::GENESIS,
-            &Trust::UNANCHORED,
+            &Trust::UNPINNED,
         ))
         .expect("a block of one coinbase");
         assert!(valid.coverage().contains(CenRow::I7));

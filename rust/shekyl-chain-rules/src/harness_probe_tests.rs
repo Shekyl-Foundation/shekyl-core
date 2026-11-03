@@ -228,7 +228,7 @@ fn the_mock_view_validates_a_candidate_with_a_brand_of_its_own() {
             formed_on(&chain, candidate_on(&chain, Vec::new())),
             &view,
             &RuleSet::GENESIS,
-            &Trust::UNANCHORED,
+            &Trust::UNPINNED,
         ))
         .expect("a candidate built on the chain's tip satisfies every landed rule");
         assert_eq!(valid.rule_set_id(), RuleSet::GENESIS.id());

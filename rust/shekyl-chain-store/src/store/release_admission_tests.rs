@@ -10,7 +10,7 @@
 //! `connect` recorded, and the table is what the open was given.
 
 use shekyl_address::Network;
-use shekyl_chain_rules::{AnchorConflict, ReleaseAnchors};
+use shekyl_chain_rules::{GenesisConflict, GenesisPin};
 use shekyl_types::{BlockHash, BlockHeight};
 
 use super::connect_fixtures::connect_chain;
@@ -26,20 +26,20 @@ fn record(path: &std::path::Path, blocks: usize) -> Vec<BlockHash> {
     hashes
 }
 
-fn released(path: &std::path::Path, anchors: &ReleaseAnchors) -> Result<ChainStore, StoreError> {
-    ChainStore::with_release(path, ApplyPolicy::Full, production_horizons(), anchors)
+fn released(path: &std::path::Path, anchors: &GenesisPin) -> Result<ChainStore, StoreError> {
+    ChainStore::with_genesis(path, ApplyPolicy::Full, production_horizons(), anchors)
         .map(|(store, _cut)| store)
 }
 
-fn pin_of(anchors: &ReleaseAnchors) -> BlockHash {
+fn pin_of(anchors: &GenesisPin) -> BlockHash {
     anchors
         .expected_at(BlockHeight::ZERO)
         .expect("a public table pins genesis")
 }
 
-fn release_pin(err: StoreError) -> AnchorConflict {
+fn release_pin(err: StoreError) -> GenesisConflict {
     match err {
-        StoreError::Cannot(StoreCannot::ReleasePin(conflict)) => conflict,
+        StoreError::Cannot(StoreCannot::ForeignGenesis(conflict)) => conflict,
         other => panic!("admission refused with {other}"),
     }
 }
@@ -48,7 +48,7 @@ fn release_pin(err: StoreError) -> AnchorConflict {
 #[test]
 fn an_empty_file_agrees_with_a_public_table() {
     let path = tmp("release-empty");
-    let anchors = ReleaseAnchors::for_network(Network::Mainnet);
+    let anchors = GenesisPin::for_network(Network::Mainnet);
     let store = released(&path, &anchors).expect("an empty file contradicts nothing");
     let tip = store.begin_read().expect("read").tip().expect("tip");
     assert!(tip.recorded.is_none());
@@ -61,7 +61,7 @@ fn an_empty_file_agrees_with_a_public_table() {
 fn a_file_whose_genesis_is_the_pin_opens() {
     let path = tmp("release-match");
     let recorded = record(&path, 1);
-    let anchors = ReleaseAnchors::for_tests(Some(recorded[0]));
+    let anchors = GenesisPin::for_tests(Some(recorded[0]));
     let store = released(&path, &anchors).expect("the recorded genesis is the pin");
     let tip = store
         .begin_read()
@@ -85,12 +85,12 @@ fn a_foreign_genesis_is_refused_on_every_public_network() {
     let recorded = record(&path, 1);
     let mut pins = Vec::new();
     for network in [Network::Mainnet, Network::Testnet, Network::Stagenet] {
-        let anchors = ReleaseAnchors::for_network(network);
+        let anchors = GenesisPin::for_network(network);
         let conflict = release_pin(released(&path, &anchors).expect_err("a synthetic genesis"));
         let expected = pin_of(&anchors);
         assert_eq!(
             conflict,
-            AnchorConflict {
+            GenesisConflict {
                 height: BlockHeight::ZERO,
                 expected,
                 recorded: Some(recorded[0]),
@@ -117,7 +117,7 @@ fn a_foreign_genesis_is_refused_with_the_file_untouched() {
     let path = tmp("release-foreign-untouched");
     let recorded = record(&path, 1);
     let before = file_state(&path);
-    let testnet = ReleaseAnchors::for_network(Network::Testnet);
+    let testnet = GenesisPin::for_network(Network::Testnet);
     let conflict = release_pin(released(&path, &testnet).expect_err("another network's store"));
     assert_eq!(conflict.recorded, Some(recorded[0]));
     assert_eq!(conflict.expected, pin_of(&testnet));
@@ -144,7 +144,7 @@ fn file_state(path: &std::path::Path) -> (Vec<u8>, std::time::SystemTime) {
 fn an_unanchored_open_keeps_a_synthetic_genesis() {
     let path = tmp("release-unanchored");
     let recorded = record(&path, 1);
-    let mainnet = ReleaseAnchors::for_network(Network::Mainnet);
+    let mainnet = GenesisPin::for_network(Network::Mainnet);
     let _ = release_pin(released(&path, &mainnet).expect_err("the public door refuses"));
     let store = ChainStore::create(&path, EPOCH).expect("create does not admit");
     let tip = store
@@ -158,13 +158,13 @@ fn an_unanchored_open_keeps_a_synthetic_genesis() {
     cleanup(&path);
 }
 
-/// Red if `ReleaseAnchors::EMPTY` is treated as a public table. Fakechain
+/// Red if `GenesisPin::NONE` is treated as a public table. Fakechain
 /// is this table, not a nettype branch inside admission.
 #[test]
 fn an_empty_table_agrees_with_a_synthetic_genesis() {
     let path = tmp("release-empty-table");
     let recorded = record(&path, 1);
-    let store = released(&path, &ReleaseAnchors::EMPTY).expect("nothing is pinned");
+    let store = released(&path, &GenesisPin::NONE).expect("nothing is pinned");
     let tip = store
         .begin_read()
         .expect("read")
@@ -182,17 +182,17 @@ fn an_empty_table_agrees_with_a_synthetic_genesis() {
 fn a_reader_admits_the_same_pins() {
     let path = tmp("release-reader");
     let recorded = record(&path, 1);
-    let mainnet = ReleaseAnchors::for_network(Network::Mainnet);
+    let mainnet = GenesisPin::for_network(Network::Mainnet);
     let conflict = release_pin(
-        ChainStore::open_read_only_with_release(&path, production_horizons(), &mainnet)
+        ChainStore::open_read_only_with_genesis(&path, production_horizons(), &mainnet)
             .expect_err("a reader refuses a foreign genesis"),
     );
     assert_eq!(conflict.height, BlockHeight::ZERO);
     assert_eq!(conflict.expected, pin_of(&mainnet));
     assert_eq!(conflict.recorded, Some(recorded[0]));
 
-    let matching = ReleaseAnchors::for_tests(Some(recorded[0]));
-    let store = ChainStore::open_read_only_with_release(&path, production_horizons(), &matching)
+    let matching = GenesisPin::for_tests(Some(recorded[0]));
+    let store = ChainStore::open_read_only_with_genesis(&path, production_horizons(), &matching)
         .expect("a reader opens a file that carries the pin");
     assert!(store.is_read_only());
     cleanup(&path);

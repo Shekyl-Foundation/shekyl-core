@@ -89,7 +89,7 @@
 //! hole there is a [`ViewRead`] at the function that walked the heights.
 
 pub(crate) mod alt;
-pub(crate) mod anchors;
+pub(crate) mod genesis;
 pub(crate) mod attestation;
 pub(crate) mod block_weight;
 pub(crate) mod body;
@@ -305,7 +305,7 @@ impl<'a> BlockContext<'a> {
             tip,
             mtp_window,
             Target::GENESIS_BLOCK,
-            &Trust::UNANCHORED,
+            &Trust::UNPINNED,
         )
     }
 }

@@ -80,7 +80,7 @@ fn judge_at(chain: &MockChain, candidate: Candidate, clock: u64) -> Verdict<()> 
             formed,
             &view,
             &RuleSet::GENESIS,
-            &Trust::UNANCHORED,
+            &Trust::UNPINNED,
         ))
         .map(|_valid: ChainValid<_>| ())
     })
@@ -114,7 +114,7 @@ fn check_alone<R: BlockRule>(chain: &MockChain, candidate: Candidate, clock: u64
                 chain.tip(),
                 window,
                 Target::GENESIS_BLOCK,
-                &Trust::UNANCHORED,
+                &Trust::UNPINNED,
             ),
             &view,
         ))
@@ -328,7 +328,7 @@ fn a_hole_below_the_tip_is_the_halting_fault_not_a_panic() {
         );
         // Through the stage: the same fault, in `Fault`'s clothing.
         let formed = formed_on(&chain, candidate_at(&chain, 500));
-        let outcome = validate(formed, &view, &RuleSet::GENESIS, &Trust::UNANCHORED);
+        let outcome = validate(formed, &view, &RuleSet::GENESIS, &Trust::UNPINNED);
         assert!(
             matches!(
                 outcome,
@@ -381,7 +381,7 @@ fn at_genesis_all_three_rows_record_as_applied_and_refuse_nothing() {
             formed,
             &view,
             &RuleSet::GENESIS,
-            &Trust::UNANCHORED,
+            &Trust::UNPINNED,
         ))
         .expect("genesis is exempt from both timestamp legs");
         for row in [CenRow::C1, CenRow::C2, CenRow::C3] {
@@ -409,7 +409,7 @@ fn a_well_formed_candidate_covers_the_timestamp_rows() {
             formed_on(&chain, candidate_at(&chain, CLOCK)),
             &view,
             &RuleSet::GENESIS,
-            &Trust::UNANCHORED,
+            &Trust::UNPINNED,
         ))
         .expect("passes");
         for row in [CenRow::C1, CenRow::C2, CenRow::C3] {

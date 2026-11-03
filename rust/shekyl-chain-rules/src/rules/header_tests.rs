@@ -58,7 +58,7 @@ fn judge_under(candidate: Candidate, rule_set: &RuleSet) -> Verdict<()> {
         Err(Faulted) => unreachable!("the default MockSubstrate never faults"),
     };
     MockChain::default().with_view(|view| {
-        judged(validate(formed, &view, rule_set, &Trust::UNANCHORED))
+        judged(validate(formed, &view, rule_set, &Trust::UNPINNED))
             .map(|_valid: ChainValid<_>| ())
     })
 }

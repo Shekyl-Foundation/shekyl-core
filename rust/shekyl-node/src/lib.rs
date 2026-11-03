@@ -75,7 +75,7 @@ use shekyl_chain_ingest::service::{
     ArrivalTag, Follow, PoolWiring, Reply, Service, ServiceConfig, ServiceFault,
 };
 use shekyl_chain_ingest::{Chain, ChainRules, Metrics, ProductionSubstrate, SubstrateFault};
-use shekyl_chain_rules::{AdmissionPolicy, FakechainSchedule, ReleaseAnchors, RuleSet};
+use shekyl_chain_rules::{AdmissionPolicy, FakechainSchedule, GenesisPin, RuleSet};
 use shekyl_chain_store::apply_policy::ApplyPolicy;
 use shekyl_chain_store::pool::PoolOpen;
 use shekyl_chain_store::store::{ChainStore, CutShort, Horizons, SnapshotView};
@@ -223,7 +223,7 @@ impl Node {
         let rules = rules_of(args.config)?;
         let horizons = Horizons::under(&rules.in_force(BlockHeight::ZERO))
             .map_err(|error| OpenError::Rules(format!("the store horizons: {error}")))?;
-        let anchors = anchors_of(rules);
+        let anchors = genesis_pin_of(rules);
         std::fs::create_dir_all(&args.config.data_dir).map_err(OpenError::Directory)?;
         let store_path = args.config.data_dir.join("chain.db");
         let pool_path = args.config.data_dir.join("pool.db");
@@ -803,10 +803,10 @@ fn uninstall_process_doors() {
 fn open_chain(
     path: &std::path::Path,
     horizons: Horizons,
-    anchors: &ReleaseAnchors,
+    anchors: &GenesisPin,
 ) -> Result<ChainStore, OpenError> {
     use shekyl_chain_store::store::{StoreCannot, StoreError};
-    match ChainStore::with_release(path, ApplyPolicy::Full, horizons, anchors) {
+    match ChainStore::with_genesis(path, ApplyPolicy::Full, horizons, anchors) {
         Ok((store, cut)) => {
             log_chain_cut(cut);
             Ok(store)
@@ -828,7 +828,7 @@ fn open_chain(
             );
             std::fs::remove_file(path).map_err(OpenError::Wipe)?;
             let (store, cut) =
-                ChainStore::with_release(path, ApplyPolicy::Full, horizons, anchors)?;
+                ChainStore::with_genesis(path, ApplyPolicy::Full, horizons, anchors)?;
             log_chain_cut(cut);
             Ok(store)
         }
@@ -865,10 +865,14 @@ fn store_durability_line() -> String {
     )
 }
 
-fn anchors_of(rules: ChainRules) -> ReleaseAnchors {
+fn genesis_pin_of(rules: ChainRules) -> GenesisPin {
     match rules {
-        ChainRules::Scheduled(net) => ReleaseAnchors::for_network(net),
-        ChainRules::Regtest { .. } => ReleaseAnchors::EMPTY,
+        ChainRules::Scheduled(net) => GenesisPin::for_network(net),
+        // Regtest's block 0 is as deterministic as any network's, so its
+        // store is pinned too (S1, design review 2026-11-03). `validate`'s
+        // CEN-E1 leaves regtest unpinned (`ChainRules::trust`): harness
+        // chains mine their own genesis.
+        ChainRules::Regtest { .. } => GenesisPin::FAKECHAIN,
     }
 }
 

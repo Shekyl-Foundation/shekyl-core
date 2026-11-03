@@ -19,14 +19,14 @@
 //! # What reads it
 //!
 //! - **CEN-E1** judges a height-0 candidate against the pin
-//!   ([`expected_at`](ReleaseAnchors::expected_at)).
+//!   ([`expected_at`](GenesisPin::expected_at)).
 //! - **CEN-E5** holds the file a node opens to it: a store whose block 0 is
 //!   another network's is refused (`rules::anchors`). The walk is
-//!   [`ReleaseAnchors::conflict_over`]; [`ReleaseAnchors::conflict_with`] is
+//!   [`GenesisPin::conflict_over`]; [`GenesisPin::conflict_with`] is
 //!   that walk over a `ChainView`.
 //! - **`Trust`** carries the pin into `validate`.
 //!
-//! The hashes are **derived**, not restated: `anchors_tests` rebuilds each
+//! The hashes are **derived**, not restated: `genesis_pin_tests` rebuilds each
 //! network's genesis block from `cryptonote_config.h`'s pins through the
 //! genesis tool and asserts the table equals it, and asserts the table
 //! equals the client identity's copy (`shekyl_rpc_types::genesis_hash_for`,
@@ -41,23 +41,31 @@ use shekyl_types::{BlockHash, BlockHeight};
 ///
 /// There is no public constructor from an arbitrary hash: the only tables
 /// are the per-network constants [`for_network`](Self::for_network) selects
-/// and [`EMPTY`](Self::EMPTY) — nettype selects *data*, never control flow
+/// and [`NONE`](Self::NONE) — nettype selects *data*, never control flow
 /// (rule 71), and no path exists for a pin the release did not carry.
 #[derive(Clone, Copy, PartialEq, Eq)]
-pub struct ReleaseAnchors {
+pub struct GenesisPin {
     /// The genesis identity the binary defines for this network; verified
     /// by equality (CEN-E1 at height 0, CEN-E5 at open), assumed by nothing.
-    /// `None` only on the table no release vouches for ([`EMPTY`](Self::EMPTY)).
+    /// `None` only on the table no release vouches for ([`NONE`](Self::NONE)).
     genesis: Option<BlockHash>,
 }
 
-impl ReleaseAnchors {
+impl GenesisPin {
     /// Nothing pinned: what a Fakechain always has — no release defines a
-    /// regtest chain's genesis (`Trust::UNANCHORED`).
-    pub const EMPTY: Self = Self { genesis: None };
+    /// regtest chain's genesis (`Trust::UNPINNED`).
+    pub const NONE: Self = Self { genesis: None };
+
+    /// Regtest's genesis. A regtest node connects mainnet's configured
+    /// genesis block (`get_config(FAKECHAIN)`, `shekyl-node`'s `genesis.rs`),
+    /// so its block 0 is mainnet's. The pin is the chain's identity: a store
+    /// opened as regtest whose block 0 is testnet's or stagenet's is
+    /// refused. A mainnet store shares regtest's block 0, so only the
+    /// network marker tells those two apart.
+    pub const FAKECHAIN: Self = Self::MAINNET;
 
     /// Mainnet: its genesis (`geblock block-id --network mainnet`; derived
-    /// from `cryptonote_config.h` in `anchors_tests`).
+    /// from `cryptonote_config.h` in `genesis_pin_tests`).
     const MAINNET: Self = Self::genesis_only([
         0xd7, 0xaf, 0x38, 0x23, 0x39, 0xb2, 0xcd, 0x0c, 0x4e, 0xe4, 0xb2, 0xea, 0x0a, 0xfe, 0x74,
         0x26, 0xf3, 0x4b, 0xc2, 0x97, 0x14, 0x95, 0xd9, 0x87, 0x3f, 0xd4, 0xce, 0xc2, 0x10, 0x7a,
@@ -119,11 +127,11 @@ impl ReleaseAnchors {
     }
 }
 
-impl fmt::Debug for ReleaseAnchors {
+impl fmt::Debug for GenesisPin {
     // A failing assertion wants to know whether genesis is pinned, not
     // thirty-two bytes.
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        f.debug_struct("ReleaseAnchors")
+        f.debug_struct("GenesisPin")
             .field(
                 "genesis",
                 &if self.genesis.is_some() {
@@ -137,5 +145,5 @@ impl fmt::Debug for ReleaseAnchors {
 }
 
 #[cfg(test)]
-#[path = "anchors_tests.rs"]
-mod anchors_tests;
+#[path = "genesis_pin_tests.rs"]
+mod genesis_pin_tests;

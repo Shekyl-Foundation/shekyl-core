@@ -869,7 +869,7 @@ fn a_total_burned_register_above_the_emission_halts_the_writer_before_the_fold()
         let view = batch.chain_view();
         let formed =
             super::connect_fixtures::formed(&view, candidate(1, genesis.hash(), Vec::new()))?;
-        match shekyl_chain_rules::validate(formed, &view, &RuleSet::GENESIS, &Trust::UNANCHORED) {
+        match shekyl_chain_rules::validate(formed, &view, &RuleSet::GENESIS, &Trust::UNPINNED) {
             Err(Fault::Corrupt(corrupt)) => {
                 assert!(
                     matches!(corrupt, Corrupt::BurnExceedsEmission { .. }),

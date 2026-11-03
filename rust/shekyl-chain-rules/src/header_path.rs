@@ -407,7 +407,7 @@ mod tests {
         .expect("the mock answers")
         .expect("major 2 passes B1 under a set that admits 2");
         chain.with_view(|view| {
-            let fault = judge_header(&formed, &view, &RuleSet::GENESIS, &Trust::UNANCHORED)
+            let fault = judge_header(&formed, &view, &RuleSet::GENESIS, &Trust::UNPINNED)
                 .expect_err("a different rule set is a fault");
             let Fault::Stale(Stale::RuleSet {
                 formed_under,
@@ -442,7 +442,7 @@ mod tests {
         .expect("the mock answers")
         .expect("the header forms");
         chain.with_view(|view| {
-            let fault = judge_header(&formed, &view, &RuleSet::GENESIS, &Trust::UNANCHORED)
+            let fault = judge_header(&formed, &view, &RuleSet::GENESIS, &Trust::UNPINNED)
                 .expect_err("a different rule set is a fault");
             match fault {
                 Fault::Stale(Stale::RuleSet { retry, .. }) => {
@@ -476,7 +476,7 @@ mod tests {
         .expect("forms");
         chain.with_view(|view| {
             let judged =
-                match judge_header(&formed, &view, &rule_set, &Trust::UNANCHORED).expect("view") {
+                match judge_header(&formed, &view, &rule_set, &Trust::UNPINNED).expect("view") {
                     Ok(judged) => judged,
                     Err(refused) => panic!("honest header refused: {refused:?}"),
                 };
@@ -511,7 +511,7 @@ mod tests {
                 from_header,
                 &view,
                 &RuleSet::admitting_for_tests(2),
-                &Trust::UNANCHORED,
+                &Trust::UNPINNED,
             )
             .expect_err("a different rule set is a fault");
             assert!(matches!(fault, Fault::Stale(Stale::RuleSet { .. })));
@@ -556,7 +556,7 @@ mod tests {
         .expect("mock")
         .expect("the header forms");
         let judged = deep.with_view(|view| {
-            match judge_header(&formed, &view, &RuleSet::GENESIS, &Trust::UNANCHORED).expect("view")
+            match judge_header(&formed, &view, &RuleSet::GENESIS, &Trust::UNPINNED).expect("view")
             {
                 Ok(judged) => judged,
                 Err(refused) => panic!("honest header refused: {refused:?}"),
@@ -565,7 +565,7 @@ mod tests {
         let from_header =
             form_judged(deep_candidate, &judged, &ReferenceClaims::EMPTY).expect("the body forms");
         MockChain::default().with_view(|view| {
-            match validate(from_header, &view, &RuleSet::GENESIS, &Trust::UNANCHORED) {
+            match validate(from_header, &view, &RuleSet::GENESIS, &Trust::UNPINNED) {
                 Err(Fault::Stale(Stale::Seed { claimed, .. })) => {
                     assert_eq!(claimed, deep_seed);
                 }
@@ -598,7 +598,7 @@ mod tests {
         .expect("mock")
         .expect("the header forms");
         let judged = claimed_on.with_view(|view| {
-            match judge_header(&formed, &view, &RuleSet::GENESIS, &Trust::UNANCHORED).expect("view")
+            match judge_header(&formed, &view, &RuleSet::GENESIS, &Trust::UNPINNED).expect("view")
             {
                 Ok(judged) => judged,
                 Err(refused) => panic!("honest header refused: {refused:?}"),
@@ -607,7 +607,7 @@ mod tests {
         let from_header =
             form_judged(long_candidate, &judged, &ReferenceClaims::EMPTY).expect("the body forms");
         judged_on.with_view(|view| {
-            match validate(from_header, &view, &RuleSet::GENESIS, &Trust::UNANCHORED) {
+            match validate(from_header, &view, &RuleSet::GENESIS, &Trust::UNPINNED) {
                 Err(Fault::Stale(Stale::Target {
                     claimed, expected, ..
                 })) => {

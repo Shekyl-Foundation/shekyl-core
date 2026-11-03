@@ -218,7 +218,7 @@ fn anchoring(mined: &Mined) -> shekyl_chain_rules::Trust {
             height: mined.height,
             hash: mined.hash,
         }]));
-    shekyl_chain_rules::Trust::full(shekyl_chain_rules::ReleaseAnchors::for_tests(None, pins))
+    shekyl_chain_rules::Trust::full(shekyl_chain_rules::GenesisPin::for_tests(None, pins))
 }
 
 #[tokio::test]
@@ -636,25 +636,25 @@ async fn a_plan_naming_a_recorded_block_as_its_alternative_tip_is_a_mismatch_not
 
 /// A fixture anchor table pinning each `(height, hash)`, leaked for the
 /// `'static` a release table has.
-fn release(pins: &[(BlockHeight, BlockHash)]) -> shekyl_chain_rules::ReleaseAnchors {
+fn release(pins: &[(BlockHeight, BlockHash)]) -> shekyl_chain_rules::GenesisPin {
     let anchors: Vec<shekyl_chain_rules::Anchor> = pins
         .iter()
         .map(|&(height, hash)| shekyl_chain_rules::Anchor { height, hash })
         .collect();
-    shekyl_chain_rules::ReleaseAnchors::for_tests(None, Box::leak(anchors.into_boxed_slice()))
+    shekyl_chain_rules::GenesisPin::for_tests(None, Box::leak(anchors.into_boxed_slice()))
 }
 
 /// Open the store at `path` under `anchors` the way a release opens it
-/// (`ChainStore::with_release`, CEN-E5 at open), and close it.
+/// (`ChainStore::with_genesis`, CEN-E5 at open), and close it.
 fn admit_release(
     path: &std::path::Path,
-    anchors: &shekyl_chain_rules::ReleaseAnchors,
+    anchors: &shekyl_chain_rules::GenesisPin,
 ) -> Result<(), shekyl_chain_store::store::StoreError> {
     let horizons = shekyl_chain_store::store::Horizons::under(
         &crate::scenario::RULES.in_force(BlockHeight::from_raw(0)),
     )
     .expect("the scenario's rule set is a store schedule");
-    shekyl_chain_store::store::ChainStore::with_release(
+    shekyl_chain_store::store::ChainStore::with_genesis(
         path,
         shekyl_chain_store::apply_policy::ApplyPolicy::default(),
         horizons,
@@ -680,7 +680,7 @@ async fn a_new_release_anchor_refuses_the_pending_alternative_at_offer_and_si27_
         ));
     }
     // (1) At open: a release whose anchor contradicts the recorded chain
-    // does not open the store (CEN-E5, `StoreCannot::ReleasePin`) ...
+    // does not open the store (CEN-E5, `StoreCannot::ForeignGenesis`) ...
     let contradicting = release(&[(a[1].height, BlockHash::from_bytes([0xEE; 32]))]);
     // ... and one that agrees with it does. Its anchor sits above B's fork
     // point.
@@ -695,7 +695,7 @@ async fn a_new_release_anchor_refuses_the_pending_alternative_at_offer_and_si27_
         matches!(
             refused_at_open,
             Some(Err(shekyl_chain_store::store::StoreError::Cannot(
-                shekyl_chain_store::store::StoreCannot::ReleasePin(_)
+                shekyl_chain_store::store::StoreCannot::ForeignGenesis(_)
             )))
         ),
         "{refused_at_open:?}"

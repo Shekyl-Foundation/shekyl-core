@@ -10,7 +10,7 @@
 //! A rule set says what the chain's rules *are*; a [`Trust`] says how much
 //! of the chain *this node* verifies for itself and what it takes from the
 //! binary instead. Today that is one thing — the release-carried
-//! [`ReleaseAnchors`] (CEN-E1 reads them per block). From slice 6 it is
+//! [`GenesisPin`] (CEN-E1 reads them per block). From slice 6 it is
 //! two: the anchors, and the **posture** — `Full`, or `BelowAnchor(anchor)`,
 //! under which the proof rows (4.I) are not run for a block in band 1 and
 //! their absence is recorded in coverage and in `connect`'s provenance, so
@@ -23,7 +23,7 @@
 //! binary defines rather than trusts and which sits in no band
 //! (`CHAIN_RULES_SLICE_4.md` Q3, the PDM lane's answer 2026-09-22). So
 //! `assumevalid = 0`, the first release's setting (`PDM :304`), has one
-//! constructible meaning: `Full` — [`ReleaseAnchors::current`] is `None`
+//! constructible meaning: `Full` — [`GenesisPin::current`] is `None`
 //! and there is nothing for `below_anchor` to be minted from.
 //!
 //! # Why a separate input
@@ -50,7 +50,7 @@
 //! exists to avoid (`CHAIN_RULES_CRATE.md` §13: *"the signature is one
 //! parameter today and every later caller is a retrofit"*).
 
-use crate::anchors::ReleaseAnchors;
+use crate::genesis_pin::GenesisPin;
 
 /// How much of the chain this node verifies for itself.
 ///
@@ -58,29 +58,29 @@ use crate::anchors::ReleaseAnchors;
 /// with [`Trust::full`].
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct Trust {
-    anchors: ReleaseAnchors,
+    anchors: GenesisPin,
 }
 
 impl Trust {
     /// Verify everything, with nothing pinned — not even a genesis: what a
-    /// Fakechain node always is. `Trust::full(ReleaseAnchors::EMPTY)`. A
-    /// public-network node is `Trust::full(ReleaseAnchors::for_network(_))`:
+    /// Fakechain node always is. `Trust::full(GenesisPin::NONE)`. A
+    /// public-network node is `Trust::full(GenesisPin::for_network(_))`:
     /// its genesis pinned, no anchor (band 1 empty) until the first
     /// checkpoint release.
-    pub const UNANCHORED: Self = Self::full(ReleaseAnchors::EMPTY);
+    pub const UNPINNED: Self = Self::full(GenesisPin::NONE);
 
     /// Verify everything; consult the table where a rule reads it (CEN-E1
     /// at pinned heights, CEN-E5 at open). What every node does today —
     /// `assumevalid = 0` — and what a Fakechain node does with
-    /// [`ReleaseAnchors::EMPTY`].
+    /// [`GenesisPin::NONE`].
     #[must_use]
-    pub const fn full(anchors: ReleaseAnchors) -> Self {
+    pub const fn full(anchors: GenesisPin) -> Self {
         Self { anchors }
     }
 
     /// The release-carried anchors this node trusts.
     #[must_use]
-    pub const fn anchors(&self) -> &ReleaseAnchors {
+    pub const fn genesis_pin(&self) -> &GenesisPin {
         &self.anchors
     }
 }

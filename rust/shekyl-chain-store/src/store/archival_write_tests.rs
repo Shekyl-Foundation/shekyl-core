@@ -35,7 +35,7 @@ use std::collections::BTreeSet;
 use shekyl_chain_rules::harness::{assert_refused, fixture};
 use shekyl_chain_rules::{
     form, validate, ArchivalDelta, AtHeight, Candidate, CenRow, FakechainSchedule, Fault,
-    FormAttempt, HeaderView, Locus, RecordWriteKind, ReferenceClaims, ReleaseAnchors, RuleSet,
+    FormAttempt, HeaderView, Locus, RecordWriteKind, ReferenceClaims, GenesisPin, RuleSet,
     Trust, TxSlot, Verdict,
 };
 use shekyl_types::archival::{AttestationWitness, IndexedDraw, IssuedDigest, IssuedDraw};
@@ -179,7 +179,7 @@ fn verdict_under<'b, 'id>(
         Ok(Err(refused)) => return Ok(Err(refused)),
         Err(never) => match never {},
     };
-    match validate(formed, view, rules, &Trust::UNANCHORED) {
+    match validate(formed, view, rules, &Trust::UNPINNED) {
         Ok(Ok(_)) => Ok(Ok(())),
         Ok(Err(refused)) => Ok(Err(refused)),
         Err(Fault::View(fault)) => Err(fault),
@@ -526,7 +526,7 @@ fn the_injector_opens_only_unanchored_and_writes_an_unjournaled_bit_at_the_tip()
     let p = persona(P_SLOT);
 
     let empty = store
-        .regtest_inject_serve_credit(Trust::UNANCHORED, p, shard(3), epoch(0))
+        .regtest_inject_serve_credit(Trust::UNPINNED, p, shard(3), epoch(0))
         .unwrap_err();
     assert!(
         matches!(empty, StoreError::Cannot(StoreCannot::ChainEmpty)),
@@ -538,7 +538,7 @@ fn the_injector_opens_only_unanchored_and_writes_an_unjournaled_bit_at_the_tip()
         connect_empty(&store, &mut grown, RuleSet::GENESIS);
     }
     let stranger = store
-        .regtest_inject_serve_credit(Trust::UNANCHORED, p, shard(3), epoch(0))
+        .regtest_inject_serve_credit(Trust::UNPINNED, p, shard(3), epoch(0))
         .unwrap_err();
     assert!(
         matches!(
@@ -555,7 +555,7 @@ fn the_injector_opens_only_unanchored_and_writes_an_unjournaled_bit_at_the_tip()
     );
     let tip = BlockHeight::from_raw(FIRST_SPEND_HEIGHT);
 
-    let anchored = Trust::full(ReleaseAnchors::for_tests(Some(grown.hashes[0])));
+    let anchored = Trust::full(GenesisPin::for_tests(Some(grown.hashes[0])));
     let off = store
         .regtest_inject_serve_credit(anchored, p, shard(3), epoch(0))
         .unwrap_err();
@@ -574,7 +574,7 @@ fn the_injector_opens_only_unanchored_and_writes_an_unjournaled_bit_at_the_tip()
     );
 
     let at = store
-        .regtest_inject_serve_credit(Trust::UNANCHORED, p, shard(3), epoch(0))
+        .regtest_inject_serve_credit(Trust::UNPINNED, p, shard(3), epoch(0))
         .expect("Fakechain, a tip recorded, a record held");
     assert_eq!(at, tip, "attributed to the tip");
     let snap = store.begin_read().expect("read");
@@ -617,7 +617,7 @@ fn the_injector_is_refused_when_serve_credits_are_stubbed() {
     let mut grown = Grown::new();
     connect_empty(&store, &mut grown, RuleSet::GENESIS);
     let err = store
-        .regtest_inject_serve_credit(Trust::UNANCHORED, persona(0x1f), shard(0), epoch(0))
+        .regtest_inject_serve_credit(Trust::UNPINNED, persona(0x1f), shard(0), epoch(0))
         .unwrap_err();
     assert!(
         matches!(
@@ -829,7 +829,7 @@ fn the_draw_issue_opens_only_unanchored_for_a_bonded_persona_and_adds_each_draw_
         connect_empty(&store, &mut grown, RuleSet::GENESIS);
     }
     let stranger = store
-        .regtest_issue_draws(Trust::UNANCHORED, epoch(0), &[draw(0, false)], digest)
+        .regtest_issue_draws(Trust::UNPINNED, epoch(0), &[draw(0, false)], digest)
         .unwrap_err();
     assert!(
         matches!(
@@ -844,7 +844,7 @@ fn the_draw_issue_opens_only_unanchored_for_a_bonded_persona_and_adds_each_draw_
         &[Listed::Join { slot: P_SLOT }],
         RuleSet::GENESIS,
     );
-    let anchored = Trust::full(ReleaseAnchors::for_tests(Some(grown.hashes[0])));
+    let anchored = Trust::full(GenesisPin::for_tests(Some(grown.hashes[0])));
     let off = store
         .regtest_issue_draws(anchored, epoch(0), &[draw(0, false)], digest)
         .unwrap_err();
@@ -868,7 +868,7 @@ fn the_draw_issue_opens_only_unanchored_for_a_bonded_persona_and_adds_each_draw_
 
     store
         .regtest_issue_draws(
-            Trust::UNANCHORED,
+            Trust::UNPINNED,
             epoch(0),
             &[draw(1, true), draw(0, false)],
             digest,
@@ -889,7 +889,7 @@ fn the_draw_issue_opens_only_unanchored_for_a_bonded_persona_and_adds_each_draw_
     // writes nothing: not the fresh draw listed before it, not the digest.
     let again = store
         .regtest_issue_draws(
-            Trust::UNANCHORED,
+            Trust::UNPINNED,
             epoch(0),
             &[draw(2, false), draw(1, false)],
             IssuedDigest::ZERO,

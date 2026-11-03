@@ -34,7 +34,7 @@
 //! to owe later.
 
 use crate::apply_policy::ArchivalFamily;
-use shekyl_chain_rules::{AnchorConflict, RuleSet};
+use shekyl_chain_rules::{GenesisConflict, RuleSet};
 use shekyl_types::{BlockHash, BlockHeight, PCanonicalId, TxHash};
 
 use crate::codec::{SchemaVersion, SettlementEpochBlocks};
@@ -320,7 +320,7 @@ pub enum StoreCannot {
     /// The file is coherent; this session is the wrong one for it — the
     /// same class as [`Self::SettlementEpochMismatch`]. The payload is the
     /// rules crate's conflict, not a second shape of it.
-    ReleasePin(AnchorConflict),
+    ForeignGenesis(GenesisConflict),
     /// The session's undo-log retention is not strictly inside its
     /// settlement epoch — zero, or `≥ SEB` (DRS-E1 S-PRUNE, `DRS_E1_SPRUNE.md`
     /// §3, §12). `tip − retention` has to sit above the body horizon, which
@@ -644,7 +644,7 @@ impl core::fmt::Display for StoreCannot {
                  session runs {session}: persisted join epochs and serve-credit windows would be \
                  silently mislabeled; reopen under the pinned schedule or use a fresh data directory"
             ),
-            Self::ReleasePin(conflict) => match conflict.recorded {
+            Self::ForeignGenesis(conflict) => match conflict.recorded {
                 Some(recorded) => write!(
                     f,
                     "block {height} is {recorded} but this binary pins {expected}; \

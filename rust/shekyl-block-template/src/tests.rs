@@ -175,7 +175,7 @@ fn admitted(chain: &MockChain, template: Template) -> Vec<CenRow> {
             formed,
             &view,
             &RuleSet::GENESIS,
-            &Trust::UNANCHORED,
+            &Trust::UNPINNED,
         ))
         .unwrap_or_else(|refused| panic!("the template was refused by a view rule: {refused}"));
         CenRow::ALL
@@ -596,7 +596,7 @@ fn the_builders_c1_refusal_is_the_validators() {
                 formed,
                 &view,
                 &RuleSet::GENESIS,
-                &Trust::UNANCHORED,
+                &Trust::UNPINNED,
             )),
             CenRow::C1,
             Locus::Block,

@@ -91,7 +91,7 @@ fn j4_refuses_the_same_credit_listed_before_the_fold_reaches_it() {
                 formed,
                 &view,
                 &RuleSet::GENESIS,
-                &Trust::UNANCHORED,
+                &Trust::UNPINNED,
             )),
             CenRow::J4,
             Locus::Input {
@@ -389,7 +389,7 @@ fn j14_refuses_the_same_under_bonded_join_listed() {
                 formed,
                 &view,
                 &RuleSet::GENESIS,
-                &Trust::UNANCHORED,
+                &Trust::UNPINNED,
             )),
             CenRow::J14,
             Locus::Input {
@@ -421,7 +421,7 @@ fn j13_refuses_the_same_mis_keyed_join_listed() {
                 formed,
                 &view,
                 &RuleSet::GENESIS,
-                &Trust::UNANCHORED,
+                &Trust::UNPINNED,
             )),
             CenRow::J13,
             Locus::Input {
@@ -651,7 +651,7 @@ fn j15_refuses_the_same_unpriced_join_listed() {
                 formed,
                 &view,
                 &RuleSet::GENESIS,
-                &Trust::UNANCHORED,
+                &Trust::UNPINNED,
             )),
             CenRow::J15,
             Locus::Input {

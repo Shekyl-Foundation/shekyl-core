@@ -145,7 +145,7 @@ fn the_cheap_tier_evaluates_the_header_ladder_and_the_alt_arms_and_nothing_else(
             formed_on(&chain, input),
             &forked(&view, fork_at_tip(&chain)),
             &RuleSet::GENESIS,
-            &Trust::UNANCHORED,
+            &Trust::UNPINNED,
         ))
         .expect("the fixture satisfies every row of the tier");
 
@@ -192,7 +192,7 @@ fn a_view_whose_tip_is_not_the_candidates_parent_is_refused_on_the_parent_link()
                 formed_on(&formed_on_chain, input.clone()),
                 &forked(&view, fork_at_tip(&shorter)),
                 &RuleSet::GENESIS,
-                &Trust::UNANCHORED,
+                &Trust::UNPINNED,
             )),
             CenRow::A2,
             Locus::Block,
@@ -214,14 +214,14 @@ fn the_alt_tier_derives_the_facts_validate_derives_over_the_same_chain() {
             formed_on(&chain, input.clone()),
             &view,
             &RuleSet::GENESIS,
-            &Trust::UNANCHORED,
+            &Trust::UNPINNED,
         ))
         .expect("well-formed on the main chain");
         let alt = judged(alt_against(
             formed_on(&chain, input.clone()),
             &forked(&view, fork_at_tip(&chain)),
             &RuleSet::GENESIS,
-            &Trust::UNANCHORED,
+            &Trust::UNPINNED,
         ))
         .expect("well-formed on the alt tier");
 
@@ -268,7 +268,7 @@ fn the_alt_target_follows_the_window_it_is_fed() {
             formed_on(&recorded, candidate_on(&recorded, Vec::new())),
             &forked(&view, fork_at_tip(&recorded)),
             &RuleSet::GENESIS,
-            &Trust::UNANCHORED,
+            &Trust::UNPINNED,
         ))
         .expect("well-formed")
         .cumulative_difficulty()
@@ -278,7 +278,7 @@ fn the_alt_target_follows_the_window_it_is_fed() {
             formed_on(&stitched, candidate_on(&stitched, Vec::new())),
             &forked(&view, fork_at_tip(&stitched)),
             &RuleSet::GENESIS,
-            &Trust::UNANCHORED,
+            &Trust::UNPINNED,
         ))
         .expect("well-formed")
         .cumulative_difficulty()
@@ -305,7 +305,7 @@ fn a_height_zero_claim_is_refused_before_anything_is_read() {
                 formed_on(&empty, input),
                 &forked(&view, deep),
                 &RuleSet::GENESIS,
-                &Trust::UNANCHORED,
+                &Trust::UNPINNED,
             )),
             CenRow::K1b,
             Locus::Block,
@@ -342,7 +342,7 @@ fn a_fork_past_the_reorg_cap_is_not_a_consensus_refusal() {
             formed,
             &forked(&view, fork),
             &capped,
-            &Trust::UNANCHORED,
+            &Trust::UNPINNED,
         ))
         .expect("past the cap is not a verdict");
     });
@@ -378,7 +378,7 @@ fn a_target_claim_the_alt_chain_does_not_derive_is_stale_not_a_verdict() {
             formed,
             &forked(&view, fork_at_tip(&chain)),
             &RuleSet::GENESIS,
-            &Trust::UNANCHORED,
+            &Trust::UNPINNED,
         ) {
             Err(Fault::Stale(Stale::Target {
                 claimed, expected, ..
@@ -425,7 +425,7 @@ fn a_rule_set_the_token_was_not_formed_under_is_stale_not_a_verdict() {
             formed_under_other,
             &forked(&view, fork_at_tip(&chain)),
             &distinct,
-            &Trust::UNANCHORED,
+            &Trust::UNPINNED,
         ) {
             Err(Fault::Stale(Stale::RuleSet {
                 formed_under,

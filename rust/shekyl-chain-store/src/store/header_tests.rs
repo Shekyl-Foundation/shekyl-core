@@ -767,7 +767,7 @@ fn a_creation_cut_off_before_its_seal_is_finished_by_the_next_open() {
         &path,
         ApplyPolicy::Full,
         production_horizons(),
-        &ReleaseAnchors::EMPTY,
+        &GenesisPin::NONE,
     )
     .expect("the creation is finished");
     assert_eq!(cut, Some(CutShort::Unsealed));

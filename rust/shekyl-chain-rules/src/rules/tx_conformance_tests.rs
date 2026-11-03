@@ -712,7 +712,7 @@ fn judge_on(chain: &MockChain, candidate: Candidate) -> Verdict<()> {
             formed,
             &view,
             &RuleSet::GENESIS,
-            &Trust::UNANCHORED,
+            &Trust::UNPINNED,
         ))
         .map(|_valid: ChainValid<_>| ())
     })

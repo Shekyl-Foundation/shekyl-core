@@ -56,7 +56,7 @@ fn judge_at(shape: TxShape, slot: TxSlot, tx: &Transaction) {
             formed,
             &view,
             &RuleSet::GENESIS,
-            &Trust::UNANCHORED,
+            &Trust::UNPINNED,
         ))
         .unwrap_or_else(|refused| panic!("{}", refused_message(shape, slot, "validate", &refused)));
     });
@@ -127,7 +127,7 @@ fn the_coinbase_fixture_is_valid_at_genesis() {
             formed(candidate(Vec::new())),
             &view,
             &RuleSet::GENESIS,
-            &Trust::UNANCHORED,
+            &Trust::UNPINNED,
         ))
         .expect("the genesis candidate");
     });

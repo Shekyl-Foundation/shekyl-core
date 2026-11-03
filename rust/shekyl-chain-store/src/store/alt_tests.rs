@@ -130,7 +130,7 @@ pub(super) fn admitted<'s>(
         .expect("the fixture's parent links to the recorded chain");
     let view = AltView::new(snap, chain);
     let formed = formed(&view, candidate).expect("the stitched view answers the seed");
-    match alt_against(formed, &view, &RuleSet::GENESIS, &Trust::UNANCHORED) {
+    match alt_against(formed, &view, &RuleSet::GENESIS, &Trust::UNPINNED) {
         Ok(Ok(valid)) => valid,
         Ok(Err(refused)) => panic!("the fixture satisfies every row of the tier: {refused}"),
         Err(fault) => panic!("the stitched view answers: {fault}"),

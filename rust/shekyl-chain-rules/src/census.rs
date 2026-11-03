@@ -69,7 +69,7 @@ pub enum RowStatus {
     /// enforces it at a site other than the per-block stages, so no
     /// per-block coverage could ever contain it (`CHAIN_RULES_SLICE_3.md`
     /// Q4). The first is CEN-E5, run once by the writer at open
-    /// (`ReleaseAnchors::conflict_with`).
+    /// (`GenesisPin::conflict_with`).
     ///
     /// The registry entry carries the citation — `enforced_at(path, "test")`
     /// — and that is the only copy. The path is compile-pinned; the gate
@@ -392,7 +392,7 @@ census_rows! {
         D7 implemented(crate::rules::difficulty::D7),
         // 4.E The genesis pin (`anchors.rs`); no coded checkpoints (S1,
         // design review 2026-11-03).
-        E1 implemented(crate::rules::anchors::E1),
+        E1 implemented(crate::rules::genesis::E1),
         // E2 is bucket 3 (REJECTED, S1 2026-11-03): no coded checkpoints,
         // so no anchor floor; the reorg cap bound only when anchored, and
         // `D_max` stays a local limit of the switch (`PopBeyondReorgCap`).
@@ -400,7 +400,7 @@ census_rows! {
         // CEN-F12 is the precedent.
         // E5 is enforced once, by the writer at open — not per block
         // (slice 3 Q4 (a)); the test named is the refusal fixture.
-        E5 enforced_at(crate::rules::anchors::E5, "a_foreign_genesis_is_the_conflict_at_height_zero"),
+        E5 enforced_at(crate::rules::genesis::E5, "a_foreign_genesis_is_the_conflict_at_height_zero"),
         // 4.F Miner transaction (structure and emission)
         F1 implemented(crate::rules::miner::F1),
         F2 by_construction(shekyl_wire::transaction::TX_VERSION, "f2_the_wire_admits_one_transaction_version"),
