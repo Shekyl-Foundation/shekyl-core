@@ -22,7 +22,9 @@ use shekyl_levin::{ingress_payload_cap, BucketHead, HEADER_SIZE};
 use shekyl_peer_policy::InboundCeiling;
 use shekyl_seam::{admit, drive_inbound, Channel, Dial, Endpoint, Hub};
 use shekyl_timing_engine::Tick;
-use shekyl_transport_layer::{CloseCause, SocketId, Sockets};
+use shekyl_transport_layer::{
+    ConnectorId, DialEnd, DialFailure, Reached, Retry, SocketId, Sockets, StreamEnd,
+};
 
 /// The far end of one channel.
 pub trait SyncPeer: Send {
@@ -86,8 +88,11 @@ impl Dial for PeerDial {
         endpoint: &Endpoint,
         ceiling: InboundCeiling,
         now: Tick,
-    ) -> Result<Channel, CloseCause> {
-        let open = admit(&self.sockets, endpoint, now, ceiling)?;
+    ) -> Result<Channel, DialEnd> {
+        // A refusal here is this node's own admission, before any I/O.
+        let open = admit(&self.sockets, endpoint, now, ceiling).map_err(|cause| {
+            DialEnd::new(DialFailure::local(Retry::Again, Reached::NoStream), cause)
+        })?;
         let id = open.id();
         let ends = StreamEnds::open(self.send_cap);
         let writer_queue = ends.writer_queue.clone();
@@ -124,6 +129,15 @@ impl Dial for PeerDial {
             endpoint: *endpoint,
             gap: None,
         })
+    }
+
+    /// Each connector's own table: a scripted peer stands in for that
+    /// connector's far end, and its ends mean what the connector's do.
+    fn stamp_stream_end(&self, connector: ConnectorId, end: StreamEnd) -> DialFailure {
+        match connector {
+            ConnectorId::Clearnet => shekyl_clearnet::stamp_stream_end(end),
+            ConnectorId::Tor => shekyl_tor::stamp_stream_end(end),
+        }
     }
 
     fn inject(&self, id: SocketId, frame: Vec<u8>) -> bool {

@@ -632,3 +632,131 @@ fn an_interrupted_recreate_leaves_a_pool_that_opens() {
     assert!(!discard(&path).exists());
     drop(std::fs::remove_file(&path));
 }
+
+/// What a power loss between the engine's first commit and the seal leaves
+/// behind: a valid redb file with no table at all, which PB-S2's first
+/// replay (2026-11-01) found refused as foreign. The next open seals it in
+/// place, and the one after opens it. Red edit: drop the
+/// `creation_interrupted` branch from `open_or_create`, and the open
+/// refuses with `PoolFileForeign`.
+#[test]
+fn a_creation_cut_off_before_its_seal_is_finished_by_the_next_open() {
+    let path = tmp("interrupted-create");
+    {
+        let file = std::fs::OpenOptions::new()
+            .read(true)
+            .write(true)
+            .create_new(true)
+            .open(&path)
+            .unwrap();
+        drop(redb::Builder::new().create_file(file).unwrap());
+    }
+    let (store, how) = PoolStore::create(&path).expect("the creation is finished");
+    assert_eq!(how, PoolOpen::Finished);
+    drop(store);
+    let (_store, how) = PoolStore::create(&path).expect("reopens");
+    assert_eq!(how, PoolOpen::Opened);
+    drop(std::fs::remove_file(&path));
+}
+
+/// The two shapes a power loss leaves before the engine has finished
+/// initializing the pool file: empty, and the header the engine flushes
+/// before its magic. Each is moved aside, never deleted, and a fresh pool
+/// created at the path (`crate::creation`); the next open is an ordinary
+/// one. Red edit: drop the `set_aside_unfinished_init` arm from
+/// `open_or_create`, and both are refused as `PoolFileForeign`.
+#[test]
+fn a_file_the_engine_never_finished_initializing_is_created_by_the_next_open() {
+    for (label, bytes) in [
+        ("empty-at-path", Vec::new()),
+        ("magic-unwritten", crate::creation::pre_magic_image()),
+    ] {
+        let path = tmp(label);
+        std::fs::write(&path, &bytes).unwrap();
+        let (store, how) =
+            PoolStore::create(&path).unwrap_or_else(|e| panic!("{label}: created: {e:?}"));
+        let PoolOpen::SetAside { to } = how else {
+            panic!("{label}: {how:?}");
+        };
+        assert_eq!(std::fs::read(&to).unwrap(), bytes, "{label}: kept aside");
+        drop(store);
+        let (_store, how) = PoolStore::create(&path).unwrap();
+        assert_eq!(how, PoolOpen::Opened, "{label}");
+        drop(std::fs::remove_file(&path));
+        drop(std::fs::remove_file(&to));
+    }
+}
+
+/// Two opens of one empty pool file finish it once. The creation lock
+/// holds the second until the first's store exists, so the second finds
+/// the file already open, and a later open is ordinary. Exactly one aside
+/// file. Red edit: drop the creation lock from `open_or_create`.
+#[test]
+fn two_openers_of_one_unfinished_pool_finish_it_once() {
+    use std::sync::{Arc, Barrier};
+    use std::thread;
+
+    let path = tmp("two-openers");
+    std::fs::write(&path, b"").unwrap();
+    let go = Arc::new(Barrier::new(2));
+    let spawn = |path: std::path::PathBuf, go: Arc<Barrier>| {
+        thread::spawn(move || {
+            go.wait();
+            PoolStore::create(&path)
+        })
+    };
+    let left = spawn(path.clone(), Arc::clone(&go));
+    let right = spawn(path.clone(), go);
+    let results = [left.join().unwrap(), right.join().unwrap()];
+    let mut finished = 0;
+    let mut busy = 0;
+    let mut aside = None;
+    for result in results {
+        match result {
+            Ok((store, PoolOpen::SetAside { to })) => {
+                finished += 1;
+                aside = Some(to);
+                drop(store);
+            }
+            Err(StoreError::Engine(EngineError::Open(
+                redb::DatabaseError::DatabaseAlreadyOpen,
+            ))) => busy += 1,
+            other => panic!("unexpected: {other:?}"),
+        }
+    }
+    assert_eq!((finished, busy), (1, 1));
+    let to = aside.unwrap();
+    assert_eq!(std::fs::read(&to).unwrap(), b"");
+    let (_store, how) = PoolStore::create(&path).unwrap();
+    assert_eq!(how, PoolOpen::Opened);
+    drop(std::fs::remove_file(&path));
+    drop(std::fs::remove_file(&to));
+}
+
+/// A zero-filled file of the initialization length, and a sealed pool
+/// whose magic was cleared, stay foreign and byte for byte. Red edit:
+/// accept a clear magic slot at the initialization length.
+#[test]
+fn a_file_that_only_looks_unfinished_is_refused_untouched() {
+    let zeroed = tmp("zeroed-init");
+    let zeros = vec![0u8; usize::try_from(crate::creation::ENGINE_INIT_LEN).unwrap()];
+    std::fs::write(&zeroed, &zeros).unwrap();
+
+    let cleared = tmp("magic-cleared");
+    drop(PoolStore::create(&cleared).unwrap().0);
+    let mut punched = std::fs::read(&cleared).unwrap();
+    assert_eq!(punched.len() as u64, crate::creation::ENGINE_INIT_LEN);
+    punched[..9].fill(0);
+    std::fs::write(&cleared, &punched).unwrap();
+
+    for (path, bytes) in [(&zeroed, zeros.as_slice()), (&cleared, punched.as_slice())] {
+        let err = PoolStore::create(path).expect_err("not an unfinished creation");
+        assert!(
+            matches!(err, StoreError::Cannot(StoreCannot::PoolFileForeign)),
+            "{}: {err:?}",
+            path.display()
+        );
+        assert_eq!(std::fs::read(path).unwrap(), bytes, "{}", path.display());
+        drop(std::fs::remove_file(path));
+    }
+}

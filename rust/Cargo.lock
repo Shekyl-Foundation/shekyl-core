@@ -4378,6 +4378,7 @@ name = "shekyl-dialer"
 version = "3.1.0"
 dependencies = [
  "shekyl-capped-stream",
+ "shekyl-clearnet",
  "shekyl-dialer",
  "shekyl-draw-rng",
  "shekyl-levin",
@@ -5062,6 +5063,7 @@ dependencies = [
  "shekyl-runtime",
  "shekyl-seam",
  "shekyl-timing-engine",
+ "shekyl-tor",
  "shekyl-transport-layer",
  "shekyl-types",
  "shekyl-wire",
@@ -5324,9 +5326,11 @@ name = "shekyl-seam"
 version = "3.1.0"
 dependencies = [
  "shekyl-capped-stream",
+ "shekyl-clearnet",
  "shekyl-onion-v3",
  "shekyl-peer-policy",
  "shekyl-timing-engine",
+ "shekyl-tor",
  "shekyl-transport-layer",
  "tokio",
  "tracing",

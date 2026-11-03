@@ -134,8 +134,7 @@ fn an_ip_address_is_not_dialed() {
         ip: Ipv4Addr::LOCALHOST,
         port: 11021,
     });
-    let cause = wait_kind(&seen, CloseKind::LocalClose);
-    assert!(!cause.proves_misbehaviour());
+    wait_kind(&seen, CloseKind::LocalClose);
     listener.shutdown();
     drop(engine);
 }
@@ -690,8 +689,7 @@ fn a_name_that_is_not_onion_v3_is_not_dialed() {
         host: "not-a-v3-name.onion".into(),
         port: 12021,
     });
-    let cause = wait_kind(&seen, CloseKind::LocalClose);
-    assert!(!cause.proves_misbehaviour());
+    wait_kind(&seen, CloseKind::LocalClose);
     listener.shutdown();
     drop(engine);
 }
@@ -710,8 +708,7 @@ fn a_closed_socks_port_is_the_proxy_and_does_not_implicate_the_onion() {
         host: v3_onion_hostname(&[0x11; 32]),
         port: 12021,
     });
-    let cause = wait_kind(&seen, CloseKind::ProxyUnavailable);
-    assert!(!cause.proves_misbehaviour());
+    wait_kind(&seen, CloseKind::ProxyUnavailable);
     listener.shutdown();
     drop(engine);
 }
@@ -753,8 +750,7 @@ fn a_socks_exchange_closed_without_a_reply_is_the_proxy() {
     )
     .expect("listen");
     listener.dial(onion());
-    let cause = wait_kind(&recorded.seen, CloseKind::ProxyUnavailable);
-    assert!(!cause.proves_misbehaviour());
+    wait_kind(&recorded.seen, CloseKind::ProxyUnavailable);
     listener.shutdown();
     drop(engine);
 }

@@ -51,9 +51,9 @@
 //!   (`SO-D11`).
 //! - **A18** [`block_draws`] — what the draw's count rule recorded for one
 //!   block (`SO-D12`). `None` until a block writes it.
-//! - **A23** [`support_block_count`] — how many support draws that block
-//!   issued (`ARCHIVAL_SUPPORT_DRAW.md` §5). `None` until a block writes
-//!   it. [`SupportCount::NONE`] is a block that issued none.
+//! - **A23** [`support_block_seats`] — the complete trees that block
+//!   seated (`ARCHIVAL_SUPPORT_DRAW.md` §5; `SO-D12` S1). `None` until a
+//!   block writes it. [`SupportSeats::EMPTY`] is a block that seated nobody.
 //! - **A19** [`drawable_digest`] — the digest of an epoch's drawable set as
 //!   written at its open (`SO-D10g`). `None` is no recorded set; an
 //!   all-zero digest is a digest.
@@ -132,8 +132,8 @@ use shekyl_store_codec::{BlobKind, CodecError};
 use shekyl_types::archival::SettlementOutcome;
 pub use shekyl_types::archival::{
     BlockDraws, CompleteTreeSet, DrawableDigest, IndexedDraw, IssuedDigest, IssuedDraw,
-    LoggedSlash, PassCount, ReleasedRecord, ServedShard, SettlementRow, SupportCount,
-    SupportIssued,
+    LoggedSlash, PassCount, ReleasedRecord, ServedShard, SettlementRow, SupportIssued,
+    SupportSeats,
 };
 use shekyl_types::{BlockHeight, PCanonicalId, SettlementEpoch, ShardId};
 use shekyl_units::AtomicUnits;
@@ -784,16 +784,16 @@ pub(super) fn block_draws<T: ReadTables>(
     chain_reads::cell(txn, ARCHIVAL_BLOCK_DRAWS, height.to_raw(), BLOCK_DRAWS)
 }
 
-/// **A23.** `archival_support_block[height]` — how many support draws the
-/// block issued. `None` is a block no row was written for.
-/// [`SupportCount::NONE`] is a block that issued none. A row that does not
+/// **A23.** `archival_support_block[height]` — the complete trees the
+/// block seated, in persona order. `None` is a block no row was written
+/// for. [`SupportSeats::EMPTY`] is a block that seated nobody. A row that does not
 /// decode is SI-7. A height below `floor` is SI-34, the same window as
 /// [`block_draws`].
-pub(super) fn support_block_count<T: ReadTables>(
+pub(super) fn support_block_seats<T: ReadTables>(
     txn: &T,
     height: BlockHeight,
     floor: BlockDrawsFloor,
-) -> Result<Option<SupportCount>, ReadFault> {
+) -> Result<Option<SupportSeats>, ReadFault> {
     above_draws_floor(height, floor)?;
     chain_reads::cell(txn, ARCHIVAL_SUPPORT_BLOCK, height.to_raw(), SUPPORT_BLOCK)
 }

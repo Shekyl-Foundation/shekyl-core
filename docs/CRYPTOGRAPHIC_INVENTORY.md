@@ -213,7 +213,11 @@ verifies. The fourth is `shekyl/archival-drawable-epoch-v1`, the digest of
 an epoch's drawable set that the settlement writer writes at the epoch's
 open and checks at its settlement (`ARCHIVAL_SERVE_CREDIT_SPEC.md` §9.5
 check 2; `SO-D12` increment 2). It is a local store check, never read by a
-consensus rule.
+consensus rule. The 2026-11-01 refresh replaces it with
+`shekyl/archival-drawable-epoch-v2`, one function and one site: the
+digest now also covers the archive width and the support stream's
+members with their receipt keys (`SO-D12q`), so the encoding changed and
+the version moved with it (rule 30).
 
 The 2026-10-18 refresh removes one mechanism-2 info label,
 `shekyl-archival-p-msg-sign-slh-dsa-192s-v1`: a persona has no address, so

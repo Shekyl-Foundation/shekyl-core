@@ -1372,9 +1372,13 @@ rule for the prunable part of a carrier (the fee-and-weight round's).
 | `SO-D12j` | **Deferred** to the design text of the increment that deletes the table (the cutover, §16.3 item 4) |
 | `SO-D12k` | **The count writer is increment 3** (2026-10-16), its own change after increment 2. The cutover is increment 4. *(Relayed as CW-1; `CW-` is the credit-wire family, `IMPLEMENTATION_INDEX.md`.)* |
 | `SO-D12l` | **`BlockDraws` gains `issued_short: u32`** (2026-10-16), the shortfall reduction a block's admissions cause. Lands with increment 3. *(Relayed as CW-2.)* |
-| `SO-D12m` | **The `D` digest covers the pairs and each persona's receipt key** (2026-10-17): `cSHAKE256_32("shekyl/archival-drawable-epoch-v1", E_le8 ‖ n_pairs_le8 ‖ (p_canonical_id ‖ shard_le8)* ‖ n_personas_le8 ‖ (p_canonical_id ‖ receipt_sign_pk)*)`, pairs in canonical order, personas ascending (`ARCHIVAL_SERVE_CREDIT_SPEC.md` §9.5 check 2) |
+| `SO-D12m` | **The `D` digest covers the pairs and each persona's receipt key** (2026-10-17), **and the archive width and the support members** (`SO-D12q`, 2026-11-01): `cSHAKE256_32("shekyl/archival-drawable-epoch-v2", E_le8 ‖ n_pairs_le8 ‖ (p_canonical_id ‖ shard_le8)* ‖ n_personas_le8 ‖ (p_canonical_id ‖ receipt_sign_pk)* ‖ roster_tag ‖ [archive_width_le8 ‖ n_members_le8 ‖ (p_canonical_id ‖ receipt_sign_pk)*])`, the bracket present only under tag `0x01` (`SO-D12t`), pairs in canonical order, personas and members ascending (`ARCHIVAL_SERVE_CREDIT_SPEC.md` §9.5 check 2) |
 | `SO-D12n` | **`DrawableSet`'s tip read is replaced** by the builder of increment 2 (2026-10-17): no second drawable-set type remains, and the pair emitter stays inside the builder |
 | `SO-D12p` | **The bundle queue and the body store land in 4c, in the chain store** (Rick, 2026-10-25). No sink trait with stand-in implementations: the producer writes to the real queue. A memory outbox nothing could consume before 4b, and a test sink proving a path the product does not have, were refused. The queue is pool-like state fed only by this daemon's own bundles until 4b; rule 23's falsifier guards the connect path, which the queue is not |
+| `SO-D12q` | **One epoch snapshot for both streams** (Rick, 2026-11-01; item 3's S1, option 1): the value filed at `h_open(E)` holds `D` with its receipt keys and the support roster (the archive width and the members in persona order with theirs), under one digest both derivations produce (`SO-D12m`, now `-v2`). A member is a complete tree of pin 1 at `h_open(E)`. Each block's support row holds its seats; admission reads a past roster from that row with keys from the snapshot, and never rebuilds (`ARCHIVAL_SUPPORT_DRAW.md` §13.1) |
+| `SO-D12r` | **The support carry stays inside its epoch** (Rick, 2026-11-01; S2, option 1): an unfiled seat re-seats at the next usable block of the same epoch where the tree has no scheduled seat; what is still carried at the end of the usable span lapses as a non-observation; the cross-epoch sentence of `ARCHIVAL_SUPPORT_DRAW.md` §2 is struck. The carry is staged and joins the connect path at the switch, with admission (§13.2) |
+| `SO-D12s` | **A complete tree's J16 anchor is its last passed support draw** (Rick, 2026-11-01; S3, option 1), read from `archival_support_issued`'s pass bit; J16's two checks are unchanged. Lands at the switch with §16.3's J16 change, since the issued journal is written only by admission (§13.3) |
+| `SO-D12t` | **No shards, no support stream** (Rick, 2026-11-02, ratifying #1255's width-zero call): no support draw is made while the archive has no closed shard. By type, not by checks: the snapshot holds `Option<SupportRoster>` whose width is a `NonZeroU64`, present only when the archive at `h_open(E)` has a shard; the seats, the view's width answer and `select_support_shard` take that width. `emit`'s `NonZeroU64::new(final_count)` is the one place it is decided (`ARCHIVAL_SUPPORT_DRAW.md` §13.4) |
 | `SO-D12o` | **The draw rows retire in increment 3** (Q-D, option 1, Rick, 2026-10-21). At the boundary of `B` the store deletes `archival_block_draws` strictly below `(B − 1)·SEB + 1 − W₂`, or below `(B − 1)·SEB` when the schedule has no window. `BlockDrawsFloor` computes that height beside the Release journal's floor; the store compares and does not source it, and a read below it is SI-34. `CHALLENGE_RESPONSE_BLOCKS` is at least 1 and below `SETTLEMENT_EPOCH_BLOCKS` wherever a window exists, so the floor sits below the undo floor. Admission, increment 4, reads `h_incl − W₂ ≤ h < h_incl` and is not clipped at `h_open` |
 
 What `SO-D12i` touches on the live chain, checked before it was ruled, is §16.7.
@@ -1779,9 +1783,12 @@ keyed by the block's hash).
 **The draws** come from the connector, which holds the drawable memo:
 `draw_targets` derives them with `select_pairs` and `support_seats`, the
 functions `verify_bundle` runs, so the pair the producer reads is the pair
-the verifier derives. **Support draws** are derived and read the same way;
-on the store view the support schedule is not on the connect path yet, so
-every block's support count is zero and the store's roster is not asked.
+the verifier derives. **Support draws** are derived and read the same way.
+The support schedule is on the connect path (`SO-D12` 4b §5.1 item 3,
+`ARCHIVAL_SUPPORT_DRAW.md` §13): each block's row holds the trees its
+epoch's schedule seats, and the store's roster answers from that row with
+each seat's key and the archive width from the epoch snapshot. Only
+scheduled seats until the switch; the carry joins with admission.
 
 **Assembly** is the retention crate's `assemble_bundle`, with the witness
 signature through a signing closure; the rules fixture assembles through

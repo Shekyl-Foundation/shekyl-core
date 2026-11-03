@@ -14,6 +14,8 @@
 
 #[path = "support/log_capture.rs"]
 mod log_capture;
+#[path = "support/tables.rs"]
+mod tables;
 
 use log_capture::log_text;
 use std::collections::VecDeque;
@@ -32,14 +34,12 @@ use shekyl_levin::{
 };
 use shekyl_onion_v3::v3_onion_hostname;
 use shekyl_peer_policy::InboundCeiling;
-use shekyl_peerlist::{
-    CloseCause, CloseKind, ConnectorId, Direction, NetworkAddress, RefusedSet, Tick,
-};
+use shekyl_peerlist::{ConnectorId, Direction, NetworkAddress, RefusedSet, Tick};
 use shekyl_seam::{
     Channel, Dial, Endpoint, Hub, Loopback, Post, Route, RoutePublish, SocketId, SyncPayload,
 };
 use shekyl_timing_engine::{Clock, ManualClock};
-use shekyl_transport_layer::Sockets;
+use shekyl_transport_layer::{DialEnd, DialFailure, Sockets, StreamEnd};
 use tokio::sync::oneshot;
 
 const NETWORK: [u8; 16] = [7; 16];
@@ -114,7 +114,7 @@ fn dialer_for(hub: &Hub) -> Arc<Dialer> {
 fn rig() -> Rig {
     let posts = Arc::new(Mutex::new(VecDeque::new()));
     let hub = hub_with_arming(&posts);
-    hub.install_loopback(SEND_CAP);
+    hub.install_loopback(SEND_CAP, tables::tables);
     let dialer = dialer_for(&hub);
     Rig { hub, posts, dialer }
 }
@@ -330,7 +330,7 @@ fn a_session_refused_close_drops_the_kept_row_and_leaves_white() {
     // The payload owner closes with SessionRefused. That close is the
     // lists' PayloadRefused. White was written when the dial returned.
     rig.dialer
-        .session_closed(id, CloseCause::new(CloseKind::SessionRefused), &mut rng);
+        .session_closed(id, tables::session_refused(), &mut rng);
     let shared = rig.dialer.shared();
     assert!(
         shared.lists.is_white(&peer(1)),
@@ -466,7 +466,7 @@ fn a_close_between_adopt_and_the_kept_row_is_not_kept() {
                 if let Some(dialer) = slot_post.lock().expect("slot").clone() {
                     dialer.session_closed(
                         *id,
-                        CloseCause::new(CloseKind::PeerClosed),
+                        tables::peer_closed(ConnectorId::Clearnet),
                         &mut SplitMix64::new(13),
                     );
                 }
@@ -475,7 +475,7 @@ fn a_close_between_adopt_and_the_kept_row_is_not_kept() {
         }),
         Arc::new(ManualClock::new(Tick::new(1))),
     );
-    hub.install_loopback(SEND_CAP);
+    hub.install_loopback(SEND_CAP, tables::tables);
     let dialer = dialer_for(&hub);
     *slot.lock().expect("slot") = Some(Arc::clone(&dialer));
     let mut rng = SplitMix64::new(14);
@@ -508,13 +508,13 @@ struct GapDial {
     answers: Mutex<VecDeque<Vec<u8>>>,
     /// Causes the next connects fail with, in order, before any channel
     /// opens: the connector refusing the dial, as a SOCKS reply would.
-    refusals: Mutex<VecDeque<CloseCause>>,
+    refusals: Mutex<VecDeque<DialEnd>>,
 }
 
 impl GapDial {
     fn new() -> Self {
         Self {
-            inner: Loopback::new(Sockets::new(), SEND_CAP),
+            inner: Loopback::new(Sockets::new(), SEND_CAP, tables::tables),
             receivers: Mutex::new(Vec::new()),
             driven: Mutex::new(Vec::new()),
             retired: Mutex::new(Vec::new()),
@@ -525,7 +525,7 @@ impl GapDial {
 
     /// Fail the next connects with `refusals`, in order, then answer each
     /// later channel from `answers`.
-    fn refusing_then_answering(refusals: Vec<CloseCause>, answers: Vec<Vec<u8>>) -> Self {
+    fn refusing_then_answering(refusals: Vec<DialEnd>, answers: Vec<Vec<u8>>) -> Self {
         let dial = Self::answering(answers);
         *dial.refusals.lock().expect("refusals") = refusals.into();
         dial
@@ -548,7 +548,7 @@ impl Dial for GapDial {
         endpoint: &Endpoint,
         ceiling: InboundCeiling,
         now: Tick,
-    ) -> Result<Channel, CloseCause> {
+    ) -> Result<Channel, DialEnd> {
         if let Some(cause) = self.refusals.lock().expect("refusals").pop_front() {
             return Err(cause);
         }
@@ -563,6 +563,10 @@ impl Dial for GapDial {
             .expect("receivers")
             .push((channel.open.id(), receiver));
         Ok(channel)
+    }
+
+    fn stamp_stream_end(&self, connector: ConnectorId, end: StreamEnd) -> DialFailure {
+        self.inner.stamp_stream_end(connector, end)
     }
 
     fn inject(&self, id: SocketId, frame: Vec<u8>) -> bool {
@@ -678,7 +682,7 @@ fn a_synchronous_handshake_post_sees_the_kept_session_and_follows_established() 
         Arc::new(ManualClock::new(Tick::new(1))),
     );
     *armer.lock().expect("armer") = Some(hub.clone());
-    hub.install_loopback(SEND_CAP);
+    hub.install_loopback(SEND_CAP, tables::tables);
     let dialer = dialer_for(&hub);
     *slot.lock().expect("slot") = Some(Arc::clone(&dialer));
     let mut rng = SplitMix64::new(11);
@@ -713,9 +717,9 @@ fn a_synchronous_close_notification_finishes() {
         Sockets::new(),
         InboundCeiling::Bounded(8),
         Arc::new(move |post| {
-            if let Post::Closed { id, cause, .. } = &post {
+            if let Post::Closed { id, end, .. } = &post {
                 if let Some(dialer) = slot_post.lock().expect("slot").clone() {
-                    dialer.session_closed(*id, *cause, &mut SplitMix64::new(12));
+                    dialer.session_closed(*id, *end, &mut SplitMix64::new(12));
                 }
                 // The strand's closed path locks the table again
                 // (`shekyl_seam_handler_gone`). A poster that runs under
@@ -729,7 +733,7 @@ fn a_synchronous_close_notification_finishes() {
         Arc::new(ManualClock::new(Tick::new(1))),
     );
     *hub_slot.lock().expect("hub") = Some(hub.clone());
-    hub.install_loopback(SEND_CAP);
+    hub.install_loopback(SEND_CAP, tables::tables);
     let dialer = dialer_for(&hub);
     *slot.lock().expect("slot") = Some(Arc::clone(&dialer));
     let mut rng = SplitMix64::new(13);
@@ -961,23 +965,32 @@ fn a_refused_payload_on_a_kept_tor_session_is_not_another_open() {
         vec![reply(NETWORK, vec![])],
     )
     .expect("adopted");
+    let opened = rig.dialer.tor_link_tally();
+    assert!(
+        opened.last_sign_of_life.is_some(),
+        "the stream that opened is a sign of life"
+    );
     assert_eq!(
-        rig.dialer.tor_link_tally(),
+        opened,
         TorLinkTally {
             opened: 1,
             unopened: 0,
             held: 1,
+            last_sign_of_life: opened.last_sign_of_life,
+            last_unopened_at: None,
         }
     );
 
     rig.dialer
-        .session_closed(id, CloseCause::new(CloseKind::SessionRefused), &mut rng);
+        .session_closed(id, tables::session_refused(), &mut rng);
     assert_eq!(
         rig.dialer.tor_link_tally(),
         TorLinkTally {
             opened: 1,
             unopened: 0,
             held: 0,
+            last_sign_of_life: opened.last_sign_of_life,
+            last_unopened_at: None,
         },
         "the close is not a new stream"
     );
@@ -1030,11 +1043,13 @@ fn an_inbound_tor_session_is_held_once_its_handshake_finishes() {
             opened: 0,
             unopened: 0,
             held: 1,
+            last_sign_of_life: None,
+            last_unopened_at: None,
         }
     );
 
-    let cause = CloseCause::new(CloseKind::PeerClosed);
-    rig.hub.finish(attached.id, cause);
+    let end = tables::peer_closed(ConnectorId::Tor);
+    rig.hub.finish(attached.id, end);
     assert_eq!(
         rig.hub.board().count(ConnectorId::Tor, Direction::Inbound),
         0,
@@ -1044,7 +1059,7 @@ fn an_inbound_tor_session_is_held_once_its_handshake_finishes() {
     // `session_closed` alone does not read the board: the adopt poster
     // calls it while holding that lock.
     rig.dialer
-        .session_closed_from_seam(attached.id, cause, &mut SplitMix64::new(1));
+        .session_closed_from_seam(attached.id, end, &mut SplitMix64::new(1));
     assert_eq!(
         rig.dialer.tor_link_tally(),
         TorLinkTally::default(),
@@ -1178,7 +1193,7 @@ fn a_tor_address_failing_twice_with_a_missing_descriptor_then_succeeding_ends_wh
     let clock = ManualClock::new(Tick::new(1));
     let hub = hub_with_arming_on(&posts, &clock);
     let dial = Arc::new(GapDial::refusing_then_answering(
-        vec![shekyl_tor::refused(0xF0), shekyl_tor::refused(0xF0)],
+        vec![shekyl_tor::reply_end(0xF0), shekyl_tor::reply_end(0xF0)],
         vec![reply(NETWORK, vec![])],
     ));
     hub.install_dial(Arc::clone(&dial) as Arc<dyn Dial>);

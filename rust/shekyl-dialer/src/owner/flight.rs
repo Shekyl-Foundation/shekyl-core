@@ -37,10 +37,11 @@ use std::sync::atomic::Ordering;
 use std::sync::{Arc, Condvar, Mutex};
 
 use shekyl_draw_rng::RelayRng;
-use shekyl_peerlist::{CloseCause, CloseKind, ConnectorId, DialOutcome, NetworkAddress};
+use shekyl_peerlist::{ConnectorId, NetworkAddress};
 use shekyl_seam::{Hub, SocketId};
+use shekyl_transport_layer::DialEnd;
 
-use super::handshake::{attempt_task, Attempt, Prepared, TaskResult};
+use super::handshake::{attempt_task, failed_outcome, Attempt, AttemptEnd, Prepared, TaskResult};
 use super::ready::block_on_future;
 use super::{Dialer, Shared};
 use crate::fill::DialAim;
@@ -85,7 +86,7 @@ pub(super) struct InFlight {
     _cancel: tokio::sync::oneshot::Sender<()>,
 }
 
-/// An attempt task's result, and how long the attempt ran.
+/// An attempt task's result, how long it ran, and when it resolved.
 pub(super) struct Finished {
     result: TaskResult,
     /// Nanoseconds from the task's first poll to its result, on the hub's
@@ -93,14 +94,29 @@ pub(super) struct Finished {
     /// queue counts, so a timeout's place against the Tor window
     /// ([`Dialer::window`]) is the attempt's own.
     ran_nanos: u64,
+    /// When the attempt's stream opened, on the judge's clock, when one did.
+    opened_ms: Option<u64>,
+    /// When the attempt resolved, on the judge's clock ([`AttemptEnd::ended_ms`]).
+    /// The failure is dated here. The wait in the completion queue is not
+    /// part of it, so a verdict applied late can err only toward excusing.
+    ended_ms: u64,
 }
 
 /// `attempt`, timed inside its task ([`Finished::ran_nanos`]).
-async fn timed(hub: Hub, attempt: impl Future<Output = TaskResult>) -> Finished {
+async fn timed(hub: Hub, attempt: impl Future<Output = AttemptEnd>) -> Finished {
     let started = hub.now();
-    let result = attempt.await;
+    let AttemptEnd {
+        result,
+        opened_ms,
+        ended_ms,
+    } = attempt.await;
     let ran_nanos = hub.now().get().saturating_sub(started.get());
-    Finished { result, ran_nanos }
+    Finished {
+        result,
+        ran_nanos,
+        opened_ms,
+        ended_ms,
+    }
 }
 
 /// The results attempt tasks have posted and the loops have not taken.
@@ -339,6 +355,7 @@ impl Dialer {
     /// clock. The owner loop never does: it uses [`Self::launch`] and never
     /// waits on a dial.
     pub fn wake<R: RelayRng + ?Sized>(&self, connector: ConnectorId, rng: &mut R) -> bool {
+        self.apply_verdicts(rng);
         let Some((address, aim, nonce)) = self.choose(connector, rng) else {
             return false;
         };
@@ -457,9 +474,9 @@ impl Dialer {
         tracing::debug!("{connector:?} dial {address:?} aim {aim:?}");
         let prepared = match self.prepare(connector, &address, &nonce) {
             Ok(prepared) => prepared,
-            Err(cause) => {
+            Err(end) => {
                 return self
-                    .record_local(connector, address, nonce, cause, rng)
+                    .record_local(connector, address, nonce, end, rng)
                     .launch();
             }
         };
@@ -494,9 +511,9 @@ impl Dialer {
         tracing::debug!("{connector:?} dial {address:?} aim {aim:?}");
         let prepared = match self.prepare(connector, &address, &nonce) {
             Ok(prepared) => prepared,
-            Err(cause) => {
+            Err(end) => {
                 return self
-                    .record_local(connector, address, nonce, cause, rng)
+                    .record_local(connector, address, nonce, end, rng)
                     .drove();
             }
         };
@@ -607,18 +624,19 @@ impl Dialer {
         connector: ConnectorId,
         address: NetworkAddress,
         nonce: InFlightNonce,
-        cause: CloseCause,
+        end: DialEnd,
         rng: &mut R,
     ) -> BeforeIo {
         drop(nonce);
         let now = self.hub.now();
+        let ended_ms = self.life_now_ms();
         self.with_inbound(|shared| {
             if self.stop.load(Ordering::Acquire) {
                 shared.attempts(connector).cancel(&address);
                 return BeforeIo::Stopped;
             }
-            let outcome = DialOutcome::DialFailed(address, cause);
-            Self::record(shared, connector, &outcome, now, rng);
+            let outcome = failed_outcome(address, end);
+            Self::record(shared, connector, &outcome, None, ended_ms, now, rng);
             BeforeIo::Recorded
         })
     }
@@ -635,12 +653,13 @@ impl Dialer {
         rng: &mut R,
     ) -> BeforeIo {
         let now = self.hub.now();
+        let ended_ms = self.life_now_ms();
         self.with_inbound(|shared| {
             if self.stop.load(Ordering::Acquire) {
                 return BeforeIo::Stopped;
             }
-            let outcome = DialOutcome::DialFailed(address, CloseCause::new(CloseKind::LocalClose));
-            Self::record(shared, connector, &outcome, now, rng);
+            let outcome = failed_outcome(address, DialEnd::local_close());
+            Self::record(shared, connector, &outcome, None, ended_ms, now, rng);
             BeforeIo::Recorded
         })
     }
@@ -681,7 +700,12 @@ impl Dialer {
         finished: Finished,
         rng: &mut R,
     ) -> Option<Applied> {
-        let Finished { result, ran_nanos } = finished;
+        let Finished {
+            result,
+            ran_nanos,
+            opened_ms,
+            ended_ms,
+        } = finished;
         let Some((record, permit)) = self.begin_apply(id) else {
             drop(result);
             return None;
@@ -690,12 +714,12 @@ impl Dialer {
         let kept = match self.apply_result(connector, &address, record.aim, result, rng) {
             Attempt::Done(outcome) => {
                 tracing::debug!("{connector:?} dial {address:?} ended: {outcome:?}");
-                self.settle_or_retry(connector, &outcome, ran_nanos, rng);
+                self.settle_or_retry(connector, &outcome, ran_nanos, opened_ms, ended_ms, rng);
                 None
             }
             Attempt::Kept(kept) => {
                 let socket = kept.id;
-                self.accept_and_notify(connector, &address, kept, rng)
+                self.accept_and_notify(connector, &address, kept, opened_ms, ended_ms, rng)
                     .then_some(socket)
             }
         };
@@ -728,12 +752,15 @@ impl Drop for ApplyPermit<'_> {
 mod tests {
     use super::{Completions, Finished};
     use crate::owner::handshake::TaskResult;
-    use shekyl_peerlist::{CloseCause, CloseKind, ConnectorId};
+    use shekyl_peerlist::ConnectorId;
+    use shekyl_transport_layer::DialEnd;
 
     fn failed() -> Finished {
         Finished {
-            result: TaskResult::Failed(CloseCause::new(CloseKind::LocalClose)),
+            result: TaskResult::Failed(DialEnd::local_close()),
             ran_nanos: 0,
+            opened_ms: None,
+            ended_ms: 0,
         }
     }
 

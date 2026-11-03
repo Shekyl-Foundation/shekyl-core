@@ -20,8 +20,8 @@
 ///   Two reads answer the row an open with no bonds records, because the
 ///   count treats absence as a hole. `block_draws` is
 ///   `Some(BlockDraws::ZERO)`: a height that drew nothing.
-///   `support_block_count` is `Some(SupportCount::NONE)`: a height that
-///   issued no support draws. `drawable_digest`
+///   `support_block_seats` is `Some(SupportSeats::EMPTY)`: a height that
+///   seated nobody. `drawable_digest`
 ///   is [`crate::DrawableEpoch::empty`]'s digest for the epoch asked. The store
 ///   answers `None` for a height or an epoch never written, and that
 ///   absence is the hole.
@@ -205,11 +205,11 @@ macro_rules! archival_reads {
             (::core::option::Option<shekyl_types::archival::BlockDraws>);
             (height, floor);
             (::core::option::Option::Some(shekyl_types::archival::BlockDraws::ZERO)));
-        $crate::archival_reads!(@emit $policy; support_block_count;
+        $crate::archival_reads!(@emit $policy; support_block_seats;
             (height: shekyl_types::BlockHeight, floor: $crate::BlockDrawsFloor);
-            (::core::option::Option<shekyl_types::archival::SupportCount>);
+            (::core::option::Option<shekyl_types::archival::SupportSeats>);
             (height, floor);
-            (::core::option::Option::Some(shekyl_types::archival::SupportCount::NONE)));
+            (::core::option::Option::Some(shekyl_types::archival::SupportSeats::EMPTY)));
         $crate::archival_reads!(@emit $policy; drawable_digest;
             (
                 epoch: shekyl_types::SettlementEpoch,
@@ -238,8 +238,8 @@ macro_rules! archival_reads {
             (::std::vec::Vec::new()));
     };
     // `block_draws` is the method table's `Some(BlockDraws::ZERO)`: the
-    // zero row does not depend on the height. `support_block_count` is
-    // `Some(SupportCount::NONE)` for the same reason. `drawable_digest` does
+    // zero row does not depend on the height. `support_block_seats` is
+    // `Some(SupportSeats::EMPTY)` for the same reason. `drawable_digest` does
     // depend on the epoch, so both bondless policies share one body. The
     // store answers `None` for an epoch never written; that absence is
     // the hole.

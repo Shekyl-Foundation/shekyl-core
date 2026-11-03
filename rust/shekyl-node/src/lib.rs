@@ -78,7 +78,7 @@ use shekyl_chain_ingest::{Chain, ChainRules, Metrics, ProductionSubstrate, Subst
 use shekyl_chain_rules::{AdmissionPolicy, FakechainSchedule, ReleaseAnchors, RuleSet};
 use shekyl_chain_store::apply_policy::ApplyPolicy;
 use shekyl_chain_store::pool::PoolOpen;
-use shekyl_chain_store::store::{ChainStore, Horizons, SnapshotView};
+use shekyl_chain_store::store::{ChainStore, CutShort, Horizons, SnapshotView};
 use shekyl_chain_sync::SyncState;
 use shekyl_chain_sync::{Declaration, Requesting};
 use shekyl_chain_sync_runtime::executor::Executor;
@@ -396,6 +396,10 @@ impl Node {
         if let Some(tip) = handshake_tips.borrow_and_update().tip {
             shekyl_ffi::dialer_ffi::publish_chain_tip(&tip);
         }
+        // The ban timer is the table's, not the zone host's. An offline
+        // node never starts a zone, and a finite ban would otherwise stay
+        // in force after its deadline (OE-D9: a lookup does not end one).
+        shekyl_ffi::seam_ffi::bans::start(runtime.handle(), sockets.clone());
         runtime.spawn(async move {
             while handshake_tips.changed().await.is_ok() {
                 if let Some(tip) = handshake_tips.borrow_and_update().tip {
@@ -584,7 +588,14 @@ impl Node {
             "Node::stop waits, and must not run inside a tokio runtime"
         );
         // The miner first: its workers hash on the board this stop withdraws,
-        // and a handle may keep mining control alive past the node.
+        // and a handle may keep mining control alive past the node. The
+        // close parks them without the join gate, so it returns before the
+        // hash; they hold no store handle, and what they finish now is
+        // dropped before it becomes a block. A start that has published
+        // its stop flag and not yet its threads is signaled here too, so
+        // those threads deliver nothing after this returns. The join takes
+        // that gate and is the last thing this stop does, so a stop already
+        // inside the gate finishes before it.
         self.mining.close();
         // The process doors hold the store (`Door::admission`); leave them
         // up and `chain.db` stays exclusive after this node has stopped.
@@ -633,6 +644,9 @@ impl Node {
             .lock()
             .unwrap_or_else(PoisonError::into_inner) = None;
         runtime.shutdown(RUNTIME_SHUTDOWN);
+        // The store has closed with the service and the slots: only now
+        // wait for the stopped miner's last hashes.
+        self.mining.join_drained();
     }
 
     /// The hasher budget the facts hash under. The lock test holds every
@@ -901,7 +915,10 @@ fn open_chain(
 ) -> Result<ChainStore, OpenError> {
     use shekyl_chain_store::store::{StoreCannot, StoreError};
     match ChainStore::with_release(path, ApplyPolicy::Full, horizons, anchors) {
-        Ok(store) => Ok(store),
+        Ok((store, cut)) => {
+            log_chain_cut(cut);
+            Ok(store)
+        }
         Err(StoreError::Cannot(StoreCannot::SchemaVersionMismatch { found, expected })) => {
             tracing::warn!(
                 %found,
@@ -909,14 +926,29 @@ fn open_chain(
                 "the chain file is a layout this release does not speak; removing it and opening a fresh store"
             );
             std::fs::remove_file(path).map_err(OpenError::Wipe)?;
-            Ok(ChainStore::with_release(
-                path,
-                ApplyPolicy::Full,
-                horizons,
-                anchors,
-            )?)
+            let (store, cut) =
+                ChainStore::with_release(path, ApplyPolicy::Full, horizons, anchors)?;
+            log_chain_cut(cut);
+            Ok(store)
         }
         Err(error) => Err(error.into()),
+    }
+}
+
+/// The chain's half of the pool's creation log: a seal finished in place,
+/// or an initialization moved aside.
+fn log_chain_cut(cut: Option<CutShort>) {
+    match cut {
+        Some(CutShort::Unsealed) => tracing::info!(
+            "the chain file's creation was cut short (a power loss on an earlier start); \
+             it was finished empty"
+        ),
+        Some(CutShort::Uninitialized { to }) => tracing::warn!(
+            moved_to = %to.display(),
+            "the chain file was a creation cut short before the engine finished it (a power \
+             loss on an earlier start); it was moved aside and a fresh store created"
+        ),
+        None => {}
     }
 }
 
@@ -960,11 +992,21 @@ fn open_pool(
         &AdmissionPolicy::GENESIS,
     )
     .map_err(|error| OpenError::Pool(format!("{error:?}")))?;
-    if let PoolOpen::Recreated { from } = opened {
-        tracing::warn!(
+    match opened {
+        PoolOpen::Recreated { from } => tracing::warn!(
             %from,
             "the pool file is a layout this release does not speak; it was recreated empty"
-        );
+        ),
+        PoolOpen::Finished => tracing::info!(
+            "the pool file's creation was cut short (a power loss on an earlier start); \
+             it was finished empty"
+        ),
+        PoolOpen::SetAside { to } => tracing::warn!(
+            moved_to = %to.display(),
+            "the pool file was a creation cut short before the engine finished it (a power \
+             loss on an earlier start); it was moved aside and a fresh pool created"
+        ),
+        PoolOpen::Created | PoolOpen::Opened => {}
     }
     Ok(Arc::new(Mutex::new(pool)))
 }

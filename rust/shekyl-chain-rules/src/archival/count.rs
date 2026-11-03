@@ -21,7 +21,7 @@
 //! the writer halts, and the block is not refused.
 
 use shekyl_archival_retention::{draw_count, draw_horizon, DrawableEpoch};
-use shekyl_types::archival::{BlockDraws, COUNTED_DRAWS};
+use shekyl_types::archival::{BlockDraws, SupportSeats, COUNTED_DRAWS};
 use shekyl_types::{BlockCount, BlockHash, BlockHeight, SettlementEpoch};
 
 use crate::census::CenRow;
@@ -33,6 +33,7 @@ use crate::view::{AtHeight, ChainView};
 
 use super::drawable;
 use super::memo::DrawableMemo;
+use super::support_seats::scheduled_seats;
 
 /// CEN-L17: the count. One row per connected height, derived here and
 /// written by the store. A windowless schedule records a zero row; every
@@ -94,7 +95,7 @@ impl super::Transition {
         opened: Option<&DrawableEpoch>,
         count_memo: &mut CountMemo<'_>,
         coverage: &mut RuleCoverage,
-    ) -> Result<BlockDraws, ViewRead<V::Fault>> {
+    ) -> Result<(BlockDraws, SupportSeats), ViewRead<V::Fault>> {
         let connecting = self.connecting;
         let schedule = self.schedule;
         let epoch = self.epoch;
@@ -103,16 +104,31 @@ impl super::Transition {
         // is computed and the row chain is not consulted: there is no prior
         // read and `draw_horizon` is not called. A stand-in window is not a
         // window. The row is still written, a zero, so a connected height
-        // has a row for the boundary to retire.
+        // has a row for the boundary to retire. The support schedule spreads
+        // its seats over `SEB − W₂`, so with no window it seats nobody, and
+        // that empty row is written too (SI-40).
         let Some(window) = schedule.challenge_response_blocks() else {
             coverage.insert(L17::ROW);
-            return Ok(BlockDraws::ZERO);
+            return Ok((BlockDraws::ZERO, SupportSeats::EMPTY));
         };
 
         let open = BlockHeight::from_raw(schedule.open_height(epoch.to_raw()));
         let at_open = connecting == open;
         let floor = BlockDrawsFloor::in_force(connecting, schedule);
-        let set_size = self.resolve_len(view, at_open, opened, count_memo)?;
+        // `|D|` and the block's support seats read one snapshot: the epoch's
+        // members are filed with `D` (`SO-D12` S1).
+        //
+        // Only scheduled seats: a seat carried from an unfiled block joins
+        // the transition with admission at the switch. Before it nothing is
+        // admitted on chain, so every scheduled seat would read as unfiled
+        // and every tree would be carried onto nearly every block (G3).
+        let (set_size, seats) = self.resolve(view, at_open, opened, count_memo, |drawable| {
+            (
+                drawable.len(),
+                scheduled_seats(drawable, connecting, schedule),
+            )
+        })?;
+        let seats = seats.map_err(ViewRead::Corrupt)?;
         self.file_prior_epoch(view, count_memo)?;
         let (visible, carry_in) = if at_open {
             // The block before a later open wrote a row. Its numbers belong
@@ -174,27 +190,32 @@ impl super::Transition {
         };
         let count = narrow_count(count).map_err(|why| fault(connecting, why))?;
         coverage.insert(L17::ROW);
-        Ok(BlockDraws {
-            count,
-            carry,
-            shortfall: visible,
-            ..BlockDraws::ZERO
-        })
+        Ok((
+            BlockDraws {
+                count,
+                carry,
+                shortfall: visible,
+                ..BlockDraws::ZERO
+            },
+            seats,
+        ))
     }
 
-    /// `|D|` for this block's count.
+    /// `read` over this block's epoch snapshot: `|D|` for the count and the
+    /// support members for the seats.
     ///
     /// At `h_open` that is the post-state set the transition just built, and
     /// the memo learns it under the opening hash. Later heights read the memo
     /// and, on a miss, rebuild from the view and keep the rebuild only when
     /// it matches the recorded digest.
-    fn resolve_len<'id, V: ChainView<'id>>(
+    fn resolve<'id, V: ChainView<'id>, R>(
         &self,
         view: &V,
         at_open: bool,
         opened: Option<&DrawableEpoch>,
         count_memo: &mut CountMemo<'_>,
-    ) -> Result<u64, ViewRead<V::Fault>> {
+        read: impl FnOnce(&DrawableEpoch) -> R,
+    ) -> Result<R, ViewRead<V::Fault>> {
         let connecting = self.connecting;
         let schedule = self.schedule;
         let epoch = self.epoch;
@@ -202,22 +223,21 @@ impl super::Transition {
         if at_open {
             let drawable =
                 opened.ok_or_else(|| fault(connecting, DrawCountFault::OpenUnrecorded))?;
-            let len = drawable.len();
             if let Some(memo) = count_memo.memo.as_mut() {
                 memo.evict(connecting, schedule);
                 memo.insert(epoch, open_hash, drawable.clone());
             }
-            return Ok(len);
+            return Ok(read(drawable));
         }
 
         let Some(memo) = count_memo.memo.as_mut() else {
             // A height with no opening block is OpenUnrecorded. The rebuild's
             // Unopened must not replace it when the memo is cold.
             self.opening_hash(view, epoch)?;
-            return Ok(self.rebuilt_epoch(view, epoch)?.len());
+            return Ok(read(&self.rebuilt_epoch(view, epoch)?));
         };
         memo.evict(connecting, schedule);
-        self.remember_epoch(view, epoch, memo)
+        self.remember_epoch(view, epoch, memo, read)
     }
 
     /// File the previous epoch's set when this block's window reaches it.
@@ -250,8 +270,7 @@ impl super::Transition {
         if !reaches {
             return Ok(());
         }
-        self.remember_epoch(view, SettlementEpoch::from_raw(raw - 1), memo)?;
-        Ok(())
+        self.remember_epoch(view, SettlementEpoch::from_raw(raw - 1), memo, |_| ())
     }
 
     /// The hash of the block that opened `epoch`. Above the tip the epoch
@@ -269,24 +288,25 @@ impl super::Transition {
         }
     }
 
-    /// `|D|` of `epoch` under its opening hash. A memo hit is that length.
-    /// A miss rebuilds, keeps the rebuild only when it matches the recorded
-    /// digest, and returns the rebuilt length. The caller evicts; this
-    /// function does not.
-    fn remember_epoch<'id, V: ChainView<'id>>(
+    /// `read` over the snapshot of `epoch` under its opening hash. A memo
+    /// hit is read as held. A miss rebuilds, keeps the rebuild only when it
+    /// matches the recorded digest, and reads the rebuild. The caller
+    /// evicts; this function does not.
+    fn remember_epoch<'id, V: ChainView<'id>, R>(
         &self,
         view: &V,
         epoch: SettlementEpoch,
         memo: &mut DrawableMemo,
-    ) -> Result<u64, ViewRead<V::Fault>> {
+        read: impl FnOnce(&DrawableEpoch) -> R,
+    ) -> Result<R, ViewRead<V::Fault>> {
         let recorded = self.opening_hash(view, epoch)?;
         if let Some(cached) = memo.get(epoch, &recorded) {
-            return Ok(cached.len());
+            return Ok(read(cached));
         }
         let rebuilt = self.rebuilt_epoch(view, epoch)?;
-        let len = rebuilt.len();
+        let answer = read(&rebuilt);
         memo.insert(epoch, recorded, rebuilt);
-        Ok(len)
+        Ok(answer)
     }
 
     /// The drawable set of `epoch` on `view`, kept only when the walk
@@ -358,7 +378,7 @@ pub fn remember_window_epochs<'id, V: ChainView<'id>>(
     let mut epochs = [schedule.epoch_at(first), schedule.epoch_at(last)].to_vec();
     epochs.dedup();
     for epoch in epochs {
-        transition.remember_epoch(view, epoch, memo)?;
+        transition.remember_epoch(view, epoch, memo, |_| ())?;
     }
     Ok(())
 }
@@ -426,6 +446,7 @@ mod tests {
             .to_receipt_sign_pk();
         DrawableEpoch::new(
             epoch,
+            std::num::NonZeroU64::new(2).map(shekyl_archival_retention::SupportRoster::empty),
             [(persona, key)],
             [DrawablePair {
                 persona,
@@ -473,10 +494,11 @@ mod tests {
                 open_hash: BlockHash::NULL,
                 memo: None,
             };
-            let row = transition
+            let (row, seats) = transition
                 .block_draws(&view, None, &mut count_memo, &mut coverage)
                 .expect("a windowless count does not read the chain");
             assert_eq!(row, BlockDraws::ZERO);
+            assert!(seats.is_empty(), "a windowless schedule seats nobody");
             assert!(coverage.contains(CenRow::L17));
         });
     }
@@ -514,7 +536,8 @@ mod tests {
             };
             let hit = transition
                 .block_draws(&view, None, &mut count_memo, &mut coverage)
-                .expect("the opening hash hits");
+                .expect("the opening hash hits")
+                .0;
             let horizon =
                 draw_horizon(1, seb, window, shekyl_archival_retention::archival_params());
             let (count, carry) = draw_count(
@@ -547,7 +570,8 @@ mod tests {
             };
             let miss = transition
                 .block_draws(&view, None, &mut miss_memo, &mut miss_coverage)
-                .expect("the miss rebuilds the empty set");
+                .expect("the miss rebuilds the empty set")
+                .0;
             let (empty_count, empty_carry) = draw_count(
                 0,
                 0,

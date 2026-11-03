@@ -7,6 +7,32 @@
 
 use super::*;
 
+/// A finite ban on a node with both connectors off ends when its time is
+/// up. That node never starts a zone host, and a lookup does not end a
+/// ban, so the timer has to be the table's. Red edit: start the timer only
+/// from the zone host.
+#[test]
+fn a_finite_ban_on_an_offline_node_ends_when_its_time_is_up() {
+    let dir = tempfile::tempdir().expect("temp");
+    let node = open_at(dir.path(), Arc::new(|| {}));
+    let host = IpAddr::V4(Ipv4Addr::new(203, 0, 113, 50));
+    let target = shekyl_daemon_rpc::handles::BanTargetFacts::Host(host);
+    assert!(node.handles().bans.ban(target, Some(1)).expect("ban"));
+    assert!(
+        node.handles().bans.remaining(host).expect("read").is_some(),
+        "the ban is in force"
+    );
+    let give_up = std::time::Instant::now() + Duration::from_secs(10);
+    while node.handles().bans.remaining(host).expect("read").is_some() {
+        assert!(
+            std::time::Instant::now() < give_up,
+            "the ban stayed in force past its second"
+        );
+        std::thread::sleep(Duration::from_millis(20));
+    }
+    node.stop();
+}
+
 /// A ban through the node is on the table `process_sockets` reads.
 /// Red edit: install a second table, or ban on a table the node does
 /// not hold.
@@ -22,7 +48,7 @@ fn a_ban_through_the_node_is_on_the_process_socket_table() {
     let target = shekyl_daemon_rpc::handles::BanTargetFacts::Host(host);
     assert!(node.handles().bans.ban(target, None).expect("ban"));
     assert!(
-        shekyl_ffi::seam_ffi::process_sockets().is_banned(host, Tick::new(0)),
+        shekyl_ffi::seam_ffi::process_sockets().is_banned(host),
         "the FFI reader sees the node's table"
     );
     assert_eq!(

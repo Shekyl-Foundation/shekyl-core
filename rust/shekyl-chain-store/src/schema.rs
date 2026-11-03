@@ -165,8 +165,8 @@ use crate::codec::{
     BondRecord, Coded, CompleteTreeSet, CurveTreeState, DrawableDigest, IssuedDigest, IssuedDraw,
     LayerHash, LeafCount, OutKey, OutTx, Present, PropertyCellBytes, QueuedBody, QueuedBundle,
     RMarket, RecordedPow, RuleSetInForce, SettlementRow, SigmaWorkMilli, SlashLogEntry,
-    SupportCount, SupportIssued, TxIndex, TxOutputIndices, TxPqcAuthsSegment, TxPrunableSegment,
-    TxPrunedSegment, UndoLog,
+    SupportCount, SupportIssued, SupportSeats, TxIndex, TxOutputIndices, TxPqcAuthsSegment,
+    TxPrunableSegment, TxPrunedSegment, UndoLog,
 };
 use crate::ids::{IssuedDrawTuple, ReleaseJournalTuple, SupportIssuedTuple};
 use crate::lmdb_order::LmdbHashKey;
@@ -470,9 +470,9 @@ pub const RUST_ONLY_TABLES: &[(&str, &str)] = &[
     ),
     (
         "archival_support_block",
-        "how many support draws one block issued (ARCHIVAL_SUPPORT_DRAW.md §5): the width of \
-         that block's support bitmap. An unanswered draw is not in this count. The C++ draws \
-         no support stream, so LMDB never holds it",
+        "the complete trees one block seated on the support stream, in persona order \
+         (ARCHIVAL_SUPPORT_DRAW.md §5; SO-D12 S1): its length is the width of that block's \
+         support bitmap. The C++ draws no support stream, so LMDB never holds it",
     ),
     (
         "archival_support_issued",
@@ -884,32 +884,32 @@ tables! {
     /// `(persona, epoch)` → the [`SupportCount`] of support draws scheduled
     /// for that tree in that epoch and not filed, capped at `c`
     /// (`ARCHIVAL_SUPPORT_DRAW.md` §5). Not the economy's shortfall.
-    /// Appended last but one (ordinal 46).
+    /// Ordinal 44.
     pub const ARCHIVAL_SUPPORT_UNISSUED: TableDefinition<([u8; 32], u64), Coded<SupportCount>> =
         TableDefinition::new("archival_support_unissued");
 
     /// `archival_support_block` — **Rust-only** ([`RUST_ONLY_TABLES`]);
-    /// height → the [`SupportCount`] of support draws that block issued,
-    /// the width of its support bitmap. Written when the block connects,
-    /// insert-once (SI-40), the zero included: a block that issued none
-    /// still has a row. A height with no row was not connected. Retired
-    /// with [`ARCHIVAL_BLOCK_DRAWS`] on the draw rows' floor (SI-34).
-    /// Ordinal 47.
-    pub const ARCHIVAL_SUPPORT_BLOCK: TableDefinition<u64, Coded<SupportCount>> =
+    /// height → the [`SupportSeats`] that block seated: the complete trees
+    /// in persona order, whose length is the width of its support bitmap
+    /// (`SO-D12` S1). Written when the block connects, insert-once (SI-40),
+    /// the empty row included: a block that seated nobody still has a row.
+    /// A height with no row was not connected. Retired with
+    /// [`ARCHIVAL_BLOCK_DRAWS`] on the draw rows' floor (SI-34). Ordinal 45.
+    pub const ARCHIVAL_SUPPORT_BLOCK: TableDefinition<u64, Coded<SupportSeats>> =
         TableDefinition::new("archival_support_block");
 
     /// `archival_support_issued` — **Rust-only** ([`RUST_ONLY_TABLES`]);
     /// `(epoch, persona, height, draw)` → the [`SupportIssued`] row: the
     /// shard the draw selected and whether a pass was admitted
     /// (`ARCHIVAL_SUPPORT_DRAW.md` §3). Epoch-major, so one tree's epoch
-    /// is one range in `(height, draw)` order. Appended (ordinal 48).
+    /// is one range in `(height, draw)` order. Ordinal 46.
     pub const ARCHIVAL_SUPPORT_ISSUED: TableDefinition<SupportIssuedTuple, Coded<SupportIssued>> =
         TableDefinition::new("archival_support_issued");
 
     /// `archival_support_settlement` — **Rust-only** ([`RUST_ONLY_TABLES`]);
     /// `(persona, epoch)` → the [`SettlementRow`] of that tree in that
     /// epoch. One row per tree, not per shard. Written by the slash pass
-    /// (`ARCHIVAL_SUPPORT_DRAW.md` §3). Ordinal 49.
+    /// (`ARCHIVAL_SUPPORT_DRAW.md` §3). Ordinal 47.
     pub const ARCHIVAL_SUPPORT_SETTLEMENT: TableDefinition<([u8; 32], u64), Coded<SettlementRow>> =
         TableDefinition::new("archival_support_settlement");
 
