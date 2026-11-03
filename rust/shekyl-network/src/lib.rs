@@ -1,0 +1,410 @@
+// Copyright (c) 2026, The Shekyl Foundation
+//
+// All rights reserved.
+// BSD-3-Clause
+
+//! The one network table (`docs/design/NETWORK_IDENTITY.md`, NI-Q3).
+//!
+//! Every Shekyl network, mainnet, testnet, stagenet and regtest, is a row
+//! in one table and goes through one code path. A network differs from the
+//! others only as data in its row; nothing branches on which network it is
+//! (rule 71), and nothing treats one network as another.
+//!
+//! A network has two forms (NI-R10):
+//!
+//! - its **name**, the root: the tag `shekyl/<network>` ([`Network::tag`]),
+//!   fixed before genesis exists. Key derivation, address prefixes and the
+//!   genesis coinbase use it.
+//! - its **id**, derived: [`network_id_from_genesis`] of the genesis block
+//!   hash, used by everything after genesis: the handshake and wire prefix,
+//!   the store pin, the pool seal and signing.
+//!
+//! Genesis commits to the name in its coinbase, so the id commits to it.
+//!
+//! Regtest's armed levers are [`Lever`]s in its row ([`Network::permits`],
+//! NI-R6); every other row permits none. Staging flags ([`Staging`], NI-R9)
+//! are a separate class: candidate mainnet behaviour staged on the test
+//! networks, each with an owner and an exit, none surviving mainnet
+//! genesis.
+
+#![deny(unsafe_code)]
+
+use std::fmt;
+use std::str::FromStr;
+
+use shekyl_crypto_hash::cshake256_32;
+
+/// A Shekyl network. The discriminant is the network's one code: the
+/// wallet file's network byte, the FFI's network argument and the C++
+/// `cryptonote::network_type` (NI-F5).
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, PartialOrd, Ord)]
+#[cfg_attr(
+    feature = "serde",
+    derive(serde::Serialize, serde::Deserialize),
+    serde(rename_all = "lowercase")
+)]
+#[repr(u8)]
+pub enum Network {
+    /// `mainnet`.
+    Mainnet = 0,
+    /// `testnet`.
+    Testnet = 1,
+    /// `stagenet`.
+    Stagenet = 2,
+    /// `regtest`: an ordinary network with its own genesis, prefixes and
+    /// ports, whose row alone permits levers (NI-R6, NI-R8).
+    Regtest = 3,
+}
+
+impl Network {
+    /// Every network, in code order.
+    pub const ALL: [Self; 4] = [Self::Mainnet, Self::Testnet, Self::Stagenet, Self::Regtest];
+
+    /// This network's row.
+    #[must_use]
+    pub const fn row(self) -> &'static Row {
+        &ROWS[self as usize]
+    }
+
+    /// The network's one numeric code.
+    #[must_use]
+    pub const fn code(self) -> u8 {
+        self as u8
+    }
+
+    /// The network a code names; `None` for any other byte.
+    #[must_use]
+    pub const fn from_code(code: u8) -> Option<Self> {
+        match code {
+            0 => Some(Self::Mainnet),
+            1 => Some(Self::Testnet),
+            2 => Some(Self::Stagenet),
+            3 => Some(Self::Regtest),
+            _ => None,
+        }
+    }
+
+    /// The network's name, as the operator writes it and the RPC wire
+    /// carries it.
+    #[must_use]
+    pub const fn name(self) -> &'static str {
+        self.row().name
+    }
+
+    /// The network a name names. Exact and lowercase: one spelling per
+    /// network, no aliases (rule 83).
+    #[must_use]
+    pub fn from_name(name: &str) -> Option<Self> {
+        Self::ALL.into_iter().find(|n| n.name() == name)
+    }
+
+    /// The network's tag, `shekyl/<name>`: the root of its identity
+    /// (NI-R10). Key derivation is salted by it, and the genesis coinbase
+    /// carries it.
+    #[must_use]
+    pub const fn tag(self) -> &'static str {
+        self.row().tag
+    }
+
+    /// The network's address prefixes.
+    #[must_use]
+    pub const fn prefixes(self) -> &'static Prefixes {
+        &self.row().prefixes
+    }
+
+    /// The daemon's default ports on this network.
+    #[must_use]
+    pub const fn ports(self) -> Ports {
+        self.row().ports
+    }
+
+    /// The subdirectory of the daemon's root its default data directory
+    /// is; `None` for the root itself.
+    #[must_use]
+    pub const fn subdirectory(self) -> Option<&'static str> {
+        self.row().subdirectory
+    }
+
+    /// Whether this network's row permits `lever` (NI-R6).
+    #[must_use]
+    pub fn permits(self, lever: Lever) -> bool {
+        self.row().permits.contains(&lever)
+    }
+
+    /// Whether this network accepts the staging flag `flag` (NI-R9).
+    #[must_use]
+    pub fn stages(self, flag: Staging) -> bool {
+        self.row().staging.contains(&flag)
+    }
+}
+
+impl fmt::Display for Network {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.write_str(self.name())
+    }
+}
+
+/// A name that names no network.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct UnknownNetwork(pub String);
+
+impl fmt::Display for UnknownNetwork {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(
+            f,
+            "unknown network '{}': expected mainnet, testnet, stagenet or regtest",
+            self.0
+        )
+    }
+}
+
+impl std::error::Error for UnknownNetwork {}
+
+impl FromStr for Network {
+    type Err = UnknownNetwork;
+
+    fn from_str(s: &str) -> Result<Self, Self::Err> {
+        Self::from_name(s).ok_or_else(|| UnknownNetwork(s.to_owned()))
+    }
+}
+
+/// One network's row.
+#[derive(Debug)]
+pub struct Row {
+    /// The network this row is.
+    pub network: Network,
+    /// The name.
+    pub name: &'static str,
+    /// `shekyl/<name>`.
+    pub tag: &'static str,
+    /// The address prefixes.
+    pub prefixes: Prefixes,
+    /// The daemon's default ports.
+    pub ports: Ports,
+    /// The default data directory's subdirectory of the daemon's root.
+    pub subdirectory: Option<&'static str>,
+    /// The levers this network permits: empty on every row but regtest's.
+    pub permits: &'static [Lever],
+    /// The staging flags this network accepts: test networks only.
+    pub staging: &'static [Staging],
+}
+
+/// A network's Bech32m address prefixes (human-readable parts).
+#[derive(Debug, PartialEq, Eq)]
+pub struct Prefixes {
+    /// The classical segment of a single-signature address.
+    pub classical: &'static str,
+    /// The first post-quantum segment.
+    pub pqc_a: &'static str,
+    /// The second post-quantum segment.
+    pub pqc_b: &'static str,
+    /// A multisig address (`PQC_MULTISIG.md` §6.1).
+    pub multisig: &'static str,
+}
+
+impl Prefixes {
+    /// Every prefix of the set.
+    #[must_use]
+    pub const fn all(&self) -> [&'static str; 4] {
+        [self.classical, self.pqc_a, self.pqc_b, self.multisig]
+    }
+}
+
+/// A daemon's default ports.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct Ports {
+    /// Peer-to-peer.
+    pub p2p: u16,
+    /// RPC.
+    pub rpc: u16,
+}
+
+/// A behaviour a network's row may permit (NI-R6). The armed-lever gate
+/// reads the row; nothing else decides whether a lever runs.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+pub enum Lever {
+    /// `dev-rpc`: the armed RPC levers, `generateblocks` and `pop_blocks`
+    /// (NI-R8).
+    DevRpc,
+    /// `dev-sync`: chain synchronisation with peers switched off.
+    Sync,
+    /// `dev-difficulty`: a fixed difficulty.
+    Difficulty,
+    /// `dev-pow-seed-epoch-blocks`: the RandomX seed epoch length.
+    PowSeedEpochBlocks,
+    /// `dev-pow-seed-epoch-lag`: the RandomX seed epoch lag.
+    PowSeedEpochLag,
+    /// `dev-settlement-epoch-blocks`: the settlement epoch length.
+    SettlementEpochBlocks,
+    /// `dev-archival-reorg-depth`: the archival reorg depth.
+    ArchivalReorgDepth,
+    /// The out-of-band serve-credit write a corpus `inject` record replays
+    /// through (NI-F6).
+    InjectServeCredit,
+    /// The issued-draws write a corpus replays through (NI-F6).
+    IssueDraws,
+}
+
+impl Lever {
+    /// Every lever.
+    pub const ALL: [Self; 9] = [
+        Self::DevRpc,
+        Self::Sync,
+        Self::Difficulty,
+        Self::PowSeedEpochBlocks,
+        Self::PowSeedEpochLag,
+        Self::SettlementEpochBlocks,
+        Self::ArchivalReorgDepth,
+        Self::InjectServeCredit,
+        Self::IssueDraws,
+    ];
+}
+
+/// A staging flag (NI-R9): a candidate mainnet behaviour staged on the
+/// test networks. Each names its owner and its exit, and none survives
+/// mainnet genesis.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+pub enum Staging {
+    /// `dev-clearnet-encrypt`.
+    ClearnetEncrypt,
+    /// `dev-relay-cover`.
+    RelayCover,
+}
+
+impl Staging {
+    /// Every staging flag.
+    pub const ALL: [Self; 2] = [Self::ClearnetEncrypt, Self::RelayCover];
+
+    /// Who owns the flag's exit.
+    #[must_use]
+    pub const fn owner(self) -> &'static str {
+        match self {
+            Self::ClearnetEncrypt => "the Noise flip",
+            Self::RelayCover => "the cover-traffic lane (TRC-1)",
+        }
+    }
+
+    /// How the flag leaves: promoted to default behaviour, or deleted.
+    #[must_use]
+    pub const fn exit(self) -> &'static str {
+        match self {
+            Self::ClearnetEncrypt => "deleted at the Noise flip",
+            Self::RelayCover => "promoted or deleted by TRC-1's outcome",
+        }
+    }
+}
+
+const STAGED: &[Staging] = &[Staging::ClearnetEncrypt, Staging::RelayCover];
+
+const ROWS: [Row; 4] = [
+    Row {
+        network: Network::Mainnet,
+        name: "mainnet",
+        tag: "shekyl/mainnet",
+        prefixes: Prefixes {
+            classical: "shekyl",
+            pqc_a: "skpq",
+            pqc_b: "skpq2",
+            multisig: "shekyl1m",
+        },
+        ports: Ports {
+            p2p: 11021,
+            rpc: 11029,
+        },
+        subdirectory: None,
+        permits: &[],
+        staging: &[],
+    },
+    Row {
+        network: Network::Testnet,
+        name: "testnet",
+        tag: "shekyl/testnet",
+        prefixes: Prefixes {
+            classical: "tshekyl",
+            pqc_a: "tskpq",
+            pqc_b: "tskpq2",
+            multisig: "shekyltest1m",
+        },
+        ports: Ports {
+            p2p: 12021,
+            rpc: 12029,
+        },
+        subdirectory: Some("testnet"),
+        permits: &[],
+        staging: STAGED,
+    },
+    Row {
+        network: Network::Stagenet,
+        name: "stagenet",
+        tag: "shekyl/stagenet",
+        prefixes: Prefixes {
+            classical: "sshekyl",
+            pqc_a: "sskpq",
+            pqc_b: "sskpq2",
+            multisig: "sshekyl1m",
+        },
+        ports: Ports {
+            p2p: 13021,
+            rpc: 13029,
+        },
+        subdirectory: Some("stagenet"),
+        permits: &[],
+        staging: STAGED,
+    },
+    Row {
+        network: Network::Regtest,
+        name: "regtest",
+        tag: "shekyl/regtest",
+        prefixes: Prefixes {
+            classical: "rshekyl",
+            pqc_a: "rskpq",
+            pqc_b: "rskpq2",
+            multisig: "rshekyl1m",
+        },
+        ports: Ports {
+            p2p: 14021,
+            rpc: 14029,
+        },
+        subdirectory: Some("regtest"),
+        permits: &Lever::ALL,
+        staging: STAGED,
+    },
+];
+
+/// Customization for the network id.
+/// Registered in `CRYPTO_DOMAIN_REGISTRY.tsv` beside [`WIRE_PREFIX_DST`].
+pub const NETWORK_ID_DST: &[u8] = b"shekyl/p2p-network-id-v1";
+
+/// Customization for the clearnet framing prefix.
+/// Registered in `CRYPTO_DOMAIN_REGISTRY.tsv`.
+pub const WIRE_PREFIX_DST: &[u8] = b"shekyl/p2p-wire-prefix-v1";
+
+/// The clearnet framing prefix's length.
+pub const PREFIX_LEN: usize = 8;
+
+/// A network id: the derived form of a network (NI-R10).
+pub type NetworkId = [u8; 16];
+
+/// The id of the chain whose genesis block hash is `genesis_block_hash`:
+/// the first 16 bytes of `cSHAKE256(S = NETWORK_ID_DST, X = genesis hash)`,
+/// digest order. A different genesis is a different network.
+#[must_use]
+pub fn network_id_from_genesis(genesis_block_hash: &[u8; 32]) -> NetworkId {
+    let digest = cshake256_32(NETWORK_ID_DST, genesis_block_hash);
+    let mut out = [0u8; 16];
+    out.copy_from_slice(&digest[..16]);
+    out
+}
+
+/// PWD-T5's clearnet prefix: the first eight bytes of
+/// `cSHAKE256(S = WIRE_PREFIX_DST, X = network_id)`.
+#[must_use]
+pub fn prefix_for(network_id: &NetworkId) -> [u8; PREFIX_LEN] {
+    let digest = cshake256_32(WIRE_PREFIX_DST, network_id);
+    let mut out = [0u8; PREFIX_LEN];
+    out.copy_from_slice(&digest[..PREFIX_LEN]);
+    out
+}
+
+#[cfg(test)]
+mod tests;
