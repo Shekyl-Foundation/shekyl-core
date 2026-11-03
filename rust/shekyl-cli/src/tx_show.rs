@@ -49,7 +49,7 @@ pub(crate) struct TxShow<'a> {
 pub(crate) fn command(
     rpc: &RpcSession,
     daemon: Option<&DaemonClient>,
-    network: &str,
+    network: DaemonNetwork,
     id: &str,
     body: bool,
 ) -> CommandResult<String> {
@@ -59,10 +59,7 @@ pub(crate) fn command(
     } else {
         None
     };
-    let endpoint = daemon
-        .map(|daemon| endpoint_for(daemon, network))
-        .transpose()
-        .map_err(refusal)?;
+    let endpoint = daemon.map(|daemon| endpoint_for(daemon, network));
     report(&TxShow {
         id: &id,
         wallet_records: wallet_records.as_deref(),
@@ -211,14 +208,14 @@ fn not_configured(wallet_open: bool, id: &str) -> String {
 /// The daemon endpoint `command` builds.
 pub(crate) fn endpoint_for<'a>(
     daemon: &'a DaemonClient,
-    network: &str,
-) -> Result<DaemonEndpoint<'a>, String> {
-    Ok(DaemonEndpoint {
+    network: DaemonNetwork,
+) -> DaemonEndpoint<'a> {
+    DaemonEndpoint {
         url: daemon.url(),
         proxy: daemon.proxy().map(str::to_owned),
-        network: session_network(network)?,
+        network,
         down_hint: daemon.down_hint(),
-    })
+    }
 }
 
 fn fetch(daemon: &DaemonEndpoint<'_>, id: &str, body: bool) -> Result<TxRender, String> {
@@ -243,17 +240,6 @@ fn canonical_id(id: &str) -> Result<String, String> {
         Err(format!(
             "tx show: {id:?} is not a transaction id (64 hexadecimal characters)"
         ))
-    }
-}
-
-fn session_network(name: &str) -> Result<DaemonNetwork, String> {
-    match name {
-        "mainnet" => Ok(DaemonNetwork::Mainnet),
-        "testnet" => Ok(DaemonNetwork::Testnet),
-        "stagenet" => Ok(DaemonNetwork::Stagenet),
-        other => Err(format!(
-            "tx show: this shell's network {other:?} is not one it can compare a daemon to"
-        )),
     }
 }
 

@@ -11,6 +11,9 @@
 //! time, see [`crate::resolve`]); commands whose native surface is designed
 //! but not yet landed answer with a RESERVED message naming what gates them.
 
+use shekyl_rpc_types::DaemonNetwork;
+use shekyl_wallet_rpc::Network;
+
 mod balance;
 mod chain;
 mod daemon_view;
@@ -93,7 +96,7 @@ pub enum CommandSource {
 pub fn run(
     rpc: RpcSession,
     daemon_client: Option<&DaemonClient>,
-    network: &str,
+    network: Network,
     presentation: Presentation,
     source: CommandSource,
 ) -> Result<(), Box<dyn std::error::Error>> {
@@ -131,7 +134,8 @@ pub fn run(
     }
 
     loop {
-        let prompt = crate::session::prompt(network, rpc.open_wallet_name().as_deref());
+        let prompt = crate::session::prompt(network.as_str(), rpc.open_wallet_name().as_deref());
+        let daemon_network = DaemonNetwork::from(network);
         let resolved = match next_line(&mut reader, &presentation, &rpc, &prompt) {
             Line::Prompt(raw) => {
                 let line = raw.trim();
@@ -281,7 +285,7 @@ pub fn run(
             ResolvedCommand::ShowTransfer { txid, body } => present(
                 &presentation,
                 "tx show",
-                crate::tx_show::command(&rpc, daemon_client, network, &txid, body),
+                crate::tx_show::command(&rpc, daemon_client, daemon_network, &txid, body),
                 crate::tx_show::show,
             ),
             ResolvedCommand::GetTxNote { txid } => present(
@@ -443,26 +447,26 @@ pub fn run(
             ResolvedCommand::Daemon(view) => present(
                 &presentation,
                 view.label(),
-                daemon_view::command(daemon_client, network, &view),
+                daemon_view::command(daemon_client, daemon_network, &view),
                 |text| println!("{text}"),
             ),
 
             ResolvedCommand::MineStart { threads } => present(
                 &presentation,
                 "mine start",
-                mine::cmd_mine_start(daemon_client, network, threads),
+                mine::cmd_mine_start(daemon_client, daemon_network, threads),
                 mine::show_mine_start,
             ),
             ResolvedCommand::MineStop => present(
                 &presentation,
                 "mine stop",
-                mine::cmd_mine_stop(daemon_client, network),
+                mine::cmd_mine_stop(daemon_client, daemon_network),
                 mine::show_mine_stop,
             ),
             ResolvedCommand::MineStatus => present(
                 &presentation,
                 "mine status",
-                mine::cmd_mine_status(daemon_client, network),
+                mine::cmd_mine_status(daemon_client, daemon_network),
                 mine::show_mine_status,
             ),
 

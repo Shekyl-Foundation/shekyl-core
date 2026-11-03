@@ -25,7 +25,7 @@ const VIEW_TIMEOUT: Duration = Duration::from_secs(15);
 
 pub(crate) fn command(
     daemon: Option<&DaemonClient>,
-    network: &str,
+    network: DaemonNetwork,
     view: &View,
 ) -> CommandResult<String> {
     let Some(daemon) = daemon else {
@@ -33,23 +33,13 @@ pub(crate) fn command(
             "Daemon not configured. Use --daemon-address to set the daemon endpoint.",
         ));
     };
-    let code = match network {
-        "mainnet" => DaemonNetwork::Mainnet,
-        "testnet" => DaemonNetwork::Testnet,
-        "stagenet" => DaemonNetwork::Stagenet,
-        other => {
-            return Err(refusal(format!(
-                "this shell's network {other:?} is not one it can compare a daemon to"
-            )));
-        }
-    };
     let rpc = SyncDaemon::connect(
         daemon.url().to_owned(),
         daemon.proxy().map(str::to_owned),
         VIEW_TIMEOUT,
     )
     .map_err(|error| refusal(error.to_string()))?;
-    let source = Source::new(Arc::new(rpc), code.to_cryptonote());
+    let source = Source::new(Arc::new(rpc), network.to_cryptonote());
     console::execute(&source, view).map_err(refusal)
 }
 
@@ -59,7 +49,7 @@ mod tests {
 
     #[test]
     fn a_daemon_word_without_a_daemon_is_refused_before_a_request() {
-        let error = command(None, "mainnet", &View::ChainHeight).unwrap_err();
+        let error = command(None, DaemonNetwork::Mainnet, &View::ChainHeight).unwrap_err();
         assert!(
             error.message.contains("Daemon not configured"),
             "{}",

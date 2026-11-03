@@ -27,6 +27,10 @@ shekyl-portable-storage = { path = "../shekyl-portable-storage" }
 # (RK-Q2). Foundational and `no_std`; it brings serde and zeroize, both
 # already in this crate's graph through every consumer.
 shekyl-units = { path = "../shekyl-units" }
+# `From<Network> for DaemonNetwork`: the wallet's three networks and the
+# daemon's nettype are one conversion (G2). Address does not depend on
+# this crate, so the impl lives here.
+shekyl-address = { path = "../shekyl-address" }
 # The grants the method table's policy column names (RPC_CHANNEL.md §6.1).
 shekyl-rpc-grants = { path = "../shekyl-rpc-grants" }
 

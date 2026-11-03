@@ -642,7 +642,7 @@ fn run_repl_command(
     commands::run(
         rpc,
         daemon_client.as_ref(),
-        cli.network_name(),
+        parse_network(cli.network_name())?,
         *presentation,
         source,
     )

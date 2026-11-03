@@ -130,8 +130,14 @@ fn a_failed_wallet_read_does_not_ask_the_daemon() {
     let client =
         crate::daemon::DaemonClient::new(&daemon.url, None, None, None).expect("daemon client");
     let at = daemon.marks();
-    let error = super::command(&session, Some(&client), "mainnet", &"ab".repeat(32), false)
-        .expect_err("the wallet read fails");
+    let error = super::command(
+        &session,
+        Some(&client),
+        DaemonNetwork::Mainnet,
+        &"ab".repeat(32),
+        false,
+    )
+    .expect_err("the wallet read fails");
     let delta = daemon.delta_after_mark(&at, Duration::from_secs(1));
     assert!(
         error

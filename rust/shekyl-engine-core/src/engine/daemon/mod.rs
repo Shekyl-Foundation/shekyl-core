@@ -138,11 +138,7 @@ pub enum FakechainPolicy {
 
 impl DaemonExpectation {
     fn pins(&self) -> shekyl_rpc_types::IdentityExpectation {
-        let network = match self.network {
-            shekyl_address::Network::Mainnet => shekyl_rpc_types::DaemonNetwork::Mainnet,
-            shekyl_address::Network::Testnet => shekyl_rpc_types::DaemonNetwork::Testnet,
-            shekyl_address::Network::Stagenet => shekyl_rpc_types::DaemonNetwork::Stagenet,
-        };
+        let network = shekyl_rpc_types::DaemonNetwork::from(self.network);
         match self.fakechain {
             FakechainPolicy::Refuse => shekyl_rpc_types::IdentityExpectation::exact(network),
             FakechainPolicy::Accept => {

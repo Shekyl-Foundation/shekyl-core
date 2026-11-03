@@ -48,10 +48,10 @@ fn default_threads() -> u64 {
 ///
 /// No wallet check. The shell does not supply a payout address (IG-Q21);
 /// the daemon mines to its `mine-address`.
-fn gate<'a>(
-    daemon: Option<&'a DaemonClient>,
-    network: &str,
-) -> Result<(&'a DaemonClient, GetInfoResponse), CommandFailed> {
+fn gate(
+    daemon: Option<&DaemonClient>,
+    network: DaemonNetwork,
+) -> Result<(&DaemonClient, GetInfoResponse), CommandFailed> {
     let Some(dc) = daemon else {
         return Err(refusal(
             "Daemon not configured. Use --daemon-address to set the daemon endpoint.",
@@ -91,21 +91,8 @@ fn gate<'a>(
 /// omitted or unknown does not decode, so there is no empty case to skip.
 /// A `--regtest` daemon reports `fakechain`, which no CLI network is, and
 /// is refused as it always was.
-fn identity_gate(network: &str, url: &str, version: &Value) -> Result<(), CommandFailed> {
-    let ours = [
-        DaemonNetwork::Mainnet,
-        DaemonNetwork::Testnet,
-        DaemonNetwork::Stagenet,
-    ]
-    .into_iter()
-    .find(|candidate| candidate.as_str() == network)
-    .ok_or_else(|| {
-        refusal(format!(
-            "This CLI is on a network it cannot name to the daemon ({network}); mining \
-             control needs mainnet, testnet or stagenet."
-        ))
-    })?;
-    IdentityExpectation::exact(ours)
+fn identity_gate(network: DaemonNetwork, url: &str, version: &Value) -> Result<(), CommandFailed> {
+    IdentityExpectation::exact(network)
         .read(version)
         .map(|_| ())
         .map_err(|IdentityRefusal { mismatch, .. }| refusal(identity_message(&mismatch, url)))
@@ -188,7 +175,7 @@ produce blocks this network accepts.";
 /// count, and does not require an open wallet (IG-Q21).
 pub fn cmd_mine_start(
     daemon: Option<&DaemonClient>,
-    network: &str,
+    network: DaemonNetwork,
     threads: Option<u64>,
 ) -> CommandResult {
     let (dc, info) = gate(daemon, network)?;
@@ -260,7 +247,7 @@ pub(crate) fn show_mine_start(val: &Value) {
 }
 
 /// `mine stop` — stop mining on the daemon.
-pub fn cmd_mine_stop(daemon: Option<&DaemonClient>, network: &str) -> CommandResult {
+pub fn cmd_mine_stop(daemon: Option<&DaemonClient>, network: DaemonNetwork) -> CommandResult {
     let (dc, _info) = gate(daemon, network)?;
 
     match dc.mining_status() {
@@ -286,7 +273,7 @@ pub(crate) fn show_mine_stop(val: &Value) {
 /// `mine status` — the daemon's mining state. The daemon's `pow_algorithm`
 /// string is deliberately not rendered (CU-3: operators do not need a
 /// protocol-algorithm name; the daemon now always reports RandomX).
-pub fn cmd_mine_status(daemon: Option<&DaemonClient>, network: &str) -> CommandResult {
+pub fn cmd_mine_status(daemon: Option<&DaemonClient>, network: DaemonNetwork) -> CommandResult {
     let (dc, _info) = gate(daemon, network)?;
 
     match dc.mining_status() {
@@ -360,7 +347,7 @@ mod tests {
             DaemonNetwork::Testnet,
             DaemonNetwork::Stagenet,
         ] {
-            identity_gate(network.as_str(), URL, &version_reply(network))
+            identity_gate(network, URL, &version_reply(network))
                 .unwrap_or_else(|e| panic!("{network}: {}", e.message));
         }
     }
@@ -369,8 +356,12 @@ mod tests {
     /// refused, and the refusal names both networks and the endpoint.
     #[test]
     fn the_gate_refuses_a_daemon_on_another_network() {
-        let refused = identity_gate("testnet", URL, &version_reply(DaemonNetwork::Mainnet))
-            .expect_err("a mainnet daemon is not a testnet daemon");
+        let refused = identity_gate(
+            DaemonNetwork::Testnet,
+            URL,
+            &version_reply(DaemonNetwork::Mainnet),
+        )
+        .expect_err("a mainnet daemon is not a testnet daemon");
         assert!(
             refused.message.starts_with("Network mismatch:")
                 && refused.message.contains("this CLI is on testnet")
@@ -386,8 +377,12 @@ mod tests {
     /// `get_info`.
     #[test]
     fn the_gate_refuses_a_fakechain_daemon() {
-        let refused = identity_gate("mainnet", URL, &version_reply(DaemonNetwork::Fakechain))
-            .expect_err("a fakechain daemon is not a mainnet daemon");
+        let refused = identity_gate(
+            DaemonNetwork::Mainnet,
+            URL,
+            &version_reply(DaemonNetwork::Fakechain),
+        )
+        .expect_err("a fakechain daemon is not a mainnet daemon");
         assert!(
             refused.message.contains("reports fakechain"),
             "{}",
@@ -401,7 +396,8 @@ mod tests {
     fn the_gate_refuses_a_daemon_on_another_rpc_version() {
         let mut reply = version_reply(DaemonNetwork::Testnet);
         reply["version"] = (CORE_RPC_VERSION - 1).into();
-        let refused = identity_gate("testnet", URL, &reply).expect_err("an older daemon");
+        let refused =
+            identity_gate(DaemonNetwork::Testnet, URL, &reply).expect_err("an older daemon");
         assert!(
             refused.message.starts_with("Version mismatch:")
                 && refused.message.contains("The daemon is the older one"),
@@ -415,7 +411,8 @@ mod tests {
     fn the_gate_refuses_a_reply_without_a_network() {
         let mut reply = version_reply(DaemonNetwork::Testnet);
         reply.as_object_mut().expect("object").remove("nettype");
-        let refused = identity_gate("testnet", URL, &reply).expect_err("no network named");
+        let refused =
+            identity_gate(DaemonNetwork::Testnet, URL, &reply).expect_err("no network named");
         assert!(
             refused.message.starts_with("Version mismatch:"),
             "{}",
@@ -426,13 +423,6 @@ mod tests {
             "the daemon's own text is not repeated: {}",
             refused.message
         );
-    }
-
-    #[test]
-    fn the_gate_refuses_a_cli_network_it_cannot_name() {
-        let refused = identity_gate("fakechain", URL, &version_reply(DaemonNetwork::Fakechain))
-            .expect_err("the CLI is never on fakechain");
-        assert!(refused.message.contains("fakechain"), "{}", refused.message);
     }
 
     #[test]
@@ -496,8 +486,8 @@ mod tests {
             crate::daemon::DaemonClient::new(&format!("http://{address}"), None, None, None)
                 .expect("the route server parses");
 
-        let result =
-            super::cmd_mine_start(Some(&daemon), "mainnet", Some(1)).expect("mining starts");
+        let result = super::cmd_mine_start(Some(&daemon), DaemonNetwork::Mainnet, Some(1))
+            .expect("mining starts");
         assert_eq!(result["started"], true);
         let asked = log.lock().expect("log");
         assert!(
