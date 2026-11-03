@@ -208,49 +208,27 @@ fn print_block(src: &Source, block: &crate::resolve::BlockRef) -> Result<String,
     Ok(out)
 }
 
-/// Unwrap a JSON-RPC 2.0 envelope: the `result`, or the `error`'s message as
-/// the operator's reason. A daemon that refused says why; a body that is
-/// neither is a malformed reply.
-pub(super) fn json_rpc_result<T: serde::de::DeserializeOwned>(
-    body: &[u8],
+/// One JSON-RPC call. `method` is a lookup in the method table; the posted
+/// name is the table's, and a missing row is an error.
+pub(super) fn native_json_rpc<Req, Res>(
+    src: &Source,
     method: &str,
-) -> Result<T, String> {
-    let envelope: serde_json::Value = serde_json::from_slice(body).map_err(|_| {
-        format!(
-            "malformed {method} reply: {}",
-            String::from_utf8_lossy(body)
-                .chars()
-                .take(120)
-                .collect::<String>()
-        )
-    })?;
-    if let Some(error) = envelope.get("error") {
-        return Err(match shekyl_rpc_types::errors::read_error_object(error) {
-            Some(refusal) => format!("{:?} {}", refusal.class, refusal.diagnostic.code),
-            None => format!("{method} failed"),
-        });
-    }
-    let result = envelope
-        .get("result")
-        .ok_or_else(|| format!("malformed {method} reply: no result"))?;
-    serde_json::from_value(result.clone()).map_err(|e| format!("malformed {method} reply: {e}"))
-}
-
-/// One `/json_rpc` POST, unwrapped as JSON-RPC 2.0.
-fn native_json_rpc<Req, Res>(src: &Source, method: &str, request: &Req) -> Result<Res, String>
+    request: &Req,
+) -> Result<Res, String>
 where
     Req: serde::Serialize,
     Res: serde::de::DeserializeOwned,
 {
-    let body = serde_json::to_vec(&serde_json::json!({
-        "jsonrpc": "2.0",
-        "id": "0",
-        "method": method,
-        "params": request,
-    }))
-    .map_err(|e| format!("cannot encode the request: {e}"))?;
-    let raw = src.post_remote("/json_rpc", body)?;
-    json_rpc_result::<Res>(&raw, method)
+    let method = crate::daemon::posted_json(method).map_err(|error| error.to_string())?;
+    src.rpc()
+        .json_rpc(method, request)
+        .map_err(|error| error.to_string())
+}
+
+/// One REST post. `path` is a lookup in the method table.
+pub(super) fn rest_post(src: &Source, path: &str, body: Vec<u8>) -> Result<Vec<u8>, String> {
+    let path = crate::daemon::posted_rest(path).map_err(|error| error.to_string())?;
+    src.post_remote(path, body)
 }
 
 fn require_ok(status: &shekyl_rpc_types::RpcStatus) -> Result<(), String> {
@@ -272,7 +250,7 @@ fn wide_difficulty_value(wide: &str) -> Option<u128> {
 }
 
 fn print_height(src: &Source) -> Result<String, String> {
-    let body = src.post_remote("/get_height", b"{}".to_vec())?;
+    let body = rest_post(src, "/get_height", b"{}".to_vec())?;
     let reply = decode_reply::<GetHeightResponse>(&body, "get_height")?;
     if !reply.status.is_ok() {
         return Err(reply.status.0);
@@ -457,7 +435,7 @@ fn is_key_image_spent(src: &Source, ki: &str) -> Result<String, String> {
         key_images: vec![ki.to_owned()],
     };
     let body = serde_json::to_vec(&request).map_err(|e| e.to_string())?;
-    let raw = src.post_remote("/is_key_image_spent", body)?;
+    let raw = rest_post(src, "/is_key_image_spent", body)?;
     // A handler's failure is a `RestErrorEnvelope`. Decoding success-only
     // would report "malformed" over the reason the server gave.
     let reply =
@@ -500,7 +478,7 @@ fn fetch_transactions(
     request: &shekyl_rpc_types::GetTransactionsRequest,
 ) -> Result<shekyl_rpc_types::GetTransactionsResponse, String> {
     let body = serde_json::to_vec(request).map_err(|e| e.to_string())?;
-    let raw = src.post_remote("/get_transactions", body)?;
+    let raw = rest_post(src, "/get_transactions", body)?;
     decode_reply::<shekyl_rpc_types::GetTransactionsResponse>(&raw, "get_transactions")
 }
 
@@ -683,7 +661,7 @@ fn fetch_peer_list(
         include_blocked: true,
     };
     let body = serde_json::to_vec(&request).map_err(|e| e.to_string())?;
-    let raw = src.post_remote("/get_peer_list", body)?;
+    let raw = rest_post(src, "/get_peer_list", body)?;
     let reply = decode_reply::<shekyl_rpc_types::P2pReply<shekyl_rpc_types::GetPeerListResponse>>(
         &raw,
         "get_peer_list",
@@ -920,7 +898,7 @@ fn rate_limits(src: &Source) -> Result<(Option<u64>, Option<u64>), String> {
 /// `print_net_stats`.
 #[deny(clippy::arithmetic_side_effects)]
 fn print_net_stats(src: &Source, now: u64) -> Result<String, String> {
-    let raw = src.post_remote("/get_net_stats", b"{}".to_vec())?;
+    let raw = rest_post(src, "/get_net_stats", b"{}".to_vec())?;
     let stats = decode_reply::<shekyl_rpc_types::GetNetStatsResponse>(&raw, "get_net_stats")?;
     if !stats.status.is_ok() {
         return Err(stats.status.0);

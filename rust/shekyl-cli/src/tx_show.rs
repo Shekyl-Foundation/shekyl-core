@@ -226,13 +226,11 @@ fn with_hint(daemon: &DaemonEndpoint<'_>, detail: &str) -> String {
 }
 
 fn canonical_id(id: &str) -> Result<String, String> {
-    let id = id.to_ascii_lowercase();
-    if id.len() == 64 && id.bytes().all(|byte| byte.is_ascii_hexdigit()) {
-        Ok(id)
-    } else {
-        Err(format!(
+    match shekyl_options::Kind::Hash.parse_text(id) {
+        Ok(shekyl_options::Value::Hash(hash)) => Ok(hash),
+        _ => Err(format!(
             "tx show: {id:?} is not a transaction id (64 hexadecimal characters)"
-        ))
+        )),
     }
 }
 

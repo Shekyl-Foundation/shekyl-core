@@ -106,11 +106,6 @@ pub struct ReplArgs {
     #[arg(long, global = true)]
     proxy: Option<String>,
 
-    /// Path to PEM CA certificate for self-signed daemon TLS.
-    /// Only needed for https:// daemon addresses with custom CAs.
-    #[arg(long, global = true)]
-    daemon_ca_cert: Option<String>,
-
     /// Show structured RPC error details (error.data) on failures.
     #[arg(long, global = true, default_value_t = false)]
     pub debug: bool,
@@ -396,7 +391,7 @@ fn main() {
 /// server validates the daemon endpoint as it starts, the same order
 /// `shekyl-wallet-rpc` keeps in `run_server`. The REPL's `DaemonClient`
 /// comes after, deliberately: it can fail for reasons that are not the
-/// endpoint's (an unusable `--proxy` or `--daemon-ca-cert`), and such a
+/// endpoint's (an unusable `--proxy`), and such a
 /// failure reports itself without retracting what the configured address
 /// would expose — a disclosure withheld until every dial succeeded would
 /// go missing exactly when a misconfigured run most needs it.
@@ -552,7 +547,6 @@ fn run_repl_command(
         match daemon::DaemonClient::new(
             &daemon.address,
             cli.proxy.as_deref(),
-            cli.daemon_ca_cert.as_deref(),
             daemon_down_hint(cli, &daemon.address),
         ) {
             Ok(dc) => Some(dc),

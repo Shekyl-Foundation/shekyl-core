@@ -132,8 +132,7 @@ fn a_failed_wallet_read_does_not_ask_the_daemon() {
         crate::rpc_client::RpcSession::connect(&format!("http://127.0.0.1:{port}"), None, false)
             .expect("the dead socket still constructs a session");
     session.set_open("wallet");
-    let client =
-        crate::daemon::DaemonClient::new(&daemon.url, None, None, None).expect("daemon client");
+    let client = crate::daemon::DaemonClient::new(&daemon.url, None, None).expect("daemon client");
     let at = daemon.marks();
     let error = super::command(
         &session,
@@ -157,16 +156,17 @@ fn a_failed_wallet_read_does_not_ask_the_daemon() {
     );
 }
 
-/// Every moved §13 word answers a difficulty-1 regtest daemon.
+/// The §13 words against a difficulty-1 regtest daemon, with blocks mined.
 ///
-/// The CLI cannot name fakechain, so this builds the renderer with
-/// `DaemonNetwork::Fakechain` the way `tx show` does. Dropping the
-/// handshake (`Source`'s identity check) lets a mainnet renderer print
-/// this daemon's height.
+/// The CLI cannot name fakechain, so the renderer is built with
+/// `DaemonNetwork::Fakechain`. A mainnet `Source` is refused before it
+/// renders: the handshake is `get_version`, and `get_height` is not asked.
+/// `daemon stop` is last, and the process exits.
 #[test]
 #[ignore = "needs SHEKYLD_BIN built from this tree; spawns a regtest daemon"]
 fn section_13_words_answer_a_regtest_daemon() {
-    let daemon = Regtest::spawn();
+    use crate::resolve::View;
+    let mut daemon = Regtest::spawn();
     let runtime = tokio::runtime::Builder::new_current_thread()
         .enable_all()
         .build()
@@ -176,43 +176,216 @@ fn section_13_words_answer_a_regtest_daemon() {
             .await
             .expect("rpc client");
         await_ready(&rpc, &daemon.logs).await;
+        await_template(&rpc).await;
     });
     drop(runtime);
+
     let client = daemon.client();
+    let transport = client.transport().expect("the session's client");
+    let mined: shekyl_rpc_types::mining::GenerateBlocksResponse = transport
+        .json_rpc(
+            crate::daemon::posted_json("generateblocks").expect("generateblocks"),
+            &shekyl_rpc_types::mining::GenerateBlocksRequest { count: 3 },
+        )
+        .expect("mine three blocks");
+    let height = mined.height.to_string();
+
     let source = crate::console::Source::new(
-        client.transport().expect("the session's client"),
+        client.transport().expect("the same client"),
         DaemonNetwork::Fakechain.to_cryptonote(),
     );
-    let height =
-        crate::console::execute(&source, &crate::resolve::View::ChainHeight).expect("chain height");
-    assert!(!height.is_empty(), "{height}");
-    let block = crate::console::execute(
-        &source,
-        &crate::resolve::View::BlockShow(crate::resolve::BlockRef::Height(0)),
-    )
-    .expect("block show");
-    assert!(block.contains("height:"), "{block}");
-    let spent = crate::console::execute(
-        &source,
-        &crate::resolve::View::ChainSpent {
-            hash: "00".repeat(32),
-        },
-    )
-    .expect("chain spent");
-    assert!(spent.contains("unspent"), "{spent}");
+    let shown = crate::console::execute(&source, &View::ChainHeight).expect("chain height");
+    assert_eq!(
+        shown.trim(),
+        height,
+        "chain height is the mined height: {shown}"
+    );
+
+    let headers = crate::console::execute(&source, &View::BlockHeaderList { from: 1, to: 3 })
+        .expect("block header list");
+    let header_count = headers.matches("height:").count();
+    assert_eq!(header_count, 3, "three headers:\n{headers}");
+    let rewards: Vec<shekyl_units::AtomicUnits> = headers
+        .lines()
+        .filter_map(|line| line.split("reward ").nth(1))
+        .map(|shown| {
+            shekyl_units::AtomicUnits::from_skl_str(shown.trim()).expect("a header reward")
+        })
+        .collect();
+    assert_eq!(rewards.len(), 3, "three header rewards:\n{headers}");
+    // The header `reward` is the miner transaction's outputs. The coinbase
+    // sum is the coins those blocks generated, miner and staker legs. From
+    // height 1 the staker share is on, so the two figures meet at that
+    // split rather than as one number. The fee leg is zero: the blocks
+    // list no transactions.
+    let miner = shekyl_units::AtomicUnits::checked_sum(rewards).expect("the reward sum");
+    let sum = crate::console::execute(&source, &View::ChainCoinbaseSum { from: 1, to: 3 })
+        .expect("coinbase sum");
+    assert!(
+        sum.contains("fee: 0.000000000 SKL"),
+        "empty blocks pay no fee: {sum}"
+    );
+    let printed = sum
+        .lines()
+        .find_map(|line| line.strip_prefix("emission: ")?.strip_suffix(" SKL"))
+        .unwrap_or_else(|| panic!("no emission line: {sum}"));
+    let emission = shekyl_units::AtomicUnits::from_skl_str(printed).expect("the emission");
+    let share = shekyl_economics::emission_share_at(1);
+    assert_eq!(shekyl_economics::emission_share_at(2), share);
+    assert_eq!(shekyl_economics::emission_share_at(3), share);
+    assert_ne!(share, 0, "heights 1..=3 are inside the emission split");
+    let scale = u128::from(shekyl_economics::params::SCALE);
+    let whole = emission.to_raw();
+    let staker_of_sum = u128::from(whole) * u128::from(share) / scale;
+    let miner_of_sum = whole - u64::try_from(staker_of_sum).expect("the staker leg fits");
+    let drift = miner.to_raw().abs_diff(miner_of_sum);
+    assert!(
+        drift <= 3,
+        "header rewards {} are the miner leg of emission {printed} (drift {drift} atomics)",
+        miner.to_skl_string()
+    );
+
+    let stats =
+        crate::console::execute(&source, &View::ChainStats { last: 3 }).expect("chain stats");
+    assert!(stats.contains("Last 3:"), "{stats}");
+    let alt = crate::console::execute(&source, &View::ChainAlt).expect("chain alt");
+    assert!(alt.contains("0 alternate chains found:"), "{alt}");
+
     for view in [
-        crate::resolve::View::DaemonStatus,
-        crate::resolve::View::ChainDifficulty,
-        crate::resolve::View::TxpoolStats,
-        crate::resolve::View::TxpoolList { short: true },
-        crate::resolve::View::BanList,
-        crate::resolve::View::PeerStats,
-        crate::resolve::View::SyncStatus,
+        View::PeerList {
+            white: true,
+            gray: true,
+            max: None,
+        },
+        View::PeerConnections,
     ] {
         let text = crate::console::execute(&source, &view)
             .unwrap_or_else(|error| panic!("{}: {error}", view.label()));
-        assert!(!text.is_empty(), "{}: {text}", view.label());
+        assert!(text.contains("P2P: offline"), "{}:\n{text}", view.label());
     }
+    let net = crate::console::execute(&source, &View::P2pStats).expect("p2p stats");
+    assert!(net.contains("Received") && net.contains("Sent"), "{net}");
+
+    let host = "203.0.113.9";
+    let added = crate::console::execute(
+        &source,
+        &View::BanAdd {
+            ip: host.to_owned(),
+            duration: Some(30),
+        },
+    )
+    .expect("ban add");
+    assert!(added.contains(host) && added.contains("30 s"), "{added}");
+    let shown_ban = crate::console::execute(
+        &source,
+        &View::BanShow {
+            ip: host.to_owned(),
+        },
+    )
+    .expect("ban show");
+    assert!(shown_ban.contains("banned"), "{shown_ban}");
+    let listed = crate::console::execute(&source, &View::BanList).expect("ban list");
+    assert!(listed.contains(host), "{listed}");
+    let lifted = crate::console::execute(
+        &source,
+        &View::BanRemove {
+            ip: host.to_owned(),
+        },
+    )
+    .expect("ban remove");
+    assert!(lifted.contains("lifted"), "{lifted}");
+
+    let before = crate::console::execute(
+        &source,
+        &View::OptionShow {
+            name: Some("log-level".to_owned()),
+        },
+    )
+    .expect("option show");
+    assert!(before.contains("log-level"), "{before}");
+    let set = crate::console::execute(
+        &source,
+        &View::OptionSet {
+            name: "log-level".to_owned(),
+            value: "debug".to_owned(),
+        },
+    )
+    .expect("option set");
+    assert!(set.contains("debug"), "{set}");
+    let after = crate::console::execute(
+        &source,
+        &View::OptionShow {
+            name: Some("log-level".to_owned()),
+        },
+    )
+    .expect("option show again");
+    assert!(after.contains("debug"), "{after}");
+
+    let startup = crate::console::execute(
+        &source,
+        &View::OptionSet {
+            name: "data-dir".to_owned(),
+            value: "/tmp/shekyl-not-runtime".to_owned(),
+        },
+    )
+    .expect_err("a startup row is refused");
+    assert!(
+        startup.contains("RefusedByMethod"),
+        "startup row is the daemon's class and diagnostic: {startup}"
+    );
+
+    let view = daemon.view_client();
+    let restricted = crate::console::Source::new(
+        view.transport().expect("view client"),
+        DaemonNetwork::Fakechain.to_cryptonote(),
+    );
+    let grant = crate::console::execute(
+        &restricted,
+        &View::OptionSet {
+            name: "log-level".to_owned(),
+            value: "info".to_owned(),
+        },
+    )
+    .expect_err("the view listener refuses option set");
+    assert!(grant.contains("OutsideTheGrant"), "{grant}");
+
+    let flushed =
+        crate::console::execute(&source, &View::TxpoolFlush { id: None }).expect("txpool flush");
+    assert!(flushed.contains("flushed the pool"), "{flushed}");
+    let relay = crate::console::execute(
+        &source,
+        &View::TxRelay {
+            hash: "cd".repeat(32),
+        },
+    )
+    .expect_err("an unknown id is refused");
+    assert!(!relay.is_empty(), "{relay}");
+
+    let started =
+        crate::commands::mine::cmd_mine_start(Some(&client), DaemonNetwork::Fakechain, Some(1))
+            .expect("mine start");
+    assert_eq!(started["started"], true, "{started}");
+    let mining = crate::commands::mine::cmd_mine_status(Some(&client), DaemonNetwork::Fakechain)
+        .expect("mine status");
+    assert_eq!(mining["active"], true, "{mining}");
+    crate::commands::mine::cmd_mine_stop(Some(&client), DaemonNetwork::Fakechain)
+        .expect("mine stop");
+
+    let marks = daemon.marks();
+    let wrong = crate::console::Source::new(
+        client.transport().expect("still the session's client"),
+        DaemonNetwork::Mainnet.to_cryptonote(),
+    );
+    let mismatch = crate::console::execute(&wrong, &View::ChainHeight).expect_err("wrong network");
+    assert!(mismatch.contains("network mismatch"), "{mismatch}");
+    let asked = daemon.delta_since(&marks);
+    assert!(
+        !asked.contains(&request_line("get_height")),
+        "a wrong network is refused before rendering:\n{asked}"
+    );
+
+    crate::console::execute(&source, &View::DaemonStop).expect("daemon stop");
+    daemon.wait_exit();
 }
 
 fn transactions_method() -> &'static str {
@@ -283,6 +456,7 @@ struct Regtest {
     data_dir: PathBuf,
     config_dir: PathBuf,
     url: String,
+    view_url: String,
     logs: Vec<PathBuf>,
 }
 
@@ -296,6 +470,11 @@ impl Regtest {
         });
         let rpc_port = std::net::TcpListener::bind("127.0.0.1:0")
             .expect("port")
+            .local_addr()
+            .expect("addr")
+            .port();
+        let view_port = std::net::TcpListener::bind("127.0.0.1:0")
+            .expect("view port")
             .local_addr()
             .expect("addr")
             .port();
@@ -319,6 +498,8 @@ impl Regtest {
             "off",
             "--rpc-admin-listen",
             &format!("127.0.0.1:{rpc_port}"),
+            "--rpc-view-listen",
+            &format!("127.0.0.1:{view_port}"),
             "--data-dir",
             data_dir.to_str().expect("utf8 data dir"),
             "--config-file",
@@ -336,22 +517,41 @@ impl Regtest {
         .stdout(Stdio::from(stdout))
         .stderr(Stdio::from(stderr))
         .stdin(Stdio::null());
-        let child = cmd.spawn().unwrap_or_else(|error| {
-            drop(std::fs::remove_dir_all(&data_dir));
-            drop(std::fs::remove_dir_all(&config_dir));
-            panic!("spawn shekyld: {error}");
-        });
+        let child =
+            shekyl_tor_control_client::spawn_lock::spawn(&mut cmd).unwrap_or_else(|error| {
+                drop(std::fs::remove_dir_all(&data_dir));
+                drop(std::fs::remove_dir_all(&config_dir));
+                panic!("spawn shekyld: {error}");
+            });
         Self {
             child,
             logs: vec![data_dir.join("shekyld.log"), data_dir.join("daemon.log")],
             data_dir,
             config_dir,
             url: format!("http://127.0.0.1:{rpc_port}"),
+            view_url: format!("http://127.0.0.1:{view_port}"),
         }
     }
 
     fn client(&self) -> crate::daemon::DaemonClient {
-        crate::daemon::DaemonClient::new(&self.url, None, None, None).expect("daemon client")
+        crate::daemon::DaemonClient::new(&self.url, None, None).expect("daemon client")
+    }
+
+    fn view_client(&self) -> crate::daemon::DaemonClient {
+        crate::daemon::DaemonClient::new(&self.view_url, None, None).expect("view client")
+    }
+
+    fn wait_exit(&mut self) {
+        let deadline = Instant::now() + Duration::from_secs(20);
+        loop {
+            if self.child.try_wait().ok().flatten().is_some() {
+                return;
+            }
+            if Instant::now() >= deadline {
+                panic!("the daemon did not exit after daemon stop");
+            }
+            std::thread::sleep(Duration::from_millis(100));
+        }
     }
 
     fn marks(&self) -> Vec<u64> {
@@ -517,6 +717,21 @@ fn mine_address(seed: &[u8; shekyl_crypto_pq::account::MASTER_SEED_BYTES]) -> St
         .expect("the address")
 }
 
+/// The announcement sentence has three owners. This spawn checks it
+/// through `scripts/armed_lever.py --check-log`, the same check the
+/// shell harness uses, so the sentence is not copied here.
+fn this_spawn_announced(logs: &[PathBuf]) -> bool {
+    let script = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../scripts/armed_lever.py");
+    logs.iter().any(|path| {
+        std::process::Command::new("python3")
+            .arg(&script)
+            .arg("--check-log")
+            .arg(path)
+            .status()
+            .is_ok_and(|status| status.success())
+    })
+}
+
 async fn await_ready(rpc: &HttpRpc, logs: &[PathBuf]) {
     let deadline = Instant::now() + Duration::from_secs(60);
     let mut last = String::new();
@@ -525,7 +740,17 @@ async fn await_ready(rpc: &HttpRpc, logs: &[PathBuf]) {
             .json_rpc_call::<shekyl_rpc_types::GetInfoResponse>("get_info", None)
             .await
         {
-            Ok(_) => return,
+            Ok(_) => {
+                let text: String = logs
+                    .iter()
+                    .map(|path| std::fs::read_to_string(path).unwrap_or_default())
+                    .collect();
+                assert!(
+                    this_spawn_announced(logs),
+                    "the daemon did not announce the armed lever at start:\n{text}"
+                );
+                return;
+            }
             Err(error) => last = error.to_string(),
         }
         tokio::time::sleep(Duration::from_millis(200)).await;

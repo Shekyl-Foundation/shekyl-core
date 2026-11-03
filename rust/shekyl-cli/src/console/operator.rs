@@ -8,11 +8,10 @@
 //! Each post uses the method table's name. A refusal is the error class
 //! and the diagnostic code (`json_rpc_result`).
 
-use super::{native_json_rpc, require_ok, Source};
+use super::{native_json_rpc, require_ok, rest_post, Source};
 use shekyl_rpc_types::bans::{
     BannedRequest, BannedResponse, GetBansResponse, SetBan, SetBansRequest,
 };
-use shekyl_rpc_types::methods::{json_rpc, rest_path};
 use shekyl_rpc_types::mining::StatusOnlyResponse;
 use shekyl_rpc_types::options::{OptionPair, OptionSetRequest, OptionShowRequest, OptionsResponse};
 use shekyl_rpc_types::pool::{
@@ -22,23 +21,11 @@ use shekyl_rpc_types::pool::{
 use shekyl_rpc_types::{GetCoinbaseTxSumRequest, GetCoinbaseTxSumResponse, HashHex};
 use shekyl_units::AtomicUnits;
 
-fn json_name(name: &str) -> &'static str {
-    json_rpc(name)
-        .unwrap_or_else(|| panic!("{name} is not a daemon method"))
-        .name
-}
-
-fn rest_name(path: &str) -> &'static str {
-    rest_path(path)
-        .unwrap_or_else(|| panic!("{path} is not a daemon method"))
-        .name
-}
-
 pub(super) fn chain_coinbase_sum(src: &Source, from: u64, to: u64) -> Result<String, String> {
     let count = to.saturating_sub(from).saturating_add(1);
     let reply: GetCoinbaseTxSumResponse = native_json_rpc(
         src,
-        json_name("get_coinbase_tx_sum"),
+        "get_coinbase_tx_sum",
         &GetCoinbaseTxSumRequest {
             height: from,
             count,
@@ -55,7 +42,7 @@ pub(super) fn chain_coinbase_sum(src: &Source, from: u64, to: u64) -> Result<Str
 pub(super) fn tx_relay(src: &Source, hash: &str) -> Result<String, String> {
     let reply: StatusOnlyResponse = native_json_rpc(
         src,
-        json_name("relay_tx"),
+        "relay_tx",
         &RelayTxRequest {
             txids: vec![HashHex::from_hex(hash).map_err(|error| error.to_string())?],
         },
@@ -66,7 +53,7 @@ pub(super) fn tx_relay(src: &Source, hash: &str) -> Result<String, String> {
 
 pub(super) fn txpool_list(src: &Source, short: bool) -> Result<String, String> {
     if short {
-        let body = src.post_remote(rest_name("/get_transaction_pool_hashes"), b"{}".to_vec())?;
+        let body = rest_post(src, "/get_transaction_pool_hashes", b"{}".to_vec())?;
         let reply: GetTransactionPoolHashesResponse =
             serde_json::from_slice(&body).map_err(|error| error.to_string())?;
         require_ok(&reply.status)?;
@@ -80,7 +67,7 @@ pub(super) fn txpool_list(src: &Source, short: bool) -> Result<String, String> {
             .collect::<Vec<_>>()
             .join("\n"));
     }
-    let body = src.post_remote(rest_name("/get_transaction_pool"), b"{}".to_vec())?;
+    let body = rest_post(src, "/get_transaction_pool", b"{}".to_vec())?;
     let reply: GetTransactionPoolResponse =
         serde_json::from_slice(&body).map_err(|error| error.to_string())?;
     require_ok(&reply.status)?;
@@ -107,11 +94,8 @@ pub(super) fn txpool_flush(src: &Source, id: Option<&str>) -> Result<String, Str
         Some(hash) => vec![HashHex::from_hex(hash).map_err(|error| error.to_string())?],
         None => Vec::new(),
     };
-    let reply: StatusOnlyResponse = native_json_rpc(
-        src,
-        json_name("flush_txpool"),
-        &FlushTxpoolRequest { txids },
-    )?;
+    let reply: StatusOnlyResponse =
+        native_json_rpc(src, "flush_txpool", &FlushTxpoolRequest { txids })?;
     require_ok(&reply.status)?;
     Ok(match id {
         Some(hash) => format!("flushed {hash}"),
@@ -120,8 +104,7 @@ pub(super) fn txpool_flush(src: &Source, id: Option<&str>) -> Result<String, Str
 }
 
 pub(super) fn ban_list(src: &Source) -> Result<String, String> {
-    let reply: GetBansResponse =
-        native_json_rpc(src, json_name("get_bans"), &serde_json::json!({}))?;
+    let reply: GetBansResponse = native_json_rpc(src, "get_bans", &serde_json::json!({}))?;
     require_ok(&reply.status)?;
     if reply.bans.is_empty() {
         return Ok("No bans.".to_owned());
@@ -143,7 +126,7 @@ pub(super) fn ban_list(src: &Source) -> Result<String, String> {
 pub(super) fn ban_add(src: &Source, ip: &str, duration: Option<u64>) -> Result<String, String> {
     let reply: StatusOnlyResponse = native_json_rpc(
         src,
-        json_name("set_bans"),
+        "set_bans",
         &SetBansRequest {
             bans: vec![SetBan {
                 host: ip.to_owned(),
@@ -162,7 +145,7 @@ pub(super) fn ban_add(src: &Source, ip: &str, duration: Option<u64>) -> Result<S
 pub(super) fn ban_remove(src: &Source, ip: &str) -> Result<String, String> {
     let reply: StatusOnlyResponse = native_json_rpc(
         src,
-        json_name("set_bans"),
+        "set_bans",
         &SetBansRequest {
             bans: vec![SetBan {
                 host: ip.to_owned(),
@@ -178,7 +161,7 @@ pub(super) fn ban_remove(src: &Source, ip: &str) -> Result<String, String> {
 pub(super) fn ban_show(src: &Source, ip: &str) -> Result<String, String> {
     let reply: BannedResponse = native_json_rpc(
         src,
-        json_name("banned"),
+        "banned",
         &BannedRequest {
             address: ip.to_owned(),
         },
@@ -228,7 +211,7 @@ fn render_options(reply: &OptionsResponse) -> String {
 pub(super) fn option_set(src: &Source, name: &str, value: &str) -> Result<String, String> {
     let reply: OptionsResponse = native_json_rpc(
         src,
-        json_name("option_set"),
+        "option_set",
         &OptionSetRequest {
             options: vec![OptionPair {
                 name: name.to_owned(),
@@ -241,13 +224,12 @@ pub(super) fn option_set(src: &Source, name: &str, value: &str) -> Result<String
 
 pub(super) fn option_show(src: &Source, name: Option<&str>) -> Result<String, String> {
     let names = name.map(|name| vec![name.to_owned()]);
-    let reply: OptionsResponse =
-        native_json_rpc(src, json_name("option_show"), &OptionShowRequest { names })?;
+    let reply: OptionsResponse = native_json_rpc(src, "option_show", &OptionShowRequest { names })?;
     Ok(render_options(&reply))
 }
 
 pub(super) fn daemon_stop(src: &Source) -> Result<String, String> {
-    let body = src.post_remote(rest_name("/stop_daemon"), b"{}".to_vec())?;
+    let body = rest_post(src, "/stop_daemon", b"{}".to_vec())?;
     let reply: StatusOnlyResponse =
         serde_json::from_slice(&body).map_err(|error| error.to_string())?;
     require_ok(&reply.status)?;

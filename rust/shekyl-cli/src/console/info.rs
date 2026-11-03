@@ -25,7 +25,7 @@ use super::Source;
 /// One `POST /get_info` to the daemon the operator named. The listener
 /// answers with what that listener discloses.
 pub(super) fn fetch_get_info(src: &Source) -> Result<GetInfoResponse, String> {
-    let raw = src.post_remote("/get_info", b"{}".to_vec())?;
+    let raw = super::rest_post(src, "/get_info", b"{}".to_vec())?;
     decode_get_info_ok(&raw)
 }
 

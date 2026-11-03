@@ -558,6 +558,79 @@ impl SyncDaemon {
         let route = route.trim_start_matches('/');
         self.runtime.block_on(self.rpc.post(route, body))
     }
+
+    /// One JSON-RPC call. The envelope is this method's: `id` is `0`, the
+    /// same value `shekyl-rpc-client` posts. A refusal is the RW-Q3 error
+    /// object, read by [`shekyl_rpc_types::errors::read_error_object`].
+    ///
+    /// # Errors
+    ///
+    /// The transport failed, the body is not a JSON-RPC reply, or the daemon
+    /// refused.
+    pub fn json_rpc<Req, Reply>(&self, method: &str, request: &Req) -> Result<Reply, JsonRpcError>
+    where
+        Req: serde::Serialize,
+        Reply: serde::de::DeserializeOwned,
+    {
+        let body = serde_json::to_vec(&serde_json::json!({
+            "jsonrpc": "2.0",
+            "id": 0,
+            "method": method,
+            "params": request,
+        }))
+        .map_err(|error| JsonRpcError::Malformed(error.to_string()))?;
+        let raw = self
+            .post("json_rpc", body)
+            .map_err(JsonRpcError::Transport)?;
+        let envelope: serde_json::Value = serde_json::from_slice(&raw)
+            .map_err(|_| JsonRpcError::Malformed(format!("malformed {method} reply")))?;
+        if let Some(error) = envelope.get("error") {
+            return Err(match shekyl_rpc_types::errors::read_error_object(error) {
+                Some(refusal) => JsonRpcError::Refusal(refusal),
+                None => JsonRpcError::Malformed(format!("{method} failed")),
+            });
+        }
+        let result = envelope.get("result").cloned().ok_or_else(|| {
+            JsonRpcError::Malformed(format!("malformed {method} reply: no result"))
+        })?;
+        serde_json::from_value(result)
+            .map_err(|error| JsonRpcError::Malformed(format!("malformed {method} reply: {error}")))
+    }
+}
+
+/// A JSON-RPC call that did not return a reply.
+#[derive(Debug)]
+pub enum JsonRpcError {
+    /// The post failed.
+    Transport(RpcError),
+    /// The daemon refused. The class and the diagnostic are the refusal.
+    Refusal(shekyl_rpc_types::errors::RpcError),
+    /// The body was not a reply of the requested type.
+    Malformed(String),
+}
+
+/// A JSON-RPC `result` envelope, for a test that answers a daemon route.
+/// `id` is `0`, the same value [`SyncDaemon::json_rpc`] posts.
+#[must_use]
+pub fn json_rpc_result_body(result: &impl serde::Serialize) -> String {
+    serde_json::json!({
+        "jsonrpc": "2.0",
+        "id": 0,
+        "result": result,
+    })
+    .to_string()
+}
+
+impl std::fmt::Display for JsonRpcError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::Transport(error) => write!(f, "{error}"),
+            Self::Refusal(refusal) => {
+                write!(f, "{:?} {}", refusal.class, refusal.diagnostic.code)
+            }
+            Self::Malformed(detail) => write!(f, "{detail}"),
+        }
+    }
 }
 
 #[cfg(test)]

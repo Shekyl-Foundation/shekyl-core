@@ -436,7 +436,7 @@ fn meta(id: CommandId) -> Meta {
         RequestNew => Meta {
             word: "new",
             synonyms: &[],
-            usage: "request new <amount> <label> [--expiry <unix|1h|7d>]",
+            usage: "request new <amount> <label> [--expiry <unix|1h|5min|7d>]",
             parent: Some(Request),
             bare: false,
             omit_history: false,

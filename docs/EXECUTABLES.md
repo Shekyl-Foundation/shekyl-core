@@ -179,8 +179,7 @@ shekyl-cli [options]
 | `--testnet` / `--stagenet` | Shorthand for `--network testnet` / `--network stagenet` — the same flags `shekyld` takes (CU-1). The prompt names the selected network |
 | `--wallet-dir <path>` | Directory for wallet files. Default: the per-network `~/.shekyl/wallets/<network>/`, created on demand, so wallets on different networks never share a directory (CU-1). Ignored with `--rpc-url`. `--engine-dir` is a hidden alias (CU-2) |
 | `--wallet <name>` | Open a wallet immediately on startup. `--engine-file` is a hidden alias (CU-2) |
-| `--proxy <socks5h://host:port>` | SOCKS proxy for the daemon connections. Prefer `socks5h://`: the REPL's direct daemon queries honor the scheme, and `socks5://` resolves the hostname locally (a DNS leak, warned at startup) |
-| `--daemon-ca-cert <pem>` | PEM CA certificate for an `https://` daemon with a custom CA |
+| `--proxy <socks5h://host:port>` | SOCKS proxy for the daemon connections. Prefer `socks5h://`: the REPL's direct daemon queries honor the scheme, and `socks5://` resolves the hostname locally (a DNS leak, warned at startup). An `https://` daemon uses the system root store |
 | `--debug` | Show structured RPC error details on failures |
 
 ### Interactive commands

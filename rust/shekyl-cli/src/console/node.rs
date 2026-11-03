@@ -75,7 +75,10 @@ pub(super) fn version(src: &Source) -> Result<String, String> {
     }
     let raw = src
         .rpc()
-        .post("/get_info", b"{}".to_vec())
+        .post(
+            crate::daemon::posted_rest("/get_info").map_err(|error| error.to_string())?,
+            b"{}".to_vec(),
+        )
         .map_err(|error| error.to_string())?;
     let info = decode_get_info_ok(&raw)?;
     info.node
@@ -102,7 +105,7 @@ fn rpc_version_difference(ours: u32, theirs: u32) -> String {
 /// `/get_transaction_pool_stats`'s `pool_stats`. The pool does not record
 /// when a transaction arrived (S7), so there is no age and no histogram.
 fn fetch_pool_stats(src: &Source) -> Result<TxpoolStats, String> {
-    let raw = src.post_remote("/get_transaction_pool_stats", b"{}".to_vec())?;
+    let raw = super::rest_post(src, "/get_transaction_pool_stats", b"{}".to_vec())?;
     let reply: GetTransactionPoolStatsResponse = serde_json::from_slice(&raw)
         .map_err(|e| format!("malformed get_transaction_pool_stats reply: {e}"))?;
     if reply.status.is_ok() {

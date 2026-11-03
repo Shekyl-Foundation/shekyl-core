@@ -685,7 +685,7 @@ async fn restricted_listener_names_a_transaction_this_node_shows() {
 /// answer through `shekyl-cli` on an offline testnet daemon.
 #[tokio::test]
 #[ignore = "requires SHEKYLD_BIN and SHEKYL_CLI_BIN; spawns a live daemon"]
-async fn get_info_console_commands_answer_on_the_in_process_arm() {
+async fn daemon_words_answer_through_shekyl_cli() {
     let daemon = RegtestDaemon::start_on_testnet().await;
     let info: GetInfoResponse = daemon
         .rpc()

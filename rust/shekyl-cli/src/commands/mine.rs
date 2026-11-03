@@ -442,7 +442,7 @@ mod tests {
     /// A loopback daemon is the silent default: no reminder.
     #[test]
     fn a_loopback_daemon_is_not_reminded() {
-        let daemon = crate::daemon::DaemonClient::new("http://127.0.0.1:18081", None, None, None)
+        let daemon = crate::daemon::DaemonClient::new("http://127.0.0.1:18081", None, None)
             .expect("loopback parses");
         assert!(super::remote_mining_note(&daemon).is_none());
     }
@@ -457,7 +457,7 @@ mod tests {
     /// is open.
     #[test]
     fn a_remote_daemon_is_reminded_and_mining_still_starts() {
-        let remote = crate::daemon::DaemonClient::new("http://203.0.113.5:18081", None, None, None)
+        let remote = crate::daemon::DaemonClient::new("http://203.0.113.5:18081", None, None)
             .expect("remote address parses");
         let note = super::remote_mining_note(&remote).expect("a remote daemon is reminded");
         assert_eq!(
@@ -466,12 +466,7 @@ mod tests {
              Mining will run on that machine's CPU."
         );
 
-        let info = serde_json::json!({
-            "jsonrpc": "2.0",
-            "id": "0",
-            "result": info_reply(),
-        })
-        .to_string();
+        let info = shekyl_rpc_transport::json_rpc_result_body(&info_reply());
         let (address, log) = crate::console::route_server_recording(vec![
             ("json_rpc:get_info", info),
             (
@@ -480,9 +475,8 @@ mod tests {
             ),
             ("/start_mining", r#"{"status":"OK"}"#.to_owned()),
         ]);
-        let daemon =
-            crate::daemon::DaemonClient::new(&format!("http://{address}"), None, None, None)
-                .expect("the route server parses");
+        let daemon = crate::daemon::DaemonClient::new(&format!("http://{address}"), None, None)
+            .expect("the route server parses");
 
         let result = super::cmd_mine_start(Some(&daemon), DaemonNetwork::Mainnet, Some(1))
             .expect("mining starts");

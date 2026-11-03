@@ -135,6 +135,7 @@ fn kind_text(kind: &Kind) -> String {
                 .join(", ")
         ),
         Kind::Origin => "web origin".to_owned(),
+        Kind::Hash => "64 hexadecimal characters".to_owned(),
         Kind::List(item) => format!("list of {} (`none` for empty)", kind_text(item)),
         Kind::Map { value, .. } => format!("map to {}", kind_text(value)),
     }
@@ -208,6 +209,7 @@ fn example_value(kind: &Kind, default: &Default) -> String {
                 .unwrap_or_default()
         ),
         Kind::Origin => "\"https://example.org\"".to_owned(),
+        Kind::Hash => "\"<64 hex characters>\"".to_owned(),
         Kind::List(item) => format!("[{}]", example_value(item, &Default::Unset)),
         Kind::Map { .. } => "{ }".to_owned(),
     }

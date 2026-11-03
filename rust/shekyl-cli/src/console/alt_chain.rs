@@ -7,8 +7,7 @@
 
 use super::info::fetch_get_info;
 use super::{
-    human_readable_timespan, json_rpc_result, native_json_rpc, require_ok, trimmed,
-    wide_difficulty_decimal, Source,
+    human_readable_timespan, native_json_rpc, require_ok, trimmed, wide_difficulty_decimal, Source,
 };
 use shekyl_rpc_types::{AltChainInfo, GetAlternateChainsResponse};
 
@@ -21,14 +20,8 @@ use shekyl_rpc_types::{AltChainInfo, GetAlternateChainsResponse};
 /// Fetch `get_alternate_chains`. In-process it is the store. Remote, it is
 /// one `/json_rpc` post.
 fn fetch_alt_chains(src: &Source) -> Result<Vec<AltChainInfo>, String> {
-    let body = serde_json::to_vec(&serde_json::json!({
-        "jsonrpc": "2.0",
-        "id": "0",
-        "method": "get_alternate_chains",
-    }))
-    .map_err(|e| format!("cannot encode the request: {e}"))?;
-    let raw = src.post_remote("/json_rpc", body)?;
-    let reply = json_rpc_result::<GetAlternateChainsResponse>(&raw, "get_alternate_chains")?;
+    let reply: GetAlternateChainsResponse =
+        native_json_rpc(src, "get_alternate_chains", &serde_json::json!({}))?;
     if reply.status.is_ok() {
         Ok(reply.chains)
     } else {

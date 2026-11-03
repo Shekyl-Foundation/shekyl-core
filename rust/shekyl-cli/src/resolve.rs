@@ -277,7 +277,7 @@ pub enum ResolvedCommand {
         label: String,
         /// Invoice expiry as wall-clock Unix seconds (`Timestamp`, RTN-6).
         /// Accepts an absolute unix timestamp or a relative duration
-        /// (`1h`, `30m`, `7d`) resolved at parse time. The JSON-RPC wire
+        /// (`1h`, `5min`, `7d`) resolved at parse time. The JSON-RPC wire
         /// still carries a raw integer.
         expiry: Option<Timestamp>,
     },
@@ -582,8 +582,9 @@ pub(crate) fn unix_now() -> Timestamp {
     )
 }
 
-/// Absolute unix seconds, or a relative duration (`30s`/`5m`/`1h`/`7d`)
+/// Absolute unix seconds, or an IG-6 duration (`30s`/`5min`/`1h`/`7d`)
 /// added to `now`. Invoice expiry is wall-clock, not block height (RTN-6).
+/// `5m` is refused: the unit is `min`.
 pub(crate) fn parse_invoice_expiry(raw: &str, now: Timestamp) -> Option<Timestamp> {
     if let Ok(secs) = raw.parse::<u64>() {
         // A bare integer below INVOICE_UNIX_FLOOR is a height-shaped
@@ -591,26 +592,26 @@ pub(crate) fn parse_invoice_expiry(raw: &str, now: Timestamp) -> Option<Timestam
         // it rather than minting a 1970 timestamp.
         return Timestamp::from_invoice_unix(secs);
     }
-    let duration = parse_duration_secs(raw)?;
+    let duration = parse_ig6_duration_secs(raw).ok()?;
     now.checked_add_secs(duration)
 }
 
-fn parse_duration_secs(raw: &str) -> Option<u64> {
-    let raw = raw.trim();
-    let (last_idx, unit) = raw.char_indices().next_back()?;
-    if last_idx == 0 {
-        return None;
-    }
-    let digits = raw.get(..last_idx)?;
-    let n: u64 = digits.parse().ok()?;
-    let mul = match unit {
-        's' => 1,
-        'm' => 60,
-        'h' => 3600,
-        'd' => 86400,
-        _ => return None,
+/// An IG-6 duration, in whole seconds. `ms` rounds up to the next second.
+pub(crate) fn parse_ig6_duration_secs(raw: &str) -> Result<u64, String> {
+    const DURATION: shekyl_options::Kind = shekyl_options::Kind::Quantity {
+        dimension: shekyl_options::Dimension::Duration,
+        min: 0,
+        keywords: &[],
     };
-    n.checked_mul(mul)
+    match DURATION.parse_text(raw.trim()) {
+        Ok(shekyl_options::Value::Duration(duration)) => {
+            let millis = u64::try_from(duration.as_millis())
+                .map_err(|_| format!("{raw:?} is not a duration"))?;
+            Ok(millis.div_ceil(1000))
+        }
+        Err(fault) => Err(fault.at("--duration", shekyl_options::Source::Cli).render()),
+        Ok(_) => Err(format!("{raw:?} is not a duration")),
+    }
 }
 
 /// Construct a formatted parse-time [`ResolvedCommand::Diagnostic`].

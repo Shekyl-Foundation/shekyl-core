@@ -51,7 +51,7 @@ fn fetch_mining_status(src: &Source) -> Result<MiningReadout, String> {
     // and still prints everything else it knows. A daemon that is not
     // answering at all is the same line, not a hung command.
     src.ensure_identity()?;
-    let raw = match src.rpc().post("/mining_status", b"{}".to_vec()) {
+    let raw = match super::rest_post(src, "/mining_status", b"{}".to_vec()) {
         Ok(raw) if raw.is_empty() => return Ok(MiningReadout::Unavailable),
         Ok(raw) => {
             if shekyl_rpc_types::errors::read_refusal(&raw).is_some_and(|error| {

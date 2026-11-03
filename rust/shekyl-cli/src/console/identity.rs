@@ -13,7 +13,7 @@ use shekyl_rpc_types::{
     core_rpc_version_string, DaemonNetwork, IdentityExpectation, IdentityMismatch,
 };
 
-use super::{json_rpc_result, Source};
+use super::Source;
 
 impl Source {
     /// Run the identity handshake once, then reuse its verdict (`VC-3`).
@@ -71,26 +71,15 @@ fn handshake(rpc: &shekyl_rpc_transport::SyncDaemon, nettype: u8) -> Result<Daem
 pub(super) fn get_version_result(
     rpc: &shekyl_rpc_transport::SyncDaemon,
 ) -> Result<serde_json::Value, String> {
-    let method = shekyl_rpc_types::methods::json_rpc("get_version")
-        .expect("get_version is a daemon method")
-        .name;
-    let body = serde_json::to_vec(&serde_json::json!({
-        "jsonrpc": "2.0", "id": "0", "method": method, "params": {},
-    }))
-    .map_err(|e| format!("cannot encode the handshake request: {e}"))?;
-    let raw = rpc
-        .post("/json_rpc", body)
-        .map_err(|error| error.to_string())?;
-    json_rpc_result(&raw, method).map_err(|reason| {
-        if reason.starts_with("malformed ") {
-            format!(
-                "{} (evidence: {reason})",
+    let method = crate::daemon::posted_json("get_version").map_err(|error| error.to_string())?;
+    rpc.json_rpc(method, &serde_json::json!({}))
+        .map_err(|error| match error {
+            shekyl_rpc_transport::JsonRpcError::Malformed(detail) => format!(
+                "{} (evidence: {detail})",
                 console_identity_message(&IdentityMismatch::unreadable())
-            )
-        } else {
-            reason
-        }
-    })
+            ),
+            other => other.to_string(),
+        })
 }
 
 fn console_identity_message(m: &IdentityMismatch) -> String {

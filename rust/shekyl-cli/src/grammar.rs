@@ -202,12 +202,11 @@ fn parse_ready(id: CommandId, tail: Tail<'_>, args: &[&str]) -> ResolvedCommand 
     }
 }
 
-/// 64 hexadecimal characters, the grammar's hash kind (IG-6).
+/// 64 hexadecimal characters, [`shekyl_options::Kind::Hash`] (IG-Q23).
 fn parse_hash(word: &str) -> Result<String, String> {
-    if word.len() == 64 && word.bytes().all(|byte| byte.is_ascii_hexdigit()) {
-        Ok(word.to_ascii_lowercase())
-    } else {
-        Err(format!("{word:?} is not a hash"))
+    match shekyl_options::Kind::Hash.parse_text(word) {
+        Ok(shekyl_options::Value::Hash(hash)) => Ok(hash),
+        _ => Err(format!("{word:?} is not a hash")),
     }
 }
 
@@ -329,11 +328,7 @@ fn parse_host(word: &str, view: View) -> ResolvedCommand {
 }
 
 fn host_token(word: &str) -> bool {
-    let (address, prefix) = word.split_once('/').unwrap_or((word, ""));
-    if address.parse::<std::net::IpAddr>().is_err() {
-        return false;
-    }
-    prefix.is_empty() || prefix.parse::<u8>().is_ok()
+    word.parse::<std::net::IpAddr>().is_ok()
 }
 
 fn parse_ban_add(args: &[&str]) -> ResolvedCommand {
@@ -349,7 +344,7 @@ fn parse_ban_add(args: &[&str]) -> ResolvedCommand {
     }
     let duration = match split.value("--duration") {
         None => None,
-        Some(value) => match parse_ig_duration(value) {
+        Some(value) => match crate::resolve::parse_ig6_duration_secs(value) {
             Ok(seconds) => Some(seconds),
             Err(message) => return diag(message),
         },
@@ -358,31 +353,6 @@ fn parse_ban_add(args: &[&str]) -> ResolvedCommand {
         ip: (*ip).to_owned(),
         duration,
     })
-}
-
-/// An IG-6 duration: an integer and `ms`, `s`, `min`, `h` or `d`.
-fn parse_ig_duration(raw: &str) -> Result<u64, String> {
-    let raw = raw.trim();
-    let split_at = raw
-        .find(|c: char| c.is_ascii_alphabetic())
-        .ok_or_else(|| format!("{raw:?} is not a duration"))?;
-    let digits = raw[..split_at].trim();
-    let unit = raw[split_at..].trim();
-    if digits.is_empty() {
-        return Err(format!("{raw:?} is not a duration"));
-    }
-    let count: u64 = digits
-        .parse()
-        .map_err(|_| format!("{raw:?} is not a duration"))?;
-    let seconds = match unit {
-        "ms" => Some(count.div_ceil(1000)),
-        "s" => Some(count),
-        "min" => count.checked_mul(60),
-        "h" => count.checked_mul(60 * 60),
-        "d" => count.checked_mul(60 * 60 * 24),
-        _ => None,
-    };
-    seconds.ok_or_else(|| format!("{raw:?} is not a duration"))
 }
 
 fn parse_option_set(args: &[&str]) -> ResolvedCommand {
@@ -672,13 +642,13 @@ fn parse_request_new(args: &[&str]) -> ResolvedCommand {
             Some(ts) => Some(ts),
             None => {
                 return diag(format!(
-                    "request new: --expiry expects unix seconds or a duration (1h, 30m, 7d), got {raw:?}"
+                    "request new: --expiry expects unix seconds or a duration (1h, 5min, 7d), got {raw:?}"
                 ));
             }
         },
         FlagValue::Invalid(raw) => {
             return diag(format!(
-                "request new: --expiry expects unix seconds or a duration (1h, 30m, 7d), got {raw:?}"
+                "request new: --expiry expects unix seconds or a duration (1h, 5min, 7d), got {raw:?}"
             ));
         }
     };

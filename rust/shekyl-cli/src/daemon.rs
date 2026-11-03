@@ -72,7 +72,7 @@ impl fmt::Display for DaemonError {
             ),
             Self::TlsFailure(detail) => write!(
                 f,
-                "TLS verification failed for daemon (check certificate or use --daemon-ca-cert). Detail: {detail}"
+                "TLS verification failed for daemon (the connection uses the system roots). Detail: {detail}"
             ),
             Self::MalformedResponse(detail) => {
                 write!(f, "Daemon returned a malformed response: {detail}")
@@ -139,16 +139,13 @@ impl DaemonClient {
     ///
     /// - `daemon_address`: e.g. `"http://127.0.0.1:11029"` or `"https://remote:11029"`.
     /// - `proxy`: optional SOCKS5 proxy address, e.g. `"socks5://127.0.0.1:9050"`.
-    ///   When set, the client uses SOCKS auth username `shekyl-cli-daemon` to ensure
-    ///   Tor assigns an isolated circuit via `IsolateSOCKSAuth`. Generic SOCKS proxies
-    ///   may ignore auth-based isolation.
-    /// - `ca_cert_path`: optional path to a PEM CA certificate for self-signed daemons.
+    ///   The transport passes it to `SyncDaemon`. An `https://` daemon uses
+    ///   the system root store (RT-W12 removes that arm).
     /// - `down_hint`: recovery copy attached to refused connections (the
     ///   caller knows the network and whether the endpoint is loopback).
     pub fn new(
         daemon_address: &str,
         proxy: Option<&str>,
-        _ca_cert_path: Option<&str>,
         down_hint: Option<String>,
     ) -> Result<Self, DaemonError> {
         if daemon_address.is_empty() {
@@ -220,25 +217,16 @@ impl DaemonClient {
             .map_err(|error| DaemonError::MalformedResponse(error.to_string()))
     }
 
-    /// Call a JSON-RPC method on the daemon.
-    fn json_rpc(&self, method: &str, params: &Value) -> Result<Value, DaemonError> {
-        let body = serde_json::json!({
-            "jsonrpc": "2.0",
-            "id": "0",
-            "method": method,
-            "params": params,
-        });
-
-        let parsed = self.post_json("/json_rpc", &body)?;
-
-        if let Some(err) = parsed.get("error") {
-            return Err(refusal_of(err));
-        }
-
-        parsed
-            .get("result")
-            .cloned()
-            .ok_or_else(|| DaemonError::MalformedResponse("missing 'result' field".into()))
+    /// Call a JSON-RPC method on the daemon. `method` is the table's name
+    /// ([`posted_json`]). The envelope is [`SyncDaemon::json_rpc`].
+    fn json_rpc<Reply: serde::de::DeserializeOwned>(
+        &self,
+        method: &str,
+        params: &impl serde::Serialize,
+    ) -> Result<Reply, DaemonError> {
+        self.rpc()?
+            .json_rpc(method, params)
+            .map_err(|error| self.with_down_hint(json_rpc_error(error)))
     }
 
     /// Fetch daemon info (`get_info`). Used by `chain_health` and mining gates.
@@ -247,9 +235,7 @@ impl DaemonClient {
     /// a member that is absent means the contract moved, not a safe zero. In
     /// particular a missing `restricted` cannot read as unrestricted.
     pub fn get_info(&self) -> Result<GetInfoResponse, DaemonError> {
-        let value = self.json_rpc(posted_json("get_info")?, &serde_json::json!({}))?;
-        serde_json::from_value(value)
-            .map_err(|e| DaemonError::MalformedResponse(format!("get_info: {e}")))
+        self.json_rpc(posted_json("get_info")?, &serde_json::json!({}))
     }
 
     /// `get_version`'s `result`, undecoded. Used by the mining gates.
@@ -259,7 +245,7 @@ impl DaemonClient {
     /// which reads the version before anything else. It is where a daemon
     /// names its network; `get_info` stopped repeating it at 3.54 (RK-Q6).
     pub fn get_version_result(&self) -> Result<Value, DaemonError> {
-        self.json_rpc(posted_json("get_version")?, &serde_json::json!({}))
+        self.json_rpc::<serde_json::Value>(posted_json("get_version")?, &serde_json::json!({}))
     }
 
     /// Operator coverage list. Empty params; the daemon orders the rows.
@@ -269,13 +255,10 @@ impl DaemonClient {
     pub fn archival_shard_coverage(
         &self,
     ) -> Result<shekyl_rpc_types::GetArchivalShardCoverageResponse, DaemonError> {
-        let value = self.json_rpc(
+        self.json_rpc(
             posted_json("get_archival_shard_coverage")?,
             &serde_json::json!({}),
-        )?;
-        serde_json::from_value(value).map_err(|e| {
-            DaemonError::MalformedResponse(format!("get_archival_shard_coverage: {e}"))
-        })
+        )
     }
 
     /// The configured daemon URL, for copy that names the endpoint
@@ -343,16 +326,29 @@ impl DaemonClient {
     }
 }
 
-fn posted_json(name: &str) -> Result<&'static str, DaemonError> {
+pub(crate) fn posted_json(name: &str) -> Result<&'static str, DaemonError> {
     shekyl_rpc_types::methods::json_rpc(name)
         .map(|method| method.name)
         .ok_or_else(|| DaemonError::Other(format!("{name} is not a daemon method")))
 }
 
-fn posted_rest(path: &str) -> Result<&'static str, DaemonError> {
+pub(crate) fn posted_rest(path: &str) -> Result<&'static str, DaemonError> {
     shekyl_rpc_types::methods::rest_path(path)
         .map(|method| method.name)
         .ok_or_else(|| DaemonError::Other(format!("{path} is not a daemon method")))
+}
+
+fn json_rpc_error(error: shekyl_rpc_transport::JsonRpcError) -> DaemonError {
+    match error {
+        shekyl_rpc_transport::JsonRpcError::Transport(error) => classify_transport(&error),
+        shekyl_rpc_transport::JsonRpcError::Refusal(refusal) => DaemonError::RpcError {
+            class: format!("{:?}", refusal.class),
+            diagnostic: refusal.diagnostic.code,
+        },
+        shekyl_rpc_transport::JsonRpcError::Malformed(detail) => {
+            DaemonError::MalformedResponse(detail)
+        }
+    }
 }
 
 /// A JSON-RPC `error` object, as its class and diagnostic code.
@@ -465,8 +461,6 @@ mod tests {
     fn path_body_reads_a_json_rpc_error_envelope() {
         let class = shekyl_rpc_types::errors::ErrorClass::OutsideTheGrant;
         let parsed = serde_json::json!({
-            "jsonrpc": "2.0",
-            "id": null,
             "error": {
                 "code": class.code(),
                 "message": "this connection's grant does not include mining",

@@ -90,7 +90,7 @@ flowchart LR
 - Connection flags (`--network`, `--testnet`, `--stagenet`,
   `--daemon-address`, `--engine-dir`/`--wallet-dir`,
   `--engine-file`/`--wallet`, `--rpc-url`, `--proxy`,
-  `--daemon-ca-cert`, `--debug`) become clap **global** arguments, so
+  `--debug`) become clap **global** arguments, so
   `shekyl-cli create miner --testnet` works (previously flags after the
   subcommand failed to parse).
 - The wallet directory defaults to `~/.shekyl/wallets/<network>/`
