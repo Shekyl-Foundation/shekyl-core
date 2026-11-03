@@ -3478,7 +3478,7 @@ pub(super) async fn staker_wallet(
 
 /// The persona's payment destination, derived in-test from the same master
 /// seed the wallet holds. The production wallet derives the identical bundle
-/// at open (`spawn_stake_engine_if_staker` → `derive_archival_p_keys`); the
+/// at open (`prepare_stake_engine_if_staker` → `derive_archival_p_keys`); the
 /// harness takes only its public keys, for the one walk that pays a persona
 /// outside `stake_in` (the emission claim's post-bond fee input).
 pub(super) fn persona_destination(

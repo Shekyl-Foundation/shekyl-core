@@ -1281,8 +1281,15 @@ before `on_stop` has run; `wait_for_shutdown_result` waits for
   or a live engine in this one, holds the file. Both are refused at once
   (`LockedElsewhere`, whose doc becomes true). Deleted:
   `open_polling_lock_release`, `REOPEN_LOCK_RELEASE_TIMEOUT`,
-  `REOPEN_LOCK_RELEASE_POLL`, and `open_and_spawn`'s `block_in_place`
-  branch with its current-thread panic caveat.
+  `REOPEN_LOCK_RELEASE_POLL`, and `open_and_spawn`. Opening and spawning
+  were one step, so a later failure dropped a live `ActorRef` and the
+  next open was told the wallet was open elsewhere.
+- **A failed open does not spawn.** The curve-tree client stays a value
+  until the body store has opened and the persona bundles are derived.
+  Drop of that value closes the file. The actors are spawned only after
+  those opens succeed. The conformance self-cert is the one fallible step
+  left, and its failure awaits the same shutdown `Engine::release` does
+  before the error returns.
 - **An engine dropped without `close`** still stops its actor when its
   last `ActorRef` drops, asynchronously. A reopen that races that is
   refused with `LockedElsewhere`, not waited on; every production close

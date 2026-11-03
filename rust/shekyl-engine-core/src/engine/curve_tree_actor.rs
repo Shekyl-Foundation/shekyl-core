@@ -78,7 +78,6 @@
 //! [`docs/design/CT5_ENGINE_WIRING.md`]: ../../../../../docs/design/CT5_ENGINE_WIRING.md
 
 use std::ops::ControlFlow;
-use std::path::Path;
 use std::sync::Arc;
 
 use kameo::actor::{Actor, ActorRef, Spawn, WeakActorRef};
@@ -812,33 +811,6 @@ impl CurveTreeHandle {
     /// The actor's mailbox, for one `ask`.
     fn actor_ref(&self) -> &ActorRef<CurveTreeActor> {
         &self.actor
-    }
-
-    /// Open (or create + resume) the persistent [`CurveTreeClient`] at `path`
-    /// and spawn the actor over it — the single open-then-spawn entry point.
-    ///
-    /// [`CurveTreeClient::open`] resumes from the store's contents with **no
-    /// genesis replay** (`CT3_SYNC.md` §3.1 / R1-Q2), so this is cheap on an
-    /// already-synced store. Recovery from a poisoned client is in-actor
-    /// ([`Self::recover`]) and never reopens the file.
-    ///
-    /// `assemble` uses this for the initial open: `path` is the curve-tree store
-    /// sibling of the wallet files
-    /// ([`curve_tree_store_path_from`](shekyl_engine_file::paths::curve_tree_store_path_from)).
-    ///
-    /// **No retry.** The engine's close awaits [`Self::shutdown`], so a store
-    /// this process closed is already closed, and a `DatabaseAlreadyOpen` here
-    /// means the wallet is open: in another process, or still in this one. It
-    /// is refused at once as `StoreOpenFault::LockedElsewhere`. *Records-was
-    /// (until 2026-11-02):* the close did not wait for the actor, and this
-    /// polled the lock for up to two seconds, a timer that once ran out under
-    /// load (`CURVE_TREE_CLIENT.md` §11).
-    ///
-    /// # Panics
-    ///
-    /// Panics if called with no ambient Tokio runtime (see [`Self::spawn`]).
-    pub(crate) fn open_and_spawn(path: impl AsRef<Path>) -> Result<Self, ClientError> {
-        Ok(Self::spawn(CurveTreeClient::open(path)?))
     }
 
     /// Rebuild a poisoned client in place, inside the actor ([`Recover`]).
