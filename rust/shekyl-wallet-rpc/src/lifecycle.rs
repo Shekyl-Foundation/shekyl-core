@@ -492,7 +492,11 @@ async fn take_and_close_tenant(
         tenants.lock().await.tenant.set_open(name, shared, tasks);
         return Err(WalletRpcError::from(e));
     }
-    drop(engine);
+    // Awaited, not dropped: when this returns the wallet's stores are
+    // closed, so the reopen that `stake` and a client's next
+    // `open_wallet` make can open them at once (`CURVE_TREE_CLIENT.md`
+    // §11). A drop would stop the actors with nobody waiting.
+    engine.release().await;
     Ok(name)
 }
 

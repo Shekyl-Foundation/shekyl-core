@@ -45,9 +45,7 @@ use super::*;
 use super::helpers::{
     draw_entry_gap_guarded, entry_gap_degeneracy_run, entry_gap_degeneracy_run_is_minimal,
 };
-use super::persona::{
-    ActivatePersona, ActivePersona, EraseReleasedShards, MintPersonaHandle, ServingBodies,
-};
+use super::persona::{ActivatePersona, ActivePersona, MintPersonaHandle};
 use super::types::PersonaIdentity;
 use crate::engine::bond_assembly::FundingInputContext;
 use crate::engine::emission_claim::self_check_claims;
@@ -547,9 +545,10 @@ fn message_and_reply_types_are_send() {
     assert_send::<MintPersonaHandle>();
     assert_send::<ActivatePersona>();
     assert_send::<ActivePersona>();
-    assert_send::<ServingBodies>();
-    assert_send::<EraseReleasedShards>();
-    assert_send::<shekyl_p_store::BodyStoreReader>();
+    assert_send::<super::body_store_actor::OpenHeldShard>();
+    assert_send::<super::body_store_actor::ReadHeldChunk>();
+    assert_send::<super::body_store_actor::EraseShards>();
+    assert_send::<shekyl_p_store::HeldShard>();
     assert_send::<PersonaHandle>();
     assert_send::<PersonaIdentity>();
     assert_send::<StakeEngineError>();
@@ -884,11 +883,11 @@ async fn plan_bond_post_emits_gf7_draw_and_schedule_events() {
             bundles,
             bonded: BTreeSet::new(),
             active: None,
-            bodies: ephemeral_body_store(),
             #[cfg(feature = "conformance")]
             self_cert: TestSelfCert::Skip,
             observer: Box::new(Recorder(Arc::clone(&recorded))),
         }),
+        bodies: super::body_store_actor::BodyStoreHandle::spawn(ephemeral_body_store()),
     };
 
     let h0 = handle
@@ -1266,13 +1265,13 @@ mod s6_self_cert {
             bundles,
             bonded: BTreeSet::new(),
             active: None,
-            bodies: ephemeral_body_store(),
             self_cert: mode,
             #[cfg(feature = "gf7-hooks")]
             observer: Box::new(shekyl_standoff::gf7::NoOpObserver),
         };
         StakeEngineHandle {
             actor: StakeEngine::spawn(args),
+            bodies: super::body_store_actor::BodyStoreHandle::spawn(ephemeral_body_store()),
         }
     }
 

@@ -91,7 +91,7 @@ async fn create_full_then_open_full_round_trips_state() {
     assert_eq!(created.capability(), Capability::Full);
     assert_eq!(created.outstanding_pending_txs(), 0);
     // Close so the advisory lock is released before reopen.
-    created.close(&creds).expect("close created wallet");
+    created.close(&creds).await.expect("close created wallet");
 
     let opened = Engine::<SoloSigner>::open_full(
         &fix.base_path,
@@ -105,6 +105,57 @@ async fn create_full_then_open_full_round_trips_state() {
     let wallet = opened.into_wallet();
     assert_eq!(wallet.network(), network);
     assert_eq!(wallet.capability(), Capability::Full);
+}
+
+/// `CURVE_TREE_CLIENT.md` §11 and §11.1: when `close` returns, the
+/// wallet's curve-tree store and persona body store are closed, so either
+/// file opens at once, with no retry anywhere. Checked on the files
+/// themselves, straight after the close: a whole-engine reopen does enough
+/// work before it reaches them to hide the race, which is why the
+/// two-second poll this replaced failed only under load. The body store is
+/// opened under a wrong key, so a closed file answers `KeyRejected` and a
+/// still-held one a lock error.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn a_closed_wallet_has_closed_its_stores() {
+    let (tmp, mut engine) = crate::engine::test_support::staker_engine(3, 7).await;
+    let base = tmp.path().join("wallet");
+    let creds = crate::engine::test_support::test_creds();
+    let network = engine.network();
+    for round in 0..10 {
+        engine
+            .close(&creds)
+            .await
+            .unwrap_or_else(|e| panic!("round {round}: close: {e:?}"));
+        let body_store = shekyl_p_store::BodyStore::open(
+            shekyl_engine_file::paths::p_store_path_from(&base),
+            shekyl_p_store::StoreKey::from_bytes([0x01; 32]),
+        );
+        assert!(
+            matches!(body_store, Err(shekyl_p_store::StoreError::KeyRejected)),
+            "round {round}: the body store is still held: {:?}",
+            body_store.as_ref().err()
+        );
+        drop(
+            shekyl_curve_tree::CurveTreeClient::open(
+                shekyl_engine_file::paths::curve_tree_store_path_from(&base),
+            )
+            .unwrap_or_else(|e| panic!("round {round}: the curve-tree store is still held: {e:?}")),
+        );
+        engine = Engine::<SoloSigner>::open_full(
+            &base,
+            &creds,
+            network,
+            dummy_daemon(),
+            SafetyOverrides::none(),
+        )
+        .unwrap_or_else(|e| panic!("round {round}: reopen: {e:?}"))
+        .into_wallet();
+        assert!(
+            engine.stake_handle().is_some(),
+            "round {round}: still a staker"
+        );
+    }
+    engine.close(&creds).await.expect("final close");
 }
 
 /// The bond-watch probe cache is built **unconditionally** — a
@@ -131,7 +182,7 @@ async fn create_and_open_build_the_bond_watch_probe_cache_unconditionally() {
         "create derives ids for the full 0..=W window"
     );
     assert!(at_create.contains_key(&0) && at_create.contains_key(&w));
-    created.close(&creds).expect("close");
+    created.close(&creds).await.expect("close");
 
     let reopened = Engine::<SoloSigner>::open_full(
         &fix.base_path,
@@ -168,6 +219,7 @@ async fn unreadable_pscan_seal_disables_the_bond_watch() {
     Engine::<SoloSigner>::create(params, dummy_daemon())
         .expect("create")
         .close(&creds)
+        .await
         .expect("close after create");
 
     // Control leg: no pscan seal exists yet => `Ok(None)` => the watch
@@ -186,7 +238,7 @@ async fn unreadable_pscan_seal_disables_the_bond_watch() {
         healthy.refresh.bond_watch_is_armed(),
         "control: an absent seal arms the watch"
     );
-    healthy.close(&creds).expect("close healthy");
+    healthy.close(&creds).await.expect("close healthy");
 
     // Corrupt leg: garbage where the seal should be => `Err` => the
     // wallet still opens (funds access must not hang on the staking
@@ -220,6 +272,7 @@ async fn open_full_with_wrong_password_returns_incorrect_password() {
     Engine::<SoloSigner>::create(params, dummy_daemon())
         .expect("create FULL wallet")
         .close(&creds)
+        .await
         .expect("close after create");
 
     let bad_password: &[u8] = b"WRONG PASSWORD";
@@ -252,6 +305,7 @@ async fn first_stake_intent_spawns_transiently_and_aborts_clean() {
     Engine::<SoloSigner>::create(params, dummy_daemon())
         .expect("create FULL wallet")
         .close(&creds)
+        .await
         .expect("close after create");
 
     // Plain open: a non-staker gets no StakeEngine (the existing gate).
@@ -266,7 +320,7 @@ async fn first_stake_intent_spawns_transiently_and_aborts_clean() {
     .into_wallet();
     assert!(!plain.has_stake_engine(), "non-staker: no actor");
     assert!(!plain.ledger().staking.staking_enabled);
-    plain.close(&creds).expect("close plain");
+    plain.close(&creds).await.expect("close plain");
 
     // Intent open: the actor spawns pre-persist (SA-R1-a), while the
     // durable staking state is untouched.
@@ -286,7 +340,10 @@ async fn first_stake_intent_spawns_transiently_and_aborts_clean() {
         "the intent flips nothing durable"
     );
     // Abort: close without persisting a bond record.
-    intent.close(&creds).expect("close aborted first-stake");
+    intent
+        .close(&creds)
+        .await
+        .expect("close aborted first-stake");
 
     // The abort left nothing: a plain reopen is a plain non-staker open.
     let after = Engine::<SoloSigner>::open_full(
@@ -322,6 +379,7 @@ async fn first_stake_refuses_cleanly_before_the_durable_point() {
     Engine::<SoloSigner>::create(params, dummy_daemon())
         .expect("create FULL wallet")
         .close(&creds)
+        .await
         .expect("close after create");
 
     // No StakeEngine resident (plain open, no intent): the continuation
@@ -348,7 +406,7 @@ async fn first_stake_refuses_cleanly_before_the_durable_point() {
     let plain = std::sync::Arc::try_unwrap(arc)
         .unwrap_or_else(|_| panic!("sole owner"))
         .into_inner();
-    plain.close(&creds).expect("close");
+    plain.close(&creds).await.expect("close");
 
     // Intent open (actor resident), unreachable daemon: the first
     // pre-persist step to touch the daemon (the fee estimate) fails →
@@ -385,7 +443,7 @@ async fn first_stake_refuses_cleanly_before_the_durable_point() {
     let intent = std::sync::Arc::try_unwrap(arc)
         .unwrap_or_else(|_| panic!("sole owner"))
         .into_inner();
-    intent.close(&creds).expect("close");
+    intent.close(&creds).await.expect("close");
 
     let after = Engine::<SoloSigner>::open_full(
         &fix.base_path,
@@ -421,7 +479,7 @@ async fn retired_records_clean_the_live_hint_at_open() {
     engine
         .persist_bond_record(PSlot::from_raw(0))
         .expect("persist");
-    engine.close(&creds).expect("close");
+    engine.close(&creds).await.expect("close");
 
     let seal_retired = |slots: &[u32]| {
         let (file, _outcome) = shekyl_engine_file::WalletFile::open(
@@ -469,7 +527,7 @@ async fn retired_records_clean_the_live_hint_at_open() {
     assert!(opened.ledger().staking.staking_enabled);
     assert!(opened.ledger().staking.bonded_slots.contains(&0));
     assert!(opened.has_stake_engine());
-    opened.close(&creds).expect("close");
+    opened.close(&creds).await.expect("close");
 
     // The bonded slot itself retired: cleaned, reverted, no actor.
     seal_retired(&[5, 0]);
@@ -491,7 +549,7 @@ async fn retired_records_clean_the_live_hint_at_open() {
         !opened.has_stake_engine(),
         "no actor for a fully-retired wallet"
     );
-    opened.close(&creds).expect("close");
+    opened.close(&creds).await.expect("close");
 }
 
 /// A staker whose `.wallet.pscan` was sealed under
@@ -529,7 +587,7 @@ async fn a_stale_pscan_seal_refuses_the_staker_start_naming_the_file_and_version
     engine
         .persist_bond_record(PSlot::from_raw(0))
         .expect("persist");
-    engine.close(&creds).expect("close");
+    engine.close(&creds).await.expect("close");
 
     // A seal whose leading word is the keyless-join schema, written through
     // the production seal path. The body is what that writer could have left
@@ -623,7 +681,7 @@ async fn primary_address_renders_and_round_trips() {
     assert_eq!(decoded.view_key, addr.view_key);
     assert_eq!(decoded.ml_kem_encap_key, addr.ml_kem_encap_key);
 
-    wallet.close(&creds).expect("close");
+    wallet.close(&creds).await.expect("close");
 }
 
 #[tokio::test(flavor = "multi_thread")]
@@ -638,6 +696,7 @@ async fn open_full_with_wrong_network_returns_network_mismatch() {
     Engine::<SoloSigner>::create(params, dummy_daemon())
         .expect("create FULL wallet")
         .close(&creds)
+        .await
         .expect("close after create");
 
     // Stagenet was used at create time; ask Mainnet.
@@ -675,7 +734,7 @@ async fn change_password_rewraps_envelope_then_reopen_uses_new_password() {
     wallet
         .change_password(&creds_old, &creds_new, None)
         .expect("rotate password");
-    wallet.close(&creds_new).expect("close after rotate");
+    wallet.close(&creds_new).await.expect("close after rotate");
 
     // Old password must refuse.
     let err = Engine::<SoloSigner>::open_full(
@@ -723,7 +782,7 @@ async fn change_password_round_trips_via_independent_wallet_file_open() {
     wallet
         .change_password(&creds_old, &creds_new, None)
         .expect("rotate password");
-    wallet.close(&creds_new).expect("close after rotate");
+    wallet.close(&creds_new).await.expect("close after rotate");
 
     // Old password must refuse at the wallet-file layer with the
     // envelope's deliberately-indistinct AEAD failure.
@@ -783,7 +842,7 @@ async fn change_password_with_new_kdf_rewrites_envelope_header() {
     wallet
         .change_password(&creds_old, &creds_new, Some(rotated_kdf))
         .expect("rotate password with new KDF params");
-    wallet.close(&creds_new).expect("close after rotate");
+    wallet.close(&creds_new).await.expect("close after rotate");
 
     let keys_bytes = std::fs::read(keys_path_from(&fix.base_path)).expect("read rotated keys file");
     let header = inspect_keys_file(&keys_bytes).expect("inspect rotated keys file header");
@@ -811,6 +870,7 @@ async fn open_full_after_state_file_deleted_returns_restored_from_height() {
     Engine::<SoloSigner>::create(params, dummy_daemon())
         .expect("create FULL wallet")
         .close(&creds)
+        .await
         .expect("close after create");
 
     // Delete the state file to force the lost-state recovery
@@ -870,6 +930,7 @@ async fn close_with_outstanding_reservation_returns_outstanding_pending_tx() {
 
     let err = wallet
         .close(&creds)
+        .await
         .expect_err("close must refuse with outstanding reservation");
     match err {
         OpenError::OutstandingPendingTx { count } => assert_eq!(count, count_before),
@@ -912,6 +973,7 @@ async fn persist_for_close_keeps_engine_on_outstanding_reservation() {
     assert_eq!(wallet.outstanding_pending_txs(), count_before);
     wallet
         .close(&creds)
+        .await
         .expect_err("still outstanding after failed persist");
 }
 
@@ -927,6 +989,7 @@ async fn tampered_prefs_are_recovered_and_warned_about() {
     Engine::<SoloSigner>::create(params, dummy_daemon())
         .expect("create FULL wallet")
         .close(&creds)
+        .await
         .expect("close after create");
 
     // Corrupt the prefs HMAC companion file. The wallet-file
@@ -990,15 +1053,16 @@ async fn persistence_trait_save_state_round_trip() {
     let params = EngineCreateParams::for_test_full(&fix.base_path, &creds, &seed);
     let network = params.network;
     let wallet = Engine::<SoloSigner>::create(params, dummy_daemon()).expect("create FULL wallet");
-    let ledger_guard = wallet.ledger.read();
-    drive_persistence(PersistenceEngine::save_state(
-        wallet.persistence(),
-        wallet.state_wrap_key(),
-        &ledger_guard.ledger,
-    ))
-    .expect("trait save_state");
-    drop(ledger_guard);
-    wallet.close(&creds).expect("close");
+    {
+        let ledger_guard = wallet.ledger.read();
+        drive_persistence(PersistenceEngine::save_state(
+            wallet.persistence(),
+            wallet.state_wrap_key(),
+            &ledger_guard.ledger,
+        ))
+        .expect("trait save_state");
+    }
+    wallet.close(&creds).await.expect("close");
 
     let opened = Engine::<SoloSigner>::open_full(
         &fix.base_path,
@@ -1028,7 +1092,7 @@ async fn change_password_flushes_prefs() {
     wallet
         .change_password(&creds_old, &creds_new, None)
         .expect("rotate password");
-    wallet.close(&creds_new).expect("close after rotate");
+    wallet.close(&creds_new).await.expect("close after rotate");
 
     let reopened = Engine::<SoloSigner>::open_full(
         &fix.base_path,
@@ -1085,14 +1149,15 @@ async fn stale_state_wrap_key_fails_after_rotate_without_rederive() {
     let network = params_a.network;
     let mut wallet =
         Engine::<SoloSigner>::create(params_a, dummy_daemon()).expect("create wallet A");
-    let ledger_guard = wallet.ledger.read();
-    drive_persistence(PersistenceEngine::save_state(
-        wallet.persistence(),
-        wallet.state_wrap_key(),
-        &ledger_guard.ledger,
-    ))
-    .expect("save before rotate");
-    drop(ledger_guard);
+    {
+        let ledger_guard = wallet.ledger.read();
+        drive_persistence(PersistenceEngine::save_state(
+            wallet.persistence(),
+            wallet.state_wrap_key(),
+            &ledger_guard.ledger,
+        ))
+        .expect("save before rotate");
+    }
 
     let k_stale = state_wrap_key_from_bytes(wallet.state_wrap_key().as_bytes());
 
@@ -1105,6 +1170,7 @@ async fn stale_state_wrap_key_fails_after_rotate_without_rederive() {
     Engine::<SoloSigner>::create(params_b, dummy_daemon())
         .expect("create wallet B")
         .close(&creds_old)
+        .await
         .expect("close B");
     let foreign_keys = std::fs::read(keys_path_from(&base_b)).expect("read B keys file");
 
@@ -1194,7 +1260,7 @@ async fn rederived_state_wrap_key_succeeds_after_rotate() {
     wallet
         .change_password(&creds_old, &creds_new, None)
         .expect("rotate password");
-    wallet.close(&creds_new).expect("close after rotate");
+    wallet.close(&creds_new).await.expect("close after rotate");
 
     let wallet = Engine::<SoloSigner>::open_full(
         &fix.base_path,
@@ -1226,6 +1292,7 @@ async fn open_does_not_retain_file_kek() {
     Engine::<SoloSigner>::create(params, dummy_daemon())
         .expect("create FULL wallet")
         .close(&creds)
+        .await
         .expect("close after create");
 
     let wallet = Engine::<SoloSigner>::open_full(

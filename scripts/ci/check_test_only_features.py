@@ -173,6 +173,15 @@ from pathlib import Path
 # feature without a row leaves it ungated, so add both in the same commit.
 TEST_ONLY: dict[tuple[str, str], str] = {
     (
+        "shekyl-curve-tree",
+        "test-tamper",
+    ): "LeafStore::test_tamper_clear_prune_disabled and "
+    "CurveTreeClient::test_tamper_poison: the tampering fixtures behind "
+    "shekyl-p-host's posture-loss KATs and the engine's in-place recovery "
+    "tests (CURVE_TREE_CLIENT.md §11). The prune-disabled posture is one-way "
+    "by ruling, so its clear path must not exist in shipped code; enabled "
+    "from the p-host and engine-core dev edges only",
+    (
         "shekyl-wire",
         "test-fixtures",
     ): "BoundTx::whole and BoundTx::modify: a fixture's whole body bound to "
@@ -362,6 +371,7 @@ GOVERNED_OWNERS: frozenset[str] = frozenset(
         "shekyl-chain-sync",
         "shekyl-mempool",
         "shekyl-bundle-producer",
+        "shekyl-curve-tree",
     }
 )
 
@@ -373,8 +383,8 @@ Hit = tuple[str, str, str]  # feature, consumer, edge kind
 # consumer, edge kind) — so a new feature or enabler on a listed crate is red,
 # and a vanished hit is red until deleted. Shrink-only: a crate leaves this
 # list by joining GOVERNED_OWNERS
-# with its features categorized (FOLLOWUPS "Fourteen crates meet the feature-
-# governance trigger ungoverned", Target: pre-genesis; the fifteenth entry,
+# with its features categorized (FOLLOWUPS "Thirteen crates meet the feature-
+# governance trigger ungoverned", Target: pre-genesis; the fourteenth entry,
 # shekyl-crypto-pq, leaves via FOLLOWUPS F-7). Entries marked FINDING enable
 # a test-named feature on a NORMAL edge — the very shape TEST_ONLY refuses —
 # and are governed first. Forwarding raised the count from twelve to fifteen
@@ -418,12 +428,6 @@ MET_TRIGGER_UNGOVERNED_AT_REGISTRATION: dict[str, tuple[str, frozenset[Hit]]] = 
         frozenset({
             ("std", "shekyl-bulletproofs", "normal"),
             ("std", "shekyl-scanner", "normal"),
-        }),
-    ),
-    "shekyl-curve-tree": (
-        "categorization only",
-        frozenset({
-            ("test-tamper", "shekyl-p-host", "dev"),
         }),
     ),
     "shekyl-engine-core": (

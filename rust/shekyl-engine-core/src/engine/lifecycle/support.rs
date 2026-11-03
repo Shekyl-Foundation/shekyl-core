@@ -58,8 +58,10 @@ pub(super) fn map_wallet_file_error(err: WalletFileError, expected: Network) -> 
     }
 }
 
-/// Run a [`PersistenceEngine`] future from sync lifecycle entry points
-/// ([`Engine::close`](super::Engine::close), [`Engine::change_password`](super::Engine::change_password)).
+/// Run a [`PersistenceEngine`] future from sync lifecycle steps
+/// ([`Engine::persist_for_close`](super::Engine::persist_for_close), which
+/// [`Engine::close`](super::Engine::close) runs, and
+/// [`Engine::change_password`](super::Engine::change_password)).
 ///
 /// # Tokio embedding
 ///
@@ -74,9 +76,6 @@ pub(super) fn map_wallet_file_error(err: WalletFileError, expected: Network) -> 
 ///   a short-lived current-thread runtime in a [`std::thread::scope`] thread so
 ///   nested-runtime panics are avoided.
 ///
-/// Dedicated async lifecycle entry points remain a V3.1 follow-up when an
-/// embedder needs cooperative cancellation across close/rotate; see
-/// `docs/FOLLOWUPS.md` (V3.1 — sync close / `change_password` vs Tokio).
 pub(crate) fn drive_persistence<Fut, T>(fut: Fut) -> T
 where
     Fut: std::future::Future<Output = T> + Send,

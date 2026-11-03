@@ -18,7 +18,7 @@
 //! |---|---|
 //! | Serve-set drifts from the consensus bond record → own node prunes bonded bytes → slash (§9.6 item 4) | [`ServeSet`] has no public constructor; the pinner reports it |
 //! | Serving starts before the pins are applied | [`PersonaServingHost::start`] takes a pinner and acquires the witness itself |
-//! | Pins land on one store while another is served | The witness carries its own reader; `start` takes no store argument |
+//! | Pins land on one store while another is served | The witness carries its store's identity and refuses a reading of any other; `start` takes no store argument |
 //! | Loopback endpoint rebinds under an unchanged onion mapping → published address answers nothing | The host binds once and owns the endpoint for its life |
 //! | A serving persona runs on vanguards-lite | `ServingPosture::Serving` carries the onion *and* `Managed` as one value |
 //! | Teardown leaves a live descriptor at a closed port | [`PersonaServingHost::shutdown`] stops tor before the listener |
@@ -39,10 +39,10 @@
 //! instance. Nothing in this path crosses the FFI boundary.
 //!
 //! What the host can hold is deliberately narrow — an expanded
-//! `OnionIdentity`, a read-only `ServingReader` (via the live pin
-//! witness), and the one [`ServeSetPinner`] taken at start. No seed, no
-//! bond spend authority, no store write handle of its own: pinning writes
-//! go through the pinner to the curve-tree actor. §7.2(iii)'s custody
+//! `OnionIdentity`, the live pin witness, and the one [`ServeSetPinner`]
+//! taken at start. No seed, no bond spend authority, no handle on the
+//! curve-tree store at all: pinning writes and the witness's reads go
+//! through the pinner to the curve-tree actor, the store's one owner. §7.2(iii)'s custody
 //! boundary is *which secret crosses into the serving side*, and here it
 //! is enforced by the types of the inputs; see [`PersonaServingHost`] for
 //! the assumption that framing carries when the serving side is
@@ -90,11 +90,11 @@ pub use host::{HostError, PersonaServing, PersonaServingHost, ServeCounters};
 pub use runtime::{PriorityFailures, SERVING_BLOCKING, SERVING_WORKERS};
 pub use serve_set::{
     PinError, PinReport, PinnedServeSet, ReportedSet, ServeObligation, ServeSet, ServeSetPinner,
-    Staleness, StalenessBound,
+    Staleness, StalenessBound, StoreFacts, StoreIdentity,
 };
 pub use shekyl_p_serve::{
-    sign_pass_transcript, sign_receipt_transcript, PassKey, ServeCounterReader, SignRefused,
-    IDENTITY_ENVELOPE_LEN, RECEIPT_ENVELOPE_LEN,
+    sign_pass_transcript, sign_receipt_transcript, HeldShardSource, PassKey, ProviderError,
+    ServeCounterReader, SignRefused, IDENTITY_ENVELOPE_LEN, RECEIPT_ENVELOPE_LEN,
 };
 #[cfg(any(test, feature = "test-signer"))]
 pub use signer::signer_over_tip;

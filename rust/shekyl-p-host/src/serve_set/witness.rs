@@ -5,11 +5,11 @@
 
 //! The sealed witness: a serve-set whose retention is in place.
 
-use shekyl_curve_tree::{BlockHeight, PostureDeclaration, SegmentPin, ServingReader, StoreError};
+use shekyl_curve_tree::{BlockHeight, PostureDeclaration, SegmentPin};
 
 use super::{
     PinError, PinReport, ReportedSet, ServeObligation, ServeSet, ServeSetPinner, Staleness,
-    StalenessBound,
+    StalenessBound, StoreFacts, StoreIdentity,
 };
 
 /// A serve-set whose pins (or posture declaration) are in place — the
@@ -57,14 +57,12 @@ pub struct PinnedServeSet {
     not_yet_frozen_at_last_pin: Vec<u64>,
     already_pruned: Vec<u64>,
     /// The store's ingest tip when this witness was minted — the staleness
-    /// baseline, read from [`Self::reader`] so the later reading is the
+    /// baseline, read from [`Self::store`] so the later reading is the
     /// same quantity from the same store. See [`Staleness`].
     minted_at_tip: BlockHeight,
     /// The store these pins are in — carried, never supplied, so the host
-    /// cannot serve a different one. No `PartialEq`/`Eq` on this type as a
-    /// result; nothing needs them, and a store handle has no meaningful
-    /// equality anyway.
-    reader: ServingReader,
+    /// cannot serve a different one. Every later reading must name it.
+    store: StoreIdentity,
 }
 
 impl PinnedServeSet {
@@ -98,15 +96,18 @@ impl PinnedServeSet {
     /// [`PinError::PostureNotDeclared`] if a prefix report's store has not
     /// declared the prune-disabled posture,
     /// [`PinError::FrozenCountExceedsCursor`] if a prefix report overstates
-    /// the store's freeze cursor, and [`PinError::Pinner`] if the pin could
-    /// not be applied or the store's ingest tip could not be read.
+    /// the store's freeze cursor, [`PinError::PinnerStoreMismatch`] if the
+    /// store's readings name a different store than the report, and
+    /// [`PinError::Pinner`] if the pin could not be applied or the store
+    /// could not be read.
     pub async fn acquire<P: ServeSetPinner>(pinner: &P) -> Result<Self, PinError> {
         let report = pinner
             .pin_serve_set()
             .await
             .map_err(|detail| PinError::Pinner { detail })?;
-        let reader = report.reader.clone();
-        let mut pinned = Self::from_report(report, reader)?;
+        let store = report.store;
+        let facts = read_facts(pinner, store, Vec::new()).await?;
+        let mut pinned = Self::from_report(report, store, &facts)?;
         // A start verifies the whole prefix corpus, unconditionally. The
         // list arm's outcomes carry pruned members for free; the prefix
         // arm has no outcomes, and the declaration history cannot be
@@ -119,13 +120,7 @@ impl PinnedServeSet {
             pinned.set.obligation(),
             ServeObligation::CompleteTreePrefix { .. }
         ) {
-            pinned.already_pruned =
-                pinned
-                    .reader
-                    .pruned_frozen_segments()
-                    .map_err(|e| PinError::Pinner {
-                        detail: format!("corpus integrity scan failed: {e:?}"),
-                    })?;
+            pinned.already_pruned = scan_pruned(pinner, store).await?;
         }
         // The refusal lives here rather than inside `from_report`, which both
         // constructors share. `refreshed` must be able to mint a witness that
@@ -144,8 +139,8 @@ impl PinnedServeSet {
 
     /// Re-pin `set` through `pinner`, **keeping this witness's store**.
     ///
-    /// The reader the pinner returns is deliberately discarded here, and that
-    /// is a soundness choice rather than an oversight. The store a host
+    /// A report naming another store is refused rather than followed, and
+    /// that is a soundness choice rather than an oversight. The store a host
     /// serves is bound to its listener, and the listener never rebinds — so
     /// the served store cannot change for the life of the host, and a refresh
     /// that could swap it would defeat the no-rebind invariant from the other
@@ -178,7 +173,7 @@ impl PinnedServeSet {
     /// declared the prune-disabled posture,
     /// [`PinError::FrozenCountExceedsCursor`] if a prefix report overstates
     /// the store's freeze cursor, and [`PinError::PinnerStoreMismatch`] if
-    /// the pins landed in a different open store. Never
+    /// the pins landed in, or a reading came from, a different open store. Never
     /// [`PinError::MembersAlreadyPruned`] — that refusal is `acquire`-only,
     /// per the paragraph above.
     pub async fn refreshed<P: ServeSetPinner>(&self, pinner: &P) -> Result<Self, PinError> {
@@ -187,13 +182,12 @@ impl PinnedServeSet {
             .await
             .map_err(|detail| PinError::Pinner { detail })?;
         // Pins must have landed in the store this witness already serves.
-        // `same_store` is allocation identity, and that is store identity
-        // here: the wallet's curve-tree handle keeps the store Arc across
-        // fail-stop and resumes the writer over it, so a healthy recovery
-        // does not mint a second database. A report whose reader is a
-        // different Arc is therefore a different open store — the pins
-        // are not in the one the host is reading.
-        if !self.reader.same_store(&report.reader) {
+        // The wallet's curve-tree actor owns one store for its life and
+        // recovers its client in place over it, so a healthy recovery does
+        // not mint a second database. A report naming another store is a
+        // different open store — the pins are not in the one the host is
+        // reading.
+        if report.store != self.store {
             return Err(PinError::PinnerStoreMismatch);
         }
         // THE GAP THE REFRESH ITSELF REPAIRS. The production loop
@@ -213,11 +207,12 @@ impl PinnedServeSet {
                 ..
             }
         );
-        let mut next = Self::from_report(report, self.reader.clone())?;
+        let facts = read_facts(pinner, self.store, Vec::new()).await?;
+        let mut next = Self::from_report(report, self.store, &facts)?;
         // PERMANENT HOLES MUST NOT BE FORGOTTEN BY A HEALTHY RE-DECLARATION:
         // the refresh after a loss reports `AlreadyDeclared`, and pruned
         // leaves do not come back (chain replay builds a NEW store, whose
-        // reader fails `same_store` and forces a fresh acquire) — so a
+        // identity fails the check above and forces a fresh acquire) — so a
         // witness that carried holes re-scans on every replacement, keeping
         // them visible exactly as the list arm's holes persist by being
         // re-reported in every refresh's outcomes. Re-scanned rather than
@@ -230,12 +225,7 @@ impl PinnedServeSet {
                 ServeObligation::CompleteTreePrefix { .. }
             )
         {
-            next.already_pruned =
-                self.reader
-                    .pruned_frozen_segments()
-                    .map_err(|e| PinError::Pinner {
-                        detail: format!("corpus integrity scan failed: {e:?}"),
-                    })?;
+            next.already_pruned = scan_pruned(pinner, self.store).await?;
         }
         Ok(next)
     }
@@ -258,18 +248,24 @@ impl PinnedServeSet {
     /// implementor defect in both directions, and refusing a refresh over
     /// it cannot wedge the loop the way a terminal `AlreadyPruned` refusal
     /// would.)
-    fn from_report(report: PinReport, reader: ServingReader) -> Result<Self, PinError> {
+    ///
+    /// `facts` were read from `store` by the caller, which checked they name
+    /// it; this function only uses them.
+    fn from_report(
+        report: PinReport,
+        store: StoreIdentity,
+        facts: &StoreFacts,
+    ) -> Result<Self, PinError> {
         let PinReport {
             set: reported,
             as_of_height,
-            // Not the store-identity check. `acquire` cloned this handle
-            // into `reader`; `refreshed` already refused a different
-            // store (`PinnerStoreMismatch`) and passes the witness's own
-            // reader so the served store cannot change. Re-checking
-            // identity here would need a previous-store argument — a
-            // mode flag by another name, which this function exists to
-            // avoid.
-            reader: _,
+            // Not the store-identity check. `acquire` takes this identity
+            // as `store`; `refreshed` already refused a different store
+            // (`PinnerStoreMismatch`) and passes the witness's own, so the
+            // served store cannot change. Re-checking identity here would
+            // need a previous-store argument — a mode flag by another
+            // name, which this function exists to avoid.
+            store: _,
         } = report;
         let (set, not_yet_frozen_at_last_pin, already_pruned) = match reported {
             ReportedSet::ShardList {
@@ -331,9 +327,9 @@ impl PinnedServeSet {
                 // coverage check. There are no outcomes to cover the set
                 // because the posture flag is the pin, so what the witness
                 // must verify is that the flag is actually declared in the
-                // store these bytes live in. Read from the reader rather
-                // than trusted from the report: the reader is the store,
-                // and a claim about the store is checked against the store.
+                // store these bytes live in. Read from the store rather
+                // than trusted from the report: a claim about the store is
+                // checked against the store.
                 //
                 // The store is also the authority for `frozen_count`. A
                 // report that overstates the cursor claims shards the
@@ -346,15 +342,10 @@ impl PinnedServeSet {
                 // `not_yet_frozen_at_last_pin` is structurally empty here:
                 // the prefix is the *frozen* set by definition (an unfrozen
                 // segment is not in `[0, k)`).
-                let declared = reader.prune_disabled().map_err(|e| PinError::Pinner {
-                    detail: format!("posture read failed: {e:?}"),
-                })?;
-                if !declared {
+                if !facts.prune_disabled {
                     return Err(PinError::PostureNotDeclared);
                 }
-                let cursor = reader.next_freeze_seg().map_err(|e| PinError::Pinner {
-                    detail: format!("freeze-cursor read failed: {e:?}"),
-                })?;
+                let cursor = facts.next_freeze_seg;
                 if frozen_count > cursor {
                     return Err(PinError::FrozenCountExceedsCursor {
                         reported: frozen_count,
@@ -382,7 +373,7 @@ impl PinnedServeSet {
         // THE STALENESS BASELINE, TAKEN FROM THE SAME STORE THE PINS ARE IN.
         // Stamping it here rather than accepting it in the report is what
         // makes the later reading a difference of one quantity: `staleness`
-        // re-reads this exact call on this exact reader, so there is no
+        // re-reads this exact fact from this exact store, so there is no
         // second clock to mismatch. It is deliberately *not* the record's
         // `as_of_height`, which is the daemon's height over RPC.
         //
@@ -392,16 +383,14 @@ impl PinnedServeSet {
         // than corrected: the bound this feeds is measured in blocks of
         // ingest, and a bound that could not absorb a single round trip
         // would be reporting the scheduler, not the serve-set.
-        let minted_at_tip = reader.sync_tip_height().map_err(|e| PinError::Pinner {
-            detail: format!("staleness baseline read failed: {e:?}"),
-        })?;
+        let minted_at_tip = facts.sync_tip_height;
 
         Ok(Self {
             set,
             not_yet_frozen_at_last_pin,
             already_pruned,
             minted_at_tip,
-            reader,
+            store,
         })
     }
 
@@ -422,11 +411,9 @@ impl PinnedServeSet {
     /// than "faulty" — and it must not be used to decide whether a shard is
     /// servable.
     ///
-    /// Servability has exactly one authority and it is live: the store
-    /// answers it on every read, because
-    /// [`ServingReader::open_frozen_segment_body`] returns `Ok(None)` for a
-    /// segment with no committed `R_k`. The serving loop already asks it
-    /// there, per request. A second, staler answer to the same question is
+    /// Servability has exactly one authority and it is live: the store that
+    /// serves the bytes answers it on every read, and the serving loop
+    /// already asks it there, per request. A second, staler answer to the same question is
     /// the kind of duplicate that only ever drifts, so this one is scoped by
     /// its name to the question it can actually answer.
     #[must_use]
@@ -446,11 +433,27 @@ impl PinnedServeSet {
         &self.already_pruned
     }
 
-    /// A reader on the store these pins are in — the store the host serves
-    /// from, by construction rather than by the caller's choice.
+    /// The store these pins are in — the store the host serves from, by
+    /// construction rather than by the caller's choice.
     #[must_use]
-    pub fn reader(&self) -> &ServingReader {
-        &self.reader
+    pub fn store(&self) -> StoreIdentity {
+        self.store
+    }
+
+    /// The ingest tip of this witness's store now, read through `pinner`,
+    /// which must be the one this witness was minted through.
+    ///
+    /// # Errors
+    ///
+    /// [`PinError::Pinner`] if the store could not be read, and
+    /// [`PinError::PinnerStoreMismatch`] if the reading names another store.
+    pub async fn ingested_tip<P: ServeSetPinner>(
+        &self,
+        pinner: &P,
+    ) -> Result<BlockHeight, PinError> {
+        Ok(read_facts(pinner, self.store, Vec::new())
+            .await?
+            .sync_tip_height)
     }
 
     /// The members this witness asserts are pinned: the reported list minus
@@ -485,11 +488,17 @@ impl PinnedServeSet {
     /// rows exist to drop. A missing posture declaration is
     /// [`Staleness::PostureLost`], not a pin-id list.
     ///
+    /// `pinner` must be the one this witness was minted through; its
+    /// readings are refused unless they name this witness's store.
+    ///
     /// # Errors
     ///
-    /// Store failure reading the pinned-segment table.
-    pub fn dropped_pins(&self) -> Result<Vec<u64>, StoreError> {
-        self.reader.members_missing_pins(&self.claimed_members())
+    /// [`PinError::Pinner`] if the store could not be read, and
+    /// [`PinError::PinnerStoreMismatch`] if the reading names another store.
+    pub async fn dropped_pins<P: ServeSetPinner>(&self, pinner: &P) -> Result<Vec<u64>, PinError> {
+        Ok(read_facts(pinner, self.store, self.claimed_members())
+            .await?
+            .members_missing_pins)
     }
 
     /// How much this wallet has ingested since this serve-set was derived,
@@ -497,7 +506,7 @@ impl PinnedServeSet {
     /// store.
     ///
     /// **One clock, read twice.** Both operands are
-    /// [`ServingReader::sync_tip_height`] on this witness's own store: the
+    /// [`StoreFacts::sync_tip_height`] of this witness's own store: the
     /// baseline stamped when the witness was minted, and the tip now. See
     /// [`Staleness`] for why that pair is a liveness signal and why a remote
     /// height is not.
@@ -520,11 +529,21 @@ impl PinnedServeSet {
     /// stopped; that is host state, and
     /// [`crate::PersonaServingHost::staleness`] folds it in.
     ///
+    /// The pin table, the posture flag and the tip come from one
+    /// [`ServeSetPinner::store_facts`] call, so they describe one moment of
+    /// the store. `pinner` must be the one this witness was minted through.
+    ///
     /// # Errors
     ///
-    /// Store failure reading the pin table, the posture flag, or the sync
-    /// tip.
-    pub fn staleness(&self, bound: StalenessBound) -> Result<Staleness, StoreError> {
+    /// [`PinError::Pinner`] if the store could not be read, and
+    /// [`PinError::PinnerStoreMismatch`] if the reading names another store.
+    pub async fn staleness<P: ServeSetPinner>(
+        &self,
+        pinner: &P,
+        bound: StalenessBound,
+    ) -> Result<Staleness, PinError> {
+        let claimed = self.claimed_members();
+        let facts = read_facts(pinner, self.store, claimed.clone()).await?;
         // Checked before any tip arithmetic, because it is the only reading
         // here that reports an exposure rather than a risk of one — and
         // because the tip cannot answer it. A member whose pin row is gone
@@ -539,8 +558,7 @@ impl PinnedServeSet {
                 // `PinnedNotYetFrozen` as well as `PinnedServable`, and
                 // `already_pruned` members never had one, so including them
                 // would report a permanent false positive.
-                let claimed = self.claimed_members();
-                let dropped = self.reader.members_missing_pins(&claimed)?;
+                let dropped = &facts.members_missing_pins;
                 if !dropped.is_empty() {
                     return Ok(Staleness::PinsDropped {
                         dropped: u32::try_from(dropped.len()).unwrap_or(u32::MAX),
@@ -567,13 +585,13 @@ impl PinnedServeSet {
                 // holes surfacing on `already_pruned`). The pair is what
                 // makes the loss story window-free; this read alone is
                 // not.
-                if !self.reader.prune_disabled()? {
+                if !facts.prune_disabled {
                     return Ok(Staleness::PostureLost { frozen_count });
                 }
             }
         }
 
-        let tip = self.reader.sync_tip_height()?;
+        let tip = facts.sync_tip_height;
         let Some(lag) = tip.to_raw().checked_sub(self.minted_at_tip.to_raw()) else {
             return Ok(Staleness::RolledBack {
                 minted_at_tip: self.minted_at_tip.to_raw(),
@@ -589,4 +607,42 @@ impl PinnedServeSet {
             Staleness::Current { lag }
         })
     }
+}
+
+/// Read `store`'s facts through `pinner`, refusing a reading of any other
+/// store.
+async fn read_facts<P: ServeSetPinner>(
+    pinner: &P,
+    store: StoreIdentity,
+    claimed: Vec<u64>,
+) -> Result<StoreFacts, PinError> {
+    let facts = pinner
+        .store_facts(claimed)
+        .await
+        .map_err(|detail| PinError::Pinner {
+            detail: format!("store read failed: {detail}"),
+        })?;
+    if facts.store != store {
+        return Err(PinError::PinnerStoreMismatch);
+    }
+    Ok(facts)
+}
+
+/// Run the corpus integrity scan on `store` through `pinner`, refusing a
+/// scan of any other store.
+async fn scan_pruned<P: ServeSetPinner>(
+    pinner: &P,
+    store: StoreIdentity,
+) -> Result<Vec<u64>, PinError> {
+    let (scanned, pruned) =
+        pinner
+            .pruned_frozen_segments()
+            .await
+            .map_err(|detail| PinError::Pinner {
+                detail: format!("corpus integrity scan failed: {detail}"),
+            })?;
+    if scanned != store {
+        return Err(PinError::PinnerStoreMismatch);
+    }
+    Ok(pruned)
 }
