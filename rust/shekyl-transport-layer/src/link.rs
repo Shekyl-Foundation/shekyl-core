@@ -71,8 +71,13 @@ pub enum InboundCause {
     /// The probe of this node's own address did not arrive within its
     /// bound (`TOR_SUPERVISOR.md` §4.5, `TSR-M2`).
     ProbeTimedOut,
-    /// A whole round of descriptor uploads failed: no directory took it.
-    DescriptorRejected,
+    /// More than half of a round's directories refused the upload: each
+    /// holds a copy numbered above this one (`TOR_SUPERVISOR.md` §4.5).
+    UploadsRefused,
+    /// This machine's clock is behind the Tor network's by more than the
+    /// tolerance, so the directories refuse its uploads
+    /// (`TOR_SUPERVISOR.md` §4.2).
+    ClockBehind,
     /// The directories the descriptor was uploaded to no longer have it,
     /// though this node's own Tor still reaches it from its copy
     /// (`TOR_SUPERVISOR.md` §4.5, the directory check).
