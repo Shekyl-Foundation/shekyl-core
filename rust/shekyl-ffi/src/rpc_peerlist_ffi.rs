@@ -141,21 +141,24 @@ pub fn listed_peers(public_only: bool) -> Option<Vec<ListedPeer>> {
 }
 
 /// The C export's owner, built from [`listed_peers`]. The host pointers
-/// borrow the owner's strings.
+/// borrow the owner's strings. The two vectors are sized by `unzip` from
+/// the rows this process already owns: no reserve here takes a count
+/// from the C side (the SA-R-7 boundary ratchet).
 fn c_owner(rows: Vec<ListedPeer>) -> PeerListOwner {
-    let mut hosts = Vec::with_capacity(rows.len());
-    let mut entries = Vec::with_capacity(rows.len());
-    for row in rows {
-        entries.push(ShekylRpcPeerFacts {
-            host: std::ptr::null(),
-            host_len: row.host.len(),
-            ip: row.ip,
-            port: row.port,
-            white: u8::from(row.white),
-            blocked: u8::from(row.blocked),
-        });
-        hosts.push(row.host);
-    }
+    let (hosts, entries): (Vec<String>, Vec<ShekylRpcPeerFacts>) = rows
+        .into_iter()
+        .map(|row| {
+            let entry = ShekylRpcPeerFacts {
+                host: std::ptr::null(),
+                host_len: row.host.len(),
+                ip: row.ip,
+                port: row.port,
+                white: u8::from(row.white),
+                blocked: u8::from(row.blocked),
+            };
+            (row.host, entry)
+        })
+        .unzip();
     let mut owner = PeerListOwner { hosts, entries };
     for (entry, host) in owner.entries.iter_mut().zip(&owner.hosts) {
         entry.host = host.as_ptr().cast();
