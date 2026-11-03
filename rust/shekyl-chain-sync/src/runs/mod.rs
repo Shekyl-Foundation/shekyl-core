@@ -60,6 +60,13 @@ where
             self.opening = crate::model::Opening::Resolved;
             return;
         }
+        // A withdrawn request's deadline: its answer is no longer owed.
+        if let Some(peer) = self.peers.get_mut(&session) {
+            if let Some(at) = peer.withdrawn.iter().position(|id| *id == request) {
+                peer.withdrawn.remove(at);
+                return;
+            }
+        }
         let header = self
             .header_request
             .as_ref()
@@ -112,6 +119,20 @@ where
         let Some(peer) = self.peers.get_mut(&session) else {
             return Ok(());
         };
+        // Answers arrive in request order. When the oldest request still
+        // owed an answer is one this node withdrew, this is that answer:
+        // asked for, so not the peer's fault, and stale, so not judged.
+        // A follow-up sent before it is answered first, and is not it.
+        if let Some(&oldest) = peer.withdrawn.first() {
+            let follow_up_first = peer
+                .follow_up
+                .as_ref()
+                .is_some_and(|request| request.id < oldest);
+            if !follow_up_first {
+                peer.withdrawn.remove(0);
+                return Ok(());
+            }
+        }
         // Responded. For the opening the request has resolved once none of
         // this response's headers waits for its proof: a refusal closes the
         // session, and a verified heavier header makes the node `Behind`.

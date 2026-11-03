@@ -793,7 +793,15 @@ where
             self.tree
                 .select(main, Star::local(local.hash, local.work), local.height, cap)?;
         if self.star.hash != previous {
-            self.header_request = None;
+            // The request in flight carries the old locator. Its answer
+            // is still owed, and it is this node's doing, not the peer's:
+            // the session remembers the id so the answer is discarded
+            // rather than judged as unasked-for (defect 10, 2026-11-03).
+            if let Some(request) = self.header_request.take() {
+                if let Some(peer) = self.peers.get_mut(&request.session) {
+                    peer.withdrawn.push(request.id);
+                }
+            }
             for peer in self.peers.values_mut() {
                 peer.span = None;
                 peer.gates.body_excluded = false;

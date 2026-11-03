@@ -484,6 +484,11 @@ pub(crate) struct Peer<K> {
     /// this node does not hold. One is in flight. The coordinator's one
     /// frontier request is not stored here.
     pub follow_up: Option<HeaderRequest<K>>,
+    /// Ids of frontier requests to this peer that a new `H*` withdrew
+    /// (`reselect`): their locator went stale before they were answered.
+    /// Each is still owed its answer, which arrives in request order and
+    /// is discarded unjudged, or passes its deadline. Ascending.
+    pub withdrawn: Vec<u64>,
     /// The body span this peer is serving.
     pub span: Option<BodySpan>,
     /// Announces proving beside the run.
@@ -510,6 +515,7 @@ impl<K> Peer<K> {
             inventory: Inventory::default(),
             run: None,
             follow_up: None,
+            withdrawn: Vec::new(),
             span: None,
             announced: Vec::new(),
             rate: None,

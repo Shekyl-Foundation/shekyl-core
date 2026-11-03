@@ -246,7 +246,23 @@ ingest deciding forks.**
   - its verified frontier in `T`;
   - its **run**: headers received but not yet PoW-verified, held within
     a per-session byte budget;
-  - at most one outstanding request with its deadline.
+  - at most one outstanding request with its deadline;
+  - the ids of frontier requests to it that a new `H*` **withdrew**
+    before they were answered (`Peer::withdrawn`). **Amended 2026-11-03
+    (#1237, the three-miner rehearsal):** a new `H*` is a new locator,
+    so the frontier request in flight is withdrawn; its answer is still
+    owed, arrives in request order, and is this node's doing. Before,
+    the request was forgotten and its answer, matching no request,
+    closed the session at `HeadersForm(ParentUnrequested)` — a fault
+    charged to a peer that did what it was asked; or, when the
+    replacement request to the same session had the same fork point,
+    the stale answer was taken as the replacement's and the real one
+    then closed it. A miner's own block connecting, or a proof landing,
+    moves `H*`, so a request in flight across either cost the session
+    (`abandoned_request_tests`). Now the answer to a withdrawn request
+    is discarded unjudged and its deadline, if it passes first, drops
+    the id. A follow-up sent before the withdrawn request is answered
+    before it and is judged as before.
 
 **Steps.**
 1. **Hint.**
