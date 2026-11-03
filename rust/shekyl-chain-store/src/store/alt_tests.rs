@@ -25,7 +25,7 @@ use super::connect_fixtures::{
     at, candidate, candidate_over, connect_chain, formed, judge, priced_on, root_going_into, spend,
     spendable_prefix, FIRST_SPEND_HEIGHT,
 };
-use super::store_tests::{cleanup, tmp, TestErr, EPOCH};
+use super::store_tests::{cleanup, tmp, TestErr, EPOCH, PROBE};
 use super::*;
 use crate::codec::{forged, AltBlock, AltBlockFacts, AltBodies, Canonical, CodecError, Encoded};
 use crate::lmdb_order::LmdbHashKey;
@@ -883,5 +883,49 @@ fn an_alt_block_with_a_witness_moves_no_digest() {
             .expect("digest"),
         before
     );
+    cleanup(&path);
+}
+
+/// SI-27's arm: a demotion the cheap tier refused halts the writer at that
+/// height on that row, every later write is refused, and reads stay open.
+/// The switch arms it (`shekyl-chain-ingest`'s demotion tier); no fixture
+/// reaches that call, because a demoted block's history is read from blobs
+/// that must hash to their `block_info` identity (CEN-B6), so a store edited
+/// to fail its own rules trips that check first (the register row). This is
+/// the arm's witness. Red if `refuse_demotion` returns the error without
+/// arming the halt.
+#[test]
+fn a_refused_demotion_halts_the_writer_si27() {
+    let path = tmp("alt-si27");
+    let store = ChainStore::create(&path, EPOCH).expect("create");
+    connect_chain(&store, &[vec![], vec![]]);
+    let height = BlockHeight::from_raw(1);
+    let want = StoreInvariant::DemotedBlockRefused { height };
+    let out: Result<(), TestErr> =
+        store.write(|batch| Err(TestErr::Store(batch.refuse_demotion(height).to_string())));
+    assert_eq!(out, Err(TestErr::Store(StoreError::from(want).to_string())));
+    assert_eq!(
+        store.connect_state(),
+        ConnectState::Halted {
+            at_height: height,
+            row: want,
+        }
+    );
+    let refused: Result<(), TestErr> = store.write(|batch| {
+        batch.open_upsert_table(PROBE)?.upsert("k", &1)?;
+        Ok(())
+    });
+    assert_eq!(
+        refused,
+        Err(TestErr::Store(
+            StoreError::from(StoreCannot::WriterHalted {
+                at_height: 1,
+                row: want,
+            })
+            .to_string()
+        ))
+    );
+    assert!(store.begin_read().is_ok(), "reads stay open");
+    drop(store);
     cleanup(&path);
 }
