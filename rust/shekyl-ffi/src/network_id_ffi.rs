@@ -49,7 +49,7 @@ mod tests {
     use shekyl_p2p_transport::{network_id_from_genesis, prefix_for};
 
     /// Recorded output of `network_id_from_genesis` over each network's
-    /// table genesis (re-recorded 2026-11-04 with the round's regenesis,
+    /// table genesis (re-recorded 2026-11-03 with the round's regenesis,
     /// `NETWORK_IDENTITY.md` NI-R4). A regenesis that moves a hash fails this
     /// until the bytes are re-recorded with it. These are not a second
     /// definition of the id.

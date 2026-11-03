@@ -135,7 +135,7 @@ one mechanism, so distinctness is an intra-mechanism property; a flat all-pairs 
 would be a category error (and would spuriously flag the legitimate cross-mechanism
 reuse of `b"nonce"`).
 
-**Census (dated snapshot, 2026-11-04, counted from the TSV's production rows): 125 registered rows across the five mechanisms —
+**Census (dated snapshot, 2026-11-03, counted from the TSV's production rows): 125 registered rows across the five mechanisms —
 130 including the two micro-buckets.** The `shekyl/`-prefix lens saw ~28 at SA-3b — a severalfold undercount, which is the
 measure of the blind spot SA-3b closes (SIGNATURE_ALIGNMENT §3.1). (The table below
 sums to 130: the five mechanisms 125, plus the two micro-buckets, 1 + 4.) **This table is a
