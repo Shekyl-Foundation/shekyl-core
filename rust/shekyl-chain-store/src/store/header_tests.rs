@@ -763,8 +763,13 @@ fn a_creation_cut_off_before_its_seal_is_finished_by_the_next_open() {
         ChainStore::open_read_only(&path, production_horizons()),
         Err(StoreError::Cannot(StoreCannot::SchemaVersionAbsent))
     ));
-    let (store, cut) =
-        open_at(&path, ApplyPolicy::Full, production_horizons()).expect("the creation is finished");
+    let (store, cut) = open_at(
+        &path,
+        ApplyPolicy::Full,
+        production_horizons(),
+        &ReleaseAnchors::EMPTY,
+    )
+    .expect("the creation is finished");
     assert_eq!(cut, Some(CutShort::Unsealed));
     drop(store);
     assert_eq!(

@@ -116,6 +116,36 @@ fn a_foreign_genesis_is_refused_on_every_public_network() {
     cleanup(&path);
 }
 
+/// Red if admission runs only after the writable open: a writable open
+/// writes into the file even with nothing committed (the engine records
+/// its allocator state when it closes), so a store from another network
+/// would be refused after it had been changed.
+#[test]
+fn a_foreign_genesis_is_refused_with_the_file_untouched() {
+    let path = tmp("release-foreign-untouched");
+    let recorded = record(&path, 1);
+    let before = file_state(&path);
+    let testnet = ReleaseAnchors::for_network(Network::Testnet);
+    let conflict = release_pin(released(&path, &testnet).expect_err("another network's store"));
+    assert_eq!(conflict.recorded, Some(recorded[0]));
+    assert_eq!(conflict.expected, pin_of(&testnet));
+    assert_eq!(
+        file_state(&path),
+        before,
+        "a refused store keeps its bytes and its modification time"
+    );
+    cleanup(&path);
+}
+
+/// The file's bytes and modification time.
+fn file_state(path: &std::path::Path) -> (Vec<u8>, std::time::SystemTime) {
+    let bytes = std::fs::read(path).expect("read the store file");
+    let modified = std::fs::metadata(path)
+        .and_then(|meta| meta.modified())
+        .expect("the store file's modification time");
+    (bytes, modified)
+}
+
 /// Red if `create` starts admitting. The synthetic id is not a public pin,
 /// and the harness door has to keep it.
 #[test]
