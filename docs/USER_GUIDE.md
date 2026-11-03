@@ -777,13 +777,14 @@ do not run. Mining on a running daemon is `mine start`, `mine stop` and
 These commands **control** mining on the connected daemon — the daemon
 still does the hashing (no RandomX runs in the wallet process), and the
 daemon owns the mining threads, so mining keeps running after you close
-the CLI. Rewards pay to the open wallet's address automatically; you never
-paste an address the way the daemon-console form requires.
+the CLI. Rewards pay the daemon's `mine-address`. The shell sends only
+the thread count; you do not pass an address.
 
-`mine` requires an open wallet, the unrestricted RPC listener, and a
-daemon on the same network as the CLI. The silent default is a daemon
-on this machine. A remote `--daemon-address` is allowed: `mine start`
-reminds you that mining will run on that machine's CPU, then continues.
+`mine` does not require an open wallet. It does require the unrestricted
+RPC listener and a daemon on the same network as the CLI. The silent
+default is a daemon on this machine. A remote `--daemon-address` is
+allowed: `mine start` reminds you that mining will run on that machine's
+CPU, then continues.
 If the daemon is still syncing, `mine start` refuses — the daemon will not
 mine until it has caught up.
 

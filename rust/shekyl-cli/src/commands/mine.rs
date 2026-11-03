@@ -14,10 +14,12 @@
 //! will not produce blocks this network accepts.
 //!
 //! Shared fail-closed gates before any mining daemon call (CLI_USABILITY.md
-//! §CU-3): wallet open, unrestricted RPC, matching network. `mine start`
-//! additionally refuses a daemon that is not synced (the daemon's own
-//! `CHECK_CORE_READY`) and reminds — does not refuse — when the endpoint is
-//! not on this machine, because mining will run on that machine's CPU.
+//! §CU-3): unrestricted RPC and a matching network. The mine words do not
+//! require an open wallet; the daemon pays its `mine-address` (IG-Q21).
+//! `mine start` additionally refuses a daemon that is not synced (the
+//! daemon's own `CHECK_CORE_READY`) and reminds — does not refuse — when
+//! the endpoint is not on this machine, because mining will run on that
+//! machine's CPU.
 
 use serde_json::{json, Value};
 use shekyl_rpc_types::mining::MineSpeed;
@@ -41,23 +43,20 @@ fn default_threads() -> u64 {
     cores.min(4)
 }
 
-/// The shared fail-closed gates (CU-3 / §CU-5 F2, F3, F5). Returns the
+/// The shared fail-closed gates (CU-3 / §CU-5 F2, F3). Returns the
 /// daemon's `get_info` snapshot when every gate passes, so callers get the
 /// sync fields without a second round-trip.
+///
+/// No wallet check. The shell does not supply a payout address (IG-Q21);
+/// the daemon mines to its `mine-address`.
 fn gate<'a>(
-    rpc: &RpcSession,
+    // The shell's session. Mining does not read it (IG-Q21). Restoring an
+    // open-wallet refusal here is the red edit of
+    // `a_remote_daemon_is_reminded_and_mining_still_starts`.
+    _rpc: &RpcSession,
     daemon: Option<&'a DaemonClient>,
     network: &str,
 ) -> Result<(&'a DaemonClient, GetInfoResponse), CommandFailed> {
-    // F5 — mining verbs are wallet verbs: the payout address is this
-    // wallet's. The daemon console is the wallet-less path.
-    if rpc.open_wallet_name().is_none() {
-        return Err(refusal(
-            "No wallet is open. Mining pays to this wallet's address — \
-             open <name> (or create <name>) first.",
-        ));
-    }
-
     let Some(dc) = daemon else {
         return Err(refusal(
             "Daemon not configured. Use --daemon-address to set the daemon endpoint.",
@@ -188,8 +187,10 @@ fastest miner for this CPU. For more hashrate, run a dedicated miner that \
 uses this node's block template — a miner built for another coin will not \
 produce blocks this network accepts.";
 
-/// `mine start [threads|auto]` — start mining on the daemon, paying to this
-/// wallet's primary address.
+/// `mine start [threads|auto]` — start mining on the daemon.
+///
+/// The daemon pays its `mine-address`. The shell sends only the thread
+/// count, and does not require an open wallet (IG-Q21).
 pub fn cmd_mine_start(
     rpc: &RpcSession,
     daemon: Option<&DaemonClient>,
@@ -472,115 +473,44 @@ mod tests {
         assert!(super::remote_mining_note(&daemon).is_none());
     }
 
-    /// A daemon that is not on loopback is reminded, and mining still starts.
+    /// A non-loopback daemon is reminded, and mining does not need a wallet.
     ///
-    /// The client is pointed at a documentation address. A SOCKS proxy on
-    /// this machine carries the bytes to a local reply, so the reminder is
-    /// about the daemon URL and the start still reaches `/start_mining`.
+    /// The reminder is the daemon URL. The start goes to the console's route
+    /// server (`console/tests.rs`), with a session that has no wallet open.
+    /// When G3 moves the session onto one `SyncDaemon`, this test moves with
+    /// it and keeps that server.
+    ///
+    /// Red edit: `gate` refuses a session with no open wallet. `/start_mining`
+    /// is then absent.
     #[test]
     fn a_remote_daemon_is_reminded_and_mining_still_starts() {
-        use std::io::{Read, Write};
-        use std::net::TcpListener;
-        use std::sync::atomic::{AtomicBool, Ordering};
-        use std::sync::Arc;
-        use std::time::Duration;
-
-        let started = Arc::new(AtomicBool::new(false));
-        let http = TcpListener::bind("127.0.0.1:0").expect("http");
-        let http_addr = http.local_addr().expect("http addr");
-        let version = version_reply(DaemonNetwork::Mainnet);
-        let info = info_reply();
-        let started_http = Arc::clone(&started);
-        let http_stop = Arc::new(AtomicBool::new(false));
-        let http_stop_loop = Arc::clone(&http_stop);
-        http.set_nonblocking(true).expect("http nonblocking");
-        let http_thread = std::thread::spawn(move || {
-            while !http_stop_loop.load(Ordering::Relaxed) {
-                match http.accept() {
-                    Ok((mut stream, _)) => {
-                        stream.set_nonblocking(false).expect("blocking");
-                        stream
-                            .set_read_timeout(Some(Duration::from_secs(2)))
-                            .expect("timeout");
-                        let mut buf = Vec::new();
-                        let mut tmp = [0u8; 2048];
-                        loop {
-                            match stream.read(&mut tmp) {
-                                Ok(0) | Err(_) => break,
-                                Ok(n) => {
-                                    buf.extend_from_slice(&tmp[..n]);
-                                    if http_request_complete(&buf) {
-                                        break;
-                                    }
-                                }
-                            }
-                        }
-                        let text = String::from_utf8_lossy(&buf);
-                        let body = if text.contains("/start_mining") {
-                            started_http.store(true, Ordering::Relaxed);
-                            r#"{"status":"OK"}"#.to_owned()
-                        } else if text.contains("/mining_status") {
-                            r#"{"status":"OK","active":false,"speed":{"count":0,"window":0},"threads_count":0,"address":"4test","difficulty":1}"#.to_owned()
-                        } else if text.contains("get_version") {
-                            serde_json::json!({"jsonrpc":"2.0","id":"0","result":version})
-                                .to_string()
-                        } else if text.contains("get_info") {
-                            serde_json::json!({"jsonrpc":"2.0","id":"0","result":info}).to_string()
-                        } else {
-                            r#"{"status":"OK"}"#.to_owned()
-                        };
-                        let reply = format!(
-                            "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}",
-                            body.len()
-                        );
-                        stream.write_all(reply.as_bytes()).expect("reply");
-                    }
-                    Err(error) if error.kind() == std::io::ErrorKind::WouldBlock => {
-                        std::thread::sleep(Duration::from_millis(5));
-                    }
-                    Err(_) => break,
-                }
-            }
-        });
-
-        let socks = TcpListener::bind("127.0.0.1:0").expect("socks");
-        let socks_port = socks.local_addr().expect("socks addr").port();
-        let socks_stop = Arc::new(AtomicBool::new(false));
-        let socks_stop_loop = Arc::clone(&socks_stop);
-        socks.set_nonblocking(true).expect("socks nonblocking");
-        let socks_thread = std::thread::spawn(move || {
-            while !socks_stop_loop.load(Ordering::Relaxed) {
-                match socks.accept() {
-                    Ok((stream, _)) => relay_socks(stream, http_addr),
-                    Err(error) if error.kind() == std::io::ErrorKind::WouldBlock => {
-                        std::thread::sleep(Duration::from_millis(5));
-                    }
-                    Err(_) => break,
-                }
-            }
-        });
-
-        let url = "http://203.0.113.5:18081";
-        let daemon = crate::daemon::DaemonClient::new(
-            url,
-            Some(&format!("socks5://127.0.0.1:{socks_port}")),
-            None,
-            None,
-        )
-        .expect("remote address parses");
-        let note = super::remote_mining_note(&daemon).expect("a remote daemon is reminded");
+        let remote = crate::daemon::DaemonClient::new("http://203.0.113.5:18081", None, None, None)
+            .expect("remote address parses");
+        let note = super::remote_mining_note(&remote).expect("a remote daemon is reminded");
         assert_eq!(
             note,
-            format!(
-                "Note: this daemon ({url}) is not on this machine. Mining will run on that machine's CPU."
-            )
-        );
-        assert!(
-            !note.contains("recommended"),
-            "the reminder does not judge the operator's network: {note}"
+            "Note: this daemon (http://203.0.113.5:18081) is not on this machine. \
+             Mining will run on that machine's CPU."
         );
 
-        let closed = TcpListener::bind("127.0.0.1:0").expect("closed port");
+        let info = serde_json::json!({
+            "jsonrpc": "2.0",
+            "id": "0",
+            "result": info_reply(),
+        })
+        .to_string();
+        let (address, log) = crate::console::route_server_recording(vec![
+            ("json_rpc:get_info", info),
+            (
+                "/mining_status",
+                r#"{"status":"OK","active":false,"speed":{"count":0,"window":0},"threads_count":0,"address":"4test","difficulty":1}"#.to_owned(),
+            ),
+            ("/start_mining", r#"{"status":"OK"}"#.to_owned()),
+        ]);
+        let daemon =
+            crate::daemon::DaemonClient::new(&format!("http://{address}"), None, None, None)
+                .expect("the route server parses");
+        let closed = std::net::TcpListener::bind("127.0.0.1:0").expect("closed port");
         let closed_port = closed.local_addr().expect("closed addr").port();
         drop(closed);
         let rpc = crate::rpc_client::RpcSession::connect(
@@ -589,88 +519,19 @@ mod tests {
             false,
         )
         .expect("a refused probe still builds a session");
-        rpc.set_open("wallet");
-
-        let result = super::cmd_mine_start(&rpc, Some(&daemon), "mainnet", Some(1))
-            .expect("mining starts after the reminder");
-        assert_eq!(result["started"], true);
         assert!(
-            started.load(Ordering::Relaxed),
-            "mine start reached /start_mining"
+            rpc.open_wallet_name().is_none(),
+            "the red check is a session with no wallet"
         );
 
-        http_stop.store(true, Ordering::Relaxed);
-        socks_stop.store(true, Ordering::Relaxed);
-        http_thread.join().expect("http thread");
-        socks_thread.join().expect("socks thread");
-    }
-
-    fn http_request_complete(buf: &[u8]) -> bool {
-        let Some(split) = buf.windows(4).position(|w| w == b"\r\n\r\n") else {
-            return false;
-        };
-        let header = String::from_utf8_lossy(&buf[..split]);
-        let length = header.lines().find_map(|line| {
-            let (name, value) = line.split_once(':')?;
-            if name.eq_ignore_ascii_case("content-length") {
-                value.trim().parse::<usize>().ok()
-            } else {
-                None
-            }
-        });
-        match length {
-            Some(length) => buf.len() >= split + 4 + length,
-            None => true,
-        }
-    }
-
-    fn relay_socks(mut client: std::net::TcpStream, daemon: std::net::SocketAddr) {
-        use std::io::{Read, Write};
-        client.set_nonblocking(false).expect("blocking");
-        client
-            .set_read_timeout(Some(std::time::Duration::from_secs(2)))
-            .expect("timeout");
-        let mut greet = [0u8; 2];
-        if client.read_exact(&mut greet).is_err() || greet[0] != 5 {
-            return;
-        }
-        let mut methods = vec![0u8; greet[1] as usize];
-        if client.read_exact(&mut methods).is_err() || client.write_all(&[5, 0]).is_err() {
-            return;
-        }
-        let mut head = [0u8; 4];
-        if client.read_exact(&mut head).is_err() {
-            return;
-        }
-        let skip = match head[3] {
-            1 => 4,
-            4 => 16,
-            3 => {
-                let mut len = [0u8; 1];
-                if client.read_exact(&mut len).is_err() {
-                    return;
-                }
-                len[0] as usize
-            }
-            _ => return,
-        };
-        let mut rest = vec![0u8; skip + 2];
-        if client.read_exact(&mut rest).is_err() {
-            return;
-        }
-        let Ok(mut upstream) = std::net::TcpStream::connect(daemon) else {
-            return;
-        };
-        if client.write_all(&[5, 0, 0, 1, 0, 0, 0, 0, 0, 0]).is_err() {
-            return;
-        }
-        let mut from_client = client.try_clone().expect("clone");
-        let mut to_daemon = upstream.try_clone().expect("clone");
-        let forward = std::thread::spawn(move || {
-            drop(std::io::copy(&mut from_client, &mut to_daemon));
-        });
-        drop(std::io::copy(&mut upstream, &mut client));
-        drop(forward.join());
+        let result = super::cmd_mine_start(&rpc, Some(&daemon), "mainnet", Some(1))
+            .expect("mining starts with no wallet open");
+        assert_eq!(result["started"], true);
+        let asked = log.lock().expect("log");
+        assert!(
+            asked.iter().any(|(path, _)| path == "/start_mining"),
+            "mine start with no wallet reached /start_mining: {asked:?}"
+        );
     }
 
     fn info_reply() -> serde_json::Value {

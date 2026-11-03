@@ -167,7 +167,7 @@ fn route_server(routes: Vec<(&'static str, String)>) -> String {
 /// anyway. The log makes the *request* assertable, which for the
 /// window-resolving commands is the whole behaviour under test.
 #[expect(clippy::type_complexity, reason = "a test log of (route, body)")]
-fn route_server_recording(
+pub(crate) fn route_server_recording(
     mut routes: Vec<(&'static str, String)>,
 ) -> (
     String,

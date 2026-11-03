@@ -53,10 +53,9 @@ does not run RandomX") is unchanged and this doc re-pins it:
 
 - **Doing** — RandomX threads, block templates, block submission — stays
   in `shekyld`. `shekyl-cli` gains no hashing code, ever.
-- **Controlling** — `start` / `stop` / `status` with this wallet's
-  payout address — is a CLI adaptor over the daemon's `AdminOnly`
-  path RPCs, the same class of work `chain_health` already does through
-  the independent `DaemonClient`
+- **Controlling** — `start` / `stop` / `status` — is a CLI adaptor over
+  the daemon's `AdminOnly` path RPCs, the same class of work
+  `chain_health` already does through the independent `DaemonClient`
   ([`../../rust/shekyl-cli/src/daemon.rs`](../../rust/shekyl-cli/src/daemon.rs)).
   The silent default is a loopback daemon. A named remote
   `--daemon-address` is a valid configuration; `mine start` reminds
@@ -68,15 +67,15 @@ does not run RandomX") is unchanged and this doc re-pins it:
 
 Prior-art shape (taken deliberately): Bitcoin Core's `-generate` is a
 client-side composition (`getnewaddress` + `generatetoaddress`); Monero's
-wallet `start_mining [threads]` tells `monerod` to mine. We compose
-`get_primary_address` + daemon `/start_mining` the same way.
+wallet `start_mining [threads]` tells `monerod` to mine. Shekyl does not
+compose a wallet address into the request (IG-Q21, Rick 2026-11-03). The
+shell sends the thread count. The daemon mines to its `mine-address`.
 
 ```mermaid
 flowchart LR
-  repl["shekyl-cli REPL"] --> addr["wallet-rpc get_primary_address"]
-  repl --> mine["DaemonClient POST /start_mining"]
+  repl["shekyl-cli REPL"] --> mine["DaemonClient POST /start_mining"]
   mine --> shekyld["shekyld miner threads"]
-  shekyld --> coinbase["coinbase to wallet address"]
+  shekyld --> coinbase["coinbase to mine-address"]
 ```
 
 ## 2. Work items
@@ -146,12 +145,13 @@ REPL verbs:
   (CU-7, 2026-09-26). Each diagnoses and names `mine start`,
   `mine stop`, or `mine status`.
 
+The mine words do not require an open wallet. The wallet does not
+supply the payout address (IG-Q21, Rick 2026-11-03).
+
 Gates, all fail-closed before any daemon call:
 
-1. **Wallet open** — `mine start` needs a payout address; without an
-   open wallet the refusal names `open` / `create`. (`mine stop` /
-   `mine status` also require it for symmetry: mining verbs are wallet
-   verbs here; the daemon console is the wallet-less path.)
+1. **Network match** — `get_version`'s identity against this CLI's
+   network, read before `get_info`.
 2. **Loopback is the silent default, not a force.** The default
    `--daemon-address` is this machine. A non-loopback endpoint is a
    valid configuration. `mine start` reminds the operator that mining
@@ -195,7 +195,7 @@ Enumerated here before code (rule 82); each path says what to run next.
 | F2 | Wrong network vs daemon (wallet testnet, daemon mainnet) | `mine start` preflight: `get_version`'s identity vs `--network`, read before `get_info` (RK-Q6; the same read refuses a daemon on another RPC version, rule set or genesis) | Name both networks and the flag to fix (restart CLI or daemon with the matching flag) |
 | F3 | Restricted RPC | `mine *` | "The daemon's RPC listener is restricted (view-only); mining control needs the unrestricted RPC listener" |
 | F4 | Remote (non-loopback) daemon | `mine start` | Reminder that mining will run on that machine's CPU; **does not refuse**. Startup already discloses a remote daemon (RT-W7). |
-| F5 | No wallet open | `mine *` (and existing `require_open` sites) | `open <name>` / `create <name>` |
+| F5 | No wallet open | commands that read the wallet (`require_open`). The mine words do not require one (IG-Q21, Rick 2026-11-03) | `open <name>` / `create <name>` |
 | F6 | Already mining | `mine start` | Current thread count + `mine stop` first (daemon reports the state; the CLI relays it, no error tone) |
 | F7 | Daemon not synced | `mine start` | Refuse with height copy. The daemon will not mine until it is caught up (`CHECK_CORE_READY` / `BUSY`); there is no confirmation that can succeed. |
 | F8 | retired `start_mining` / `stop_mining` / `mining_status`, or a partial `mine` (CU-7, 2026-09-26: the retired line does not run) | parser | Diagnostic naming `mine start [threads]`, `mine stop`, or `mine status`; never bare "Unknown command" |
@@ -213,8 +213,9 @@ Enumerated here before code (rule 82); each path says what to run next.
   `WALLET_REWRITE_PLAN.md` hard-cut bullets, `CLI_PARITY_MATRIX.md`
   rows 71/73 (→ Covered, with the doing-stays-daemon note),
   [`../EXECUTABLES.md`](../EXECUTABLES.md).
-- `shekyld`'s mining console remains documented as the path for
-  operators already on the node (and the only path with no wallet).
+- `shekyld`'s mining configuration remains the path for an operator
+  who starts the miner with the daemon. `shekyl-cli`'s mine words do
+  not require a wallet.
 
 ## 3. Out of scope (named, with reopen shape)
 

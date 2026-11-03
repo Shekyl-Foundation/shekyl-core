@@ -23,6 +23,8 @@ mod node;
 mod status;
 #[cfg(test)]
 mod tests;
+#[cfg(test)]
+pub(crate) use tests::route_server_recording;
 
 use alt_chain::alt_chain_info;
 use blockchain::{print_blockchain_dynamic_stats, print_blockchain_info};

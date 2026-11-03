@@ -260,14 +260,15 @@ is [`docs/CLI_PARITY_MATRIX.md`](CLI_PARITY_MATRIX.md).
 
 | Command | Description |
 |---------|-------------|
-| `mine start [threads\|auto]` | Start mining on the local daemon, paying to this wallet (default threads: `min(cores, 4)`; the daemon owns the threads, so mining keeps running after the CLI exits) |
+| `mine start [threads\|auto]` | Start mining on the daemon, paying its `mine-address` (default threads: `min(cores, 4)`; the shell sends only the thread count; the daemon owns the threads, so mining keeps running after the CLI exits) |
 | `mine stop` | Stop mining on the daemon |
 | `mine status` | Mining state, thread count, and hash rate |
 
 The retired spellings `start_mining`, `stop_mining` and `mining_status`
-do not run; each names its `mine` replacement. Requires an open wallet,
-the unrestricted RPC listener, and a daemon on the same network as the
-CLI. The default daemon is loopback. A remote `--daemon-address` is
+do not run; each names its `mine` replacement. Does not require an open
+wallet. Requires the unrestricted RPC listener and a daemon on the same
+network as the CLI. The default daemon is loopback. A remote
+`--daemon-address` is
 allowed, and `mine start` reminds you that mining will run on that
 machine's CPU.
 A still-syncing daemon refuses `mine start` until it is caught up.
