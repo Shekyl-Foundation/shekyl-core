@@ -6,19 +6,19 @@
 //! The one method table (`RPC_WIRE.md` RW-Q7).
 //!
 //! Every method the daemon serves is one row: its name and the aliases it
-//! answers to, the surface it is served on, who may call it, and what one
-//! request may cost. Dispatch's grant check reads the table; nothing else
-//! lists a method's policy (RK-D6). A gate in `shekyl-daemon-rpc` checks
-//! that every served method is a row and every row is served.
+//! answers to, the surface it is served on, and who may call it. Dispatch's
+//! grant check reads the table; nothing else lists a method's policy
+//! (RK-D6). A gate in `shekyl-daemon-rpc` checks that every served method
+//! is a row and every row is served.
 //!
 //! **Who may call it** is [`Policy`] (`RPC_CHANNEL.md` §6.1, RT-O32): every
 //! row is in exactly one grant, or in exactly one of the two classes that are
 //! not grants (host-only data and the armed test levers). A row without a
 //! policy does not compile, and a test checks every row against §6.1.
 //!
-//! **What it may cost** is [`Cost`] (§6.3). Two rows are marked unbounded
-//! until RT-W10 step 2 sets their bounds, and a bounded caller is refused
-//! them.
+//! What one request may cost lives in the handler that does the work
+//! (§6.3): the inherited caps, the one hash `calc_pow` spends, and the one
+//! coinbase read. The table does not carry a cost.
 //!
 //! One of RW-Q7's columns is not here yet, and says why: **request and reply
 //! types.** A type is not a value; until the flip, the dispatch match is
@@ -43,17 +43,6 @@ pub enum Policy {
     /// The JSON-RPC endpoint itself: it serves any connection, and each
     /// method on it carries its own policy.
     Endpoint,
-}
-
-/// What one request may cost (`RPC_CHANNEL.md` §6.3).
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub enum Cost {
-    /// Bounded by its handler, or cheap.
-    Bounded,
-    /// No bound is set yet: a bounded caller (every caller but the host's
-    /// administrator) is refused it as over its resource bound. RT-W10
-    /// step 2 sets the bound.
-    Unbounded,
 }
 
 /// A bounded caller is every caller but the host's administrator (§6.3).
@@ -86,8 +75,6 @@ pub struct Method {
     pub surface: Surface,
     /// Who may call it.
     pub policy: Policy,
-    /// What one request may cost.
-    pub cost: Cost,
 }
 
 impl Method {
@@ -153,7 +140,6 @@ const fn json(name: &'static str, aliases: &'static [&'static str], policy: Poli
         aliases,
         surface: Surface::JsonRpc,
         policy,
-        cost: Cost::Bounded,
     }
 }
 
@@ -163,14 +149,6 @@ const fn rest(name: &'static str, aliases: &'static [&'static str], policy: Poli
         aliases,
         surface: Surface::Rest,
         policy,
-        cost: Cost::Bounded,
-    }
-}
-
-const fn unbounded(method: Method) -> Method {
-    Method {
-        cost: Cost::Unbounded,
-        ..method
     }
 }
 
@@ -218,9 +196,9 @@ pub const METHODS: &[Method] = &[
     // is part of mining status, and the serve-credit lever went with the
     // C++ chain.
     json("submit_block", &["submitblock"], g(MiningWork)),
-    // A computation service (RT-O9.4); its bound is RT-W10 step 2's.
-    // Dispatched from the store (`read_methods::calc_pow`).
-    unbounded(json("calc_pow", &[], g(MiningWork))),
+    // A computation service (RT-O9.4). A bounded caller pays one hash
+    // from the shared budget; the blob is at most `MAX_POW_BLOB_SIZE`.
+    json("calc_pow", &[], g(MiningWork)),
     json("get_block_template", &["getblocktemplate"], g(MiningWork)),
     json("get_miner_data", &[], g(MiningWork)),
     json("generateblocks", &[], Policy::Armed),
@@ -228,10 +206,9 @@ pub const METHODS: &[Method] = &[
     json("get_bans", &[], g(Bans)),
     json("banned", &[], g(Bans)),
     json("flush_txpool", &[], g(Node)),
-    // A public chain fact (RT-O9.4); its span bound is RT-W10 step 2's.
-    // Dispatched from the store, with `get_alternate_chains` and the
-    // curve-tree and archival rows below.
-    unbounded(json("get_coinbase_tx_sum", &[], g(Chain))),
+    // A public chain fact (RT-O9.4). A bounded caller's read runs on the
+    // blocking pool behind a concurrency limit of one.
+    json("get_coinbase_tx_sum", &[], g(Chain)),
     json("get_alternate_chains", &[], g(Status)),
     json("relay_tx", &[], g(Node)),
     json("get_txpool_backlog", &[], g(Pool)),
@@ -417,18 +394,6 @@ mod tests {
             );
         }
         assert!(placed.is_empty(), "placed but not in the table: {placed:?}");
-    }
-
-    /// The two rows whose bound is RT-W10 step 2's are the only unbounded
-    /// ones (§6.3): a bounded caller is refused them until then.
-    #[test]
-    fn only_calc_pow_and_the_coinbase_sum_are_unbounded() {
-        let unbounded: Vec<&str> = METHODS
-            .iter()
-            .filter(|row| row.cost == Cost::Unbounded)
-            .map(|row| row.name)
-            .collect();
-        assert_eq!(unbounded, ["calc_pow", "get_coinbase_tx_sum"]);
     }
 
     #[test]

@@ -19,8 +19,11 @@
 //! The values are typed chain facts. The handlers own the wire: hex, the
 //! 128-bit triples, the status strings and the refusals.
 
+use std::sync::Arc;
+
 use shekyl_archival_retention::ShardCoverageIn;
 use shekyl_chain_rules::EmissionEpochFacts;
+use shekyl_pow_randomx::PreparedCache;
 use shekyl_types::archival::HoldingsKind;
 use shekyl_types::{
     BlockHash, BlockHeight, ChainCount, CurveTreeRoot, KeyImage, PCanonicalId, PowHash,
@@ -91,11 +94,9 @@ pub enum PowSeed {
     AtHeight(BlockHeight),
 }
 
-/// A `calc_pow` answer.
+/// Why `calc_pow` will not hash. Neither variant spends a hash.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum PowAt {
-    /// RandomX over the bytes under the seed.
-    Hashed(PowHash),
+pub enum PowDecline {
     /// The seed height is above the tip: the chain has no block there, so
     /// there is no seed to hash under.
     SeedAboveTip {
@@ -113,6 +114,32 @@ pub enum PowAt {
         /// The seed asked for, given or named by the height.
         seed: BlockHash,
     },
+}
+
+/// A cache the daemon already holds, admitted for one `calc_pow` hash.
+///
+/// Only [`ChainReadFacts::admit_pow`] mints one. The caller spends its
+/// hash budget against this value, then [`ChainReadFacts::hash_admitted`]
+/// runs RandomX on the cache it holds, so the lookup that succeeded is
+/// the lookup that hashes. The cache is crate-private: a caller outside
+/// this crate passes the value on and does not build one.
+pub struct AdmittedPow {
+    pub(crate) cache: Arc<PreparedCache>,
+}
+
+impl std::fmt::Debug for AdmittedPow {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str("AdmittedPow")
+    }
+}
+
+/// A seed resolved to a held cache, or a reason it will not be hashed.
+#[derive(Debug)]
+pub enum PowAdmission {
+    /// The seed's cache is held. Hashing it is what spends a hash.
+    Admitted(AdmittedPow),
+    /// The chain has no seed there, or the cache is not held.
+    Declined(PowDecline),
 }
 
 /// A claimant's bond record, as the claim source reports it: what the
@@ -308,15 +335,31 @@ pub trait ChainReadFacts: Send + Sync {
     /// when a listed transaction or a block in range is missing.
     fn coinbase_sum(&self, start: BlockHeight, count: u64) -> Result<CoinbaseRange, FactsFault>;
 
-    /// RandomX over `pow_blob` under `seed`, under a cache the daemon's
-    /// cache store already holds; [`PowAt::SeedNotHeld`] for any other.
-    /// Never derives a cache.
+    /// Resolve `seed` to a cache the daemon already holds.
+    ///
+    /// Looks the seed up and, when the seed is a height, reads that block.
+    /// Does not derive a cache, run RandomX, take a hasher permit, or
+    /// spend an RPC hash. [`PowAdmission::Declined`] is a request that
+    /// will not hash.
     ///
     /// # Errors
     ///
-    /// As [`curve_tree`](Self::curve_tree) when the seed is read off the
-    /// chain.
-    fn pow_hash(&self, pow_blob: &[u8], seed: PowSeed) -> Result<PowAt, FactsFault>;
+    /// [`FactsFault::NotReady`] when this handle is not open. The store's
+    /// faults when the seed is a height read off the chain.
+    fn admit_pow(&self, seed: PowSeed) -> Result<PowAdmission, FactsFault>;
+
+    /// RandomX over `pow_blob` on the cache `admitted` holds.
+    ///
+    /// Takes one permit in the calc_pow hasher class, then hashes. The
+    /// hash does not fail. [`FactsFault::NotReady`] is the handle: a
+    /// chain that is not open never admits, and hashing on it is that
+    /// fault rather than a zero.
+    ///
+    /// # Errors
+    ///
+    /// [`FactsFault::NotReady`] when this handle is not open.
+    fn hash_admitted(&self, pow_blob: &[u8], admitted: &AdmittedPow)
+        -> Result<PowHash, FactsFault>;
 
     /// What `persona`'s emission claim is built from (`ClaimSource`).
     ///

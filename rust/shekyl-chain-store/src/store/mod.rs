@@ -892,6 +892,11 @@ mod connect_fixtures;
 #[path = "connect_tests.rs"]
 mod connect_tests;
 
+#[cfg(all(test, target_os = "linux"))]
+#[allow(unsafe_code)]
+#[path = "rt_w10_cost.rs"]
+mod rt_w10_cost;
+
 #[cfg(test)]
 #[path = "connect_ruleset_tests.rs"]
 mod connect_ruleset_tests;

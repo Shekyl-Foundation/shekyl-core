@@ -1466,48 +1466,69 @@ async fn an_external_miner_writes_at_the_reported_offsets_and_the_door_connects_
 /// value-shaped test): its block names the tip below its height as the
 /// parent, and its coinbase claims that height. A job may be stale; it is
 /// never torn between two tips.
+///
+/// The subject is two publications of the record the sink reads. The empty
+/// chain is posted first. The blocks connect after that, while the follower
+/// builds. Each post is that record — the job and its bodies, under one
+/// generation — and the check is every job the record held. Red edit: sample
+/// the posting watch against the board's current job, or offer the blocks
+/// before the empty chain has a job in the record.
 #[tokio::test(flavor = "multi_thread")]
 async fn a_job_built_while_blocks_connect_never_pairs_two_tips() {
-    use crate::follower::Posting;
+    use std::collections::BTreeMap;
+
+    use crate::follower::kept_jobs;
     let mut y = Scenario::open("service-one-snapshot-y");
     let blocks = y.mine(24).await;
     let board = Arc::new(shekyl_miner::JobBoard::new());
     let (_sync_tx, sync) = tokio::sync::watch::channel(shekyl_chain_sync::SyncState::Synced);
-    let (service, path, posting) =
+    let (service, path, mut posting) =
         service_mining("service-one-snapshot", Arc::new(Gated::new()), &board, sync);
-    let watcher = {
-        let board = Arc::clone(&board);
-        let mut posting = posting.clone();
-        tokio::spawn(async move {
-            let mut seen = Vec::new();
-            while posting.changed().await.is_ok() {
-                if let Posting::Posted(generation) = *posting.borrow_and_update() {
-                    if let Some((at, job)) = board.posted() {
-                        if at == generation {
-                            seen.push(job);
-                        }
-                    }
-                }
+    let seen = {
+        let mut seen: BTreeMap<shekyl_miner::Generation, shekyl_miner::Job> = BTreeMap::new();
+        let collect = |seen: &mut BTreeMap<shekyl_miner::Generation, shekyl_miner::Job>| {
+            for (generation, job) in kept_jobs(&service.shared.postings()) {
+                seen.entry(generation).or_insert(job);
             }
-            seen
+        };
+        tokio::time::timeout(CHAIN_POSTED, async {
+            loop {
+                collect(&mut seen);
+                if seen.values().any(|job| job.height == BlockHeight::ZERO) {
+                    return;
+                }
+                posting.changed().await.expect("the posting watch");
+            }
         })
-    };
-    for block in &blocks {
-        offer_all(&service.door(), 1, std::slice::from_ref(block)).await;
-    }
-    let mut followed = service.followed();
-    followed
-        .wait_for(|at| *at >= u64::try_from(blocks.len()).expect("fits"))
         .await
-        .expect("following");
+        .expect("the empty chain's job");
+        for block in &blocks {
+            offer_all(&service.door(), 1, std::slice::from_ref(block)).await;
+            // The build yields, so a generation is in the record here, before
+            // a later post drops it from the ring.
+            collect(&mut seen);
+        }
+        tokio::time::timeout(CHAIN_POSTED, async {
+            loop {
+                collect(&mut seen);
+                if seen.values().any(|job| job.height.to_raw() > 0) {
+                    return;
+                }
+                posting.changed().await.expect("the posting watch");
+            }
+        })
+        .await
+        .expect("a job after the tip moved");
+        collect(&mut seen);
+        seen
+    };
     service.stop().await.expect("stops");
-    let seen = watcher.await.expect("the watcher");
     assert!(
         seen.len() >= 2,
         "the subject: jobs while blocks connected ({})",
         seen.len()
     );
-    for job in &seen {
+    for job in seen.values() {
         let parent = job
             .height
             .to_raw()
@@ -2039,7 +2060,7 @@ async fn a_block_this_node_mined_waits_for_a_seat_and_then_connects() {
     substrate.until_held().await;
     // The miner finds block 2. The sink meets no room and waits.
     let board = shekyl_miner::JobBoard::new();
-    let generation = board.publish(shekyl_miner::Job {
+    let job = shekyl_miner::Job {
         block: blocks[2].template.block.clone(),
         height: blocks[2].height,
         seed: BlockHash::NULL,
@@ -2054,12 +2075,16 @@ async fn a_block_this_node_mined_waits_for_a_seat_and_then_connects() {
         median_weight: 0,
         already_generated: shekyl_units::AtomicUnits::ZERO,
         listed: Vec::new(),
-    });
+    };
+    let generation = board.publish(job.clone());
     let postings = crate::follower::Postings::default();
-    postings
-        .lock()
-        .expect("postings")
-        .insert(generation, blocks[2].template.transactions.clone());
+    postings.lock().expect("postings").insert(
+        generation,
+        crate::follower::KeptPosting {
+            job,
+            bodies: blocks[2].template.transactions.clone(),
+        },
+    );
     let (sender, inbox) = shekyl_miner::found_blocks();
     let (done_tx, _done_rx) = tokio::sync::oneshot::channel();
     let sink = crate::follower::spawn_sink(inbox, door.clone(), postings, done_tx);

@@ -39,12 +39,13 @@ use crate::shard_view::{ShardViewFacts, SkeletonAbsent};
 use crate::submit::DaemonSubmitEngine;
 
 use crate::authority::Authority;
+use crate::hash_budget::HashBudget;
 use axum::http::{HeaderValue, Method};
 use axum::routing::{get, post, MethodRouter};
 use axum::Router;
-use std::future::IntoFuture as _;
 use std::sync::Arc;
-use tokio::sync::watch;
+use std::time::Instant;
+use tokio::sync::{watch, Semaphore};
 use tower_http::cors::{AllowOrigin, CorsLayer};
 use tower_http::limit::RequestBodyLimitLayer;
 use tracing::info;
@@ -65,6 +66,11 @@ pub struct AppState {
     /// The node's handles (N1). Present, and not yet what the live routes
     /// read: those keep the C++ `core` until the store flip.
     pub handles: Handles,
+    /// One hash budget for every bounded caller (§6.3).
+    pub hash_budget: Arc<HashBudget>,
+    /// Bounded `get_coinbase_tx_sum` reads, one at a time. Cold reads wait
+    /// on disk; the permit is taken before the blocking-pool task.
+    pub coinbase_reads: Arc<Semaphore>,
 }
 
 pub struct ServerConfig {
@@ -413,6 +419,8 @@ pub async fn serve_listeners(
     shutdown: watch::Receiver<bool>,
 ) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
     let conn_tracker = ConnTracker::new(config.conn_limits);
+    let hash_budget = Arc::new(HashBudget::new(Instant::now()));
+    let coinbase_reads = Arc::new(Semaphore::new(1));
     let router_at = |authority: Authority| {
         let state = Arc::new(AppState {
             core: core.clone(),
@@ -421,6 +429,8 @@ pub async fn serve_listeners(
             shard_view: config.shard_view.clone(),
             options: config.options.clone(),
             handles: config.handles.clone(),
+            hash_budget: Arc::clone(&hash_budget),
+            coinbase_reads: Arc::clone(&coinbase_reads),
         });
         build_router(state, &config.cors_origins, authority)
     };
@@ -492,8 +502,8 @@ impl Listener {
 }
 
 /// The lifecycle half of [`serve_listeners`], independent of the core so it
-/// can be tested as one: one `axum::serve` per bound socket, every accepted
-/// connection admitted through the shared tracker, and every acceptor
+/// can be tested as one: one plaintext HTTP/1 serve per bound socket, every
+/// accepted connection admitted through the shared tracker, and every acceptor
 /// stopped by the same level-triggered signal — including one that has not
 /// been polled when the signal arrives, which is the ordering that used to
 /// hang `shekyl_daemon_rpc_stop`. An acceptor that fails must not leave the
@@ -529,20 +539,20 @@ pub(crate) async fn serve_bound(
         let listener = LimitedListener::new(listener, conn_tracker.clone());
         let mut stop = shutdown.clone();
         let mut fail = fail_rx.clone();
-        serves.spawn(
-            axum::serve(listener, app)
-                .with_graceful_shutdown(async move {
-                    // Either signal is a stop, and either outcome of each is
-                    // too (the value turned true, or its sender is gone).
-                    // `wait_for` is level-triggered: a send that happened
-                    // before this future was first polled is still observed.
-                    tokio::select! {
-                        _signal = stop.wait_for(|&stop| stop) => {}
-                        _signal = fail.wait_for(|&fail| fail) => {}
-                    }
-                })
-                .into_future(),
-        );
+        serves.spawn(crate::listener_http::serve_plaintext(
+            listener,
+            app,
+            async move {
+                // Either signal is a stop, and either outcome of each is
+                // too (the value turned true, or its sender is gone).
+                // `wait_for` is level-triggered: a send that happened
+                // before this future was first polled is still observed.
+                tokio::select! {
+                    _signal = stop.wait_for(|&stop| stop) => {}
+                    _signal = fail.wait_for(|&fail| fail) => {}
+                }
+            },
+        ));
     }
     first_error_stops_the_rest(&mut serves, &fail_tx).await
 }
