@@ -211,6 +211,11 @@ pub enum ResolvedCommand {
     },
 
     ChainHealth,
+    /// A daemon word (`INPUT_GRAMMAR.md` §13). `words` is what the moved
+    /// renderer matches, and the report is its text.
+    DaemonView {
+        words: Vec<String>,
+    },
 
     // -- Proofs (WI-RPC-3 surface) --
     GetTxProof {

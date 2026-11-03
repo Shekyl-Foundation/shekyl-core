@@ -104,6 +104,22 @@ fn parse_ready(id: CommandId, tail: Tail<'_>, args: &[&str]) -> ResolvedCommand 
         Balance => bare(id, args, ResolvedCommand::Balance),
         Status => bare(id, args, ResolvedCommand::Status),
         Chain => bare(id, args, ResolvedCommand::ChainHealth),
+        ChainHeight => daemon_words(&["chain", "height"], args),
+        ChainDifficulty => daemon_words(&["chain", "difficulty"], args),
+        ChainStats => daemon_flagged(id, &["chain", "stats"], args, &["--last"]),
+        ChainAlt => daemon_words(&["chain", "alt"], args),
+        ChainSpent => daemon_one(id, &["chain", "spent"], args),
+        BlockShow => daemon_one(id, &["block", "show"], args),
+        BlockHeaderList => {
+            daemon_flagged(id, &["block", "header", "list"], args, &["--from", "--to"])
+        }
+        PeerList => parse_peer_list(args),
+        PeerStats => daemon_words(&["peer", "stats"], args),
+        PeerConnections => daemon_words(&["peer", "connections"], args),
+        P2pStats => daemon_words(&["p2p", "stats"], args),
+        SyncStatus => daemon_words(&["sync", "status"], args),
+        DaemonStatus => daemon_words(&["daemon", "status"], args),
+        TxpoolStats => daemon_words(&["txpool", "stats"], args),
         Version => bare(id, args, ResolvedCommand::Version),
         Wallet => bare(id, args, ResolvedCommand::Wallet),
         Stake => bare(id, args, ResolvedCommand::Stake),
@@ -163,10 +179,85 @@ fn parse_ready(id: CommandId, tail: Tail<'_>, args: &[&str]) -> ResolvedCommand 
         Verify => parse_verify(tail, args),
         // Subjects. `walk` asks for a verb before this match; the arm keeps
         // the match exhaustive if that ever changes.
-        Tx | Request | Uri | Shard | ShardList | Mine | Prove | Check => {
-            diag(catalog::need_verb(id))
-        }
+        Tx | Request | Uri | Shard | ShardList | Mine | Prove | Check | Block | BlockHeader
+        | Peer | P2p | Sync | Daemon | Txpool => diag(catalog::need_verb(id)),
     }
+}
+
+/// A §13 word with no arguments. `path` is what the renderer matches.
+fn daemon_words(path: &[&str], args: &[&str]) -> ResolvedCommand {
+    if args.is_empty() {
+        ResolvedCommand::DaemonView {
+            words: path.iter().map(|word| (*word).to_string()).collect(),
+        }
+    } else {
+        diag(format!("{}: unexpected {}", path.join(" "), args[0]))
+    }
+}
+
+/// A §13 word with one positional.
+fn daemon_one(id: CommandId, path: &[&str], args: &[&str]) -> ResolvedCommand {
+    match args {
+        [word] => {
+            let mut words: Vec<String> = path.iter().map(|part| (*part).to_string()).collect();
+            words.push((*word).to_string());
+            ResolvedCommand::DaemonView { words }
+        }
+        _ => diag(usage(id)),
+    }
+}
+
+/// A §13 word whose arguments are the named flags, each required.
+fn daemon_flagged(
+    id: CommandId,
+    path: &[&str],
+    args: &[&str],
+    required: &[&str],
+) -> ResolvedCommand {
+    let split = match flags(id, args) {
+        Ok(split) => split,
+        Err(command) => return command,
+    };
+    if !split.positional.is_empty() {
+        return diag(usage(id));
+    }
+    let mut words: Vec<String> = path.iter().map(|part| (*part).to_string()).collect();
+    for name in required {
+        let Some(value) = split.value(name) else {
+            return diag(usage(id));
+        };
+        if value.parse::<u64>().is_err() {
+            return diag(format!("{name} takes an integer"));
+        }
+        words.push((*name).to_string());
+        words.push(value.to_string());
+    }
+    ResolvedCommand::DaemonView { words }
+}
+
+fn parse_peer_list(args: &[&str]) -> ResolvedCommand {
+    let split = match flags(CommandId::PeerList, args) {
+        Ok(split) => split,
+        Err(command) => return command,
+    };
+    if !split.positional.is_empty() {
+        return diag(usage(CommandId::PeerList));
+    }
+    let mut words = vec!["peer".to_string(), "list".to_string()];
+    if split.has("--white") {
+        words.push("--white".to_string());
+    }
+    if split.has("--gray") {
+        words.push("--gray".to_string());
+    }
+    if let Some(value) = split.value("--max") {
+        if value.parse::<u64>().is_err() {
+            return diag("peer list: --max takes an integer".to_string());
+        }
+        words.push("--max".to_string());
+        words.push(value.to_string());
+    }
+    ResolvedCommand::DaemonView { words }
 }
 
 fn bare(id: CommandId, args: &[&str], command: ResolvedCommand) -> ResolvedCommand {
@@ -701,6 +792,39 @@ mod tests {
         match parse("tx show abcdef") {
             ResolvedCommand::ShowTransfer { body, .. } => assert!(!body),
             other => panic!("expected tx show without --body, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn a_daemon_word_keeps_the_renderers_path_and_chain_alone_stays_the_wallet() {
+        match parse("chain") {
+            ResolvedCommand::ChainHealth => {}
+            other => panic!("bare chain is the wallet's report, got {other:?}"),
+        }
+        match parse("chain height") {
+            ResolvedCommand::DaemonView { words } => {
+                assert_eq!(words, ["chain", "height"]);
+            }
+            other => panic!("expected chain height, got {other:?}"),
+        }
+        match parse("block header list --to 3 --from 1") {
+            ResolvedCommand::DaemonView { words } => {
+                assert_eq!(
+                    words,
+                    ["block", "header", "list", "--from", "1", "--to", "3"]
+                );
+            }
+            other => panic!("expected the header list, got {other:?}"),
+        }
+        match parse("peer list --max 4") {
+            ResolvedCommand::DaemonView { words } => {
+                assert_eq!(words, ["peer", "list", "--max", "4"]);
+            }
+            other => panic!("expected peer list, got {other:?}"),
+        }
+        match parse("chain stats") {
+            ResolvedCommand::Diagnostic { .. } => {}
+            other => panic!("chain stats needs --last, got {other:?}"),
         }
     }
 

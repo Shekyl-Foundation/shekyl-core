@@ -13,6 +13,7 @@
 
 mod balance;
 mod chain;
+mod daemon_view;
 mod fees;
 mod lifecycle;
 pub(crate) mod mine;
@@ -439,6 +440,15 @@ pub fn run(
                 chain::cmd_chain_health(daemon_client),
                 chain::show_chain,
             ),
+            ResolvedCommand::DaemonView { words } => {
+                let name = words.join(" ");
+                present(
+                    &presentation,
+                    &name,
+                    daemon_view::command(daemon_client, network, &words),
+                    |text| println!("{text}"),
+                )
+            }
 
             ResolvedCommand::MineStart { threads } => present(
                 &presentation,
