@@ -79,6 +79,32 @@ def loop_attach(path):
     return sh("losetup", "--find", "--show", path, capture=True).strip()
 
 
+class LoopDevices:
+    """The loop devices one run attached, released on every exit.
+
+    A device is recorded the moment it is attached and forgotten only once
+    its detach succeeds, so a failure at any step, including the second of
+    two attaches or a detach itself, leaves the cleanup holding exactly
+    what is still attached.
+    """
+
+    def __init__(self):
+        self.held = []
+
+    def attach(self, path):
+        dev = loop_attach(path)
+        self.held.append(dev)
+        return dev
+
+    def detach_all(self, check=True):
+        """Detach in reverse order. Checked, a failed detach stops the run
+        with that device still held; unchecked (the cleanup after a
+        failure), each is tried once and forgotten."""
+        while self.held:
+            sh("losetup", "-d", self.held[-1], check=check)
+            self.held.pop()
+
+
 def parse_found(out):
     """replay-log's find answer, `entry@position`, as the entry index."""
     head = out.strip().split("@", 1)[0]
@@ -256,9 +282,10 @@ class Powerloss:
         data, log = (os.path.join(session.work, name) for name in ("data.img", "log.img"))
         sparse_file(data, DATA_BYTES)
         sparse_file(log, LOG_BYTES)
-        data_dev, log_dev = loop_attach(data), loop_attach(log)
-        held = {"subject": None, "mounted": False, "dm": False, "loops": [data_dev, log_dev]}
+        loops = LoopDevices()
+        held = {"subject": None, "mounted": False, "dm": False}
         try:
+            data_dev, log_dev = loops.attach(data), loops.attach(log)
             sectors = DATA_BYTES // SECTOR
             sh("dmsetup", "create", DM_NAME, "--table",
                f"0 {sectors} log-writes {data_dev} {log_dev}")
@@ -304,8 +331,7 @@ class Powerloss:
             held["mounted"] = False
             sh("dmsetup", "remove", DM_NAME)
             held["dm"] = False
-            while held["loops"]:
-                sh("losetup", "-d", held["loops"].pop())
+            loops.detach_all()
         finally:
             # A failed capture releases whatever it still holds, so the next
             # run does not meet a busy device name. Its own error is the one
@@ -318,8 +344,7 @@ class Powerloss:
                 sh("umount", self.mnt, check=False)
             if held["dm"]:
                 sh("dmsetup", "remove", DM_NAME, check=False)
-            for dev in held["loops"]:
-                sh("losetup", "-d", dev, check=False)
+            loops.detach_all(check=False)
         os.remove(data)
         # The log is complete once the target is removed: every mark is in
         # it, and each must be found (rule 47: an acknowledgement the log
@@ -392,12 +417,13 @@ class Powerloss:
                            for chain, table in cap["digests"].items()}
         acks = cap["acks"]
         mkfs_entries = cap["mkfs_entries"]
-        log_dev = loop_attach(os.path.join(session.work, "log.img"))
         target = os.path.join(session.work, "replay.img")
         sparse_file(target, cap["data_bytes"])
-        target_dev = loop_attach(target)
         os.makedirs(self.mnt, exist_ok=True)
+        loops = LoopDevices()
         try:
+            log_dev = loops.attach(os.path.join(session.work, "log.img"))
+            target_dev = loops.attach(target)
             total = int(sh(args.replay_log, "--log", log_dev, "--num-entries",
                            capture=True).strip())
             bounds = boundaries_of(args.replay_log, log_dev, total)
@@ -427,8 +453,7 @@ class Powerloss:
                 print(f"entry {point_at}/{total} ({point['kind']}): acked {point['acked']} "
                       f"reopened {tip} -> {point['verdict']}", flush=True)
         finally:
-            sh("losetup", "-d", target_dev, check=False)
-            sh("losetup", "-d", log_dev, check=False)
+            loops.detach_all(check=False)
         artifact = dict(
             {key: cap[key] for key in ("schema_version", "git_rev", "subject_binary_sha256",
                                        "chain")},
@@ -476,6 +501,52 @@ def _selftest():
     check("the point after the mark's entry holds its report", acked_at(rows, 41), ("main", 1))
     check("a later entry wins numerically", acked_at(rows, 100), ("main", 2))
     check("a fork acknowledgement", acked_at(rows, 500), ("fork", 3))
+    # LoopDevices over a fake losetup: what is held after each failure.
+    module = sys.modules[__name__]
+    real_attach, real_sh = module.loop_attach, module.sh
+    attached, detached = [], []
+
+    class Refused(Exception):
+        pass
+
+    def fake_attach(path):
+        if path == "no-free-loop":
+            raise Refused(path)
+        attached.append(path)
+        return f"/dev/loop-{path}"
+
+    def fake_sh(*argv, check=True, capture=False):
+        dev = argv[-1]
+        if dev == "/dev/loop-stuck" and check:
+            raise Refused(dev)
+        detached.append(dev)
+        return 0
+
+    module.loop_attach, module.sh = fake_attach, fake_sh
+    try:
+        loops = LoopDevices()
+        try:
+            loops.attach("data")
+            loops.attach("no-free-loop")
+        except Refused:
+            pass
+        check("a failed second attach leaves the first held", loops.held, ["/dev/loop-data"])
+        loops.detach_all(check=False)
+        check("the cleanup releases it", (loops.held, detached), ([], ["/dev/loop-data"]))
+        detached.clear()
+        loops = LoopDevices()
+        loops.attach("stuck")
+        loops.attach("log")
+        try:
+            loops.detach_all()
+        except Refused:
+            pass
+        check("a failed checked detach keeps that device held",
+              (loops.held, detached), (["/dev/loop-stuck"], ["/dev/loop-log"]))
+        loops.detach_all(check=False)
+        check("the unchecked cleanup tries it once and forgets it", loops.held, [])
+    finally:
+        module.loop_attach, module.sh = real_attach, real_sh
     pts, sampled = checkpoints({100, 50}, 200, 1, None)
     check("boundaries, midpoints and the end", pts, [25, 50, 75, 100, 150, 200])
     check("the full list is not a subsample", sampled, False)
