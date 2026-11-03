@@ -11,13 +11,18 @@
 # each flush and FUA boundary, and at points between them, and holds each
 # rebuilt store to PB-S1's condition.
 #
-# The acknowledgement is the latest flush or FUA already in the log when
-# get_info published a tip. Under D9 that flush is the commit of the tip:
-# the commit is durable before get_info answers. A mark written afterwards
-# is not the oracle. A tip is never attributed to a flush that has not
-# moved, and never to a flush inside the mkfs image: the first would judge
-# a new tip against an older prefix, and the second would judge genesis
-# against an empty filesystem.
+# The oracle is the daemon's promise: once get_info has reported a tip, a
+# crash after that report recovers the tip or a heavier chain it had seen
+# (design review, 2026-11-03). The capture writes a mark right after each
+# new tip get_info reports, so the mark sits at the report. Every point
+# from the mark onward must hold that tip or a known heavier chain. A point
+# before it may hold the tip or the one before, since nothing about the tip
+# had been reported. Every point is also held to the checks that need no
+# report: its tip is on a known chain, and its digest is a clean replay's.
+# Early publication still fails: a tip reported before its fsync finished
+# leaves points after the mark and before the flush on the older tip.
+# Where redb's own flush falls is redb's property, not the daemon's
+# promise, and nothing here infers it.
 #
 # Capture (`capture`, needs root for the device mapper) and replay
 # (`replay`, needs root) both take xfstests' `replay-log`. While each seed
@@ -46,15 +51,15 @@ import drs_bench as B  # noqa: E402
 import drs_crash as C  # noqa: E402
 import drs_regtest as R  # noqa: E402
 
-SCHEMA = "shekyl_drs_powerloss_v1"
+SCHEMA = "shekyl_drs_powerloss_v2"
 CAPTURE = "capture.json"
 DM_NAME = "drs-pbs2"
 DATA_BYTES = 4 << 30
 LOG_BYTES = 16 << 30
 SECTOR = 512
 _FLUSH_FLAGS = ("--next-flush", "--next-fua")
-# How long the mkfs mark's super block may take to reach the log.
-MKFS_MARK_DEADLINE_S = 30
+# The mark after mkfs. Points before it judge an empty filesystem.
+MKFS_MARK = "mkfs"
 
 
 def sh(*argv, check=True, capture=False):
@@ -71,10 +76,7 @@ def sparse_file(path, size):
 
 
 def loop_attach(path):
-    """A loop device over `path`, with buffered I/O: its writes land in the
-    file's page cache, which is what `LogCursor` reads (`--direct-io=off`
-    says so rather than relying on the default)."""
-    return sh("losetup", "--find", "--show", "--direct-io=off", path, capture=True).strip()
+    return sh("losetup", "--find", "--show", path, capture=True).strip()
 
 
 def parse_found(out):
@@ -92,91 +94,30 @@ def find_entry(replay_log, log_dev, flag, start):
     return parse_found(proc.stdout) if proc.returncode == 0 else None
 
 
-class LogCursor:
-    """The latest flush or FUA already in the log, read while the device is attached.
-
-    It reads the log's backing file, never the loop device the target
-    writes through. A read of the loop device fills that device's own page
-    cache, which the target's writes below it do not update: every later
-    read sees the first, and on a fresh log the first read precedes the
-    super block (`Magic doesn't match`). The loop driver's writes land in
-    the file's page cache, so a read of the file sees each as it is made.
-
-    The walk remembers where each flag left off, so a poll does not rescan
-    the image it has already passed.
-    """
-
-    def __init__(self, replay_log, log_path):
-        self.replay_log = replay_log
-        self.log_dev = log_path
-        self.starts = {flag: 0 for flag in _FLUSH_FLAGS}
-        self.latest = None
-
-    def num_entries(self):
-        text = sh(self.replay_log, "--log", self.log_dev, "--num-entries", capture=True).strip()
-        return int(text)
-
-    def first_count(self, deadline_s):
-        """The entry count once the log's super block can be read.
-
-        The target writes the super block from its own thread after the
-        mark or FUA that asks for it, so the first read can come before it
-        (about half a second after a 4 GiB mkfs, measured). Past the
-        deadline the capture fails: a log that never reads is not one this
-        harness can judge.
-        """
-        deadline = time.time() + deadline_s
-        while True:
-            proc = subprocess.run(
-                ["sudo", "-n", self.replay_log, "--log", self.log_dev, "--num-entries"],
-                check=False, capture_output=True, text=True)
-            if proc.returncode == 0 and proc.stdout.strip().isdigit():
-                return int(proc.stdout.strip())
-            if time.time() >= deadline:
-                B._fail(f"the log at {self.log_dev} had no readable super block {deadline_s}s "
-                        f"after the mkfs mark: {proc.stderr.strip() or proc.stdout.strip()}")
-            time.sleep(0.1)
-
-    def advance(self):
-        total = self.num_entries()
-        for flag in _FLUSH_FLAGS:
-            at = self.starts[flag]
-            while at < total:
-                entry = find_entry(self.replay_log, self.log_dev, flag, at)
-                if entry is None or entry < at:
-                    break
-                if self.latest is None or entry > self.latest:
-                    self.latest = entry
-                at = entry + 1
-            self.starts[flag] = at
-        return self.latest
+def mark_name(seq):
+    """The mark written after the `seq`-th report."""
+    return f"ack-{seq}"
 
 
-def attribute_tip(acks, chain, height, latest, mkfs_entries):
-    """Record `(chain, height)` against `latest` when that flush is past mkfs
-    and newer than every ack already held.
+def reported_new(last, chain, tip):
+    """Whether `(chain, tip)` is a report the capture has not marked yet."""
+    return last != (chain, tip)
 
-    Returns whether an ack now covers this tip. An older flush is left
-    alone: raising its tip would fail a clean prefix of the previous tip,
-    and writing the ack after the flush would let that prefix pass. A flush
-    still inside the mkfs image is not an acknowledgement of a chain tip.
-    """
-    if latest is None or latest < mkfs_entries:
-        return False
-    newest = max(acks) if acks else None
-    if newest is not None and latest <= newest:
-        held = acks.get(latest)
-        return held is not None and held["chain"] == chain and held["height"] >= height
-    acks[latest] = {"entry": latest, "chain": chain, "height": height}
-    return True
+
+def find_mark(replay_log, log_path, name):
+    """The entry index of the mark `name` in a complete log, or None."""
+    proc = subprocess.run(
+        ["sudo", "-n", replay_log, "--log", log_path, "--find", "--end-mark", name],
+        check=False, capture_output=True, text=True)
+    return parse_found(proc.stdout) if proc.returncode == 0 else None
 
 
 def acked_at(acks, point):
-    """The last acknowledgement whose flush entry is strictly below `point`.
+    """The last acknowledgement whose mark entry is strictly below `point`.
 
-    A replay point is `flush_entry + 1` (the first entries through that
-    flush). Sorting is by entry, then height: mark names do not order
-    `ack-main-10` before `ack-main-9`.
+    A replay point is the count of entries replayed, so the point after a
+    mark's entry is the first to include it. Sorting is by entry, then
+    height.
     """
     last = None
     rows = acks.values() if isinstance(acks, dict) else acks
@@ -267,12 +208,13 @@ class Powerloss:
     def __init__(self, args):
         self.args = args
         self.session = R.Session(args)
-        self.acks = {}
+        self.acks = []
+        self.last_report = None
         self.mnt = os.path.join(self.session.work, "mnt")
 
-    def follow(self, chain, until, deadline_s, cursor, mkfs_entries):
-        """Poll the subject's tip until a post-mkfs flush is attributed a
-        tip at or above `until` on `chain`."""
+    def follow(self, chain, until, deadline_s):
+        """Poll the subject's tip, marking the log after each new report,
+        until a report on `chain` is at or above `until`."""
         session = self.session
         deadline = time.time() + deadline_s
         while time.time() < deadline:
@@ -289,17 +231,18 @@ class Powerloss:
                 continue
             on = session.chain_of(tip, header)
             # An unidentified tip is not the chain this follow is waiting
-            # for. Attributing it there would acknowledge a height no
-            # served chain has published.
+            # for. Marking it would acknowledge a height no served chain
+            # has published.
             if on is None:
                 time.sleep(0.02)
                 continue
-            latest = cursor.advance()
-            attribute_tip(self.acks, on, tip, latest, mkfs_entries)
-            reached = [ack for ack in self.acks.values()
-                       if ack["chain"] == chain and ack["height"] >= until]
-            if reached:
-                return max(ack["height"] for ack in reached)
+            if reported_new(self.last_report, on, tip):
+                name = mark_name(len(self.acks))
+                sh("dmsetup", "message", DM_NAME, "0", "mark", name)
+                self.acks.append({"mark": name, "chain": on, "height": tip})
+                self.last_report = (on, tip)
+            if on == chain and tip >= until:
+                return tip
             time.sleep(0.02)
         B._fail(f"the subject did not reach {until} on {chain} within {deadline_s}s")
 
@@ -322,13 +265,8 @@ class Powerloss:
             held["dm"] = True
             dm = f"/dev/mapper/{DM_NAME}"
             sh("mkfs.ext4", "-q", "-F", dm)
-            # The target writes its super block, the entry count replay-log
-            # reads, when it logs a mark or a FUA; mkfs alone may leave
-            # none. The mark asks for one, and `first_count` waits for it,
-            # so `mkfs_entries` covers every entry mkfs made.
-            sh("dmsetup", "message", DM_NAME, "0", "mark", "mkfs")
-            cursor = LogCursor(args.replay_log, log)
-            mkfs_entries = cursor.first_count(MKFS_MARK_DEADLINE_S)
+            # Every entry before this mark is mkfs's.
+            sh("dmsetup", "message", DM_NAME, "0", "mark", MKFS_MARK)
             os.makedirs(self.mnt, exist_ok=True)
             sh("mount", dm, self.mnt)
             held["mounted"] = True
@@ -345,7 +283,7 @@ class Powerloss:
                 proc = held["subject"] = session.spawn(
                     "subject", subject, ["--p2p-closed-peer", f"127.0.0.1:{session.sp2p}"],
                     session.bp2p, session.brpc)
-                self.follow("main", main_tip, args.startup_timeout, cursor, mkfs_entries)
+                self.follow("main", main_tip, args.startup_timeout)
                 proc.terminate()
                 proc.wait(args.shutdown_timeout)
             fork = session.spawn("fork", fork_dir, [], session.fp2p, session.frpc)
@@ -357,7 +295,7 @@ class Powerloss:
                 proc = held["subject"] = session.spawn(
                     "subject", subject, ["--p2p-closed-peer", f"127.0.0.1:{session.fp2p}"],
                     session.bp2p, session.brpc)
-                self.follow("fork", fork_tip, args.startup_timeout, cursor, mkfs_entries)
+                self.follow("fork", fork_tip, args.startup_timeout)
                 proc.kill()
                 proc.wait()
             # A complete capture is released with every step checked: the
@@ -383,6 +321,17 @@ class Powerloss:
             for dev in held["loops"]:
                 sh("losetup", "-d", dev, check=False)
         os.remove(data)
+        # The log is complete once the target is removed: every mark is in
+        # it, and each must be found (rule 47: an acknowledgement the log
+        # does not hold is not one this capture can judge).
+        mkfs_mark = find_mark(args.replay_log, log, MKFS_MARK)
+        if mkfs_mark is None:
+            B._fail(f"the log at {log} holds no `{MKFS_MARK}` mark")
+        for ack in self.acks:
+            ack["entry"] = find_mark(args.replay_log, log, ack["mark"])
+            if ack["entry"] is None:
+                B._fail(f"the log at {log} holds no `{ack['mark']}` mark")
+        mkfs_entries = mkfs_mark + 1
         record = {
             "schema_version": SCHEMA,
             "git_rev": args.git_rev,
@@ -391,7 +340,7 @@ class Powerloss:
             "hashes": session.hashes,
             "digests": {chain: {str(height): digest for height, digest in table.items()}
                         for chain, table in session.digests.items()},
-            "acks": [self.acks[entry] for entry in sorted(self.acks)],
+            "acks": sorted(self.acks, key=lambda ack: ack["entry"]),
             "mkfs_entries": mkfs_entries,
             "data_bytes": DATA_BYTES,
         }
@@ -433,6 +382,9 @@ class Powerloss:
         session = self.session
         with open(os.path.join(session.work, CAPTURE), encoding="utf-8") as fh:
             cap = json.load(fh)
+        if cap.get("schema_version") != SCHEMA:
+            B._fail(f"{CAPTURE} is {cap.get('schema_version')!r}, not {SCHEMA!r}: its "
+                    "acknowledgements were recorded under another oracle")
         session.hashes = {key: {int(height): value for height, value in table.items()}
                           for key, table in cap["hashes"].items()}
         session.prefix = cap["chain"]["prefix"]
@@ -511,24 +463,17 @@ def _selftest():
     check.names = []
     check("a find answer is its entry", parse_found("4127@88412\n"), 4127)
     check("an empty find answer is none", parse_found(""), None)
-    acks = {}
-    check("no flush yet records nothing", attribute_tip(acks, "main", 1, None, 10), False)
-    check("a mkfs flush is not an acknowledgement",
-          attribute_tip(acks, "main", 1, 9, 10), False)
-    check("those refusals leave the table empty", acks, {})
-    check("the first post-mkfs flush takes the tip",
-          attribute_tip(acks, "main", 1, 10, 10), True)
-    check("the same flush does not take a later tip",
-          attribute_tip(acks, "main", 4, 10, 10), False)
-    check("the tip on that flush stayed", acks[10]["height"], 1)
-    check("a newer flush takes the tip seen now",
-          attribute_tip(acks, "main", 4, 15, 10), True)
-    check("the ack stores the flush's own index", acks[15]["entry"], 15)
+    check("the first report is new", reported_new(None, "main", 0), True)
+    check("the same tip again is not a new report", reported_new(("main", 3), "main", 3), False)
+    check("a higher tip is a new report", reported_new(("main", 3), "main", 4), True)
+    check("the same height on the fork is a new report",
+          reported_new(("main", 30), "fork", 30), True)
+    check("marks are numbered by report", mark_name(7), "ack-7")
     rows = [{"entry": 90, "chain": "main", "height": 2},
             {"entry": 40, "chain": "main", "height": 1},
             {"entry": 200, "chain": "fork", "height": 3}]
-    check("the flush's own entry is not yet the replay point", acked_at(rows, 40), None)
-    check("the point after that flush sees it", acked_at(rows, 41), ("main", 1))
+    check("a point before the mark judges no report", acked_at(rows, 40), None)
+    check("the point after the mark's entry holds its report", acked_at(rows, 41), ("main", 1))
     check("a later entry wins numerically", acked_at(rows, 100), ("main", 2))
     check("a fork acknowledgement", acked_at(rows, 500), ("fork", 3))
     pts, sampled = checkpoints({100, 50}, 200, 1, None)
