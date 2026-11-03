@@ -60,6 +60,11 @@ where
             self.opening = crate::model::Opening::Resolved;
             return;
         }
+        // The evidence draw's wake: the step's draw follows this event.
+        if self.draw_wake == Some(request) {
+            self.draw_wake = None;
+            return;
+        }
         // A withdrawn request's deadline: its answer is no longer owed.
         if let Some(peer) = self.peers.get_mut(&session) {
             if let Some(at) = peer.withdrawn.iter().position(|id| *id == request) {

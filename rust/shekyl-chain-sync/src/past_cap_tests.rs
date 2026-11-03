@@ -595,3 +595,77 @@ fn an_evidence_refetch_after_a_whole_fork_response_is_proven() {
         );
     });
 }
+
+/// A heavier past-cap run is drawn without further traffic: the header
+/// response that records the candidate arms a wake, and the wake draws
+/// (§10 partition regtest, 2026-11-03: a node whose one peer went quiet
+/// after serving its heavier chain never began the check).
+#[test]
+fn an_evidence_candidate_is_drawn_when_nothing_else_arrives() {
+    let rules = cap(1);
+    let main = chain_of(4);
+    let prefix = prefix_of(&main, 0);
+    let mut block = candidate_on(&main, Vec::new()).block;
+    let mut parent = prefix[0].hash;
+    let mut timestamp = prefix[0].header.timestamp;
+    let mut sync = Sync::new(Trust::UNANCHORED, move |_| rules);
+    main.with_view(|raw| {
+        let view = UnitWork(raw);
+        let tip = view.tip().unwrap().unwrap();
+        let mut out = Vec::new();
+        sync.handle(
+            Event::Tip { tip },
+            &view,
+            Instant::now(),
+            &mut NoDraw,
+            &mut out,
+        )
+        .unwrap();
+        open_and_claim(&mut sync, &view, 1, u128::MAX);
+        let mut wake = None;
+        for step in 0..4 {
+            let extra = sync.run_records(1);
+            let along = Along {
+                prefix: &prefix,
+                extra: &extra,
+                fork: 0,
+            };
+            timestamp += 120;
+            formed_on(&along, &rules, &mut block, parent, timestamp);
+            let pow = block.pow_blob();
+            parent = PowBlob::read(&pow).expect("preimage").identity();
+            let out = answer(&mut sync, &view, 1, pow, u128::MAX, step < 3);
+            assert!(closes(&out).is_empty(), "header {step} closed: {out:?}");
+            assert!(
+                !proves(&out).contains(&HashClass::Evidence),
+                "a header response drew: {out:?}"
+            );
+            wake = wake.or_else(|| {
+                out.iter().find_map(|command| match command {
+                    Command::ArmDraw { session: 1, id, .. } => Some(*id),
+                    _ => None,
+                })
+            });
+        }
+        assert!(sync.run_len(1) > 0, "the candidate run did not form");
+        assert!(sync.evidence_session().is_none(), "drawn before the wake");
+        let id = wake.expect("the candidate armed no wake");
+        let mut out = Vec::new();
+        sync.handle(
+            Event::Deadline {
+                session: 1,
+                request: id,
+            },
+            &view,
+            Instant::now(),
+            &mut NoDraw,
+            &mut out,
+        )
+        .unwrap();
+        assert!(
+            proves(&out).contains(&HashClass::Evidence),
+            "the wake did not draw: {out:?}"
+        );
+        assert_eq!(sync.evidence_session(), Some(1));
+    });
+}

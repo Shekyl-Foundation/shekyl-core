@@ -483,6 +483,16 @@ ingest deciding forks.**
             dialer's rule: an honest chain served by many honest sessions
             is reached in proportion to their share.
           - **At most one check per session.**
+          - **When the draw runs (Defect 11, §10's partition regtest,
+            2026-11-03):** a header response records its candidate and
+            does not draw, so responses of one round are drawn over as
+            a set; the draw runs at the next event. That event is not
+            promised — a peer that has served its chain may send nothing
+            more, and the regtest's heavier-chain node sat with its
+            peer's 841 headers and never began the check. The response
+            therefore arms a wake (`Command::ArmDraw`) one declared
+            transit out, the bound on the draw when nothing else
+            arrives; one is armed at a time.
        4. **In order from the fork, and stop at proof.**
           - Every later seed on the run is earned under B2's 65-block
             rule (above).
