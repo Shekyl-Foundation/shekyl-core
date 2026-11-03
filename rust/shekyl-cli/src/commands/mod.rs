@@ -453,19 +453,19 @@ pub fn run(
             ResolvedCommand::MineStart { threads } => present(
                 &presentation,
                 "mine start",
-                mine::cmd_mine_start(&rpc, daemon_client, network, threads),
+                mine::cmd_mine_start(daemon_client, network, threads),
                 mine::show_mine_start,
             ),
             ResolvedCommand::MineStop => present(
                 &presentation,
                 "mine stop",
-                mine::cmd_mine_stop(&rpc, daemon_client, network),
+                mine::cmd_mine_stop(daemon_client, network),
                 mine::show_mine_stop,
             ),
             ResolvedCommand::MineStatus => present(
                 &presentation,
                 "mine status",
-                mine::cmd_mine_status(&rpc, daemon_client, network),
+                mine::cmd_mine_status(daemon_client, network),
                 mine::show_mine_status,
             ),
 

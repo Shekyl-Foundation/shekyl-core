@@ -27,7 +27,6 @@ use shekyl_rpc_types::mining::MineSpeed;
 use crate::daemon::DaemonClient;
 use crate::display::short_address;
 use crate::outcome::{failed, refusal, CommandFailed, CommandResult};
-use crate::rpc_client::RpcSession;
 use shekyl_rpc_types::{
     core_rpc_version_string, DaemonNetwork, GetInfoResponse, IdentityExpectation, IdentityMismatch,
     IdentityRefusal,
@@ -50,10 +49,6 @@ fn default_threads() -> u64 {
 /// No wallet check. The shell does not supply a payout address (IG-Q21);
 /// the daemon mines to its `mine-address`.
 fn gate<'a>(
-    // The shell's session. Mining does not read it (IG-Q21). Restoring an
-    // open-wallet refusal here is the red edit of
-    // `a_remote_daemon_is_reminded_and_mining_still_starts`.
-    _rpc: &RpcSession,
     daemon: Option<&'a DaemonClient>,
     network: &str,
 ) -> Result<(&'a DaemonClient, GetInfoResponse), CommandFailed> {
@@ -192,12 +187,11 @@ produce blocks this network accepts.";
 /// The daemon pays its `mine-address`. The shell sends only the thread
 /// count, and does not require an open wallet (IG-Q21).
 pub fn cmd_mine_start(
-    rpc: &RpcSession,
     daemon: Option<&DaemonClient>,
     network: &str,
     threads: Option<u64>,
 ) -> CommandResult {
-    let (dc, info) = gate(rpc, daemon, network)?;
+    let (dc, info) = gate(daemon, network)?;
     remind_if_remote(dc);
 
     // F6 — already mining: relay the daemon's state, no error tone.
@@ -266,12 +260,8 @@ pub(crate) fn show_mine_start(val: &Value) {
 }
 
 /// `mine stop` — stop mining on the daemon.
-pub fn cmd_mine_stop(
-    rpc: &RpcSession,
-    daemon: Option<&DaemonClient>,
-    network: &str,
-) -> CommandResult {
-    let (dc, _info) = gate(rpc, daemon, network)?;
+pub fn cmd_mine_stop(daemon: Option<&DaemonClient>, network: &str) -> CommandResult {
+    let (dc, _info) = gate(daemon, network)?;
 
     match dc.mining_status() {
         Ok(status) if !status.active => return Ok(json!({"stopped": false, "idle": true})),
@@ -296,12 +286,8 @@ pub(crate) fn show_mine_stop(val: &Value) {
 /// `mine status` — the daemon's mining state. The daemon's `pow_algorithm`
 /// string is deliberately not rendered (CU-3: operators do not need a
 /// protocol-algorithm name; the daemon now always reports RandomX).
-pub fn cmd_mine_status(
-    rpc: &RpcSession,
-    daemon: Option<&DaemonClient>,
-    network: &str,
-) -> CommandResult {
-    let (dc, _info) = gate(rpc, daemon, network)?;
+pub fn cmd_mine_status(daemon: Option<&DaemonClient>, network: &str) -> CommandResult {
+    let (dc, _info) = gate(daemon, network)?;
 
     match dc.mining_status() {
         Ok(status) => Ok(json!({
@@ -473,15 +459,14 @@ mod tests {
         assert!(super::remote_mining_note(&daemon).is_none());
     }
 
-    /// A non-loopback daemon is reminded, and mining does not need a wallet.
+    /// A non-loopback daemon is reminded, and mining still starts.
     ///
     /// The reminder is the daemon URL. The start goes to the console's route
-    /// server (`console/tests.rs`), with a session that has no wallet open.
-    /// When G3 moves the session onto one `SyncDaemon`, this test moves with
-    /// it and keeps that server.
+    /// server (`console/tests.rs`). When G3 moves the session onto one
+    /// `SyncDaemon`, this test moves with it and keeps that server.
     ///
-    /// Red edit: `gate` refuses a session with no open wallet. `/start_mining`
-    /// is then absent.
+    /// `cmd_mine_start` takes no session, so it cannot ask whether a wallet
+    /// is open.
     #[test]
     fn a_remote_daemon_is_reminded_and_mining_still_starts() {
         let remote = crate::daemon::DaemonClient::new("http://203.0.113.5:18081", None, None, None)
@@ -510,22 +495,9 @@ mod tests {
         let daemon =
             crate::daemon::DaemonClient::new(&format!("http://{address}"), None, None, None)
                 .expect("the route server parses");
-        let closed = std::net::TcpListener::bind("127.0.0.1:0").expect("closed port");
-        let closed_port = closed.local_addr().expect("closed addr").port();
-        drop(closed);
-        let rpc = crate::rpc_client::RpcSession::connect(
-            &format!("http://127.0.0.1:{closed_port}"),
-            None,
-            false,
-        )
-        .expect("a refused probe still builds a session");
-        assert!(
-            rpc.open_wallet_name().is_none(),
-            "the red check is a session with no wallet"
-        );
 
-        let result = super::cmd_mine_start(&rpc, Some(&daemon), "mainnet", Some(1))
-            .expect("mining starts with no wallet open");
+        let result =
+            super::cmd_mine_start(Some(&daemon), "mainnet", Some(1)).expect("mining starts");
         assert_eq!(result["started"], true);
         let asked = log.lock().expect("log");
         assert!(
