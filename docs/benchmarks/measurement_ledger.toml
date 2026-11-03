@@ -631,6 +631,7 @@ stale_through = [
   { through = "2e51e0f20d", note = "A comment in the dial profile: clearnet corroboration is a byte on an outbound session, as OE-D5 already ruled, where the comment still said the ruling was open. The judging row is unchanged. The clearnet dial, handshake and gap do the same I/O. Not re-measured." },
   { through = "93a1e8ff42", note = "One commit path for a ban: the four ban methods become one, and the ban API moves beside the occupancy table. A store that changes nothing closes nothing. Bookkeeping on a ban, a lift or an expiry, not on a dial. The clearnet dial, handshake and gap do the same I/O. Not re-measured." },
   { through = "c9fb52ee4b", note = "The socket table claims one ban timer for the process engine it registers on, and the node starts that timer at open, so a finite ban expires with no zone host. The claim is taken when the timer starts, not on a dial. The clearnet dial, handshake and gap do the same I/O. Not re-measured." },
+  { through = "496c6d8858", note = "The I/O change, Windows only: the dial socket caps its SYN retransmissions at one (SIO_TCP_INITIAL_RTO), so a refused connect is reported after one retry, about 0.5 s, where the default retried for about 2.0 s past the deadline; a lost SYN is still resent once at +1.0 s. On Linux the dial builds its socket before the connect and the I/O is unchanged. The dial deadline, handshake and gap spans are untouched. Not re-measured; the Windows timings are shekyl-dev data/windows-refused-connect/, 2026-11-03." },
 ]
 
 [[constant]]
