@@ -3,11 +3,33 @@
 // All rights reserved.
 // BSD-3-Clause
 
-//! Tier-1/Tier-2 Known Answer Tests for the frozen ARCHIVAL_P_DERIVE_V1 pipeline.
+//! Tier-1/Tier-2 vectors for the frozen ARCHIVAL_P_DERIVE_V2 pipeline:
+//! `ARCHIVAL_P_DERIVE_V1`'s labels, info strings and key constructions,
+//! under the salt `salt_for(net)` = `shekyl-master-derive-v2-` ‖
+//! `shekyl/<network>`, with no seed format (`NETWORK_IDENTITY.md` NI-R7,
+//! NI-R10; `V3_WALLET_DECISION_LOG.md`, 2026-11-03).
 //!
-//! Corpus: `docs/test_vectors/ARCHIVAL_P_DERIVE_V1/{manifest.json,vectors.json}`.
-//! Regenerate after a deliberate, documented derivation bump:
-//! `cargo test -p shekyl-crypto-pq kat_regenerate_archival_p_derive_v1 -- --ignored --nocapture`
+//! Corpus: `docs/test_vectors/ARCHIVAL_P_DERIVE_V2/{manifest.json,vectors.json}`.
+//!
+//! # Oracle, per value (rule 50)
+//!
+//! Independent: every Tier-1 HKDF output (each label, `LABEL ‖ 0x00 ‖
+//! p_slot_le32`), the `hs_id` Ed25519 public keys (RFC 8032 keygen), and the
+//! Tier-2 payment scalars and their Ed25519/X25519 public keys are
+//! recomputed from the vectors' inputs by
+//! `scripts/kat/address_derivation_v3_oracle.py`, which CI runs in
+//! `docs-gates.yml`. Self-pinned (drift tripwire only): the ML-KEM-768,
+//! ML-DSA-65 and FN-DSA-1024 key material, the hybrid keys built from it,
+//! `slot_separation` (hybrid public keys) and `p_canonical_id`.
+//!
+//! Regenerating is a decision, not a command; the regenerator refuses
+//! unless the invocation cites the decision-log entry:
+//!
+//! ```text
+//! SHEKYL_PINNED_REGEN_DECISION="YYYY-MM-DD <rationale>" \
+//!   cargo test -p shekyl-crypto-pq --test kat_archival_p_derive_v2 \
+//!   kat_regenerate_archival_p_derive_v2 -- --ignored --nocapture
+//! ```
 //!
 //! This KAT belongs on the `aarch64` qemu-user lane (`depends.yml`): `P`'s
 //! derivation is the third cross-arch-deterministic primitive, and a single
@@ -21,7 +43,7 @@
 use std::path::PathBuf;
 
 use serde::Deserialize;
-use shekyl_crypto_pq::account::{DerivationNetwork, SeedFormat, MASTER_SEED_BYTES};
+use shekyl_crypto_pq::account::{Network, MASTER_SEED_BYTES};
 use shekyl_crypto_pq::archival_p::{
     derive_archival_p_keys, derive_p_account_sign_seed, derive_p_bond_spend_ed_seed,
     derive_p_bond_spend_ml_dsa_seed, derive_p_hs_id_seed, derive_p_kem_d_z, derive_p_ml_dsa_seed,
@@ -31,13 +53,17 @@ use shekyl_crypto_pq::archival_p::{
 use shekyl_crypto_pq::archival_p_freeze::archival_p_derive_manifest_self_check;
 
 const MANIFEST_JSON: &str =
-    include_str!("../../../docs/test_vectors/ARCHIVAL_P_DERIVE_V1/manifest.json");
+    include_str!("../../../docs/test_vectors/ARCHIVAL_P_DERIVE_V2/manifest.json");
 const VECTORS_JSON: &str =
-    include_str!("../../../docs/test_vectors/ARCHIVAL_P_DERIVE_V1/vectors.json");
+    include_str!("../../../docs/test_vectors/ARCHIVAL_P_DERIVE_V2/vectors.json");
 
 /// cSHAKE256 customization for the archival principal identity (mirrors
 /// `shekyl-archival-retention::id::P_CANONICAL_ID_CUSTOMIZATION`).
 const P_CANONICAL_ID_CUSTOMIZATION: &[u8] = b"shekyl/archival-p-id-v1";
+
+/// The manifest's `derivation_version`: the corpus version and the salt it
+/// was derived under.
+const DERIVATION_VERSION: &str = "v2 (salt shekyl-master-derive-v2-shekyl/<network>)";
 
 /// Independent SP 800-185 cSHAKE256 with 32-byte output (the second of the two
 /// paths the cross-check proves equal). Intentionally a fresh implementation,
@@ -88,7 +114,6 @@ struct Tier1Vector {
     kind: String,
     master_seed_hex: String,
     network: String,
-    seed_format: String,
     p_slot: u32,
     #[serde(default)]
     p_slot_b: Option<u32>,
@@ -112,7 +137,6 @@ struct Tier1Expected {
 struct Tier2Vector {
     id: String,
     network: String,
-    seed_format: String,
     master_seed_hex: String,
     p_slot: u32,
     expected: Tier2Expected,
@@ -135,22 +159,8 @@ struct Tier2Expected {
     bond_spend_sk_hex: String,
 }
 
-fn parse_network(s: &str) -> DerivationNetwork {
-    match s {
-        "mainnet" => DerivationNetwork::Mainnet,
-        "testnet" => DerivationNetwork::Testnet,
-        "stagenet" => DerivationNetwork::Stagenet,
-        "fakechain" => DerivationNetwork::Fakechain,
-        other => panic!("unknown network: {other}"),
-    }
-}
-
-fn parse_seed_format(s: &str) -> SeedFormat {
-    match s {
-        "bip39" => SeedFormat::Bip39,
-        "raw32" => SeedFormat::Raw32,
-        other => panic!("unknown seed_format: {other}"),
-    }
+fn parse_network(s: &str) -> Network {
+    Network::from_name(s).unwrap_or_else(|| panic!("unknown network: {s}"))
 }
 
 fn decode_master(s: &str) -> [u8; MASTER_SEED_BYTES] {
@@ -172,24 +182,22 @@ fn assert_pinned_pair(id: &str, a: &[u8], b: &[u8], exp_a: &str, exp_b: &str, di
     assert_ne!(a_hex, b_hex, "{id} {differ}");
 }
 
-fn keys_for(v_network: &str, v_format: &str, master_hex: &str, p_slot: u32) -> ArchivalPKeys {
+fn keys_for(v_network: &str, master_hex: &str, p_slot: u32) -> ArchivalPKeys {
     let net = parse_network(v_network);
-    let fmt = parse_seed_format(v_format);
     let master = decode_master(master_hex);
-    derive_archival_p_keys(&master, net, fmt, p_slot).expect("derive_archival_p_keys")
+    derive_archival_p_keys(&master, net, p_slot).expect("derive_archival_p_keys")
 }
 
 fn run_tier1(v: &Tier1Vector) {
     let net = parse_network(&v.network);
-    let fmt = parse_seed_format(&v.seed_format);
     let master = decode_master(&v.master_seed_hex);
 
     match v.kind.as_str() {
         "spend_wide" | "view_wide" | "kem_d_z" => {
             let out = match v.kind.as_str() {
-                "spend_wide" => derive_p_spend_wide(&master, net, fmt, v.p_slot),
-                "view_wide" => derive_p_view_wide(&master, net, fmt, v.p_slot),
-                "kem_d_z" => derive_p_kem_d_z(&master, net, fmt, v.p_slot),
+                "spend_wide" => derive_p_spend_wide(&master, net, v.p_slot),
+                "view_wide" => derive_p_view_wide(&master, net, v.p_slot),
+                "kem_d_z" => derive_p_kem_d_z(&master, net, v.p_slot),
                 _ => unreachable!(),
             };
             let exp = v.expected.out_hex.as_deref().expect("out_hex");
@@ -203,15 +211,13 @@ fn run_tier1(v: &Tier1Vector) {
         | "receipt_fn_dsa_seed"
         | "hs_id_seed" => {
             let out = match v.kind.as_str() {
-                "account_sign_seed" => derive_p_account_sign_seed(&master, net, fmt, v.p_slot),
-                "ml_dsa_seed" => derive_p_ml_dsa_seed(&master, net, fmt, v.p_slot),
-                "bond_spend_ed_seed" => derive_p_bond_spend_ed_seed(&master, net, fmt, v.p_slot),
-                "bond_spend_ml_dsa_seed" => {
-                    derive_p_bond_spend_ml_dsa_seed(&master, net, fmt, v.p_slot)
-                }
-                "receipt_ed_seed" => derive_p_receipt_ed_seed(&master, net, fmt, v.p_slot),
-                "receipt_fn_dsa_seed" => derive_p_receipt_fn_dsa_seed(&master, net, fmt, v.p_slot),
-                "hs_id_seed" => derive_p_hs_id_seed(&master, net, fmt, v.p_slot),
+                "account_sign_seed" => derive_p_account_sign_seed(&master, net, v.p_slot),
+                "ml_dsa_seed" => derive_p_ml_dsa_seed(&master, net, v.p_slot),
+                "bond_spend_ed_seed" => derive_p_bond_spend_ed_seed(&master, net, v.p_slot),
+                "bond_spend_ml_dsa_seed" => derive_p_bond_spend_ml_dsa_seed(&master, net, v.p_slot),
+                "receipt_ed_seed" => derive_p_receipt_ed_seed(&master, net, v.p_slot),
+                "receipt_fn_dsa_seed" => derive_p_receipt_fn_dsa_seed(&master, net, v.p_slot),
+                "hs_id_seed" => derive_p_hs_id_seed(&master, net, v.p_slot),
                 _ => unreachable!(),
             };
             let exp = v.expected.out_hex.as_deref().expect("out_hex");
@@ -224,12 +230,10 @@ fn run_tier1(v: &Tier1Vector) {
             // asserted against the same pinned vector rather than trusted to
             // agree with the free function beside it.
             //
-            // This does NOT touch `ARCHIVAL_P_DERIVE_V1`'s frozen surface: no
-            // new label, no new vector, no corpus rotation — the value was
-            // already pinned cross-arch here. A bundle-shape change, not a
-            // frozen-surface change.
+            // This is a bundle-shape check, not a frozen-surface one: no
+            // label or vector exists for it beyond the pinned seed.
             if v.kind == "hs_id_seed" {
-                let bundle = derive_archival_p_keys(&master, net, fmt, v.p_slot)
+                let bundle = derive_archival_p_keys(&master, net, v.p_slot)
                     .expect("bundle derives for a pinned vector");
                 assert_eq!(
                     hex::encode(bundle.hs_id_seed()),
@@ -245,7 +249,7 @@ fn run_tier1(v: &Tier1Vector) {
             // cross-arch gap that matters: a divergent bit here leaves an ARM
             // user's persona unreachable at its advertised `.onion`. The
             // seed→pubkey step is RFC 8032 keygen, exactly what tor applies.
-            let seed = derive_p_hs_id_seed(&master, net, fmt, v.p_slot);
+            let seed = derive_p_hs_id_seed(&master, net, v.p_slot);
             let pk = ed25519_dalek::SigningKey::from_bytes(&seed)
                 .verifying_key()
                 .to_bytes();
@@ -253,22 +257,22 @@ fn run_tier1(v: &Tier1Vector) {
             assert_eq!(hex::encode(pk), exp, "{}", v.id);
         }
         "hs_id_label_separation" | "receipt_label_separation" | "label_separation" => {
-            // Two seeds under one (seed, net, fmt, slot). hs-id vs account-sign:
+            // Two seeds under one (seed, net, slot). hs-id vs account-sign:
             // the serving onion is not the on-chain identity. receipt vs
             // account-sign: scheme 3 shares no seed with the identity key.
             // label_separation: the GF-1 identity seed is not the bond-spend seed.
             let (a, b) = match v.kind.as_str() {
                 "hs_id_label_separation" => (
-                    derive_p_hs_id_seed(&master, net, fmt, v.p_slot),
-                    derive_p_account_sign_seed(&master, net, fmt, v.p_slot),
+                    derive_p_hs_id_seed(&master, net, v.p_slot),
+                    derive_p_account_sign_seed(&master, net, v.p_slot),
                 ),
                 "receipt_label_separation" => (
-                    derive_p_receipt_ed_seed(&master, net, fmt, v.p_slot),
-                    derive_p_account_sign_seed(&master, net, fmt, v.p_slot),
+                    derive_p_receipt_ed_seed(&master, net, v.p_slot),
+                    derive_p_account_sign_seed(&master, net, v.p_slot),
                 ),
                 "label_separation" => (
-                    derive_p_account_sign_seed(&master, net, fmt, v.p_slot),
-                    derive_p_bond_spend_ed_seed(&master, net, fmt, v.p_slot),
+                    derive_p_account_sign_seed(&master, net, v.p_slot),
+                    derive_p_bond_spend_ed_seed(&master, net, v.p_slot),
                 ),
                 _ => unreachable!(),
             };
@@ -282,19 +286,19 @@ fn run_tier1(v: &Tier1Vector) {
             );
         }
         "hs_id_network_separation" | "receipt_network_separation" => {
-            // The salt is `salt_for(net, fmt)`. The inequality is a live
+            // The salt is `salt_for(net)`. The inequality is a live
             // computation, so dropping `net` fails here even if the corpus is
             // rebuilt around the new bytes. One wallet must not serve at the
             // same `.onion`, or hold the same receipt key, on two networks.
             let net_b = parse_network(v.network_b.as_deref().expect("network_b"));
             let (a, b) = match v.kind.as_str() {
                 "hs_id_network_separation" => (
-                    derive_p_hs_id_seed(&master, net, fmt, v.p_slot),
-                    derive_p_hs_id_seed(&master, net_b, fmt, v.p_slot),
+                    derive_p_hs_id_seed(&master, net, v.p_slot),
+                    derive_p_hs_id_seed(&master, net_b, v.p_slot),
                 ),
                 "receipt_network_separation" => (
-                    derive_p_receipt_fn_dsa_seed(&master, net, fmt, v.p_slot),
-                    derive_p_receipt_fn_dsa_seed(&master, net_b, fmt, v.p_slot),
+                    derive_p_receipt_fn_dsa_seed(&master, net, v.p_slot),
+                    derive_p_receipt_fn_dsa_seed(&master, net_b, v.p_slot),
                 ),
                 _ => unreachable!(),
             };
@@ -310,8 +314,8 @@ fn run_tier1(v: &Tier1Vector) {
         "slot_separation" => {
             // Same inputs, two p_slots: identity keys must differ.
             let p_slot_b = v.p_slot_b.expect("p_slot_b");
-            let a = derive_archival_p_keys(&master, net, fmt, v.p_slot).unwrap();
-            let b = derive_archival_p_keys(&master, net, fmt, p_slot_b).unwrap();
+            let a = derive_archival_p_keys(&master, net, v.p_slot).unwrap();
+            let b = derive_archival_p_keys(&master, net, p_slot_b).unwrap();
             assert_pinned_pair(
                 &v.id,
                 &a.hybrid_sign_pk.to_canonical_bytes().unwrap(),
@@ -326,7 +330,7 @@ fn run_tier1(v: &Tier1Vector) {
 }
 
 fn run_tier2(v: &Tier2Vector) {
-    let k = keys_for(&v.network, &v.seed_format, &v.master_seed_hex, v.p_slot);
+    let k = keys_for(&v.network, &v.master_seed_hex, v.p_slot);
     let e = &v.expected;
 
     assert_eq!(
@@ -423,14 +427,17 @@ fn run_tier2(v: &Tier2Vector) {
 }
 
 #[test]
-fn kat_archival_p_derive_v1_vectors() {
+fn kat_archival_p_derive_v2_vectors() {
     use sha2::{Digest, Sha256};
 
     archival_p_derive_manifest_self_check().expect("corpus manifest hash pin");
 
     let manifest: ManifestFile =
         serde_json::from_str(MANIFEST_JSON).expect("manifest.json must parse");
-    assert_eq!(manifest.derivation_version, "v1", "derivation_version");
+    assert_eq!(
+        manifest.derivation_version, DERIVATION_VERSION,
+        "derivation_version"
+    );
     assert_eq!(
         manifest.vectors_sha256_hex,
         hex::encode(Sha256::digest(VECTORS_JSON.as_bytes())),
@@ -447,249 +454,296 @@ fn kat_archival_p_derive_v1_vectors() {
     for v in &file.tier2 {
         run_tier2(v);
     }
+
+    // Every network is covered at Tier 2 and by an `hs_id` row (rule 47:
+    // the suite asserts its own subjects exist).
+    for net in Network::ALL {
+        assert!(
+            file.tier2.iter().any(|v| v.network == net.name()),
+            "no Tier-2 vector on {net}"
+        );
+        assert!(
+            file.tier1
+                .iter()
+                .any(|v| v.kind == "hs_id_pubkey" && v.network == net.name()),
+            "no hs_id_pubkey vector on {net}"
+        );
+    }
 }
 
 // ---------------------------------------------------------------------------
-// Fixture regenerator (run with --ignored)
+// Fixture regenerator (armed; run with --ignored)
 // ---------------------------------------------------------------------------
 
 const MASTER_33: [u8; MASTER_SEED_BYTES] = [0x33u8; MASTER_SEED_BYTES];
 const MASTER_44: [u8; MASTER_SEED_BYTES] = [0x44u8; MASTER_SEED_BYTES];
 
+fn hs_id_pubkey(seed: &[u8; 32]) -> [u8; 32] {
+    ed25519_dalek::SigningKey::from_bytes(seed)
+        .verifying_key()
+        .to_bytes()
+}
+
+fn row(
+    id: &str,
+    kind: &str,
+    master: &[u8; MASTER_SEED_BYTES],
+    net: Network,
+    slot: u32,
+    out: &[u8],
+) -> serde_json::Value {
+    serde_json::json!({
+        "id": id, "kind": kind,
+        "master_seed_hex": hex::encode(master), "network": net.name(),
+        "p_slot": slot,
+        "expected": { "out_hex": hex::encode(out) }
+    })
+}
+
+fn pair(
+    id: &str,
+    kind: &str,
+    net: Network,
+    network_b: Option<Network>,
+    slots: (u32, Option<u32>),
+    out_a: &[u8],
+    out_b: &[u8],
+) -> serde_json::Value {
+    let mut v = serde_json::json!({
+        "id": id, "kind": kind,
+        "master_seed_hex": hex::encode(MASTER_33), "network": net.name(),
+        "p_slot": slots.0,
+        "expected": { "out_a_hex": hex::encode(out_a), "out_b_hex": hex::encode(out_b) }
+    });
+    if let Some(net_b) = network_b {
+        v["network_b"] = serde_json::Value::String(net_b.name().to_string());
+    }
+    if let Some(slot_b) = slots.1 {
+        v["p_slot_b"] = serde_json::Value::from(slot_b);
+    }
+    v
+}
+
 fn build_tier1_vectors() -> Vec<serde_json::Value> {
-    let net = DerivationNetwork::Mainnet;
-    let fmt = SeedFormat::Bip39;
+    let net = Network::Mainnet;
     let m = &MASTER_33;
 
-    let spend = derive_p_spend_wide(m, net, fmt, 0);
-    let view = derive_p_view_wide(m, net, fmt, 0);
-    let kem = derive_p_kem_d_z(m, net, fmt, 0);
-    let acct = derive_p_account_sign_seed(m, net, fmt, 0);
-    let mldsa = derive_p_ml_dsa_seed(m, net, fmt, 0);
-    let bond_ed = derive_p_bond_spend_ed_seed(m, net, fmt, 0);
-    let bond_ml = derive_p_bond_spend_ml_dsa_seed(m, net, fmt, 0);
-    let receipt_ed = derive_p_receipt_ed_seed(m, net, fmt, 0);
-    let receipt_fn_dsa = derive_p_receipt_fn_dsa_seed(m, net, fmt, 0);
-    let receipt_fn_dsa_net_b = derive_p_receipt_fn_dsa_seed(m, DerivationNetwork::Testnet, fmt, 0);
-    let hs_id = derive_p_hs_id_seed(m, net, fmt, 0);
-    let hs_id_pk = ed25519_dalek::SigningKey::from_bytes(&hs_id)
-        .verifying_key()
-        .to_bytes();
+    let spend = derive_p_spend_wide(m, net, 0);
+    let view = derive_p_view_wide(m, net, 0);
+    let kem = derive_p_kem_d_z(m, net, 0);
+    let acct = derive_p_account_sign_seed(m, net, 0);
+    let mldsa = derive_p_ml_dsa_seed(m, net, 0);
+    let bond_ed = derive_p_bond_spend_ed_seed(m, net, 0);
+    let bond_ml = derive_p_bond_spend_ml_dsa_seed(m, net, 0);
+    let receipt_ed = derive_p_receipt_ed_seed(m, net, 0);
+    let receipt_fn_dsa = derive_p_receipt_fn_dsa_seed(m, net, 0);
+    let receipt_fn_dsa_net_b = derive_p_receipt_fn_dsa_seed(m, Network::Testnet, 0);
+    let hs_id = derive_p_hs_id_seed(m, net, 0);
 
-    // Non-Mainnet HS-identity coverage. `hs_id` is network-scoped like every
-    // sibling (salt = salt_for(net, fmt)), but it is *not* an `ArchivalPKeys`
-    // field, so Tier-2's cross-network matrix does not reach it — these rows pin
-    // the network/format-varying behavior of the label whose production consumer
-    // (the forthcoming 2d-2 SP-T3 serving path) passes the wallet's real
-    // (net, fmt); today only the disposable SP-T3 spike exercises it, and it
-    // hardcodes Mainnet/Bip39. Matrix mirrors Tier-2: (testnet, raw32, MASTER_44,
-    // slot 0) and (stagenet, bip39, MASTER_33, slot 3).
-    let hs_id_tn =
-        derive_p_hs_id_seed(&MASTER_44, DerivationNetwork::Testnet, SeedFormat::Raw32, 0);
-    let hs_id_tn_pk = ed25519_dalek::SigningKey::from_bytes(&hs_id_tn)
-        .verifying_key()
-        .to_bytes();
-    let hs_id_sn = derive_p_hs_id_seed(m, DerivationNetwork::Stagenet, SeedFormat::Bip39, 3);
-    let hs_id_sn_pk = ed25519_dalek::SigningKey::from_bytes(&hs_id_sn)
-        .verifying_key()
-        .to_bytes();
-    // Network-separation pair: same seed/format/slot, mainnet vs testnet. `a` is
-    // the mainnet `hs_id` above; `b` varies only the network.
-    let hs_id_net_b = derive_p_hs_id_seed(m, DerivationNetwork::Testnet, fmt, 0);
-
-    let slot0 = derive_archival_p_keys(m, net, fmt, 0).unwrap();
-    let slot7 = derive_archival_p_keys(m, net, fmt, 7).unwrap();
-
-    let mk_intermediate = |id: &str, kind: &str, slot: u32, out: &[u8]| {
-        serde_json::json!({
-            "id": id, "kind": kind,
-            "master_seed_hex": hex::encode(m), "network": "mainnet", "seed_format": "bip39",
-            "p_slot": slot,
-            "expected": { "out_hex": hex::encode(out) }
-        })
-    };
-
-    // Same shape as `mk_intermediate` but with explicit (master, network, format)
-    // — for the non-Mainnet `hs_id` rows.
-    let mk_net =
-        |id: &str, kind: &str, master: &[u8], net_s: &str, fmt_s: &str, slot: u32, out: &[u8]| {
-            serde_json::json!({
-                "id": id, "kind": kind,
-                "master_seed_hex": hex::encode(master), "network": net_s, "seed_format": fmt_s,
-                "p_slot": slot,
-                "expected": { "out_hex": hex::encode(out) }
-            })
-        };
-
-    vec![
-        mk_intermediate(
-            "spend_wide_mainnet_bip39_slot0",
+    let mut out = vec![
+        row(
+            "spend_wide_mainnet_slot0",
             "spend_wide",
+            m,
+            net,
             0,
             spend.as_slice(),
         ),
-        mk_intermediate(
-            "view_wide_mainnet_bip39_slot0",
+        row(
+            "view_wide_mainnet_slot0",
             "view_wide",
+            m,
+            net,
             0,
             view.as_slice(),
         ),
-        mk_intermediate("kem_d_z_mainnet_bip39_slot0", "kem_d_z", 0, kem.as_slice()),
-        mk_intermediate(
-            "account_sign_seed_mainnet_bip39_slot0",
+        row(
+            "kem_d_z_mainnet_slot0",
+            "kem_d_z",
+            m,
+            net,
+            0,
+            kem.as_slice(),
+        ),
+        row(
+            "account_sign_seed_mainnet_slot0",
             "account_sign_seed",
+            m,
+            net,
             0,
             acct.as_slice(),
         ),
-        mk_intermediate(
-            "ml_dsa_seed_mainnet_bip39_slot0",
+        row(
+            "ml_dsa_seed_mainnet_slot0",
             "ml_dsa_seed",
+            m,
+            net,
             0,
             mldsa.as_slice(),
         ),
-        mk_intermediate(
-            "bond_spend_ed_seed_mainnet_bip39_slot0",
+        row(
+            "bond_spend_ed_seed_mainnet_slot0",
             "bond_spend_ed_seed",
+            m,
+            net,
             0,
             bond_ed.as_slice(),
         ),
-        mk_intermediate(
-            "bond_spend_ml_dsa_seed_mainnet_bip39_slot0",
+        row(
+            "bond_spend_ml_dsa_seed_mainnet_slot0",
             "bond_spend_ml_dsa_seed",
+            m,
+            net,
             0,
             bond_ml.as_slice(),
         ),
-        mk_intermediate(
-            "receipt_ed_seed_mainnet_bip39_slot0",
+        row(
+            "receipt_ed_seed_mainnet_slot0",
             "receipt_ed_seed",
+            m,
+            net,
             0,
             receipt_ed.as_slice(),
         ),
-        mk_intermediate(
-            "receipt_fn_dsa_seed_mainnet_bip39_slot0",
+        row(
+            "receipt_fn_dsa_seed_mainnet_slot0",
             "receipt_fn_dsa_seed",
+            m,
+            net,
             0,
             receipt_fn_dsa.as_slice(),
         ),
-        mk_intermediate(
-            "hs_id_seed_mainnet_bip39_slot0",
+        row(
+            "hs_id_seed_mainnet_slot0",
             "hs_id_seed",
+            m,
+            net,
             0,
             hs_id.as_slice(),
         ),
-        mk_intermediate(
-            "hs_id_pubkey_mainnet_bip39_slot0",
-            "hs_id_pubkey",
-            0,
-            &hs_id_pk,
-        ),
-        mk_net(
-            "hs_id_seed_testnet_raw32_slot0",
-            "hs_id_seed",
-            &MASTER_44,
-            "testnet",
-            "raw32",
-            0,
-            hs_id_tn.as_slice(),
-        ),
-        mk_net(
-            "hs_id_pubkey_testnet_raw32_slot0",
-            "hs_id_pubkey",
-            &MASTER_44,
-            "testnet",
-            "raw32",
-            0,
-            &hs_id_tn_pk,
-        ),
-        mk_net(
-            "hs_id_seed_stagenet_bip39_slot3",
-            "hs_id_seed",
-            m,
-            "stagenet",
-            "bip39",
-            3,
-            hs_id_sn.as_slice(),
-        ),
-        mk_net(
-            "hs_id_pubkey_stagenet_bip39_slot3",
+        row(
+            "hs_id_pubkey_mainnet_slot0",
             "hs_id_pubkey",
             m,
-            "stagenet",
-            "bip39",
-            3,
-            &hs_id_sn_pk,
+            net,
+            0,
+            &hs_id_pubkey(&hs_id),
         ),
-        serde_json::json!({
-            "id": "hs_id_network_separation_mainnet_vs_testnet", "kind": "hs_id_network_separation",
-            "master_seed_hex": hex::encode(m), "network": "mainnet", "seed_format": "bip39",
-            "network_b": "testnet", "p_slot": 0,
-            "expected": {
-                "out_a_hex": hex::encode(hs_id.as_slice()),
-                "out_b_hex": hex::encode(hs_id_net_b.as_slice())
-            }
-        }),
-        serde_json::json!({
-            "id": "hs_id_label_separation_hs_id_vs_account_sign", "kind": "hs_id_label_separation",
-            "master_seed_hex": hex::encode(m), "network": "mainnet", "seed_format": "bip39",
-            "p_slot": 0,
-            "expected": {
-                "out_a_hex": hex::encode(hs_id.as_slice()),
-                "out_b_hex": hex::encode(acct.as_slice())
-            }
-        }),
-        serde_json::json!({
-            "id": "receipt_network_separation_mainnet_vs_testnet", "kind": "receipt_network_separation",
-            "master_seed_hex": hex::encode(m), "network": "mainnet", "seed_format": "bip39",
-            "network_b": "testnet", "p_slot": 0,
-            "expected": {
-                "out_a_hex": hex::encode(receipt_fn_dsa.as_slice()),
-                "out_b_hex": hex::encode(receipt_fn_dsa_net_b.as_slice())
-            }
-        }),
-        serde_json::json!({
-            "id": "receipt_label_separation_receipt_vs_account_sign", "kind": "receipt_label_separation",
-            "master_seed_hex": hex::encode(m), "network": "mainnet", "seed_format": "bip39",
-            "p_slot": 0,
-            "expected": {
-                "out_a_hex": hex::encode(receipt_ed.as_slice()),
-                "out_b_hex": hex::encode(acct.as_slice())
-            }
-        }),
-        serde_json::json!({
-            "id": "slot_separation_slot0_vs_slot7", "kind": "slot_separation",
-            "master_seed_hex": hex::encode(m), "network": "mainnet", "seed_format": "bip39",
-            "p_slot": 0, "p_slot_b": 7,
-            "expected": {
-                "out_a_hex": hex::encode(slot0.hybrid_sign_pk.to_canonical_bytes().unwrap()),
-                "out_b_hex": hex::encode(slot7.hybrid_sign_pk.to_canonical_bytes().unwrap())
-            }
-        }),
-        serde_json::json!({
-            "id": "label_separation_account_sign_vs_bond_spend_ed", "kind": "label_separation",
-            "master_seed_hex": hex::encode(m), "network": "mainnet", "seed_format": "bip39",
-            "p_slot": 0,
-            "expected": {
-                "out_a_hex": hex::encode(acct.as_slice()),
-                "out_b_hex": hex::encode(bond_ed.as_slice())
-            }
-        }),
-    ]
+    ];
+
+    // `hs_id` is network-scoped like every sibling (salt = salt_for(net)),
+    // but it is *not* an `ArchivalPKeys` field, so Tier-2's network matrix
+    // does not reach it: these rows pin it on the other three networks, at
+    // the Tier-2 rows' (master, slot) pairs.
+    for (net, master, slot) in [
+        (Network::Testnet, &MASTER_44, 0),
+        (Network::Stagenet, &MASTER_33, 3),
+        (Network::Regtest, &MASTER_44, 2),
+    ] {
+        let seed = derive_p_hs_id_seed(master, net, slot);
+        let name = net.name();
+        out.push(row(
+            &format!("hs_id_seed_{name}_slot{slot}"),
+            "hs_id_seed",
+            master,
+            net,
+            slot,
+            seed.as_slice(),
+        ));
+        out.push(row(
+            &format!("hs_id_pubkey_{name}_slot{slot}"),
+            "hs_id_pubkey",
+            master,
+            net,
+            slot,
+            &hs_id_pubkey(&seed),
+        ));
+    }
+
+    let hs_id_testnet = derive_p_hs_id_seed(m, Network::Testnet, 0);
+    let hs_id_stagenet = derive_p_hs_id_seed(m, Network::Stagenet, 0);
+    let hs_id_regtest = derive_p_hs_id_seed(m, Network::Regtest, 0);
+    let slot0 = derive_archival_p_keys(m, net, 0).unwrap();
+    let slot7 = derive_archival_p_keys(m, net, 7).unwrap();
+
+    out.extend([
+        pair(
+            "hs_id_network_separation_mainnet_vs_testnet",
+            "hs_id_network_separation",
+            Network::Mainnet,
+            Some(Network::Testnet),
+            (0, None),
+            hs_id.as_slice(),
+            hs_id_testnet.as_slice(),
+        ),
+        pair(
+            "hs_id_network_separation_stagenet_vs_regtest",
+            "hs_id_network_separation",
+            Network::Stagenet,
+            Some(Network::Regtest),
+            (0, None),
+            hs_id_stagenet.as_slice(),
+            hs_id_regtest.as_slice(),
+        ),
+        pair(
+            "hs_id_label_separation_hs_id_vs_account_sign",
+            "hs_id_label_separation",
+            net,
+            None,
+            (0, None),
+            hs_id.as_slice(),
+            acct.as_slice(),
+        ),
+        pair(
+            "receipt_network_separation_mainnet_vs_testnet",
+            "receipt_network_separation",
+            Network::Mainnet,
+            Some(Network::Testnet),
+            (0, None),
+            receipt_fn_dsa.as_slice(),
+            receipt_fn_dsa_net_b.as_slice(),
+        ),
+        pair(
+            "receipt_label_separation_receipt_vs_account_sign",
+            "receipt_label_separation",
+            net,
+            None,
+            (0, None),
+            receipt_ed.as_slice(),
+            acct.as_slice(),
+        ),
+        pair(
+            "slot_separation_slot0_vs_slot7",
+            "slot_separation",
+            net,
+            None,
+            (0, Some(7)),
+            &slot0.hybrid_sign_pk.to_canonical_bytes().unwrap(),
+            &slot7.hybrid_sign_pk.to_canonical_bytes().unwrap(),
+        ),
+        pair(
+            "label_separation_account_sign_vs_bond_spend_ed",
+            "label_separation",
+            net,
+            None,
+            (0, None),
+            acct.as_slice(),
+            bond_ed.as_slice(),
+        ),
+    ]);
+    out
 }
 
 fn build_tier2_vector(
     id: &str,
-    network: &str,
-    seed_format: &str,
+    net: Network,
     master: &[u8; MASTER_SEED_BYTES],
     p_slot: u32,
 ) -> serde_json::Value {
-    let net = parse_network(network);
-    let fmt = parse_seed_format(seed_format);
-    let k = derive_archival_p_keys(master, net, fmt, p_slot).unwrap();
+    let k = derive_archival_p_keys(master, net, p_slot).unwrap();
     serde_json::json!({
         "id": id,
-        "network": network,
-        "seed_format": seed_format,
+        "network": net.name(),
         "master_seed_hex": hex::encode(master),
         "p_slot": p_slot,
         "expected": {
@@ -712,23 +766,29 @@ fn build_tier2_vector(
 
 fn build_tier2_vectors() -> Vec<serde_json::Value> {
     vec![
-        build_tier2_vector("mainnet_bip39_slot0", "mainnet", "bip39", &MASTER_33, 0),
-        build_tier2_vector("mainnet_bip39_slot7", "mainnet", "bip39", &MASTER_33, 7),
-        build_tier2_vector("testnet_raw32_slot0", "testnet", "raw32", &MASTER_44, 0),
-        build_tier2_vector("stagenet_bip39_slot3", "stagenet", "bip39", &MASTER_33, 3),
+        build_tier2_vector("mainnet_slot0", Network::Mainnet, &MASTER_33, 0),
+        build_tier2_vector("mainnet_slot7", Network::Mainnet, &MASTER_33, 7),
+        build_tier2_vector("testnet_slot0", Network::Testnet, &MASTER_44, 0),
+        build_tier2_vector("stagenet_slot3", Network::Stagenet, &MASTER_33, 3),
+        build_tier2_vector("regtest_slot2", Network::Regtest, &MASTER_44, 2),
     ]
 }
 
 fn corpus_dir() -> PathBuf {
-    PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../docs/test_vectors/ARCHIVAL_P_DERIVE_V1")
+    PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../docs/test_vectors/ARCHIVAL_P_DERIVE_V2")
 }
 
-/// Regenerates the on-disk KAT corpus. Run manually after a deliberate derivation bump.
+/// Regenerates the on-disk corpus. Armed: it refuses unless
+/// `SHEKYL_PINNED_REGEN_DECISION` cites the decision-log entry that moved
+/// the derivation. Everything is derived from fixed inputs, so a rerun with
+/// nothing changed rewrites the files byte-identically.
 #[test]
-#[ignore = "fixture regenerator; run manually after derivation corpus changes"]
-fn kat_regenerate_archival_p_derive_v1() {
+#[ignore = "armed fixture regenerator; requires SHEKYL_PINNED_REGEN_DECISION"]
+fn kat_regenerate_archival_p_derive_v2() {
     use sha2::{Digest, Sha256};
     use std::fs;
+
+    let decision = shekyl_crypto_pq::test_support::regen_decision_or_refuse("ARCHIVAL_P_DERIVE_V2");
 
     let dir = corpus_dir();
     fs::create_dir_all(&dir).expect("mkdir corpus dir");
@@ -744,22 +804,45 @@ fn kat_regenerate_archival_p_derive_v1() {
     let vectors_hash = Sha256::digest(vectors_on_disk.as_bytes());
     let manifest_body = serde_json::json!({
         "_comment": [
-            "Tier-1/Tier-2 Known Answer Test fixtures for ARCHIVAL_P_DERIVE_V1.",
-            "Tier-1 pins the per-row HKDF intermediates and the label/slot",
-            "separation properties; Tier-2 pins end-to-end ArchivalPKeys public",
-            "and secret material plus p_canonical_id (inline cSHAKE256).",
-            "vectors_sha256_hex covers the exact on-disk bytes of vectors.json",
-            "(verify with `sha256sum vectors.json`).",
-            "Belongs on the aarch64 qemu lane: third cross-arch-deterministic",
-            "primitive; a divergent bit means an ARM user cannot recover a bond.",
-            "Regenerate only on a deliberate, documented derivation-version bump:",
-            "cargo test -p shekyl-crypto-pq kat_regenerate_archival_p_derive_v1 -- --ignored --nocapture"
+            "Tier-1/Tier-2 vectors for ARCHIVAL_P_DERIVE_V2: ARCHIVAL_P_DERIVE_V1's",
+            "labels and info strings (LABEL || 0x00 || p_slot_le32) under the salt",
+            "salt_for(net) = 'shekyl-master-derive-v2-' || 'shekyl/<network>', with",
+            "no seed format (NETWORK_IDENTITY.md NI-R7, NI-R10). Tier-1 pins the",
+            "per-label HKDF outputs, the hs_id public key on all four networks, and",
+            "the label/network/slot separation properties; Tier-2 pins whole",
+            "ArchivalPKeys bundles on all four networks plus p_canonical_id",
+            "(inline cSHAKE256). vectors_sha256_hex covers the exact on-disk bytes",
+            "of vectors.json (verify with `sha256sum vectors.json`).",
+            "Belongs on the aarch64 qemu lane: a divergent bit means an ARM user",
+            "cannot recover a bond.",
+            "",
+            "Oracles (rule 50): see oracle_independent and oracle_self_pinned.",
+            "The independent values are recomputed by",
+            "scripts/kat/address_derivation_v3_oracle.py (stdlib Python, RFC 5869",
+            "by hand), run in CI by docs-gates.yml."
         ],
-        "derivation_version": "v1",
+        "derivation_version": DERIVATION_VERSION,
         "fips203_pin": "=0.4.3",
         "fn_dsa_pin": "=0.4.0",
+        "oracle_independent": [
+            "tier1 every single-output kind's out_hex (HKDF-SHA-512 per label)",
+            "tier1 hs_id_pubkey.out_hex (RFC 8032 keygen of the HKDF seed)",
+            "tier1 *_network_separation / *_label_separation out_a_hex / out_b_hex",
+            "tier2 spend_sk_hex, view_sk_hex (HKDF then reduction mod l)",
+            "tier2 spend_pk_hex, view_pk_hex (Ed25519 base-point multiplication)",
+            "tier2 x25519_pk_hex (Edwards-to-Montgomery map of view_pk)"
+        ],
+        "oracle_self_pinned": [
+            "tier1 slot_separation (hybrid Ed25519 + ML-DSA-65 public keys)",
+            "tier2 ml_kem_ek_hex, ml_kem_dk_hex (fips203 keygen)",
+            "tier2 hybrid_sign_pk_hex, hybrid_sign_sk_hex, bond_spend_pk_hex, bond_spend_sk_hex (ML-DSA-65 halves)",
+            "tier2 receipt_sign_pk_hex (FN-DSA-1024 half)",
+            "tier2 p_canonical_id_hex (cSHAKE256 of the hybrid identity key; cross-checked against shekyl-archival-retention's id.rs, not against an outside implementation)"
+        ],
+        "regeneration_decision": decision,
+        "regeneration_note": "Re-recorded from ARCHIVAL_P_DERIVE_V1 by the V3_WALLET_DECISION_LOG.md entry of 2026-11-03 (One secret, one derivation): the labels are unchanged; the salt drops the seed format and binds the network's name.",
         "vectors_sha256_hex": hex::encode(vectors_hash),
-        "regeneration_command": "cargo test -p shekyl-crypto-pq kat_regenerate_archival_p_derive_v1 -- --ignored --nocapture",
+        "regeneration_command": "SHEKYL_PINNED_REGEN_DECISION=\"YYYY-MM-DD <rationale>\" cargo test -p shekyl-crypto-pq --test kat_archival_p_derive_v2 kat_regenerate_archival_p_derive_v2 -- --ignored --nocapture",
         "tier1_count": tier1.len(),
         "tier2_count": tier2.len()
     });
@@ -773,6 +856,7 @@ fn kat_regenerate_archival_p_derive_v1() {
     corpus_hasher.update(vectors_on_disk.as_bytes());
     let corpus_hash = corpus_hasher.finalize();
 
+    eprintln!("regenerated under decision: {decision}");
     eprintln!("wrote {}", vectors_path.display());
     eprintln!("wrote {}", manifest_path.display());
     eprintln!("vectors_sha256_hex = {}", hex::encode(vectors_hash));

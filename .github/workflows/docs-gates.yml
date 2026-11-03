@@ -753,6 +753,21 @@ jobs:
         if: '!cancelled()'
         run: python3 docs/test_vectors/RPC_CHANNEL_NAMES_V1/generate.py --check
 
+      - name: Run key-derivation vector independent oracle
+        # ADDRESS_DERIVATION_V3 and ARCHIVAL_P_DERIVE_V2 are written by the
+        # Rust they test, so the Rust KAT alone proves determinism, not
+        # correctness (50-testing.mdc, oracle tiers). This recomputes every
+        # HKDF / hash / mod-l / Ed25519 value in both corpora from the
+        # vectors' inputs, with RFC 5869 HKDF written over hmac and the
+        # derivation constants written from the design, and anchors its own
+        # primitives on RFC 5869, RFC 8032 and the base point first. Fails on
+        # any disagreement, and (47-gate-subject-assertion.mdc) when a corpus
+        # or a vector kind it exists to check is absent. Values that need an
+        # ML-KEM / ML-DSA / FN-DSA / SLH-DSA implementation stay self-pinned;
+        # each manifest lists them.
+        if: '!cancelled()'
+        run: python3 -I scripts/kat/address_derivation_v3_oracle.py
+
       - name: Run clatter production-graph gate
         # clatter is an independent implementation of the RPC channel's
         # handshake pattern, in the workspace as a test-only cross-check

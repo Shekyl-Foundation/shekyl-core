@@ -1,0 +1,44 @@
+{
+  "_comment": [
+    "Tier-1/Tier-2 vectors for ADDRESS_DERIVATION_V3: seed (32 bytes, every",
+    "network) -> normalize_seed -> HKDF-SHA-512 under salt_for(net) =",
+    "'shekyl-master-derive-v2-' || 'shekyl/<network>' (NETWORK_IDENTITY.md",
+    "NI-R7, NI-R10). Tier-1 pins the intermediate steps on all four",
+    "networks; Tier-2 pins whole accounts from account_from_seed, and from",
+    "account_from_words where mnemonic_words is present (words and bytes",
+    "give the same wallet), re-checked through rederive_account.",
+    "vectors_sha256_hex covers the exact on-disk bytes of vectors.json",
+    "(verify with `sha256sum vectors.json`).",
+    "",
+    "Oracles (rule 50): see oracle_independent and oracle_self_pinned.",
+    "The independent values are recomputed by",
+    "scripts/kat/address_derivation_v3_oracle.py (stdlib Python, RFC 5869",
+    "by hand), run in CI by docs-gates.yml. ML-KEM keygen uses",
+    "fips203 =0.4.3 with the SHA3-ChaCha intermediary (account.rs)."
+  ],
+  "derivation_version": "v3 (salt shekyl-master-derive-v2-shekyl/<network>)",
+  "fips203_pin": "=0.4.3",
+  "oracle_independent": [
+    "tier1 salt_for.salt_hex",
+    "tier1 normalize_seed.master_seed_hex",
+    "tier1 derive_spend_wide / derive_view_wide / derive_kem_d_z .wide_hex",
+    "tier1 derive_spend_wide / derive_view_wide .scalar_hex",
+    "tier1 ml_kem_chacha_seed.chacha_seed_hex",
+    "tier1 network_separation.spend_sk_a_hex / spend_sk_b_hex",
+    "tier2 master_seed_hex, spend_sk_hex, view_sk_hex",
+    "tier2 spend_pk_hex, view_pk_hex (Ed25519 base-point multiplication)",
+    "tier2 x25519_pk_hex (Edwards-to-Montgomery map of view_pk), and the first 32 bytes of pqc_public_key_hex",
+    "tier2 classical_address_bytes_hex first 65 bytes (version 0x01 || spend_pk || view_pk)",
+    "tier2 mnemonic_words <-> seed_hex (published BIP-39 reference vectors)"
+  ],
+  "oracle_self_pinned": [
+    "tier2 ml_kem_ek_hex, ml_kem_dk_hex, and the ML-KEM suffix of pqc_public_key_hex (fips203 keygen)",
+    "tier2 classical_address_bytes_hex bytes 65.. (the SLH-DSA-192s message-signing public key)"
+  ],
+  "regeneration_command": "SHEKYL_PINNED_REGEN_DECISION=\"YYYY-MM-DD <rationale>\" cargo test -p shekyl-crypto-pq --test kat_address_derivation_v3 kat_regenerate_address_derivation_v3 -- --ignored --nocapture",
+  "regeneration_decision": "2026-11-03 One secret, one derivation (NI-R7, NI-R10)",
+  "regeneration_note": "Re-recorded from ADDRESS_DERIVATION_V2 by the V3_WALLET_DECISION_LOG.md entry of 2026-11-03 (One secret, one derivation): the seed format and passphrase leave the derivation, and the salt binds the network's name.",
+  "tier1_count": 21,
+  "tier2_count": 6,
+  "vectors_sha256_hex": "d8784486155656f70f5bdef3fdc03ad23d30214a9fcc208c8f7288489adf1327"
+}

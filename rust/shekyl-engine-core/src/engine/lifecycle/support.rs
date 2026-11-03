@@ -3,11 +3,10 @@
 // All rights reserved.
 // BSD-3-Clause
 
-//! Shared lifecycle helpers: network mapping, error translation, and
+//! Shared lifecycle helpers: error translation and
 //! the sync-over-async persistence drive.
 
 use shekyl_address::Network;
-use shekyl_crypto_pq::account::DerivationNetwork;
 use shekyl_crypto_pq::wallet_envelope::WalletEnvelopeError;
 use shekyl_engine_file::{SafetyOverrides, WalletFileError};
 
@@ -16,24 +15,6 @@ use crate::engine::error::{IoError, OpenError};
 use crate::engine::traits::{DaemonEngine, LedgerEngine, RefreshEngine};
 #[cfg(test)]
 use crate::engine::{Engine, EngineSignerKind};
-
-/// Map an address-layer [`Network`] into the derivation-layer
-/// [`DerivationNetwork`].
-///
-/// The address layer has three networks; the derivation layer has
-/// four. `Fakechain` is a derivation-only construct (Testnet
-/// addresses with distinct derivation salts) and is not reachable
-/// from a wallet file's network byte. Wallets that need Fakechain
-/// keys must construct their `AllKeysBlob` outside the lifecycle
-/// methods.
-pub(crate) fn network_to_derivation(network: Network) -> DerivationNetwork {
-    match network {
-        Network::Mainnet => DerivationNetwork::Mainnet,
-        Network::Testnet => DerivationNetwork::Testnet,
-        Network::Stagenet => DerivationNetwork::Stagenet,
-        Network::Regtest => DerivationNetwork::Fakechain,
-    }
-}
 
 // ---------------------------------------------------------------------------
 // Error mapping
@@ -109,11 +90,8 @@ pub(super) fn rederivation_failure_detail(_err: &shekyl_crypto_pq::CryptoError) 
     // The crypto-pq error is `Display` and carries a String detail,
     // but `KeyError::Primitive` is keyed on `&'static str` per the
     // closed-error contract. The lifecycle path can hit ML-KEM seed
-    // expansion, X25519 birational mapping, or the
-    // permitted-seed-format check; we collapse them to a single
-    // category here because the typed branches that distinguish the
-    // permitted-seed-format failure are already separate variants
-    // (`UnsupportedDerivationPair`).
+    // expansion or X25519 birational mapping; we collapse them to a
+    // single category here.
     "rederive_account failed (HKDF / scalar / ML-KEM / X25519)"
 }
 

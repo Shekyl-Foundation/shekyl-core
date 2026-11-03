@@ -240,10 +240,14 @@ enum SpawnNetwork {
 
 /// A full address on `network`, from `seed`. Same derivation the wallet
 /// uses for its primary address, so a spawn can pay coinbase to that wallet.
-pub(super) fn mine_address_from_seed(seed: &[u8; 64], network: shekyl_address::Network) -> String {
-    use shekyl_crypto_pq::account::{rederive_account, DerivationNetwork, SeedFormat};
-    rederive_account(seed, DerivationNetwork::Mainnet, SeedFormat::Bip39)
+pub(super) fn mine_address_from_seed(
+    seed: &[u8; shekyl_crypto_pq::account::SEED_BYTES],
+    network: shekyl_address::Network,
+) -> String {
+    use shekyl_crypto_pq::account::{account_from_seed, Network};
+    account_from_seed(seed, Network::Mainnet)
         .expect("the keys")
+        .1
         .to_address(network)
         .encode()
         .expect("encodes")
@@ -254,7 +258,7 @@ fn default_mine_address(network: SpawnNetwork) -> String {
         SpawnNetwork::Regtest => shekyl_address::Network::Mainnet,
         SpawnNetwork::Testnet => shekyl_address::Network::Testnet,
     };
-    mine_address_from_seed(&[0x5a; 64], address_network)
+    mine_address_from_seed(&[0x5a; 32], address_network)
 }
 
 /// How one regtest daemon is spawned.
@@ -477,14 +481,18 @@ impl RegtestDaemon {
     }
 
     /// Spawn mining coinbase to `seed`'s primary address.
-    pub(super) async fn start_for_seed(seed: &[u8; 64]) -> RegtestDaemon {
+    pub(super) async fn start_for_seed(
+        seed: &[u8; shekyl_crypto_pq::account::SEED_BYTES],
+    ) -> RegtestDaemon {
         Self::start_for_seed_with_schedule(seed, None).await
     }
 
     /// [`Self::start_for_seed`] with the restricted listener bound as well:
     /// an offline daemon mining to `seed`'s address, whose own transactions
     /// are shown at once (no route, RD's NoRoute fluff at the origin).
-    pub(super) async fn start_for_seed_with_restricted_listener(seed: &[u8; 64]) -> RegtestDaemon {
+    pub(super) async fn start_for_seed_with_restricted_listener(
+        seed: &[u8; shekyl_crypto_pq::account::SEED_BYTES],
+    ) -> RegtestDaemon {
         let serial = serial_lock().lock_owned().await;
         let mine_address = mine_address_from_seed(seed, shekyl_address::Network::Mainnet);
         Self::spawn(
@@ -497,7 +505,7 @@ impl RegtestDaemon {
 
     /// [`Self::start_for_seed`] with a levered regtest schedule.
     pub(super) async fn start_for_seed_with_schedule(
-        seed: &[u8; 64],
+        seed: &[u8; shekyl_crypto_pq::account::SEED_BYTES],
         schedule: Option<RegtestSchedule>,
     ) -> RegtestDaemon {
         let serial = serial_lock().lock_owned().await;
@@ -1573,12 +1581,12 @@ async fn regtest_daemon_spawns_and_mines_to_wallet_address() {
     use super::lifecycle::{CapabilityInput, Credentials, EngineCreateParams};
     use super::{DaemonClient, Engine, SoloSigner};
     use shekyl_address::Network;
-    use shekyl_crypto_pq::account::{SeedFormat, MASTER_SEED_BYTES};
+    use shekyl_crypto_pq::account::SEED_BYTES;
     use shekyl_crypto_pq::wallet_envelope::KdfParams;
     use shekyl_engine_file::SafetyOverrides;
     use shekyl_engine_prefs::WalletPrefs;
 
-    let seed = [0x11u8; MASTER_SEED_BYTES];
+    let seed = [0x11u8; SEED_BYTES];
     let mine_address = mine_address_from_seed(&seed, Network::Mainnet);
     let serial = serial_lock().lock_owned().await;
     let daemon =
@@ -1593,15 +1601,12 @@ async fn regtest_daemon_spawns_and_mines_to_wallet_address() {
     let creds = Credentials::password_only(b"track2-test");
 
     // FAKECHAIN uses mainnet config/address format (cryptonote_config.h:372), so
-    // the wallet is Mainnet + Bip39 (the only permitted seed format for Mainnet).
+    // the wallet is Mainnet.
     let params = EngineCreateParams {
         base_path: &wallet_path,
         credentials: &creds,
         network: Network::Mainnet,
-        capability: CapabilityInput::Full {
-            master_seed_64: &seed,
-            seed_format: SeedFormat::Bip39,
-        },
+        capability: CapabilityInput::Full { seed: &seed },
         creation_timestamp: 0,
         restore_height_hint: 0,
         kdf: KdfParams {
@@ -1732,7 +1737,7 @@ async fn e2e_refresh_scans_coinbase_balance() {
     use shekyl_scanner::WalletLedgerExt;
     use shekyl_units::AtomicUnits;
 
-    let seed = [0x44u8; shekyl_crypto_pq::account::MASTER_SEED_BYTES];
+    let seed = [0x44u8; shekyl_crypto_pq::account::SEED_BYTES];
     let daemon = RegtestDaemon::start_for_seed(&seed).await;
 
     // Create the wallet (FAKECHAIN = mainnet address format; see the get_curve_tree test).
@@ -1746,10 +1751,7 @@ async fn e2e_refresh_scans_coinbase_balance() {
         base_path: &wallet_path,
         credentials: &creds,
         network: shekyl_address::Network::Mainnet,
-        capability: super::lifecycle::CapabilityInput::Full {
-            master_seed_64: &seed,
-            seed_format: shekyl_crypto_pq::account::SeedFormat::Bip39,
-        },
+        capability: super::lifecycle::CapabilityInput::Full { seed: &seed },
         creation_timestamp: 0,
         restore_height_hint: 0,
         kdf: shekyl_crypto_pq::wallet_envelope::KdfParams {
@@ -1829,7 +1831,7 @@ async fn e2e_fcmp_spend_accepted_by_daemon() {
     use shekyl_scanner::WalletLedgerExt;
     use shekyl_units::AtomicUnits;
 
-    let seed = [0x33u8; shekyl_crypto_pq::account::MASTER_SEED_BYTES];
+    let seed = [0x33u8; shekyl_crypto_pq::account::SEED_BYTES];
     let daemon = RegtestDaemon::start_for_seed(&seed).await;
 
     // Create the wallet (FAKECHAIN = mainnet address format; see the get_curve_tree
@@ -2002,7 +2004,7 @@ async fn e2e_fcmp_spend_reorg_restores_pool_and_fee() {
     use shekyl_units::AtomicUnits;
     use shekyl_wire::{Input, Transaction};
 
-    let seed = [0x35u8; shekyl_crypto_pq::account::MASTER_SEED_BYTES];
+    let seed = [0x35u8; shekyl_crypto_pq::account::SEED_BYTES];
     let daemon = RegtestDaemon::start_for_seed(&seed).await;
     let creds = super::lifecycle::Credentials::password_only(b"track2-spend-reorg");
     let (created, tmp) = create_wallet(daemon.rpc_port, &seed, b"track2-spend-reorg").await;
@@ -2183,16 +2185,13 @@ async fn e2e_fcmp_spend_reorg_restores_pool_and_fee() {
 fn mainnet_params<'a>(
     base_path: &'a std::path::Path,
     creds: &'a super::lifecycle::Credentials<'a>,
-    seed: &'a [u8; shekyl_crypto_pq::account::MASTER_SEED_BYTES],
+    seed: &'a [u8; shekyl_crypto_pq::account::SEED_BYTES],
 ) -> super::lifecycle::EngineCreateParams<'a> {
     super::lifecycle::EngineCreateParams {
         base_path,
         credentials: creds,
         network: shekyl_address::Network::Mainnet,
-        capability: super::lifecycle::CapabilityInput::Full {
-            master_seed_64: seed,
-            seed_format: shekyl_crypto_pq::account::SeedFormat::Bip39,
-        },
+        capability: super::lifecycle::CapabilityInput::Full { seed },
         creation_timestamp: 0,
         restore_height_hint: 0,
         kdf: shekyl_crypto_pq::wallet_envelope::KdfParams {
@@ -2212,7 +2211,7 @@ async fn mainnet_wallet(
     rpc_port: u16,
     seed_byte: u8,
 ) -> (super::Engine<super::SoloSigner>, tempfile::TempDir, String) {
-    let seed = [seed_byte; shekyl_crypto_pq::account::MASTER_SEED_BYTES];
+    let seed = [seed_byte; shekyl_crypto_pq::account::SEED_BYTES];
     let (wallet, tmp) = create_wallet(rpc_port, &seed, b"track2").await;
     let address = wallet.primary_address().encode().expect("encode address");
     (wallet, tmp, address)
@@ -2225,7 +2224,7 @@ async fn mainnet_wallet(
 /// The wallet base path is `tmp.path().join("wallet")`.
 async fn create_wallet(
     rpc_port: u16,
-    seed: &[u8; shekyl_crypto_pq::account::MASTER_SEED_BYTES],
+    seed: &[u8; shekyl_crypto_pq::account::SEED_BYTES],
     password: &'static [u8],
 ) -> (super::Engine<super::SoloSigner>, tempfile::TempDir) {
     let rpc = HttpRpc::new(format!("http://127.0.0.1:{rpc_port}"))
@@ -2286,8 +2285,7 @@ async fn e2e_fcmp_spend_over_depth3_tree() {
     const MAX_MINE_BATCHES: usize = 60; // up to 1200 blocks (684 leaves ≈ 745)
 
     let daemon =
-        RegtestDaemon::start_for_seed(&[0x44u8; shekyl_crypto_pq::account::MASTER_SEED_BYTES])
-            .await;
+        RegtestDaemon::start_for_seed(&[0x44u8; shekyl_crypto_pq::account::SEED_BYTES]).await;
     let (wallet, _tmp, address) = mainnet_wallet(daemon.rpc_port, 0x44).await;
 
     // Mine (no refresh needed — depth is the daemon's, not the wallet's) until the
@@ -2601,8 +2599,7 @@ async fn e2e_a_rust_block_at_the_consensus_bound_is_judged_by_the_cxx() {
     use zeroize::Zeroizing;
 
     let daemon =
-        RegtestDaemon::start_for_seed(&[0x79u8; shekyl_crypto_pq::account::MASTER_SEED_BYTES])
-            .await;
+        RegtestDaemon::start_for_seed(&[0x79u8; shekyl_crypto_pq::account::SEED_BYTES]).await;
     let (wallet, _tmp, address) = mainnet_wallet(daemon.rpc_port, 0x79).await;
     let arc = Arc::new(RwLock::new(wallet));
     let Overfilled {
@@ -2901,8 +2898,7 @@ async fn e2e_a_rust_block_at_the_consensus_bound_is_judged_by_the_cxx() {
 #[ignore = "Track-2 regtest: requires SHEKYLD_BIN; ~50 spends into the pool, several min"]
 async fn e2e_cxx_template_fills_to_its_median() {
     let daemon =
-        RegtestDaemon::start_for_seed(&[0x77u8; shekyl_crypto_pq::account::MASTER_SEED_BYTES])
-            .await;
+        RegtestDaemon::start_for_seed(&[0x77u8; shekyl_crypto_pq::account::SEED_BYTES]).await;
     let (wallet, _tmp, address) = mainnet_wallet(daemon.rpc_port, 0x77).await;
     let arc = Arc::new(RwLock::new(wallet));
     let Overfilled {
@@ -3077,8 +3073,7 @@ async fn e2e_trim_curve_tree_restores_grow_root() {
     }
 
     let daemon =
-        RegtestDaemon::start_for_seed(&[0x44u8; shekyl_crypto_pq::account::MASTER_SEED_BYTES])
-            .await;
+        RegtestDaemon::start_for_seed(&[0x44u8; shekyl_crypto_pq::account::SEED_BYTES]).await;
 
     // Grow to depth-2 with >= 2 Selene leaf chunks, then record the anchor state.
     let mut anchor = None;
@@ -3163,8 +3158,7 @@ async fn generate_ct2_tier_b_fixture() {
     const REORG_DEPTH: u64 = 8;
 
     let daemon =
-        RegtestDaemon::start_for_seed(&[0x44u8; shekyl_crypto_pq::account::MASTER_SEED_BYTES])
-            .await;
+        RegtestDaemon::start_for_seed(&[0x44u8; shekyl_crypto_pq::account::SEED_BYTES]).await;
     let (wallet, _tmp, _) = mainnet_wallet(daemon.rpc_port, 0x44).await;
     // A second wallet for its address only — the spend recipient (a real
     // non-change regular output, distinct from the self-send change).
@@ -3445,7 +3439,7 @@ type StakerWallet = (
 /// encoded primary address.
 pub(super) async fn staker_wallet(
     rpc_port: u16,
-    seed: &[u8; shekyl_crypto_pq::account::MASTER_SEED_BYTES],
+    seed: &[u8; shekyl_crypto_pq::account::SEED_BYTES],
     slot: super::stake_engine::PSlot,
 ) -> StakerWallet {
     let creds = super::lifecycle::Credentials::password_only(b"pr4-staker");
@@ -3476,18 +3470,18 @@ pub(super) async fn staker_wallet(
     (Arc::new(RwLock::new(engine)), tmp, address)
 }
 
-/// The persona's payment destination, derived in-test from the same master
-/// seed the wallet holds. The production wallet derives the identical bundle
+/// The persona's payment destination, derived in-test from the master seed
+/// the wallet expands its seed into. The production wallet derives the identical bundle
 /// at open (`prepare_stake_engine_if_staker` → `derive_archival_p_keys`); the
 /// harness takes only its public keys, for the one walk that pays a persona
 /// outside `stake_in` (the emission claim's post-bond fee input).
 pub(super) fn persona_destination(
-    seed: &[u8; shekyl_crypto_pq::account::MASTER_SEED_BYTES],
+    seed: &[u8; shekyl_crypto_pq::account::SEED_BYTES],
     slot: u32,
 ) -> super::pending::TxDestination {
-    use shekyl_crypto_pq::account::{DerivationNetwork, SeedFormat};
+    use shekyl_crypto_pq::account::{normalize_seed, Network};
     use shekyl_crypto_pq::archival_p::derive_archival_p_keys;
-    let keys = derive_archival_p_keys(seed, DerivationNetwork::Mainnet, SeedFormat::Bip39, slot)
+    let keys = derive_archival_p_keys(&normalize_seed(seed), Network::Mainnet, slot)
         .expect("derive persona keys");
     super::pending::TxDestination::OwnPersona(keys.payment_destination())
 }
@@ -3729,7 +3723,7 @@ enum FixtureStake {
 /// parent, and the pool door judges it at commit.
 async fn stake_persona_to_confirmed_bond(
     daemon: &RegtestDaemon,
-    seed: &[u8; shekyl_crypto_pq::account::MASTER_SEED_BYTES],
+    seed: &[u8; shekyl_crypto_pq::account::SEED_BYTES],
     slot_raw: u32,
     funding_cushion: u64,
     stake_entry: FixtureStake,
@@ -3819,7 +3813,7 @@ async fn stake_persona_to_confirmed_bond(
 /// the confirmed-bond fixture and the FND-20 tripwire.
 async fn stake_persona_and_submit_bond(
     daemon: &RegtestDaemon,
-    seed: &[u8; shekyl_crypto_pq::account::MASTER_SEED_BYTES],
+    seed: &[u8; shekyl_crypto_pq::account::SEED_BYTES],
     slot_raw: u32,
     funding_cushion: u64,
     stake_entry: FixtureStake,
@@ -4125,7 +4119,7 @@ async fn e2e_staker_bond_post_accepted_and_applied() {
     /// (the emission-claim e2e sizes its own, larger cushion).
     const FUNDING_CUSHION: u64 = 200_000_000;
 
-    let seed = [0x44u8; shekyl_crypto_pq::account::MASTER_SEED_BYTES];
+    let seed = [0x44u8; shekyl_crypto_pq::account::SEED_BYTES];
     let daemon = RegtestDaemon::start_for_seed(&seed).await;
     // Schedule guard (serial lock now held): this test's wallet epoch
     // arithmetic must run on the genesis pin. A sibling e2e that armed the
@@ -4306,7 +4300,7 @@ async fn e2e_emission_claim_accepted_and_applied() {
     // either direction is a loud named failure, never silent bleed. Run
     // the regtest e2es in separate processes (the module docs' one-test
     // invocation) for green runs.
-    let seed = [0x55u8; shekyl_crypto_pq::account::MASTER_SEED_BYTES];
+    let seed = [0x55u8; shekyl_crypto_pq::account::SEED_BYTES];
     let daemon = RegtestDaemon::start_for_seed_with_schedule(&seed, Some(SCHEDULE)).await;
     // The levers are set and deliberately NOT restored afterwards: they are the
     // only input `arm` reads, and once armed the schedule latch is
@@ -4989,7 +4983,7 @@ async fn e2e_drain_wire_shape_matches_a_real_transfer() {
     /// byte-diff below compares against the 1-in/2-out transfer.
     const FUNDING_CUSHION: u64 = 40_000_000_000;
 
-    let seed = [0x66u8; shekyl_crypto_pq::account::MASTER_SEED_BYTES];
+    let seed = [0x66u8; shekyl_crypto_pq::account::SEED_BYTES];
     let daemon = RegtestDaemon::start_for_seed(&seed).await;
     // Schedule guard (serial lock now held): a sibling e2e that armed the SEB
     // lever in this process would bleed its schedule in silently (the
@@ -5291,7 +5285,7 @@ async fn e2e_release_accepted_and_connected() {
     // Arm the levered schedule BEFORE any wallet-side epoch arithmetic
     // (the claim e2e's arming shape and its containment caveats: the
     // latch is irreversible and per-process — run this walk alone).
-    let seed = [0x66u8; shekyl_crypto_pq::account::MASTER_SEED_BYTES];
+    let seed = [0x66u8; shekyl_crypto_pq::account::SEED_BYTES];
     let daemon = RegtestDaemon::start_for_seed_with_schedule(&seed, Some(SCHEDULE)).await;
     SCHEDULE.set_in_process_env();
     let armed = shekyl_archival_retention::arm_settlement_epoch_override_for_regtest()
@@ -5518,7 +5512,7 @@ async fn e2e_unstake_collect_retire_composed_arc() {
     // Arm the levered schedule BEFORE any wallet-side epoch arithmetic (the
     // claim e2e's arming shape, and its containment caveats verbatim: the
     // latch is irreversible and per-process — run this walk alone).
-    let seed = [0x77u8; shekyl_crypto_pq::account::MASTER_SEED_BYTES];
+    let seed = [0x77u8; shekyl_crypto_pq::account::SEED_BYTES];
     let daemon = RegtestDaemon::start_for_seed_with_schedule(&seed, Some(SCHEDULE)).await;
     SCHEDULE.set_in_process_env();
     let armed = shekyl_archival_retention::arm_settlement_epoch_override_for_regtest()
@@ -5811,7 +5805,7 @@ async fn e2e_arm3_phantom_slot_collected_at_open() {
     use super::stake_engine::PSlot;
 
     const SLOT: u32 = 0;
-    let seed = [0x45u8; shekyl_crypto_pq::account::MASTER_SEED_BYTES];
+    let seed = [0x45u8; shekyl_crypto_pq::account::SEED_BYTES];
     let daemon = RegtestDaemon::start_for_seed(&seed).await;
     // Schedule guard (see the bond e2e): wallet epoch arithmetic here must
     // run on the genesis pin; a sibling-armed levered schedule fails loudly.

@@ -15,9 +15,7 @@ use super::*;
 use shekyl_rpc_client::RpcError;
 
 use proptest::prelude::*;
-use shekyl_crypto_pq::account::{
-    rederive_account, DerivationNetwork, SeedFormat, MASTER_SEED_BYTES,
-};
+use shekyl_crypto_pq::account::{rederive_account, Network, MASTER_SEED_BYTES};
 use shekyl_engine_state::LedgerBlock;
 
 use tokio::sync::watch;
@@ -52,15 +50,11 @@ const PROPERTY_TEST_MASTER_SEED: [u8; MASTER_SEED_BYTES] = {
 /// Build a [`LocalRefresh`] against a deterministic test wallet
 /// seed. The view material derives via the same
 /// [`rederive_account`] path `Engine::create` uses internally
-/// (`DerivationNetwork::Fakechain` + `SeedFormat::Raw32`), so
+/// (on `Network::Regtest`), so
 /// `build_scanner` lands in the structurally-valid branch.
 fn make_local_refresh() -> LocalRefresh {
-    let blob = rederive_account(
-        &PROPERTY_TEST_MASTER_SEED,
-        DerivationNetwork::Fakechain,
-        SeedFormat::Raw32,
-    )
-    .expect("rederive_account against fakechain raw32 seed");
+    let blob = rederive_account(&PROPERTY_TEST_MASTER_SEED, Network::Regtest)
+        .expect("rederive_account against a regtest master seed");
     let vm = ViewMaterial::try_from_keys(&blob)
         .expect("ViewMaterial::try_from_keys against deterministic test blob");
     LocalRefresh::new(vm, shekyl_types::BlockHeight::from_raw(0))
@@ -81,8 +75,7 @@ fn snapshot_at_anchor(synced: u64, hash: BlockHash) -> LedgerSnapshot {
 fn test_persona(slot: u32) -> shekyl_crypto_pq::archival_p::ArchivalPKeys {
     shekyl_crypto_pq::archival_p::derive_archival_p_keys(
         &PROPERTY_TEST_MASTER_SEED,
-        DerivationNetwork::Fakechain,
-        SeedFormat::Raw32,
+        Network::Regtest,
         slot,
     )
     .expect("derive test persona")
@@ -188,12 +181,7 @@ async fn bond_watch_emits_sightings_for_watched_ids_only() {
     let snapshot = snapshot_at_anchor(0, b0.block.hash());
     let watch = std::collections::BTreeMap::from([(test_persona_id(&mine), 4u32)]);
 
-    let blob = rederive_account(
-        &PROPERTY_TEST_MASTER_SEED,
-        DerivationNetwork::Fakechain,
-        SeedFormat::Raw32,
-    )
-    .expect("rederive");
+    let blob = rederive_account(&PROPERTY_TEST_MASTER_SEED, Network::Regtest).expect("rederive");
     let vm = ViewMaterial::try_from_keys(&blob).expect("view material");
     let refresh = LocalRefresh::with_bond_watch(vm, shekyl_types::BlockHeight::from_raw(0), watch);
 
@@ -262,12 +250,7 @@ async fn reorg_discards_abandoned_fork_bond_sightings() {
     let daemon = TestDaemon::with_seed_and_chain(DEFAULT_TEST_SEED, chain_a.clone());
     daemon.replace_chain_after_fetch(TRIGGER, FORK, tail_b);
 
-    let blob = rederive_account(
-        &PROPERTY_TEST_MASTER_SEED,
-        DerivationNetwork::Fakechain,
-        SeedFormat::Raw32,
-    )
-    .expect("rederive");
+    let blob = rederive_account(&PROPERTY_TEST_MASTER_SEED, Network::Regtest).expect("rederive");
     let vm = ViewMaterial::try_from_keys(&blob).expect("view material");
     let watch = std::collections::BTreeMap::from([(test_persona_id(&mine), 4u32)]);
     let refresh = LocalRefresh::with_bond_watch(vm, shekyl_types::BlockHeight::from_raw(0), watch);
@@ -368,12 +351,8 @@ async fn intra_attempt_reorg_is_detected_and_rewound() {
     const FORK: u64 = 6; // first divergent height (above the persisted window)
     const TRIGGER: u64 = 7; // daemon reorgs right after serving this fetch
 
-    let blob = rederive_account(
-        &PROPERTY_TEST_MASTER_SEED,
-        DerivationNetwork::Fakechain,
-        SeedFormat::Raw32,
-    )
-    .expect("rederive_account against fakechain raw32 seed");
+    let blob = rederive_account(&PROPERTY_TEST_MASTER_SEED, Network::Regtest)
+        .expect("rederive_account against a regtest master seed");
     let vm = ViewMaterial::try_from_keys(&blob)
         .expect("ViewMaterial::try_from_keys against deterministic test blob");
     let refresh = LocalRefresh::new(vm, shekyl_types::BlockHeight::from_raw(0));
@@ -459,12 +438,8 @@ async fn intra_attempt_reorg_at_exact_synced_height_rewinds_through_seam() {
     const FORK: u64 = SYNCED; // fork at exactly the persisted-window top
     const TRIGGER: u64 = 6; // daemon reorgs right after serving this fetch
 
-    let blob = rederive_account(
-        &PROPERTY_TEST_MASTER_SEED,
-        DerivationNetwork::Fakechain,
-        SeedFormat::Raw32,
-    )
-    .expect("rederive_account against fakechain raw32 seed");
+    let blob = rederive_account(&PROPERTY_TEST_MASTER_SEED, Network::Regtest)
+        .expect("rederive_account against a regtest master seed");
     let vm = ViewMaterial::try_from_keys(&blob)
         .expect("ViewMaterial::try_from_keys against deterministic test blob");
     let refresh = LocalRefresh::new(vm, shekyl_types::BlockHeight::from_raw(0));
@@ -546,12 +521,8 @@ async fn two_reorgs_in_one_attempt_are_both_detected_never_spliced() {
     const FORK2: u64 = 8; // second divergent height (chain C)
     const TRIGGER2: u64 = 9; // daemon reorgs to C right after serving this
 
-    let blob = rederive_account(
-        &PROPERTY_TEST_MASTER_SEED,
-        DerivationNetwork::Fakechain,
-        SeedFormat::Raw32,
-    )
-    .expect("rederive_account against fakechain raw32 seed");
+    let blob = rederive_account(&PROPERTY_TEST_MASTER_SEED, Network::Regtest)
+        .expect("rederive_account against a regtest master seed");
     let vm = ViewMaterial::try_from_keys(&blob)
         .expect("ViewMaterial::try_from_keys against deterministic test blob");
     let refresh = LocalRefresh::new(vm, shekyl_types::BlockHeight::from_raw(0));
@@ -740,12 +711,8 @@ fn is_daemon_malformed(event: &RefreshDiagnostic) -> bool {
 async fn produce_scan_respects_birthday_floor_when_ledger_anchored() {
     const FLOOR: u64 = 1000;
     const TIP: u64 = 1010;
-    let blob = rederive_account(
-        &PROPERTY_TEST_MASTER_SEED,
-        DerivationNetwork::Fakechain,
-        SeedFormat::Raw32,
-    )
-    .expect("rederive_account against fakechain raw32 seed");
+    let blob = rederive_account(&PROPERTY_TEST_MASTER_SEED, Network::Regtest)
+        .expect("rederive_account against a regtest master seed");
     let vm = ViewMaterial::try_from_keys(&blob)
         .expect("ViewMaterial::try_from_keys against deterministic test blob");
     let refresh = LocalRefresh::new(vm, shekyl_types::BlockHeight::from_raw(FLOOR));
@@ -791,12 +758,8 @@ async fn produce_scan_floor_noop_when_synced_past_birthday() {
     const FLOOR: u64 = 100;
     const SYNCED: u64 = 500;
     const TIP: u64 = 505;
-    let blob = rederive_account(
-        &PROPERTY_TEST_MASTER_SEED,
-        DerivationNetwork::Fakechain,
-        SeedFormat::Raw32,
-    )
-    .expect("rederive_account against fakechain raw32 seed");
+    let blob = rederive_account(&PROPERTY_TEST_MASTER_SEED, Network::Regtest)
+        .expect("rederive_account against a regtest master seed");
     let vm = ViewMaterial::try_from_keys(&blob)
         .expect("ViewMaterial::try_from_keys against deterministic test blob");
     let refresh = LocalRefresh::new(vm, shekyl_types::BlockHeight::from_raw(FLOOR));

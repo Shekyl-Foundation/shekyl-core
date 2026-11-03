@@ -163,7 +163,7 @@ fn accept_mining_recipient(encoded: &str) -> Result<(), String> {
 #[test]
 fn regtest_mining_fixture_is_in_the_current_address_encoding() {
     use shekyl_address::Network;
-    use shekyl_crypto_pq::account::{generate_account_from_raw_seed, DerivationNetwork};
+    use shekyl_crypto_pq::account::account_from_seed;
 
     let fixture: serde_json::Value =
         serde_json::from_str(include_str!("vectors/regtest_mining_recipients.json"))
@@ -185,8 +185,8 @@ fn regtest_mining_fixture_is_in_the_current_address_encoding() {
     // satisfy every check below while the documented command regenerated
     // something else. The seed is the emitter's; if the two ever diverge this
     // assertion fails loudly rather than the corpus drifting.
-    let (_seed, blob) = generate_account_from_raw_seed(&[0x11u8; 32], DerivationNetwork::Fakechain)
-        .expect("derive fakechain account");
+    let (_seed, blob) =
+        account_from_seed(&[0x11u8; 32], Network::Regtest).expect("derive regtest account");
     let emitted = blob
         .to_address(Network::Mainnet)
         .encode()
@@ -222,7 +222,7 @@ fn regtest_mining_fixture_is_in_the_current_address_encoding() {
 #[test]
 fn the_mining_recipient_predicate_refuses_what_the_daemon_refuses() {
     use shekyl_address::{Network, ShekylAddress};
-    use shekyl_crypto_pq::account::{generate_account_from_raw_seed, DerivationNetwork};
+    use shekyl_crypto_pq::account::account_from_seed;
 
     let fixture: serde_json::Value =
         serde_json::from_str(include_str!("vectors/regtest_mining_recipients.json"))
@@ -254,8 +254,7 @@ fn the_mining_recipient_predicate_refuses_what_the_daemon_refuses() {
 
     // Wrong network: the same account encoded for Testnet. The HRP differs, so
     // the FAKECHAIN daemon (which parses Mainnet HRPs) would not accept it.
-    let (_seed, blob) = generate_account_from_raw_seed(&[0x11u8; 32], DerivationNetwork::Fakechain)
-        .expect("derive account");
+    let (_seed, blob) = account_from_seed(&[0x11u8; 32], Network::Regtest).expect("derive account");
     let testnet = blob
         .to_address(Network::Testnet)
         .encode()

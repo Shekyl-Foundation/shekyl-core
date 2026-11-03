@@ -27,7 +27,6 @@
 # THE USE OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 
 set(unit_tests_sources
-  account.cpp
   apply_permutation.cpp
   block_queue.cpp
   block_reward.cpp
@@ -80,7 +79,6 @@ set(unit_tests_sources
   varint.cpp
   fcmp.cpp
   vercmp.cpp
-  wallet_bip39_residency.cpp
   wipeable_string.cpp
   is_hdd.cpp
   aligned.cpp

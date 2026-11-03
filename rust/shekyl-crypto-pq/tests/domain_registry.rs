@@ -28,8 +28,9 @@
 //! `salt|info`, because a derivation's
 //! separation comes from the (salt, info) pair, not the info alone: the three
 //! shared info labels (`shekyl-ed25519-spend/-view/-ml-kem-768`) appear as both a
-//! const (composed `salt_for` salt) and an inline `SeedDerivation` (fixed
-//! `shekyl-master-derive-v1` salt) — legitimately distinct derivations that a
+//! const (composed `salt_for` salt) and the harness fixture wallet's inline
+//! `fixture_expand` (fixed `shekyl-master-derive-v1` salt, test-only) —
+//! legitimately distinct derivations that a
 //! bare-info test would wrongly report as a collision, and which SA-3b is NOT
 //! permitted to "fix" (it mutates zero domain values).
 //!
@@ -368,7 +369,7 @@ fn test_domains_are_segregated_from_production() {
 }
 
 /// Guards the mechanism-2 model itself: the three shared info labels MUST still
-/// appear as two rows each (const site + inline SeedDerivation), distinct only by
+/// appear as two rows each (const site + the harness's inline fixture_expand), distinct only by
 /// salt. If a future edit collapses one, this fails — surfacing that the
 /// salt-keyed distinctness model no longer matches the code, rather than letting
 /// the main test pass on a silently-changed shape.

@@ -17,10 +17,10 @@
 #[ignore = "prints a regtest mining address for vector regeneration"]
 fn emit_regtest_mining_address() {
     use shekyl_address::{Network, ShekylAddress};
-    use shekyl_crypto_pq::account::{generate_account_from_raw_seed, DerivationNetwork};
+    use shekyl_crypto_pq::account::account_from_seed;
 
-    let (_seed, blob) = generate_account_from_raw_seed(&[0x11u8; 32], DerivationNetwork::Fakechain)
-        .expect("derive fakechain account");
+    let (_seed, blob) =
+        account_from_seed(&[0x11u8; 32], Network::Regtest).expect("derive regtest account");
     let addr = blob.to_address(Network::Mainnet);
     let encoded = addr.encode().expect("encode address");
     // Round-trip through the decoder the daemon uses, as a sanity gate.

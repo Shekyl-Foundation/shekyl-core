@@ -93,7 +93,7 @@ DESIGN_DIR = os.path.join(ROOT, "docs", "design")
 # store's dead-table rows closed with the tables (layout 34); 288 the same
 # day when the docs sweep's closed rows (the C++ template fill, the
 # C++-anchored gates, `bi_cum_rct`) merged with it, the list's length.
-GRANDFATHER_CEILING = 287
+GRANDFATHER_CEILING = 286
 # How far the ceiling may sit above the list before the gate demands it be
 # lowered. Small enough that a burn-down is locked in within a few rows.
 GRANDFATHER_SLACK = 5

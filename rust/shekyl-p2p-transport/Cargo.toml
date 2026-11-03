@@ -7,6 +7,8 @@ rust-version.workspace = true
 license.workspace = true
 
 [dependencies]
+# The network id and wire prefix (`prefix.rs` re-exports them).
+shekyl-network = { path = "../shekyl-network" }
 fips203 = "=0.4.3"
 rand_core = { version = "0.6", features = ["getrandom"] }
 shekyl-crypto-hash = { path = "../shekyl-crypto-hash" }

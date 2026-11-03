@@ -4771,6 +4771,8 @@ name = "shekyl-harness-wallet"
 version = "3.1.0"
 dependencies = [
  "curve25519-dalek",
+ "hkdf",
+ "sha2",
  "shekyl-crypto-pq",
  "shekyl-wire",
  "zeroize",
@@ -5091,6 +5093,7 @@ dependencies = [
  "shekyl-crypto-hash",
  "shekyl-crypto-pq",
  "shekyl-levin",
+ "shekyl-network",
  "shekyl-noise",
  "x25519-dalek",
  "zeroize",

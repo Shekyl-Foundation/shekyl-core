@@ -73,9 +73,6 @@ fn redact_create_wallet_response(v: &Value) -> Value {
             if obj.contains_key("mnemonic") {
                 obj.insert("mnemonic".into(), Value::String("[REDACTED]".into()));
             }
-            if obj.contains_key("raw_seed_hex") {
-                obj.insert("raw_seed_hex".into(), Value::String("[REDACTED]".into()));
-            }
         }
     }
     out

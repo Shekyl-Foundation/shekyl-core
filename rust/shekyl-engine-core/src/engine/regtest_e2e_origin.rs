@@ -98,7 +98,9 @@ impl StemSinkPair {
     /// height, and an unsynchronized node withholds a local origin instead
     /// of stemming it.
     /// Spawn the pair mining coinbase to `seed`'s primary address (N2).
-    pub(super) async fn start_for_seed(seed: &[u8; 64]) -> StemSinkPair {
+    pub(super) async fn start_for_seed(
+        seed: &[u8; shekyl_crypto_pq::account::SEED_BYTES],
+    ) -> StemSinkPair {
         let serial = serial_lock().lock_owned().await;
         let origin_p2p = RegtestDaemon::free_port();
         let sink_p2p = RegtestDaemon::free_port_excluding(&[origin_p2p]);
@@ -383,7 +385,7 @@ async fn restricted_listener_hides_a_transaction_this_node_has_not_broadcast() {
     const MINE_BATCH_BLOCKS: u64 = 10;
     const MAX_MINE_BATCHES: usize = 24;
 
-    let seed = [0x5eu8; shekyl_crypto_pq::account::MASTER_SEED_BYTES];
+    let seed = [0x5eu8; shekyl_crypto_pq::account::SEED_BYTES];
     let pair = StemSinkPair::start_for_seed(&seed).await;
     let origin = pair.origin();
     let restricted = HttpRpc::new(origin.restricted_url().to_owned())
@@ -628,7 +630,7 @@ async fn restricted_listener_names_a_transaction_this_node_shows() {
     const MINE_BATCH_BLOCKS: u64 = 10;
     const MAX_MINE_BATCHES: usize = 24;
 
-    let seed = [0x5fu8; shekyl_crypto_pq::account::MASTER_SEED_BYTES];
+    let seed = [0x5fu8; shekyl_crypto_pq::account::SEED_BYTES];
     let daemon = RegtestDaemon::start_for_seed_with_restricted_listener(&seed).await;
     let restricted = HttpRpc::new(daemon.restricted_url().to_owned())
         .await

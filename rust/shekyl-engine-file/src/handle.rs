@@ -171,9 +171,6 @@ pub struct CreateParams<'a> {
     /// caller-supplied `expected_network`, so a wallet bound to one
     /// chain can never be silently opened as another.
     pub network: Network,
-    /// `0x00 = BIP-39 mnemonic`, `0x01 = raw 32-byte hex`. Stored for
-    /// UX ("offer the same restore UI we used at creation").
-    pub seed_format: u8,
     /// FULL / VIEW_ONLY / HARDWARE_OFFLOAD. Envelope discriminates
     /// `cap_content` layout from this value.
     pub capability: &'a CapabilityContent<'a>,
@@ -185,7 +182,7 @@ pub struct CreateParams<'a> {
     /// Canonical 65-byte classical address — `version(1) || spend_pk(32)
     /// || view_pk(32)`. The envelope cross-checks this at open time
     /// against the address it would derive from `cap_content` under
-    /// the declared `(network, seed_format)`.
+    /// the declared network.
     pub expected_classical_address: &'a [u8; EXPECTED_CLASSICAL_ADDRESS_BYTES],
     /// Argon2id cost parameters. `KdfParams::default()` gives the
     /// V3.0 OWASP-memory-constrained profile.
@@ -398,7 +395,6 @@ impl WalletFile {
         let keys_bytes = seal_keys_file(
             params.password,
             params.network.code(),
-            params.seed_format,
             params.capability,
             params.creation_timestamp,
             params.restore_height_hint,
@@ -1241,14 +1237,14 @@ mod tests {
     /// orchestrator-level tests. End-to-end cryptographic correctness
     /// is covered by the envelope's own tests.
     struct Fixture {
-        master_seed: [u8; 64],
+        master_seed: [u8; 32],
         address: [u8; EXPECTED_CLASSICAL_ADDRESS_BYTES],
     }
 
     impl Fixture {
         fn new() -> Self {
             Self {
-                master_seed: [0x11; 64],
+                master_seed: [0x11; 32],
                 address: {
                     let mut a = [0u8; EXPECTED_CLASSICAL_ADDRESS_BYTES];
                     a[0] = 0x01; // version byte
@@ -1259,7 +1255,7 @@ mod tests {
 
         fn capability(&self) -> CapabilityContent<'_> {
             CapabilityContent::Full {
-                master_seed_64: &self.master_seed,
+                seed: &self.master_seed,
             }
         }
 
@@ -1291,7 +1287,6 @@ mod tests {
             base_path: base,
             password,
             network: TEST_NETWORK,
-            seed_format: 0x00,
             capability: cap,
             creation_timestamp: 0x6000_0000,
             restore_height_hint: 0,

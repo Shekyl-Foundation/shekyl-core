@@ -17,7 +17,7 @@
 //! (`Mainnet | Testnet | Stagenet`); the plan additionally calls out a
 //! `Fakechain` variant for regtest / dev. Adding `Fakechain` is a
 //! workspace-wide change (HRP tables, `NetworkSafetyConstants`,
-//! `DerivationNetwork`, wallet-file region-1 byte parse) and is
+//! `Network`, wallet-file region-1 byte parse) and is
 //! deliberately scheduled as a separate commit on this same Phase 1
 //! branch, so this commit's diff stays scoped to the wallet-core
 //! skeleton. See `docs/V3_WALLET_DECISION_LOG.md`.

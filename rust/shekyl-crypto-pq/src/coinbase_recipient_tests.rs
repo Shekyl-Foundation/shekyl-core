@@ -24,7 +24,7 @@ fn not_a_point() -> [u8; 32] {
 #[test]
 fn a_coinbase_pays_a_wallets_keys_and_its_x25519_is_the_wallets() {
     let seed = [0x99u8; MASTER_SEED_BYTES];
-    let blob = rederive_account(&seed, DerivationNetwork::Mainnet, SeedFormat::Bip39).unwrap();
+    let blob = rederive_account(&seed, Network::Mainnet).unwrap();
     assert_eq!(
         coinbase_recipient(
             blob.spend_pk.as_canonical_bytes(),
@@ -39,7 +39,7 @@ fn a_coinbase_pays_a_wallets_keys_and_its_x25519_is_the_wallets() {
 #[test]
 fn a_coinbase_recipient_is_refused_for_each_bad_key() {
     let seed = [0x99u8; MASTER_SEED_BYTES];
-    let blob = rederive_account(&seed, DerivationNetwork::Mainnet, SeedFormat::Bip39).unwrap();
+    let blob = rederive_account(&seed, Network::Mainnet).unwrap();
     let spend = *blob.spend_pk.as_canonical_bytes();
     let view = *blob.view_pk.as_canonical_bytes();
     assert_eq!(

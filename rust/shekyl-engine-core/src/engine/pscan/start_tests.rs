@@ -16,7 +16,7 @@ use super::*;
 
 use std::collections::BTreeMap;
 
-use shekyl_crypto_pq::account::MASTER_SEED_BYTES;
+use shekyl_crypto_pq::account::SEED_BYTES;
 use shekyl_engine_state::pscan_cursor::{PScanCursor, PSCAN_CURSOR_BLOCK, PSCAN_CURSOR_VERSION};
 use shekyl_engine_state::pscan_state::{
     PSCAN_STATE_BLOCK, PSCAN_STATE_VERSION, PSCAN_STATE_VERSION_KEYLESS_JOIN,
@@ -32,7 +32,7 @@ use crate::engine::{Credentials, EngineCreateParams};
 use crate::engine::test_support::dummy_daemon;
 
 /// This suite's deterministic seed (multiplier 7).
-fn fixed_seed() -> [u8; MASTER_SEED_BYTES] {
+fn fixed_seed() -> [u8; SEED_BYTES] {
     crate::engine::test_support::fixed_seed(7)
 }
 

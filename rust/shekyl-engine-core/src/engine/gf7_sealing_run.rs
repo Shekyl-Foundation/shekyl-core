@@ -252,10 +252,10 @@ fn wallet_seed(
     arm_tag: u64,
     run: usize,
     wallet: usize,
-) -> [u8; shekyl_crypto_pq::account::MASTER_SEED_BYTES] {
+) -> [u8; shekyl_crypto_pq::account::SEED_BYTES] {
     let mut state =
         0x6766_375f_7365_616c ^ (arm_tag << 48) ^ (ordinal(run) << 16) ^ ordinal(wallet);
-    let mut seed = [0u8; shekyl_crypto_pq::account::MASTER_SEED_BYTES];
+    let mut seed = [0u8; shekyl_crypto_pq::account::SEED_BYTES];
     for chunk in seed.chunks_mut(8) {
         let v = splitmix64(&mut state).to_le_bytes();
         chunk.copy_from_slice(&v[..chunk.len()]);

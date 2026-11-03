@@ -460,7 +460,7 @@ fn phantom_sweep_derivation_failure_leaves_state_untouched() {
 }
 
 use shekyl_address::Network;
-use shekyl_crypto_pq::account::MASTER_SEED_BYTES;
+use shekyl_crypto_pq::account::SEED_BYTES;
 use shekyl_engine_file::SafetyOverrides;
 use tempfile::tempdir;
 
@@ -469,7 +469,7 @@ use crate::engine::{Credentials, EngineCreateParams, OpenedEngine, SoloSigner};
 use crate::engine::test_support::dummy_daemon;
 
 /// This suite's deterministic seed (multiplier 7).
-fn fixed_seed() -> [u8; MASTER_SEED_BYTES] {
+fn fixed_seed() -> [u8; SEED_BYTES] {
     crate::engine::test_support::fixed_seed(7)
 }
 

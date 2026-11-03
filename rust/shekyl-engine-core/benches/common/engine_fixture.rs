@@ -181,7 +181,7 @@
 //! bench-function boundary moves only pointer-sized data.
 
 use shekyl_address::Network;
-use shekyl_crypto_pq::account::{SeedFormat, MASTER_SEED_BYTES};
+use shekyl_crypto_pq::account::SEED_BYTES;
 use shekyl_crypto_pq::wallet_envelope::KdfParams;
 use shekyl_engine_core::{
     CapabilityInput, Credentials, DaemonClient, Engine, EngineCreateParams, SoloSigner,
@@ -282,10 +282,7 @@ pub fn build_engine_fixture() -> (Box<Engine<SoloSigner>>, TempDir) {
         base_path: &base_path,
         credentials: &creds,
         network: Network::Stagenet,
-        capability: CapabilityInput::Full {
-            master_seed_64: &seed,
-            seed_format: SeedFormat::Bip39,
-        },
+        capability: CapabilityInput::Full { seed: &seed },
         creation_timestamp: 0,
         restore_height_hint: 0,
         kdf: KdfParams {
@@ -372,15 +369,15 @@ fn bench_runtime() -> &'static tokio::runtime::Runtime {
 #[allow(dead_code)]
 pub fn drop_fixture(_fixture: (Box<Engine<SoloSigner>>, TempDir)) {}
 
-/// Deterministic 64-byte master seed for the bench fixture.
+/// Deterministic 32-byte wallet seed for the bench fixture.
 ///
 /// Pattern: `byte[i] = (i & 0xff) * 7 mod 256`. Matches the shape used
 /// by the existing in-crate `lifecycle.rs::tests::fixed_seed` helper
 /// at the level of "deterministic, non-zero, non-trivial," without
 /// borrowing the helper directly (test surface is bounded; benches
 /// duplicate locally per §4.2 of the design doc).
-fn fixed_seed() -> [u8; MASTER_SEED_BYTES] {
-    let mut s = [0u8; MASTER_SEED_BYTES];
+fn fixed_seed() -> [u8; SEED_BYTES] {
+    let mut s = [0u8; SEED_BYTES];
     for (i, b) in s.iter_mut().enumerate() {
         *b = u8::try_from(i & 0xff).unwrap_or(0).wrapping_mul(7);
     }
@@ -590,7 +587,7 @@ const LOCAL_KEYS_BENCH_SEED: [u8; 32] = {
 /// (per the type's `ZeroizeOnDrop` discipline). No filesystem
 /// teardown needed. Panics if
 /// [`LocalKeys::from_test_seed`] panics (only on internal
-/// `generate_account_from_raw_seed` failure, which is deterministic
+/// `account_from_seed` failure, which is deterministic
 /// on a healthy build).
 #[cfg(feature = "bench-internals")]
 #[allow(dead_code)]

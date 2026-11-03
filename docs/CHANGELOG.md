@@ -27494,7 +27494,7 @@ production callers.
 - **`shekyl_account_public_address_check` argument-order mismatch
   between Rust definition and C-side declaration** (Track 0a CI
   triage, 2026-04-28). The Rust definition in
-  [`rust/shekyl-ffi/src/account_ffi.rs`](../rust/shekyl-ffi/src/account_ffi.rs)
+  `rust/shekyl-ffi/src/account_ffi.rs`
   takes `(pqc_pk_ptr, view_pk_ptr)`; the C header in
   [`src/shekyl/shekyl_ffi.h`](../src/shekyl/shekyl_ffi.h) declared
   `(view_pub_ptr, pqc_public_key_ptr)`, and the one C++ caller in

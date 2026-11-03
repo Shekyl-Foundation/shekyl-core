@@ -301,7 +301,7 @@ async fn activate_returns_genesis_frozen_identity() {
 
 // §10.1 robustness #3 — identity is deterministic across a respawn: a fresh
 // actor over a fresh derivation of the same slot projects byte-identical
-// identity. The runtime consumer of the `ARCHIVAL_P_DERIVE_V1` freeze.
+// identity. The runtime consumer of the `ARCHIVAL_P_DERIVE_V2` freeze.
 #[tokio::test]
 async fn identity_is_deterministic_across_respawn() {
     let first = {
@@ -344,8 +344,7 @@ async fn the_onion_credential_matches_the_pinned_derivation() {
 
         let seed = shekyl_crypto_pq::archival_p::derive_p_hs_id_seed(
             &super::test_fixtures::TEST_SEED,
-            shekyl_crypto_pq::account::DerivationNetwork::Mainnet,
-            shekyl_crypto_pq::account::SeedFormat::Bip39,
+            shekyl_crypto_pq::account::Network::Mainnet,
             slot,
         );
         let oracle = shekyl_tor_control_wallet::service::OnionIdentity::from_hs_id_seed(&seed);

@@ -1,0 +1,44 @@
+{
+  "_comment": [
+    "Tier-1/Tier-2 vectors for ARCHIVAL_P_DERIVE_V2: ARCHIVAL_P_DERIVE_V1's",
+    "labels and info strings (LABEL || 0x00 || p_slot_le32) under the salt",
+    "salt_for(net) = 'shekyl-master-derive-v2-' || 'shekyl/<network>', with",
+    "no seed format (NETWORK_IDENTITY.md NI-R7, NI-R10). Tier-1 pins the",
+    "per-label HKDF outputs, the hs_id public key on all four networks, and",
+    "the label/network/slot separation properties; Tier-2 pins whole",
+    "ArchivalPKeys bundles on all four networks plus p_canonical_id",
+    "(inline cSHAKE256). vectors_sha256_hex covers the exact on-disk bytes",
+    "of vectors.json (verify with `sha256sum vectors.json`).",
+    "Belongs on the aarch64 qemu lane: a divergent bit means an ARM user",
+    "cannot recover a bond.",
+    "",
+    "Oracles (rule 50): see oracle_independent and oracle_self_pinned.",
+    "The independent values are recomputed by",
+    "scripts/kat/address_derivation_v3_oracle.py (stdlib Python, RFC 5869",
+    "by hand), run in CI by docs-gates.yml."
+  ],
+  "derivation_version": "v2 (salt shekyl-master-derive-v2-shekyl/<network>)",
+  "fips203_pin": "=0.4.3",
+  "fn_dsa_pin": "=0.4.0",
+  "oracle_independent": [
+    "tier1 every single-output kind's out_hex (HKDF-SHA-512 per label)",
+    "tier1 hs_id_pubkey.out_hex (RFC 8032 keygen of the HKDF seed)",
+    "tier1 *_network_separation / *_label_separation out_a_hex / out_b_hex",
+    "tier2 spend_sk_hex, view_sk_hex (HKDF then reduction mod l)",
+    "tier2 spend_pk_hex, view_pk_hex (Ed25519 base-point multiplication)",
+    "tier2 x25519_pk_hex (Edwards-to-Montgomery map of view_pk)"
+  ],
+  "oracle_self_pinned": [
+    "tier1 slot_separation (hybrid Ed25519 + ML-DSA-65 public keys)",
+    "tier2 ml_kem_ek_hex, ml_kem_dk_hex (fips203 keygen)",
+    "tier2 hybrid_sign_pk_hex, hybrid_sign_sk_hex, bond_spend_pk_hex, bond_spend_sk_hex (ML-DSA-65 halves)",
+    "tier2 receipt_sign_pk_hex (FN-DSA-1024 half)",
+    "tier2 p_canonical_id_hex (cSHAKE256 of the hybrid identity key; cross-checked against shekyl-archival-retention's id.rs, not against an outside implementation)"
+  ],
+  "regeneration_command": "SHEKYL_PINNED_REGEN_DECISION=\"YYYY-MM-DD <rationale>\" cargo test -p shekyl-crypto-pq --test kat_archival_p_derive_v2 kat_regenerate_archival_p_derive_v2 -- --ignored --nocapture",
+  "regeneration_decision": "2026-11-03 One secret, one derivation (NI-R7, NI-R10)",
+  "regeneration_note": "Re-recorded from ARCHIVAL_P_DERIVE_V1 by the V3_WALLET_DECISION_LOG.md entry of 2026-11-03 (One secret, one derivation): the labels are unchanged; the salt drops the seed format and binds the network's name.",
+  "tier1_count": 24,
+  "tier2_count": 5,
+  "vectors_sha256_hex": "f63efd68a76df05481e1190ca1bcaca52d06f90c6c4e692245055cd5823174d1"
+}

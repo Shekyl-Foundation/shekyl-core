@@ -1875,6 +1875,7 @@ fn from_envelope_error(e: &WalletEnvelopeError, whole: &WalletFileError) -> Wall
         | E::CapContentLenMismatch { .. }
         | E::StateSeedBlockMismatch => WalletRpcError::WalletFileCorrupt,
         E::FormatVersionTooNew { .. }
+        | E::FormatVersionRetired { .. }
         | E::UnsupportedKdfAlgo(_)
         | E::UnsupportedWrapCount(_)
         | E::UnknownCapabilityMode(_) => WalletRpcError::WalletFileVersionUnsupported,
@@ -1931,7 +1932,6 @@ fn from_key_error(err: &KeyError) -> WalletRpcError {
             tracing::warn!("keys file public material does not match its seed");
             WalletRpcError::WalletFileCorrupt
         }
-        KeyError::UnsupportedDerivationPair => WalletRpcError::WalletFileVersionUnsupported,
         KeyError::Primitive { detail } => internal_detail("key derivation primitive", detail),
     }
 }
@@ -3182,6 +3182,13 @@ mod tests {
                 WalletFileError::Envelope(WalletEnvelopeError::FormatVersionTooNew {
                     got: 9,
                     max: 1,
+                }),
+                WalletRpcErrorCode::WalletFileVersionUnsupported,
+            ),
+            (
+                WalletFileError::Envelope(WalletEnvelopeError::FormatVersionRetired {
+                    got: 1,
+                    current: 2,
                 }),
                 WalletRpcErrorCode::WalletFileVersionUnsupported,
             ),

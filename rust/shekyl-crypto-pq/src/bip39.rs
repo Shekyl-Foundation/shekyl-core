@@ -3,21 +3,20 @@
 // All rights reserved.
 // BSD-3-Clause
 
-//! BIP-39 mnemonic handling for Shekyl mainnet and stagenet wallets.
+//! BIP-39 mnemonic handling: the spelling of a Shekyl wallet's seed.
 //!
-//! Shekyl uses BIP-39 only as an **entropy encoding**: the 24-word mnemonic is
-//! how users back up their wallet on paper. It is converted to a 64-byte
-//! PBKDF2-HMAC-SHA512 output (2048 iterations, salt = `"mnemonic" || passphrase`),
-//! and that output is then fed through the `seed_normalize` primitive to
-//! produce the 64-byte `master_seed` from which all keys are derived. See
-//! `docs/POST_QUANTUM_CRYPTOGRAPHY.md` §"Key Derivation Pipeline".
+//! Shekyl uses BIP-39 only as an **entropy encoding** (`NETWORK_IDENTITY.md`
+//! NI-R7): the 24 words are how a wallet's 32-byte seed is written down,
+//! on every network. The words decode to the 32 bytes and nothing else;
+//! there is no passphrase and no PBKDF2 step, so the words and the bytes
+//! are one secret. See `docs/POST_QUANTUM_CRYPTOGRAPHY.md` §"Key Derivation
+//! Pipeline".
 //!
 //! # Why we wrap a crate rather than inline the wordlist
 //!
-//! BIP-39 correctness hinges on three easy-to-mis-implement details: the
-//! 2048-word English wordlist, SHA-256 entropy checksum placement in the
-//! final 11-bit word, and Unicode NFKD normalisation of the passphrase. The
-//! `bip39` crate from rust-bitcoin gets all three right and is widely
+//! BIP-39 correctness hinges on two easy-to-mis-implement details: the
+//! 2048-word English wordlist and SHA-256 entropy checksum placement in the
+//! final 11-bit word. The `bip39` crate from rust-bitcoin gets all three right and is widely
 //! deployed. Rather than re-implement them here, we depend on the crate and
 //! pin its correctness with a Tier-3 KAT that matches the canonical BIP-39
 //! English-wordlist SHA-256 against a constant in this file. Any upstream
@@ -29,9 +28,8 @@
 //!   additional KATs and a language selector in the wallet file; neither is
 //!   in scope for v1.
 //! - Only 24-word mnemonics are supported (32 bytes of entropy plus an
-//!   8-bit checksum). Shorter lengths are rejected at wallet-creation time.
-//! - Passphrase defaults to the empty string. Opt-in only; see
-//!   `docs/USER_GUIDE.md` for the footgun discussion.
+//!   8-bit checksum), at creation and at import: 12 words is 128 bits, 64
+//!   bits of security under Grover, below Shekyl's post-quantum floor.
 
 use bip39::{Language, Mnemonic};
 use zeroize::Zeroizing;
@@ -44,13 +42,6 @@ pub const SHEKYL_MNEMONIC_WORD_COUNT: usize = 24;
 
 /// Shekyl mandates 32-byte entropy (the `d` of a 24-word mnemonic).
 pub const SHEKYL_BIP39_ENTROPY_BYTES: usize = 32;
-
-/// PBKDF2-HMAC-SHA512 iteration count per BIP-39 §Seed-derivation.
-pub const BIP39_PBKDF2_ITERATIONS: u32 = 2048;
-
-/// Length of the PBKDF2-HMAC-SHA512 output that serves as the pre-normalised
-/// seed. 64 bytes per BIP-39.
-pub const BIP39_PBKDF2_OUTPUT_LEN: usize = 64;
 
 /// Convert 32 bytes of entropy into a 24-word BIP-39 English mnemonic.
 ///
@@ -87,54 +78,10 @@ pub fn validate(words: &str) -> bool {
         && word_count(words) == SHEKYL_MNEMONIC_WORD_COUNT
 }
 
-/// Convert a validated 24-word BIP-39 English mnemonic plus an optional
-/// passphrase into the 64-byte PBKDF2-HMAC-SHA512 output specified by
-/// BIP-39 §Seed-derivation.
-///
-/// Formally:
-///
-/// ```text
-/// out = PBKDF2-HMAC-SHA512(
-///         P  = NFKD(mnemonic).as_bytes(),
-///         S  = b"mnemonic" || NFKD(passphrase).as_bytes(),
-///         c  = 2048,
-///         dkLen = 64,
-///       )
-/// ```
-///
-/// The output **is not** the Shekyl `master_seed_64` — it is the input to
-/// `seed_normalize`, which produces the 64-byte format-independent master
-/// seed. Keeping the two steps separate ensures that changing the mnemonic
-/// length (should we ever add 12- or 18-word support) does not shift the
-/// downstream derivation.
-///
-/// Passphrase defaults to an empty string at the call site, matching the
-/// "no passphrase" default we enforce in the wallet UI. See
-/// `docs/USER_GUIDE.md` for the footgun discussion about enabling one.
-pub fn mnemonic_to_pbkdf2_seed(
-    words: &str,
-    passphrase: &str,
-) -> Result<Zeroizing<[u8; BIP39_PBKDF2_OUTPUT_LEN]>, CryptoError> {
-    let mnemonic = Mnemonic::parse_in(Language::English, words)
-        .map_err(|e| CryptoError::InvalidInput(format!("BIP-39 parse: {e}")))?;
-
-    if mnemonic.word_count() != SHEKYL_MNEMONIC_WORD_COUNT {
-        return Err(CryptoError::InvalidInput(format!(
-            "Shekyl requires 24-word mnemonics; got {}",
-            mnemonic.word_count()
-        )));
-    }
-
-    let seed: [u8; 64] = mnemonic.to_seed(passphrase);
-    Ok(Zeroizing::new(seed))
-}
-
 /// Recover the 32-byte BIP-39 entropy from a validated 24-word English
 /// mnemonic phrase.
 ///
-/// BIP-39 is structurally one-way only on the phrase-to-PBKDF2-seed side
-/// (`mnemonic_to_pbkdf2_seed` above); the phrase-to-entropy direction is a
-/// reversible bit-unpacking of the 264-bit word stream into 256 entropy bits
+/// The phrase-to-entropy direction is a reversible bit-unpacking of the 264-bit word stream into 256 entropy bits
 /// plus an 8-bit checksum. This entry point is the Shekyl-side primitive
 /// behind the `shekyl_bip39_mnemonic_to_entropy` FFI added by the
 /// Electrum-words removal Phase 1 atomic commit per
@@ -272,33 +219,9 @@ mod tests {
         assert_eq!(&back[..32], &entropy[..]);
     }
 
-    #[test]
-    fn pbkdf2_seed_is_64_bytes_and_deterministic() {
-        let entropy = [0x11u8; 32];
-        let words = mnemonic_from_entropy(&entropy).unwrap();
-        let s1 = mnemonic_to_pbkdf2_seed(&words, "").unwrap();
-        let s2 = mnemonic_to_pbkdf2_seed(&words, "").unwrap();
-        assert_eq!(s1.as_slice(), s2.as_slice());
-        assert_eq!(s1.len(), 64);
-    }
-
-    #[test]
-    fn pbkdf2_seed_differs_with_and_without_passphrase() {
-        let entropy = [0xAAu8; 32];
-        let words = mnemonic_from_entropy(&entropy).unwrap();
-        let a = mnemonic_to_pbkdf2_seed(&words, "").unwrap();
-        let b = mnemonic_to_pbkdf2_seed(&words, "TREZOR").unwrap();
-        assert_ne!(a.as_slice(), b.as_slice());
-    }
-
     /// BIP-39 official test vector #1 from
     /// https://github.com/trezor/python-mnemonic/blob/master/vectors.json
-    /// (entropy = 32 × 0x00, passphrase = "TREZOR").
-    ///
-    /// We assert mnemonic-word equivalence here. The PBKDF2 output for this
-    /// vector is additionally pinned in the Tier-3 KAT fixture
-    /// `BIP39_PBKDF2_V1_KAT.json`, which avoids the indentation-in-string-
-    /// literal hazard of embedding 128 hex chars inline.
+    /// (entropy = 32 × 0x00): the words the entropy encodes.
     #[test]
     fn bip39_official_vector_zero_entropy_words_match() {
         let entropy = [0u8; 32];
@@ -324,77 +247,6 @@ mod tests {
         assert!(!validate(&truncated));
     }
 
-    /// BIP-0039 §A mandates NFKD Unicode normalisation of the passphrase
-    /// before it is consumed as part of the PBKDF2-HMAC-SHA512 salt
-    /// (`b"mnemonic" || NFKD(passphrase)`). Two byte-different but
-    /// logically-equivalent Unicode forms of the same passphrase must
-    /// therefore yield byte-identical seeds; if they do not, the wallet
-    /// derived under one form is unrecoverable from any spec-compliant
-    /// BIP-39 implementation given only the other form.
-    ///
-    /// The load-bearing properties this test enforces:
-    ///
-    /// 1. The `bip39` crate's `unicode-normalization` feature is enabled
-    ///    in the consumer build (per `Cargo.toml` failure-mode #1). If
-    ///    the feature is somehow off, `Mnemonic::to_seed` is not even
-    ///    present in the API; this test would fail to compile.
-    /// 2. Our consumer site continues to call the auto-NFKD-applying
-    ///    entry point (`to_seed`) rather than the
-    ///    caller-pre-normalises variant (`to_seed_normalized`) (per
-    ///    `Cargo.toml` failure-mode #2). A silent migration to the
-    ///    non-normalising entry point without a compensating NFKD
-    ///    pre-pass would cause this test to fail with two distinct
-    ///    seeds.
-    /// 3. The upstream NFKD implementation actually normalises
-    ///    `\u{00E9}` and `e\u{0301}` to the same byte sequence (the
-    ///    canonical decomposition). A dependency swap or upstream
-    ///    regression that broke this would fail this test.
-    ///
-    /// The mnemonic phrase is held constant (English wordlist, ASCII-only,
-    /// so NFC == NFKD trivially for the phrase itself). The load-bearing
-    /// surface is the passphrase, which is arbitrary user-supplied
-    /// Unicode and is therefore the dimension where NFKD makes the
-    /// difference between recoverable and unrecoverable wallets.
-    #[test]
-    fn nfkd_passphrase_normalization() {
-        let entropy = [0x42u8; 32];
-        let phrase = mnemonic_from_entropy(&entropy).unwrap();
-
-        // "café" in two Unicode-equivalent forms:
-        //   NFC:  c, a, f, U+00E9 (é precomposed)            — 5 bytes
-        //   NFKD: c, a, f, e, U+0301 (combining acute accent) — 6 bytes
-        // Both must NFKD-normalise to the same byte sequence
-        // (`c, a, f, e, U+0301`).
-        let pw_nfc = "caf\u{00E9}";
-        let pw_nfkd = "cafe\u{0301}";
-
-        assert_ne!(
-            pw_nfc.as_bytes(),
-            pw_nfkd.as_bytes(),
-            "test precondition: the two passphrase forms must be \
-             byte-different, otherwise the test is vacuous and \
-             would not detect a missing NFKD pass"
-        );
-
-        let seed_nfc = mnemonic_to_pbkdf2_seed(&phrase, pw_nfc).unwrap();
-        let seed_nfkd = mnemonic_to_pbkdf2_seed(&phrase, pw_nfkd).unwrap();
-
-        assert_eq!(
-            seed_nfc.as_slice(),
-            seed_nfkd.as_slice(),
-            "BIP-0039 §A NFKD normalisation of the passphrase is not \
-             being applied. Either the `bip39` crate's \
-             `unicode-normalization` feature is disabled in this build, \
-             or the consumer in `shekyl-crypto-pq/src/bip39.rs` has \
-             migrated from `to_seed` to `to_seed_normalized` without \
-             adding an NFKD pre-pass. Either way, wallets created with \
-             non-ASCII passphrases are non-recoverable from \
-             spec-compliant BIP-39 implementations. See \
-             `Cargo.toml`'s `bip39` dependency comment and \
-             `ELECTRUM_WORDS_REMOVAL.md` §4.7 #6 for the discipline."
-        );
-    }
-
     /// `entropy_from_mnemonic` is the BIP-39 phrase-to-entropy primitive
     /// the wallet keyfile relies on for the new `m_bip39_entropy` field
     /// (per `ELECTRUM_WORDS_REMOVAL.md` §4.10). The round-trip property is
@@ -407,7 +259,7 @@ mod tests {
     #[test]
     fn entropy_from_mnemonic_round_trip() {
         // Pick three entropy patterns: all-zero (BIP-39 vector #1's input),
-        // all-0x42 (matches `mnemonic_to_pbkdf2_seed` test fixtures), and
+        // all-0x42, and
         // a non-trivial bit pattern that won't accidentally agree with
         // either extreme.
         for &entropy_byte in &[0x00u8, 0x42u8, 0xC3u8] {

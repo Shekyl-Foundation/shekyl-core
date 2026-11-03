@@ -3,10 +3,10 @@
 // All rights reserved.
 // BSD-3-Clause
 
-//! ADDRESS_DERIVATION_V2 corpus freeze tripwire.
+//! ADDRESS_DERIVATION_V3 corpus freeze tripwire.
 //!
 //! The pinned SHA-256 digest covers the exact on-disk bytes of
-//! `docs/test_vectors/ADDRESS_DERIVATION_V2/manifest.json` followed by
+//! `docs/test_vectors/ADDRESS_DERIVATION_V3/manifest.json` followed by
 //! `vectors.json` (no separator). Any deliberate corpus rotation must
 //! update both files and this constant via the KAT regenerator.
 //!
@@ -19,15 +19,15 @@ use sha2::{Digest, Sha256};
 use crate::CryptoError;
 
 const MANIFEST_JSON: &str =
-    include_str!("../../../docs/test_vectors/ADDRESS_DERIVATION_V2/manifest.json");
+    include_str!("../../../docs/test_vectors/ADDRESS_DERIVATION_V3/manifest.json");
 const VECTORS_JSON: &str =
-    include_str!("../../../docs/test_vectors/ADDRESS_DERIVATION_V2/vectors.json");
+    include_str!("../../../docs/test_vectors/ADDRESS_DERIVATION_V3/vectors.json");
 
 /// SHA-256 over the concatenated on-disk corpus files (`manifest.json` then
 /// `vectors.json`). Rotated only by a deliberate derivation-version bump.
 pub const ADDRESS_DERIVATION_MANIFEST_HASH: [u8; 32] = [
-    0x2b, 0xbf, 0x03, 0xe3, 0xf3, 0xce, 0xbb, 0xd7, 0xdf, 0x0e, 0x2a, 0xd6, 0xdb, 0x72, 0x3d, 0x19,
-    0xf2, 0xe7, 0x6c, 0x64, 0xc2, 0x93, 0xe2, 0x97, 0xbc, 0xcd, 0x4c, 0xc9, 0x9f, 0x3d, 0xff, 0x51,
+    0x13, 0x9d, 0xd7, 0x58, 0x27, 0x0a, 0x44, 0xd7, 0xe6, 0xdf, 0x16, 0xb8, 0x2e, 0xb5, 0x1a, 0x78,
+    0x53, 0x9e, 0x6d, 0xe2, 0x96, 0x66, 0xd7, 0xbe, 0x8e, 0x30, 0xa0, 0x2c, 0x41, 0x1e, 0x04, 0xea,
 ];
 
 /// Recompute the corpus digest from the embedded file bytes.
@@ -53,7 +53,7 @@ pub fn address_derivation_manifest_self_check() -> Result<(), CryptoError> {
         Ok(())
     } else {
         Err(CryptoError::InvalidInput(
-            "ADDRESS_DERIVATION_V2 corpus hash mismatch (manifest/vectors drift)".into(),
+            "ADDRESS_DERIVATION_V3 corpus hash mismatch (manifest/vectors drift)".into(),
         ))
     }
 }

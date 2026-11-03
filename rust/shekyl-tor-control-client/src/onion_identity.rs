@@ -15,7 +15,7 @@
 //! construction. The seed itself comes from
 //! `shekyl_crypto_pq::archival_p::derive_p_hs_id_seed` — the GF-9 serving
 //! label, network-scoped and `p_slot`-bound, frozen under
-//! `ARCHIVAL_P_DERIVE_V1` — and that derivation stays in `shekyl-crypto-pq`
+//! `ARCHIVAL_P_DERIVE_V2` — and that derivation stays in `shekyl-crypto-pq`
 //! on the **wallet** side of the custody boundary.
 //!
 //! # The custody boundary is the API (`ARCHIVAL_CHALLENGE_MECHANISM.md` §7.2(iii))
@@ -234,7 +234,7 @@ mod tests {
     /// any drift in expansion, checksum, or alphabet fails byte-exactly
     /// here instead of surfacing as an unreachable service in the field.
     /// (The seed→pubkey half of this pipeline is additionally pinned
-    /// cross-arch by `kat_archival_p_derive_v1`'s `hs_id_pubkey` vectors in
+    /// cross-arch by `kat_archival_p_derive_v2`'s `hs_id_pubkey` vectors in
     /// `shekyl-crypto-pq`; the live tor cross-check is the SP-T3 spike's
     /// `bring_up_with_pow` published-vs-derived fail-stop.)
     #[test]

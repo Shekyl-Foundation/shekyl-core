@@ -37,7 +37,7 @@ use crate::engine::{
     Credentials, DaemonClient, Engine, IoError, RefreshError, RefreshOptions, SoloSigner,
 };
 use crate::scan::ScanResult;
-use shekyl_crypto_pq::account::MASTER_SEED_BYTES;
+use shekyl_crypto_pq::account::SEED_BYTES;
 use shekyl_engine_state::{BlockchainTip, LedgerBlock, ReorgBlocks};
 use shekyl_types::{BlockHash, BlockHeight};
 
@@ -104,7 +104,7 @@ fn make_wallet() -> EngineFixture {
     let tmp = tempfile::tempdir().expect("tempdir");
     let base_path = tmp.path().join("wallet");
     let creds = Credentials::password_only(TEST_PASSWORD);
-    let mut seed = [0u8; MASTER_SEED_BYTES];
+    let mut seed = [0u8; SEED_BYTES];
     for (i, b) in seed.iter_mut().enumerate() {
         *b = u8::try_from(i & 0xff).unwrap_or(0).wrapping_mul(11);
     }

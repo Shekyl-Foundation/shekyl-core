@@ -16,7 +16,7 @@ use shekyl_archival_retention::{
     HoldingsDescriptor, HoldingsKind, MembershipOnlyBacking, ShardSet, ShardWorkEntry,
     WorkEpochClaim,
 };
-use shekyl_crypto_pq::account::{DerivationNetwork, SeedFormat, MASTER_SEED_BYTES};
+use shekyl_crypto_pq::account::{Network, MASTER_SEED_BYTES};
 use shekyl_crypto_pq::archival_p::{derive_archival_p_keys, ArchivalPKeys};
 use shekyl_crypto_pq::kem::HybridKemPublicKey;
 use shekyl_crypto_pq::multisig::{SINGLE_KEY_CANONICAL_LEN, SINGLE_SIG_CANONICAL_LEN};
@@ -31,8 +31,7 @@ use crate::engine::pscan::persona_scanner::guaranteed_scanner_for_persona;
 const SEED: [u8; MASTER_SEED_BYTES] = [0x07u8; MASTER_SEED_BYTES];
 
 fn persona(slot: u32) -> ArchivalPKeys {
-    derive_archival_p_keys(&SEED, DerivationNetwork::Fakechain, SeedFormat::Raw32, slot)
-        .expect("derive a test persona")
+    derive_archival_p_keys(&SEED, Network::Regtest, slot).expect("derive a test persona")
 }
 
 /// The cleartext canonical id the way an on-chain bond-post carries it.

@@ -119,9 +119,8 @@ fn mine_one(node: &Node, above: u64) -> BlockHash {
 }
 /// A full address on `network`, from a fixed seed's keys.
 fn mining_address(network: shekyl_address::Network) -> String {
-    use shekyl_crypto_pq::account::{rederive_account, DerivationNetwork, SeedFormat};
-    let blob = rederive_account(&[0x5a; 64], DerivationNetwork::Mainnet, SeedFormat::Bip39)
-        .expect("the keys");
+    use shekyl_crypto_pq::account::{rederive_account, Network};
+    let blob = rederive_account(&[0x5a; 64], Network::Mainnet).expect("the keys");
     shekyl_address::ShekylAddress::new(
         network,
         *blob.spend_pk.as_canonical_bytes(),

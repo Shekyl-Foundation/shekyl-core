@@ -145,8 +145,8 @@
 1	shekyl/chain-digest/v0/chain	rust/shekyl-chain-store/src/digest_v0.rs	CHAIN_CUSTOMIZATION	shekyl-live		DRS-P0d height-ordered chain component
 1	shekyl/chain-digest/v0/spent-elem	rust/shekyl-chain-store/src/digest_v0.rs	SPENT_ELEM_CUSTOMIZATION	shekyl-live		DRS-P0d spent-key XOR leaf
 1	shekyl/chain-store/undo-log/post-image-v1	rust/shekyl-chain-store/src/codec/undo.rs	POST_IMAGE_DST	shekyl-live		S-CHAIN-W (DRS-E1 inc 3): cSHAKE256-32 post-image digest of the value a journaled write left under its key; replay compares it before counting an inverse reversed (SI-6 exact). Part of the undo_log row layout (SCHEMA_VERSION 2)
-1	shekyl/p2p-wire-prefix-v1	rust/shekyl-p2p-transport/src/prefix.rs	WIRE_PREFIX_DST	shekyl-live		PWD-T5: first 8 bytes of cSHAKE256(S = this customization, X = network_id). Used only when --clearnet-transport-encrypt is on; the default plaintext path still starts with LEVIN_SIGNATURE
-1	shekyl/p2p-network-id-v1	rust/shekyl-p2p-transport/src/prefix.rs	NETWORK_ID_DST	shekyl-live		first 16 bytes of cSHAKE256(S = this customization, X = genesis block hash). The handshake id; a regenesis rotates it because the hash moves
+1	shekyl/p2p-wire-prefix-v1	rust/shekyl-network/src/lib.rs	WIRE_PREFIX_DST	shekyl-live		PWD-T5: first 8 bytes of cSHAKE256(S = this customization, X = network_id). Used only when --clearnet-transport-encrypt is on; the default plaintext path still starts with LEVIN_SIGNATURE
+1	shekyl/p2p-network-id-v1	rust/shekyl-network/src/lib.rs	NETWORK_ID_DST	shekyl-live		first 16 bytes of cSHAKE256(S = this customization, X = genesis block hash). The handshake id; a regenesis rotates it because the hash moves
 1	shekyl/rpc-rendezvous-name-v1	rust/shekyl-rpc-channel/src/lib.rs	RENDEZVOUS_NAME_DST	shekyl-live		RT-O10/RT-O14: first 12 bytes of cSHAKE256(S = this customization, X = network_id || instance label). The name a daemon's local rendezvous is found under, so an instance name never reaches a path
 1	shekyl/rpc-static-fingerprint-v1	rust/shekyl-rpc-channel/src/lib.rs	STATIC_FINGERPRINT_DST	shekyl-live		RT-O14: cSHAKE256(S = this customization, X = X25519 public key || ML-KEM-768 encapsulation key), 32 bytes. The identity a daemon enrols an RPC client under
 1	shekyl/bp-plus-batch-weights-v1	rust/shekyl-bulletproofs/src/derived.rs	BATCH_WEIGHTS_CUSTOMIZATION	shekyl-live		2026-10-15 (CEN-H19, ruling R3): the seed of a Bulletproof+ batch verify's weights — cSHAKE256(label, n_le4 ‖ per entry: len_le4 ‖ proof ‖ m_le4 ‖ C_1 ‖ … ‖ C_m)[..32] over every (proof, commitments) in the batch in block order (transaction order, then proof order), seeding the ChaCha20Rng the verifier draws one weight per proof from; computed before any proof is accumulated. The whole block is the batch (shekyl-chain-rules H19 fold); the submit engine verifies a batch of one; a subset is never verified under a larger batch's seed (CHAIN_RULES_CRATE.md §4.6)
@@ -156,11 +156,11 @@
 # ── Mechanism 2 — HKDF salt + info ───────────
 # distinctness key = salt|info. The three shared infos (spend/view/kem) are
 # legitimately distinct derivations: const site (account.rs, composed salt_for)
-# vs inline SeedDerivation (kem.rs, salt=shekyl-master-derive-v1). Keyed so.
+# vs the harness fixture_expand (shekyl-harness-wallet, salt=shekyl-master-derive-v1). Keyed so.
 2	shekyl-kem-v1	rust/shekyl-crypto-pq/src/kem.rs	KEM_DOMAIN_SALT	shekyl-live	salt:shekyl-kem-v1	salt
 2	shekyl-seed-normalize-v1	rust/shekyl-crypto-pq/src/account.rs	SEED_NORMALIZE_SALT	shekyl-live	salt:shekyl-seed-normalize-v1	salt
-2	shekyl-master-derive-v1	rust/shekyl-crypto-pq/src/kem.rs	HKDF_SALT_MASTER_DERIVE	shekyl-live	salt:shekyl-master-derive-v1	salt
-2	shekyl-master-derive-v1-	rust/shekyl-crypto-pq/src/account.rs	(salt_for prefix)	shekyl-live	salt:shekyl-master-derive-v1-	salt; strict prefix of HKDF_SALT_MASTER_DERIVE, disambiguated by trailing hyphen + composed network/seed-kind suffix
+2	shekyl-master-derive-v1	rust/shekyl-harness-wallet/src/lib.rs	FIXTURE_DERIVE_SALT	test-only	salt:shekyl-master-derive-v1	salt; the harness fixture wallet's fixed derivation (NI-R7: not a wallet's)
+2	shekyl-master-derive-v2-	rust/shekyl-crypto-pq/src/account.rs	MASTER_DERIVE_SALT_PREFIX	shekyl-live	salt:shekyl-master-derive-v2-	salt prefix; composed with the network's tag (salt_for, NI-R10)
 2	shekyl-output-derive-v1	rust/shekyl-crypto-pq/src/derivation.rs	HKDF_SALT_OUTPUT_DERIVE	shekyl-live	salt:shekyl-output-derive-v1	salt
 2	shekyl-view-tag-prefilter-v1	rust/shekyl-crypto-pq/src/derivation.rs	HKDF_SALT_VIEW_TAG_PREFILTER	shekyl-live	salt:shekyl-view-tag-prefilter-v1	salt
 2	shekyl-output-kem-v1	rust/shekyl-crypto-pq/src/derivation.rs	SALT_KEM_DERIVE_V1	shekyl-live	salt:shekyl-output-kem-v1	salt
@@ -168,9 +168,9 @@
 2	shekyl-ed25519-spend	rust/shekyl-crypto-pq/src/account.rs	SPEND_INFO	shekyl-live	salt_for|shekyl-ed25519-spend	info; salt=composed salt_for
 2	shekyl-ed25519-view	rust/shekyl-crypto-pq/src/account.rs	VIEW_INFO	shekyl-live	salt_for|shekyl-ed25519-view	info; salt=composed salt_for
 2	shekyl-ml-kem-768	rust/shekyl-crypto-pq/src/account.rs	KEM_INFO	shekyl-live	salt_for|shekyl-ml-kem-768	info; salt=composed salt_for
-2	shekyl-ed25519-spend	rust/shekyl-crypto-pq/src/kem.rs	(SeedDerivation inline)	shekyl-live	shekyl-master-derive-v1|shekyl-ed25519-spend	info; distinct-by-salt from account.rs SPEND_INFO
-2	shekyl-ed25519-view	rust/shekyl-crypto-pq/src/kem.rs	(SeedDerivation inline)	shekyl-live	shekyl-master-derive-v1|shekyl-ed25519-view	info; distinct-by-salt from account.rs VIEW_INFO
-2	shekyl-ml-kem-768	rust/shekyl-crypto-pq/src/kem.rs	(SeedDerivation inline)	shekyl-live	shekyl-master-derive-v1|shekyl-ml-kem-768	info; distinct-by-salt from account.rs KEM_INFO
+2	shekyl-ed25519-spend	rust/shekyl-harness-wallet/src/lib.rs	(fixture_expand inline)	test-only	shekyl-master-derive-v1|shekyl-ed25519-spend	info; harness fixture; distinct-by-salt from account.rs SPEND_INFO
+2	shekyl-ed25519-view	rust/shekyl-harness-wallet/src/lib.rs	(fixture_expand inline)	test-only	shekyl-master-derive-v1|shekyl-ed25519-view	info; harness fixture; distinct-by-salt from account.rs VIEW_INFO
+2	shekyl-ml-kem-768	rust/shekyl-harness-wallet/src/lib.rs	(fixture_expand inline)	test-only	shekyl-master-derive-v1|shekyl-ml-kem-768	info; harness fixture; distinct-by-salt from account.rs KEM_INFO
 2	shekyl-output-x	rust/shekyl-crypto-pq/src/derivation.rs	LABEL_OUTPUT_X	shekyl-live	shekyl-output-derive-v1|shekyl-output-x	info
 2	shekyl-output-y	rust/shekyl-crypto-pq/src/derivation.rs	LABEL_OUTPUT_Y	shekyl-live	shekyl-output-derive-v1|shekyl-output-y	info
 2	shekyl-output-mask	rust/shekyl-crypto-pq/src/derivation.rs	LABEL_OUTPUT_MASK	shekyl-live	shekyl-output-derive-v1|shekyl-output-mask	info

@@ -6804,3 +6804,42 @@ only by this daemon's own bundles until 4b, and rule 23's falsifier guards
 the connect path, which the queue is not.
 
 ---
+
+## 2026-11-03 — One secret, one derivation: a wallet is 32 bytes on every network, salted by the network's name
+
+**Decision** (Rick, `NETWORK_IDENTITY.md` NI-R7 and NI-R10). A wallet's
+secret is 32 bytes on every network, written as BIP-39's 24 words. The
+words decode to the 32 bytes and nothing else: no 12-word option, not
+even on import, and no passphrase, so no PBKDF2 step. Key derivation runs
+`normalize_seed(seed)` and then HKDF under the salt
+`shekyl-master-derive-v2-` ‖ the network's tag (`shekyl/<network>`). The
+seed format leaves the derivation salt and the wallet file; the keys file
+stores the 32-byte seed (format `0x02`), so a wallet can always show its
+words and an import round-trips. A `0x01` file is refused with its
+reason, never reinterpreted.
+
+**Why.**
+- *One pathway for every network* (NI-R4). Mainnet and stagenet derived
+  from BIP-39's PBKDF2 output, testnet and regtest from raw bytes, through
+  separate code: the test networks exercised a wallet path mainnet does
+  not run.
+- *24 words only.* 12 words is 128 bits, 64 bits of security under
+  Grover, below the post-quantum floor.
+- *No passphrase.* Its PBKDF2 stretch is weak, and the wallet file has
+  its own encryption.
+- *The network's name, not its id* (NI-R10). The genesis pays addresses
+  this derivation produces, and the network id is a hash of the genesis,
+  so the id cannot salt the keys the genesis pays. The name exists before
+  genesis, and genesis commits to it in its coinbase. The same 32 bytes
+  on two networks still give unrelated keys.
+
+**Consequences.** Every key-derivation vector is re-recorded:
+`ADDRESS_DERIVATION_V2` becomes `ADDRESS_DERIVATION_V3` and
+`ARCHIVAL_P_DERIVE_V1` becomes `ARCHIVAL_P_DERIVE_V2`; the keys-file
+vectors move to `WALLET_FILE_FORMAT_V2`, with the `V1` file kept as the
+refused input. Addresses derived from an existing seed move, mainnet's
+genesis recipients included; their custodians re-derive at the genesis
+ceremony (NI-R11). The wallet RPC returns the 24 words on every network
+and no longer a raw seed. Raw 32-byte seeds remain only as harness input.
+
+---

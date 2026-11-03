@@ -223,7 +223,7 @@ rand_chacha = "0.3"
 # that feature, and a separate integration-test crate cannot see the in-crate
 # `cfg(test)` gate. Standard cargo idiom for feature-enabling one's own tests.
 shekyl-crypto-pq = { path = ".", features = ["test-utils"] }
-# Note: the ARCHIVAL_P_DERIVE_V1 KAT computes its p_canonical_id via an inline
+# Note: the ARCHIVAL_P_DERIVE_V2 KAT computes its p_canonical_id via an inline
 # cSHAKE256 (so the `shekyl-archival-retention` cross-check proves the two
 # cSHAKE paths agree). It uses `sha3` directly, which is already a normal
 # `[dependencies]` entry and is therefore available to tests without a separate

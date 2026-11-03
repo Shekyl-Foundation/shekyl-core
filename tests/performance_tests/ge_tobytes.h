@@ -33,7 +33,6 @@
 #include "crypto/crypto.h"
 #include "cryptonote_basic/cryptonote_basic.h"
 
-#include "cryptonote_basic/account.h"
 
 class test_ge_tobytes
 {
@@ -42,13 +41,10 @@ public:
 
   bool init()
   {
-    // A canonical point to decompress: a fresh account's spend key. (This
-    // used to build a whole C++ transaction to read a key image out of it;
-    // that builder left with the C++ tx_extra codec, TXE-Q1, and the
-    // benchmark's subject was never the transaction.)
-    cryptonote::account_base alice;
-    alice.generate(crypto::secret_key{}, false, false, cryptonote::FAKECHAIN);
-    const crypto::public_key& pk = alice.get_keys().m_account_address.m_spend_public_key;
+    // A canonical point to decompress: a fresh public key.
+    crypto::public_key pk;
+    crypto::secret_key sk;
+    crypto::generate_keys(pk, sk);
     if (ge_frombytes_vartime(&m_p3, (const unsigned char*) &pk) != 0)
       return false;
     return true;

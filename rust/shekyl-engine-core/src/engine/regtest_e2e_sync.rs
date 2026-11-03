@@ -27,7 +27,7 @@ use super::*;
 #[tokio::test(flavor = "multi_thread")]
 #[ignore = "Track-2 regtest: requires SHEKYLD_BIN; two daemons, ~2 min"]
 async fn a_node_syncs_a_chain_longer_than_the_doors_window_from_a_peer() {
-    sync_from_a_peer(100, [0x5au8; 64]).await;
+    sync_from_a_peer(100, [0x5au8; 32]).await;
 }
 
 /// A node syncs fifteen spans from one peer: more than the handler
@@ -42,13 +42,13 @@ async fn a_node_syncs_a_chain_longer_than_the_doors_window_from_a_peer() {
 #[tokio::test(flavor = "multi_thread")]
 #[ignore = "Track-2 regtest: requires SHEKYLD_BIN; two daemons and 300 blocks, several min"]
 async fn a_node_syncs_fifteen_spans_from_a_peer() {
-    sync_from_a_peer(300, [0x5bu8; 64]).await;
+    sync_from_a_peer(300, [0x5bu8; 32]).await;
 }
 
 /// The two-daemon sync walk: a source linked to a non-syncing sink mines
 /// `blocks`; a joiner linked to the source must reach its tip, moving at
 /// least every 120 s.
-async fn sync_from_a_peer(blocks: u64, seed: [u8; 64]) {
+async fn sync_from_a_peer(blocks: u64, seed: [u8; shekyl_crypto_pq::account::SEED_BYTES]) {
     let serial = serial_lock().lock_owned().await;
     let source_p2p = RegtestDaemon::free_port();
     let sink_p2p = RegtestDaemon::free_port_excluding(&[source_p2p]);

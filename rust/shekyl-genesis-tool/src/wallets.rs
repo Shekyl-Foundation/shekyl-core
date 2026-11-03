@@ -5,12 +5,11 @@
 
 //! Fresh-entropy genesis wallet ceremony (`geblock gen-wallets`).
 //!
-//! Seed formats are network-enforced by
-//! `shekyl_crypto_pq::account::DerivationNetwork::permitted_seed_format`:
-//! mainnet/stagenet wallets are BIP-39-only (24 words, empty passphrase),
-//! testnet wallets are raw-32-only. This mirrors the (private)
-//! `shekyl-wallet-rpc` `generate_seed_material` shape — fresh `OsRng`
-//! entropy, zeroized after use in both arms.
+//! One pathway on every network (`NETWORK_IDENTITY.md` NI-R7): each wallet
+//! is 32 bytes of fresh `OsRng` entropy, written down as its 24 BIP-39
+//! words, and derived through `account_from_seed` under the network's
+//! name. This mirrors the (private) `shekyl-wallet-rpc`
+//! `generate_seed_material` shape; the entropy is zeroized after use.
 //!
 //! Seeds are shown exactly once, in the custody files written here — there
 //! is no re-export path anywhere in the stack. Custody files are 0600,
@@ -30,24 +29,18 @@ use std::path::{Path, PathBuf};
 use rand::rngs::OsRng;
 use rand::RngCore;
 use shekyl_address::{Network, ShekylAddress};
-use shekyl_crypto_pq::account::{
-    generate_account_from_bip39, generate_account_from_raw_seed, DerivationNetwork, RAW_SEED_BYTES,
-};
-use shekyl_crypto_pq::bip39::{mnemonic_from_entropy, SHEKYL_BIP39_ENTROPY_BYTES};
-use zeroize::{Zeroize, Zeroizing};
+use shekyl_crypto_pq::account::{account_from_seed, SEED_BYTES};
+use shekyl_crypto_pq::bip39::mnemonic_from_entropy;
+use zeroize::Zeroizing;
 
 use crate::recipients::{
     RecipientEntry, RecipientsFile, GENESIS_RECIPIENT_AMOUNT_ATOMIC, GENESIS_RECIPIENT_COUNT,
 };
 use crate::{invalid, GenesisToolError};
 
-/// Seed backup material, captured at generation (the only time it exists).
-pub enum SeedBackup {
-    /// BIP-39 mnemonic, 24 words, empty passphrase (mainnet/stagenet).
-    Mnemonic(Zeroizing<String>),
-    /// Raw 32-byte seed, lowercase hex (testnet derivation).
-    RawHex(Zeroizing<String>),
-}
+/// Seed backup material, captured at generation (the only time it exists):
+/// the wallet's 24 BIP-39 words.
+pub struct SeedBackup(pub Zeroizing<String>);
 
 /// One freshly generated genesis wallet.
 pub struct GeneratedWallet {
@@ -59,46 +52,37 @@ pub struct GeneratedWallet {
     pub backup: SeedBackup,
 }
 
-fn derivation_for(net: Network) -> DerivationNetwork {
-    match net {
-        Network::Mainnet => DerivationNetwork::Mainnet,
-        Network::Testnet => DerivationNetwork::Testnet,
-        Network::Stagenet => DerivationNetwork::Stagenet,
-        Network::Regtest => DerivationNetwork::Fakechain,
-    }
-}
-
 /// Generate exactly [`GENESIS_RECIPIENT_COUNT`] fresh wallets for `net` and
 /// return their addresses plus seed backups. Every address is round-tripped
 /// through [`ShekylAddress::decode_for_network`] before being returned.
 pub fn generate_wallets(net: Network) -> Result<Vec<GeneratedWallet>, GenesisToolError> {
-    let count = u32::try_from(GENESIS_RECIPIENT_COUNT).expect("GENESIS_RECIPIENT_COUNT fits u32");
-    let derivation = derivation_for(net);
-    let mut out = Vec::with_capacity(GENESIS_RECIPIENT_COUNT);
-    for index in 1..=count {
-        let (blob, backup) = match net {
-            Network::Mainnet | Network::Stagenet => {
-                let mut entropy = [0u8; SHEKYL_BIP39_ENTROPY_BYTES];
-                OsRng.fill_bytes(&mut entropy);
-                let mnemonic = Zeroizing::new(
-                    mnemonic_from_entropy(&entropy)
-                        .map_err(|e| invalid(format!("mnemonic_from_entropy: {e:?}")))?,
-                );
-                entropy.zeroize();
-                let (_master, blob) = generate_account_from_bip39(&mnemonic, "", derivation)
-                    .map_err(|e| invalid(format!("bip39 account: {e:?}")))?;
-                (blob, SeedBackup::Mnemonic(mnemonic))
-            }
-            Network::Testnet | Network::Regtest => {
-                let mut raw = [0u8; RAW_SEED_BYTES];
-                OsRng.fill_bytes(&mut raw);
-                let seed_hex = Zeroizing::new(hex::encode(raw));
-                let (_master, blob) = generate_account_from_raw_seed(&raw, derivation)
-                    .map_err(|e| invalid(format!("raw-seed account: {e:?}")))?;
-                raw.zeroize();
-                (blob, SeedBackup::RawHex(seed_hex))
-            }
-        };
+    let mut seeds = Vec::with_capacity(GENESIS_RECIPIENT_COUNT);
+    for _ in 0..GENESIS_RECIPIENT_COUNT {
+        let mut seed = Zeroizing::new([0u8; SEED_BYTES]);
+        OsRng.fill_bytes(seed.as_mut());
+        seeds.push(seed);
+    }
+    wallets_from_seeds(net, &seeds)
+}
+
+/// The wallets `seeds` give on `net`, one per seed, in order: what
+/// [`generate_wallets`] does with its fresh entropy, and what a fixture with
+/// committed test seeds (regtest's recipients, NI-R11) does with its own.
+/// Every address is round-tripped through
+/// [`ShekylAddress::decode_for_network`] before being returned.
+pub fn wallets_from_seeds(
+    net: Network,
+    seeds: &[Zeroizing<[u8; SEED_BYTES]>],
+) -> Result<Vec<GeneratedWallet>, GenesisToolError> {
+    let mut out = Vec::with_capacity(seeds.len());
+    for (seed, index) in seeds.iter().zip(1u32..) {
+        let words = Zeroizing::new(
+            mnemonic_from_entropy(seed)
+                .map_err(|e| invalid(format!("mnemonic_from_entropy: {e:?}")))?,
+        );
+        let (_master, blob) =
+            account_from_seed(seed, net).map_err(|e| invalid(format!("account: {e:?}")))?;
+        let backup = SeedBackup(words);
 
         let address = blob
             .to_address(net)
@@ -235,10 +219,7 @@ fn write_ceremony_tree(
         let path = staging.join(custody_filename(net, w.index));
         let mut file = open_file_private(&path)?;
 
-        let (seed_kind, seed_value): (&str, &str) = match &w.backup {
-            SeedBackup::Mnemonic(m) => ("BIP-39 mnemonic (24 words, empty passphrase)", m),
-            SeedBackup::RawHex(h) => ("raw 32-byte seed, hex (testnet derivation)", h),
-        };
+        let seed_value: &str = &w.backup.0;
         let body = Zeroizing::new(format!(
             "Shekyl genesis wallet — {net_name} {role} #{index}\n\
              \n\
@@ -248,7 +229,7 @@ fn write_ceremony_tree(
              \n\
              address: {address}\n\
              \n\
-             seed ({seed_kind}):\n{seed_value}\n",
+             seed (24 BIP-39 words):\n{seed_value}\n",
             index = w.index,
             address = w.address,
         ));

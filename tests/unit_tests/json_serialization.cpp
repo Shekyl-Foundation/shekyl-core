@@ -10,7 +10,6 @@
 #include "byte_stream.h"
 #include "crypto/crypto.h"
 #include "crypto/hash.h"
-#include "cryptonote_basic/account.h"
 #include "cryptonote_basic/cryptonote_basic.h"
 #include "cryptonote_basic/cryptonote_format_utils.h"
 #include "cryptonote_config.h"

@@ -8,7 +8,7 @@
   `ARCHIVAL_P_DERIVE_V1` KAT + `archival_p` module **landed** (Bond-PR 0 #152 — verified at source:
   [`archival_p.rs`](../../rust/shekyl-crypto-pq/src/archival_p.rs) carries all eight §9.3 labels
   incl. the `bond_spend_*` pair and the GF-9 `hs_id` label (SPIKE-F-4, §10.13);
-  [`kat_archival_p_derive_v1.rs`](../../rust/shekyl-crypto-pq/tests/kat_archival_p_derive_v1.rs)).
+  [`kat_archival_p_derive_v1.rs`](../../rust/shekyl-crypto-pq/tests/kat_archival_p_derive_v2.rs)).
   **C-1 dependency discharged:** the emission vin-layer ML-DSA equality check **landed** (PR #277,
   `dev` `13c368707`; `emission_verify.rs`) — quantum spend-authority no longer classical-only.
 - **Round 2 closed (2026-07-11)** — network + transport (§10). All §10.10 exit dispositions
@@ -555,7 +555,7 @@ artifact where one exists.
       incl. the `shekyl-archival-p-bond-spend-{ed25519,ml-dsa-65}-v1` labels → `bond_spend_pk`
       (GF-1; §9.3 / §9.4). **code (Bond-PR 0 #152, verified 2026-07-11):**
       [`archival_p.rs`](../../rust/shekyl-crypto-pq/src/archival_p.rs) (7 labels present),
-      [`kat_archival_p_derive_v1.rs`](../../rust/shekyl-crypto-pq/tests/kat_archival_p_derive_v1.rs).
+      [`kat_archival_p_derive_v1.rs`](../../rust/shekyl-crypto-pq/tests/kat_archival_p_derive_v2.rs).
 - [ ] Pin off-chain announce/backing presentation wire (daemon + wallet). **R2 transport half
       pinned** (GF-5 broadcast, §10.5 / §10.13); the *wire* half is the residual (§10.13 carry).
 - [ ] Pin rotation ceremony (over-enumeration; holdings/bond migration). **→ R3** (§11; §2.3 P2B-1
@@ -978,7 +978,7 @@ note).
 - [x] Reviewer sign-off on Round 1 draft (2026-06-13 — GF-1 resolved, GF-2 made architectural, GF-8/11/4 corrected, downstream round criteria named).
 - [x] `ARCHIVAL_P_DERIVE_V1` KAT manifest (fixed `master_seed` + `p_slot` → known `p_canonical_id`
       **and `bond_spend_pk`** — the §9.3 `shekyl-archival-p-bond-spend-*` labels, GF-1). **Landed**
-      (Bond-PR 0 #152): [`kat_archival_p_derive_v1.rs`](../../rust/shekyl-crypto-pq/tests/kat_archival_p_derive_v1.rs).
+      (Bond-PR 0 #152): [`kat_archival_p_derive_v1.rs`](../../rust/shekyl-crypto-pq/tests/kat_archival_p_derive_v2.rs).
 - [x] `shekyl-crypto-pq::archival_p` implementation + unit tests. **Landed:**
       [`archival_p.rs`](../../rust/shekyl-crypto-pq/src/archival_p.rs) (eight §9.3 labels present,
       verified at source 2026-07-11; the GF-9 `hs_id` label added by SPIKE-F-4, 2026-08-05).
