@@ -581,7 +581,7 @@ A command's last term is a verb or a view, and a command that changes state ends
 | `version`, `help [command]` | same | | | K |
 | `exit` (synonym `quit`) | `exit` | | | R (IG-Q30): `quit` goes |
 | `tx list [--in \| --out] [--unmatched]` | `tx list` | | `--direction in\|out`; `--unmatched` | R (IG-Q22) |
-| `tx show <id>` | same | hash | `--body` | K; `--body` prints the transaction's serialized bytes, kind `bytes` (RW-Q4) |
+| `tx show <id>` | same | hash | `--body` | K (Rick, 2026-11-03): one report of transaction `<id>`. An open wallet that holds the id is the report, and the daemon is not asked. Otherwise the report is the daemon's view. `--body` fetches the serialized bytes from the daemon (kind `bytes`, RW-Q4); when the wallet holds the id and the daemon is not on loopback, the report says the daemon now knows the request. If neither source knows the id, the refusal names both |
 | `tx note <txid> [<text...>]` | `tx note <id>`, `tx note set <id> <text>` | hash; hash, text | | R (IG-Q34): `tx note` is a view; `tx note set` with empty text clears the note |
 | `tx abandon <txid>` | same | hash | | K |
 | — | `tx decode <body>` | bytes (a transaction's serialized bytes) | | N (IG-Q26, RW-Q4): decodes with the Rust codecs; `shekyl-utils-deserialize` then goes |
@@ -636,7 +636,7 @@ The catalog the Rust console and `shekyl-cli` serve (IG-Q25). The interim C++ co
 | `is_key_image_spent <ki>` | `chain spent <key-image>` | hash | |
 | `pop_blocks <n>` | — | | –: no grammar successor; it is an armed test lever (RPC_CHANNEL RT-O9.2, §6.4) |
 | `print_block <hash\|height>` | `block show <hash\|height>` | hash or integer | |
-| `print_tx <hash> [+hex]` | `tx show <id>` | hash; `--body`; `--json` is the session's | shares the wallet's word; `+json` went with epee's rendering (IG-Q55) |
+| `print_tx <hash> [+hex]` | `tx show <id>` | hash; `--body`; `--json` is the session's | One report (Rick, 2026-11-03): the open wallet's record when it holds the id, and the daemon is not asked; otherwise the daemon's view. `--body` fetches the bytes from the daemon. When the wallet holds the id and the daemon is not on loopback, the report says the daemon now knows the request. If neither source knows the id, the refusal names both. `+json` went with epee's rendering (IG-Q55) |
 | `relay_tx <txid>` | `tx relay <id>` | hash | |
 | `print_pool`, `print_pool_sh`, `print_pool_stats`, `flush_txpool [txid]` | `txpool list [--short]`, `txpool stats`, `txpool flush [id]` | | |
 | `print_pl [white] [gray] [limit]`, `print_pl_stats`, `print_cn`, `print_net_stats` | `peer list [--white] [--gray] [--max N]`, `peer stats`, `peer connections`, `p2p stats` | | |

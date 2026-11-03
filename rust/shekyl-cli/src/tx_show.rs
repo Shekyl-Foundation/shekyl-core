@@ -1,0 +1,397 @@
+// Copyright (c) 2026, The Shekyl Foundation
+//
+// All rights reserved.
+// BSD-3-Clause
+
+//! `tx show` (Rick, 2026-11-03). One report of one transaction.
+//!
+//! An open wallet that holds the id is the report, and the daemon is not
+//! asked: the wallet's scan already has the chain facts, and asking a
+//! remote daemon would tell it which transactions are this wallet's.
+//! Otherwise the report is the daemon's view. `--body` always fetches the
+//! bytes from the daemon; when the wallet holds the id and that daemon is
+//! not on loopback, the report says the daemon now knows the request.
+
+use std::sync::Arc;
+use std::time::Duration;
+
+use serde_json::Value;
+use shekyl_rpc_transport::SyncDaemon;
+use shekyl_rpc_types::DaemonNetwork;
+
+use crate::commands::{format_amount_str, format_height, unspendable_reason_text};
+use crate::console::{self, Source, TxRender};
+use crate::daemon::DaemonClient;
+use crate::outcome::{failed, refusal, CommandResult};
+use crate::rpc_client::RpcSession;
+
+/// The line appended when a wallet-held id's bytes were fetched from a
+/// daemon that is not on loopback.
+const DAEMON_LEARNED: &str = "The daemon now knows you asked for this transaction.";
+
+const NOT_CONFIGURED: &str =
+    "Daemon not configured. Use --daemon-address to set the daemon endpoint.";
+
+/// How long one daemon fetch waits. A show is one handshake and one read.
+const DAEMON_TIMEOUT: Duration = Duration::from_secs(30);
+
+/// The daemon a show may ask, when one is configured.
+pub(crate) struct DaemonEndpoint<'a> {
+    pub url: &'a str,
+    pub proxy: Option<String>,
+    pub network: DaemonNetwork,
+    pub loopback: bool,
+    pub down_hint: Option<&'a str>,
+}
+
+/// One show. `wallet_records` is `None` when no wallet is open, and empty
+/// when the open wallet does not hold the id.
+pub(crate) struct TxShow<'a> {
+    pub id: &'a str,
+    pub wallet_records: Option<&'a str>,
+    pub body: bool,
+    pub daemon: Option<&'a DaemonEndpoint<'a>>,
+}
+
+/// `tx show <id> [--body]`.
+pub(crate) fn command(
+    rpc: &RpcSession,
+    daemon: Option<&DaemonClient>,
+    network: &str,
+    id: &str,
+    body: bool,
+) -> CommandResult<String> {
+    let id = canonical_id(id).map_err(refusal)?;
+    let wallet_records = if rpc.is_open() {
+        Some(read_wallet(rpc, &id)?)
+    } else {
+        None
+    };
+    let network = session_network(network).map_err(refusal)?;
+    let endpoint = daemon.map(|daemon| DaemonEndpoint {
+        url: daemon.url(),
+        proxy: daemon.proxy().map(str::to_owned),
+        network,
+        loopback: daemon.is_loopback(),
+        down_hint: daemon.down_hint(),
+    });
+    report(&TxShow {
+        id: &id,
+        wallet_records: wallet_records.as_deref(),
+        body,
+        daemon: endpoint.as_ref(),
+    })
+    .map_err(refusal)
+}
+
+pub(crate) fn show(text: &String) {
+    println!("{text}");
+}
+
+/// The report. Asks the daemon only when the wallet does not hold the id,
+/// or when `--body` asks for the bytes.
+pub(crate) fn report(show: &TxShow<'_>) -> Result<String, String> {
+    let id = canonical_id(show.id)?;
+    let held = show
+        .wallet_records
+        .is_some_and(|records| !records.is_empty());
+    if held && !show.body {
+        return Ok(show.wallet_records.expect("held means records").to_owned());
+    }
+    if held {
+        let records = show.wallet_records.expect("held means records");
+        let Some(daemon) = show.daemon else {
+            return Ok(format!(
+                "{records}\n\nThe serialized bytes could not be fetched from the daemon: {NOT_CONFIGURED}"
+            ));
+        };
+        return match fetch(daemon, &id, true) {
+            Ok(render) => Ok(held_with_body(records, &id, &render, daemon.loopback)),
+            Err(detail) => Ok(format!(
+                "{records}\n\nThe serialized bytes could not be fetched from the daemon: {detail}"
+            )),
+        };
+    }
+    let Some(daemon) = show.daemon else {
+        return Err(not_configured(show.wallet_records.is_some(), &id));
+    };
+    match fetch(daemon, &id, show.body) {
+        Ok(TxRender::Shown { text, .. }) => Ok(text),
+        Ok(TxRender::Unknown) => Err(neither(show.wallet_records.is_some(), &id)),
+        Err(detail) => Err(format!(
+            "{} The daemon could not be asked: {detail}",
+            wallet_clause(show.wallet_records.is_some(), &id)
+        )),
+    }
+}
+
+/// The wallet's rows whose transaction id is `id`, or an empty string when
+/// it holds none. A failed read is not "holds none": the command stops
+/// rather than asking the daemon about an id the wallet might hold.
+fn read_wallet(rpc: &RpcSession, id: &str) -> CommandResult<String> {
+    match rpc.call("get_transfers", serde_json::json!({})) {
+        Ok(val) => {
+            let Some(rows) = val.get("transfers").and_then(Value::as_array) else {
+                return failed("Malformed get_transfers response.");
+            };
+            Ok(format_records(rows, id))
+        }
+        Err(error) => Err(rpc.report("Failed to read this wallet's transactions", &error)),
+    }
+}
+
+fn format_records(rows: &[Value], id: &str) -> String {
+    rows.iter()
+        .filter(|row| {
+            row.get("tx_hash")
+                .and_then(Value::as_str)
+                .is_some_and(|hash| hash.eq_ignore_ascii_case(id))
+        })
+        .map(format_record)
+        .collect::<Vec<_>>()
+        .join("\n\n")
+}
+
+fn format_record(row: &Value) -> String {
+    let text = |name: &str| {
+        row.get(name)
+            .and_then(Value::as_str)
+            .unwrap_or("?")
+            .to_owned()
+    };
+    let mut lines = vec![
+        format!("Transaction {}", text("tx_hash")),
+        format!("  Id:         {}", text("id")),
+        format!("  Direction:  {}", text("direction")),
+        format!("  State:      {}", text("state")),
+        format!("  Amount:     {} SKL", format_amount_str(&text("amount"))),
+        format!("  Fee:        {} SKL", format_amount_str(&text("fee"))),
+        format!("  Height:     {}", format_height(row)),
+    ];
+    if let Some(spent) = row.get("spent_height").and_then(Value::as_i64) {
+        lines.push(format!("  Spent at:   {spent}"));
+    }
+    if let Some(reason) = row.get("unspendable_reason").and_then(Value::as_str) {
+        lines.push(format!(
+            "  Unspendable: {}",
+            unspendable_reason_text(reason)
+        ));
+    }
+    if let Some(kind) = row
+        .get("attribution")
+        .and_then(|attr| attr.get("kind"))
+        .and_then(Value::as_str)
+    {
+        lines.push(format!("  Attribution: {kind}"));
+    }
+    if let Some(note) = row.get("note").and_then(Value::as_str) {
+        lines.push(format!("  Note:        {note}"));
+    }
+    lines.join("\n")
+}
+
+fn held_with_body(records: &str, id: &str, render: &TxRender, loopback: bool) -> String {
+    let section = match render {
+        TxRender::Unknown => format!("The daemon has no serialized bytes for {id}."),
+        TxRender::Shown {
+            body_hex: Some(hex),
+            ..
+        } => hex.clone(),
+        TxRender::Shown {
+            text,
+            body_hex: None,
+        } => text.clone(),
+    };
+    let mut out = format!("{records}\n\n{section}");
+    if !loopback {
+        out.push('\n');
+        out.push_str(DAEMON_LEARNED);
+    }
+    out
+}
+
+fn wallet_clause(wallet_open: bool, id: &str) -> String {
+    if wallet_open {
+        format!("This wallet has no record of {id}.")
+    } else {
+        "No wallet is open.".to_owned()
+    }
+}
+
+fn neither(wallet_open: bool, id: &str) -> String {
+    if wallet_open {
+        format!("This wallet has no record of {id}, and the daemon has no transaction {id}.")
+    } else {
+        format!("No wallet is open, and the daemon has no transaction {id}.")
+    }
+}
+
+fn not_configured(wallet_open: bool, id: &str) -> String {
+    format!("{} {NOT_CONFIGURED}", wallet_clause(wallet_open, id))
+}
+
+fn fetch(daemon: &DaemonEndpoint<'_>, id: &str, body: bool) -> Result<TxRender, String> {
+    let rpc = SyncDaemon::connect(daemon.url.to_owned(), daemon.proxy.clone(), DAEMON_TIMEOUT)
+        .map_err(|error| with_hint(daemon, &error.to_string()))?;
+    let source = Source::new(Arc::new(rpc), daemon.network.to_cryptonote());
+    console::show_transaction(&source, id, body)
+}
+
+fn with_hint(daemon: &DaemonEndpoint<'_>, detail: &str) -> String {
+    match daemon.down_hint {
+        Some(hint) => format!("{detail}\n{hint}"),
+        None => detail.to_owned(),
+    }
+}
+
+fn canonical_id(id: &str) -> Result<String, String> {
+    let id = id.to_ascii_lowercase();
+    if id.len() == 64 && id.bytes().all(|byte| byte.is_ascii_hexdigit()) {
+        Ok(id)
+    } else {
+        Err(format!(
+            "tx show: {id:?} is not a transaction id (64 hexadecimal characters)"
+        ))
+    }
+}
+
+fn session_network(name: &str) -> Result<DaemonNetwork, String> {
+    match name {
+        "mainnet" => Ok(DaemonNetwork::Mainnet),
+        "testnet" => Ok(DaemonNetwork::Testnet),
+        "stagenet" => Ok(DaemonNetwork::Stagenet),
+        other => Err(format!(
+            "tx show: this shell's network {other:?} is not one it can compare a daemon to"
+        )),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn id() -> String {
+        "ab".repeat(32)
+    }
+
+    #[test]
+    fn a_short_id_is_refused_before_either_source() {
+        let error = report(&TxShow {
+            id: "abcd",
+            wallet_records: None,
+            body: false,
+            daemon: None,
+        })
+        .expect_err("not an id");
+        assert!(error.contains("64 hexadecimal"), "{error}");
+    }
+
+    #[test]
+    fn a_held_id_is_the_wallet_record_and_names_no_daemon() {
+        let records = format!("wallet holds {}", id());
+        let text = report(&TxShow {
+            id: &id(),
+            wallet_records: Some(&records),
+            body: false,
+            daemon: None,
+        })
+        .expect("the wallet is the report");
+        assert_eq!(text, records);
+    }
+
+    #[test]
+    fn neither_source_names_both() {
+        let missing = report(&TxShow {
+            id: &id(),
+            wallet_records: Some(""),
+            body: false,
+            daemon: None,
+        })
+        .expect_err("no daemon configured");
+        assert!(missing.contains("no record"), "{missing}");
+        assert!(missing.contains("Daemon not configured"), "{missing}");
+
+        let open = neither(true, &id());
+        assert!(open.contains("no record of"), "{open}");
+        assert!(open.contains("daemon has no transaction"), "{open}");
+        let closed = neither(false, &id());
+        assert!(closed.contains("No wallet is open"), "{closed}");
+        assert!(closed.contains("daemon has no transaction"), "{closed}");
+    }
+
+    #[test]
+    fn body_from_a_remote_daemon_says_the_daemon_learned_the_request() {
+        let records = "wallet holds it";
+        let remote = held_with_body(
+            records,
+            &id(),
+            &TxRender::Shown {
+                text: "view".to_owned(),
+                body_hex: Some("abcd".repeat(20)),
+            },
+            false,
+        );
+        assert!(remote.starts_with(records), "{remote}");
+        assert!(remote.contains(&"abcd".repeat(20)), "{remote}");
+        assert!(remote.contains(DAEMON_LEARNED), "{remote}");
+        assert!(
+            !remote.contains("view"),
+            "the bytes, not the daemon's narrative: {remote}"
+        );
+
+        let local = held_with_body(
+            records,
+            &id(),
+            &TxRender::Shown {
+                text: "view".to_owned(),
+                body_hex: Some("ee".repeat(40)),
+            },
+            true,
+        );
+        assert!(!local.contains(DAEMON_LEARNED), "{local}");
+    }
+
+    #[test]
+    fn the_wallet_record_is_every_row_of_that_transaction() {
+        let id = id();
+        let other = "cd".repeat(32);
+        let rows = serde_json::json!([
+            {
+                "id": format!("{id}:0"),
+                "tx_hash": id,
+                "direction": "INCOMING",
+                "state": "MINED",
+                "amount": "1",
+                "fee": "0",
+                "block_height": 4,
+                "note": "rent"
+            },
+            {
+                "id": format!("{id}:1"),
+                "tx_hash": id.to_uppercase(),
+                "direction": "INCOMING",
+                "state": "MINED",
+                "amount": "2",
+                "fee": "0",
+                "block_height": 4
+            },
+            {
+                "id": &other,
+                "tx_hash": other,
+                "direction": "OUTGOING",
+                "state": "PENDING",
+                "amount": "9",
+                "fee": "1"
+            }
+        ]);
+        let text = format_records(rows.as_array().expect("rows"), &id);
+        assert!(text.contains(&format!("{id}:0")), "{text}");
+        assert!(text.contains(&format!("{id}:1")), "{text}");
+        assert!(text.contains("rent"), "{text}");
+        assert!(!text.contains(&other), "another transaction: {text}");
+    }
+}
+
+#[cfg(test)]
+#[path = "tx_show_regtest.rs"]
+mod regtest;

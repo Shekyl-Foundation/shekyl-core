@@ -24,6 +24,7 @@ mod staking;
 
 pub use staking::{accept_foundation_terms, post_foundation_stake, FOUNDATION_PHRASE};
 mod transfers;
+pub(crate) use transfers::{format_height, unspendable_reason_text};
 
 use crate::daemon::DaemonClient;
 use crate::outcome::{
@@ -274,11 +275,11 @@ pub fn run(
                 transfers::cmd_transfers(&rpc, incoming, outgoing, unmatched),
                 transfers::show_transfers,
             ),
-            ResolvedCommand::ShowTransfer { txid } => present(
+            ResolvedCommand::ShowTransfer { txid, body } => present(
                 &presentation,
                 "tx show",
-                transfers::cmd_show_transfer(&rpc, &txid),
-                transfers::show_transfer,
+                crate::tx_show::command(&rpc, daemon_client, network, &txid, body),
+                crate::tx_show::show,
             ),
             ResolvedCommand::GetTxNote { txid } => present(
                 &presentation,

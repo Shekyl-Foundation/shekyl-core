@@ -112,6 +112,9 @@ pub struct MiningStatus {
 pub struct DaemonClient {
     url: String,
     agent: ureq::Agent,
+    /// The SOCKS proxy this client was built with, so a later daemon
+    /// request (`tx show --body`) uses the same circuit.
+    proxy: Option<String>,
     /// See [`DaemonError::ConnectionRefused`]: attached to every refused
     /// connection this client reports.
     down_hint: Option<String>,
@@ -180,8 +183,15 @@ impl DaemonClient {
         Ok(Self {
             url,
             agent,
+            proxy: proxy.map(str::to_owned),
             down_hint,
         })
+    }
+
+    /// The SOCKS proxy, when the client was built with one.
+    #[must_use]
+    pub fn proxy(&self) -> Option<&str> {
+        self.proxy.as_deref()
     }
 
     /// Attach this client's recovery hint to a refused connection. Applied

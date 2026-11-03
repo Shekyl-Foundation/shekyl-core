@@ -187,6 +187,7 @@ const SEND_FLAGS: &[Flag] = &[
 ];
 const ADDRESS_FLAGS: &[Flag] = &[Flag::switch("--full"), Flag::value("--out")];
 const FEE_FLAGS: &[Flag] = &[Flag::value("--inputs"), Flag::value("--outputs")];
+const TX_SHOW_FLAGS: &[Flag] = &[Flag::switch("--body")];
 const TX_LIST_FLAGS: &[Flag] = &[
     Flag::switch("--in"),
     Flag::switch("--out"),
@@ -283,7 +284,7 @@ fn meta(id: CommandId) -> Meta {
             omit_history: false,
             flags: TX_LIST_FLAGS,
         },
-        TxShow => child("show", "tx show <id>", Tx),
+        TxShow => flagged("show", "tx show <id> [--body]", Tx, TX_SHOW_FLAGS),
         TxNote => child("note", "tx note <txid> [<text...>]", Tx),
         TxAbandon => child("abandon", "tx abandon <txid>", Tx),
         Request => interior("request", "request", None),

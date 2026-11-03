@@ -8,6 +8,8 @@
 
 pub mod catalog;
 pub mod commands;
+// The remaining §13 words are this module's callers. `tx show` is the first.
+#[allow(dead_code)]
 pub(crate) mod console;
 pub mod daemon;
 pub mod display;
@@ -17,6 +19,7 @@ pub mod resolve;
 pub mod rpc_client;
 pub mod session;
 pub mod status;
+pub(crate) mod tx_show;
 pub mod validate;
 
 /// Prompt for a password without echoing it.

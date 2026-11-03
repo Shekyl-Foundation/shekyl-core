@@ -102,6 +102,8 @@ pub enum ResolvedCommand {
     },
     ShowTransfer {
         txid: String,
+        /// Fetch the serialized bytes from the daemon.
+        body: bool,
     },
     GetTxNote {
         txid: String,

@@ -122,9 +122,7 @@ fn parse_ready(id: CommandId, tail: Tail<'_>, args: &[&str]) -> ResolvedCommand 
         Fee => parse_fee(args),
         Send => parse_send(args),
         TxList => parse_tx_list(args),
-        TxShow => one_word(id, args, |txid| ResolvedCommand::ShowTransfer {
-            txid: txid.to_string(),
-        }),
+        TxShow => parse_tx_show(id, args),
         TxNote => parse_tx_note(tail, args),
         TxAbandon => one_word(id, args, |txid| ResolvedCommand::Abandon {
             txid: txid.to_string(),
@@ -350,6 +348,20 @@ fn parse_send(args: &[&str]) -> ResolvedCommand {
             None => diag(format!("send: invalid amount {amount:?}")),
         },
         _ => diag("send: need <amount> <address>"),
+    }
+}
+
+fn parse_tx_show(id: CommandId, args: &[&str]) -> ResolvedCommand {
+    let split = match flags(id, args) {
+        Ok(split) => split,
+        Err(command) => return command,
+    };
+    match split.positional.as_slice() {
+        [txid] => ResolvedCommand::ShowTransfer {
+            txid: (*txid).to_string(),
+            body: split.has("--body"),
+        },
+        _ => diag(usage(id)),
     }
 }
 
@@ -669,6 +681,28 @@ fn parse_verify(tail: Tail<'_>, args: &[&str]) -> ResolvedCommand {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn tx_show_takes_the_id_and_an_optional_body() {
+        match parse("tx show abcdef --body") {
+            ResolvedCommand::ShowTransfer { txid, body } => {
+                assert_eq!(txid, "abcdef");
+                assert!(body);
+            }
+            other => panic!("expected tx show, got {other:?}"),
+        }
+        match parse("tx show --body abcdef") {
+            ResolvedCommand::ShowTransfer { txid, body } => {
+                assert_eq!(txid, "abcdef");
+                assert!(body);
+            }
+            other => panic!("expected the flag before the id, got {other:?}"),
+        }
+        match parse("tx show abcdef") {
+            ResolvedCommand::ShowTransfer { body, .. } => assert!(!body),
+            other => panic!("expected tx show without --body, got {other:?}"),
+        }
+    }
 
     #[test]
     fn transfer_retires_to_send() {

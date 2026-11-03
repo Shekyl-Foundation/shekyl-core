@@ -398,27 +398,77 @@ fn print_transaction(src: &Source, args: &[String]) -> Result<String, String> {
 
     // Size, weight and the block time are part of the rendering. `+meta`
     // was the console's flag for them; §13's `tx show` has no such flag.
-    let meta = true;
-    if meta {
-        if let shekyl_rpc_types::TxLocation::Mined {
-            block_timestamp, ..
-        } = &tx.location
-        {
-            out.push(format!(
-                "Block timestamp: {block_timestamp} ({})",
-                human_readable_timestamp(*block_timestamp)
-            ));
-        }
-        // The parse is the binding's, above — a body that did not parse (or
-        // did not hash to the request) never reached this rendering, so the
-        // old "Error parsing transaction" soft lines have no input left.
-        out.push(format!("Size: {}", blob.len()));
-        out.push(format!("Weight: {}", parsed.weight()));
+    if let shekyl_rpc_types::TxLocation::Mined {
+        block_timestamp, ..
+    } = &tx.location
+    {
+        out.push(format!(
+            "Block timestamp: {block_timestamp} ({})",
+            human_readable_timestamp(*block_timestamp)
+        ));
     }
+    // The parse is the binding's, above — a body that did not parse (or
+    // did not hash to the request) never reached this rendering, so the
+    // old "Error parsing transaction" soft lines have no input left.
+    out.push(format!("Size: {}", blob.len()));
+    out.push(format!("Weight: {}", parsed.weight()));
     if hex_out {
         out.push(tx.as_hex.clone());
     }
     Ok(out.join("\n"))
+}
+
+/// What the daemon said about one transaction.
+pub(crate) enum TxRender {
+    /// The daemon answered, and the id is not among the transactions it holds.
+    Unknown,
+    /// The daemon's rendering. `body_hex` is the serialized bytes when they
+    /// were fetched.
+    Shown {
+        text: String,
+        body_hex: Option<String>,
+    },
+}
+
+/// The daemon's view of `id`.
+///
+/// `Unknown` is the only "not held" answer. An archived body and an
+/// unavailable pool are the daemon's view of an id it does hold: the text
+/// is that answer. A transport failure, an identity refusal, or a body
+/// that does not hash to `id` is `Err`.
+pub(crate) fn show_transaction(src: &Source, id: &str, body: bool) -> Result<TxRender, String> {
+    let mut args = vec![id.to_owned()];
+    if body {
+        args.push("--body".to_owned());
+    }
+    match print_transaction(src, &args) {
+        Ok(text) => {
+            let body_hex = if body {
+                Some(body_line(&text).ok_or_else(|| {
+                    format!("tx show: the daemon's reply for {id} carried no serialized bytes")
+                })?)
+            } else {
+                None
+            };
+            Ok(TxRender::Shown { text, body_hex })
+        }
+        Err(reason) if reason.starts_with("Transaction wasn't found") => Ok(TxRender::Unknown),
+        Err(reason) if reason.starts_with("Transaction ") => Ok(TxRender::Shown {
+            text: reason,
+            body_hex: None,
+        }),
+        Err(reason) => Err(reason),
+    }
+}
+
+/// The last line, when it is the serialized body: hex, and longer than an id.
+fn body_line(text: &str) -> Option<String> {
+    let line = text.lines().last()?.trim();
+    if line.len() > 64 && line.chars().all(|c| c.is_ascii_hexdigit()) {
+        Some(line.to_owned())
+    } else {
+        None
+    }
 }
 
 /// `is_key_image_spent <key_image>` — RK-4c. Reads that method only.
@@ -505,10 +555,7 @@ pub(crate) fn render(source: &Source, args: &[String]) -> Result<String, Console
         [a, b, rest @ ..] if a == "tx" && b == "show" => print_transaction(source, rest),
         [a, b, rest @ ..] if a == "chain" && b == "spent" => is_key_image_spent(source, rest),
         [a, b, rest @ ..] if a == "peer" && b == "list" => {
-            let (white, gray, limit) = match peer_list_flags(rest) {
-                Ok(flags) => flags,
-                Err(fault) => return Err(fault),
-            };
+            let (white, gray, limit) = peer_list_flags(rest)?;
             print_peer_list(source, white, gray, limit)
         }
         [a, b] if a == "peer" && b == "stats" => print_peer_list_stats(source),
@@ -516,17 +563,11 @@ pub(crate) fn render(source: &Source, args: &[String]) -> Result<String, Console
         [a, b] if a == "p2p" && b == "stats" => print_net_stats(source, unix_now()),
         [a, b] if a == "sync" && b == "status" => sync_info(source),
         [a, b, c, rest @ ..] if a == "block" && b == "header" && c == "list" => {
-            let (start, end) = match from_to(rest) {
-                Ok(window) => window,
-                Err(fault) => return Err(fault),
-            };
+            let (start, end) = from_to(rest)?;
             print_blockchain_info(source, start, end)
         }
         [a, b, rest @ ..] if a == "chain" && b == "stats" => {
-            let nblocks = match flag_u64(rest, "--last") {
-                Ok(n) => n,
-                Err(fault) => return Err(fault),
-            };
+            let nblocks = flag_u64(rest, "--last")?;
             print_blockchain_dynamic_stats(source, nblocks)
         }
         // No argument (IG-Q44). The renderer still accepts the old parser's
