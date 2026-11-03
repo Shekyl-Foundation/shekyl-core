@@ -140,13 +140,6 @@ impl StakeEngineHandle {
     /// `.pstore` file is closed when this returns (`CURVE_TREE_CLIENT.md`
     /// §11.1). Two awaits, not a supervision link, because a linked child's
     /// mailbox closes before its own `on_stop` runs.
-    #[cfg_attr(
-        not(test),
-        allow(
-            dead_code,
-            reason = "its caller is the engine's awaited close, step 7 of CURVE_TREE_CLIENT.md §11's plan, later in this PR"
-        )
-    )]
     pub(crate) async fn shutdown(&self) {
         if let Err(not_running) = self.actor.stop_gracefully().await {
             tracing::debug!(?not_running, "stake actor already stopping");

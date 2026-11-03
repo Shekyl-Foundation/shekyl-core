@@ -452,19 +452,6 @@ pub enum ClientError {
 }
 
 impl ClientError {
-    /// `true` iff this is a [`StoreError::is_already_open`] store failure: the
-    /// redb single-writer lock is *transiently* held by a not-yet-dropped handle
-    /// (the `close → reopen` / respawn race, where kameo drops the old client —
-    /// and its lock — only after `wait_for_shutdown` resolves).
-    ///
-    /// The actor layer uses this to poll-retry **only** the transient case and
-    /// surface every other open error immediately, rather than spinning a
-    /// permanently-failing open out to the grace-window timeout.
-    #[must_use]
-    pub fn is_already_open(&self) -> bool {
-        matches!(self, ClientError::Store(e) if e.is_already_open())
-    }
-
     /// What this failure means when [`CurveTreeClient::open`] raised it
     /// ([`StoreOpenFault`]). An open reads nothing but the store, so what it
     /// can raise is a store failure, a resume refusal, or the store's own

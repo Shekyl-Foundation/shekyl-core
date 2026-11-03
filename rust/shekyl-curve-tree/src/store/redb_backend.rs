@@ -484,21 +484,6 @@ pub enum StoreError {
 }
 
 impl StoreError {
-    /// `true` iff this wraps redb's
-    /// [`DatabaseAlreadyOpen`](redb::Error::DatabaseAlreadyOpen) — the
-    /// single-writer lock is held by another live handle to the same file.
-    ///
-    /// This is the **only transient** open failure: it clears the instant the
-    /// holding [`crate::CurveTreeClient`] drops (the `close → reopen` / respawn
-    /// lock-release lag — see [`crate::ClientError::is_already_open`]). Every
-    /// other variant is a standing condition — corruption, schema mismatch, I/O,
-    /// a permission error — that re-opening cannot fix, so callers must surface
-    /// those immediately rather than poll-retrying out a grace window.
-    #[must_use]
-    pub fn is_already_open(&self) -> bool {
-        matches!(self, StoreError::Redb(e) if matches!(**e, redb::Error::DatabaseAlreadyOpen))
-    }
-
     /// What this failure means to whoever has to act on a store that would
     /// not open ([`StoreOpenFault`]). Exhaustive over this enum, so a new
     /// variant has to be placed before it compiles; the arms a caller's own
@@ -545,8 +530,10 @@ impl StoreError {
 /// diagnosis (which stays in the error for the log).
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum StoreOpenFault {
-    /// Another process holds the store's single-writer lock: the wallet is
-    /// open somewhere else.
+    /// Another holder has the store's single-writer lock: the wallet is open
+    /// in another process, or still open in this one. Never transient within
+    /// a process: the wallet's close awaits the store's release
+    /// (`CURVE_TREE_CLIENT.md` §11), so there is nothing to wait for.
     LockedElsewhere,
     /// The store's contents contradict themselves. Remedy: delete the store
     /// and let the wallet rebuild it.
@@ -2895,8 +2882,11 @@ mod tests {
         let path = dir.path().join("tree.redb");
         let _held = LeafStore::open(&path).expect("first open");
         let second = LeafStore::open(&path).expect_err("the lock is held");
-        assert!(second.is_already_open(), "{second:?}");
-        assert_eq!(second.open_fault(), StoreOpenFault::LockedElsewhere);
+        assert_eq!(
+            second.open_fault(),
+            StoreOpenFault::LockedElsewhere,
+            "{second:?}"
+        );
     }
 
     /// The remedy each store arm names, for the arms a test can build.

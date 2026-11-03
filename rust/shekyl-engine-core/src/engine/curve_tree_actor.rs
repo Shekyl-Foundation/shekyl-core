@@ -762,41 +762,6 @@ fn collapse_send_error<M>(err: SendError<M, ClientError>) -> CurveTreeHandleErro
 /// `WriterRecovery` (a share of the store), so that an engine-side respawn
 /// could resume a writer over the same store and swap the fresh actor in for
 /// every clone.
-/// Upper bound on how long [`CurveTreeHandle::open_and_spawn`] retries the
-/// reopen while a just-dropped actor's redb single-writer lock is released.
-/// Past this the reopen error is surfaced (genuinely corrupt or
-/// externally-held store).
-const REOPEN_LOCK_RELEASE_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(2);
-/// Poll interval for the [`CurveTreeHandle::open_and_spawn`] reopen retry.
-const REOPEN_LOCK_RELEASE_POLL: std::time::Duration = std::time::Duration::from_millis(2);
-
-/// Open the store at `path`, polling **only** while the redb single-writer lock
-/// is still held by a just-dropped actor
-/// ([`ClientError::is_already_open`](shekyl_curve_tree::ClientError::is_already_open)
-/// — `redb::DatabaseAlreadyOpen`). The `close → reopen` drop lag clears
-/// within the [`REOPEN_LOCK_RELEASE_TIMEOUT`] grace window; **any other error**
-/// (corruption, schema, permission) — or the window expiring — surfaces
-/// immediately, since waiting cannot make a standing failure openable.
-///
-/// `async` so the caller cooperates with the runtime that has to run the prior
-/// actor's drop: the sync [`CurveTreeHandle::open_and_spawn`] drives it under
-/// [`block_in_place`](tokio::task::block_in_place) so the worker is released
-/// while it waits.
-async fn open_polling_lock_release(path: &Path) -> Result<CurveTreeClient, ClientError> {
-    let deadline = std::time::Instant::now() + REOPEN_LOCK_RELEASE_TIMEOUT;
-    loop {
-        match CurveTreeClient::open(path) {
-            Ok(client) => return Ok(client),
-            // Lock still held by a not-yet-dropped handle: bounded poll-retry.
-            Err(e) if e.is_already_open() && std::time::Instant::now() < deadline => {
-                tokio::time::sleep(REOPEN_LOCK_RELEASE_POLL).await;
-            }
-            // Non-transient, or the grace window expired — surface it.
-            Err(e) => return Err(e),
-        }
-    }
-}
-
 #[derive(Clone)]
 pub(crate) struct CurveTreeHandle {
     /// The actor's mailbox.
@@ -861,45 +826,19 @@ impl CurveTreeHandle {
     /// sibling of the wallet files
     /// ([`curve_tree_store_path_from`](shekyl_engine_file::paths::curve_tree_store_path_from)).
     ///
+    /// **No retry.** The engine's close awaits [`Self::shutdown`], so a store
+    /// this process closed is already closed, and a `DatabaseAlreadyOpen` here
+    /// means the wallet is open: in another process, or still in this one. It
+    /// is refused at once as `StoreOpenFault::LockedElsewhere`. *Records-was
+    /// (until 2026-11-02):* the close did not wait for the actor, and this
+    /// polled the lock for up to two seconds, a timer that once ran out under
+    /// load (`CURVE_TREE_CLIENT.md` §11).
+    ///
     /// # Panics
     ///
     /// Panics if called with no ambient Tokio runtime (see [`Self::spawn`]).
-    ///
-    /// If — and **only** if — the reopen-race contention path below is taken on a
-    /// **current-thread** runtime, [`block_in_place`](tokio::task::block_in_place)
-    /// panics loudly. That is the deliberate *panic-not-deadlock* signal: the lock
-    /// can only free once the prior actor's drop runs, which a single-threaded
-    /// runtime cannot do while this call blocks waiting for it. Production
-    /// wallet-open runs on the multi-thread runtime — the same stance as
-    /// `spawn_stake_engine_if_staker`'s conformance self-cert wait. Uncontended
-    /// opens (every fresh `create`) never reach it.
     pub(crate) fn open_and_spawn(path: impl AsRef<Path>) -> Result<Self, ClientError> {
-        let path = path.as_ref();
-        // Reopen-after-shutdown race: a just-closed wallet's actor may not have released the redb
-        // single-writer lock yet, because kameo drops the actor value — and its
-        // [`CurveTreeClient`] — *after* `wait_for_shutdown` resolves. A fresh
-        // open immediately after a close (`close` → `open_full`) therefore races
-        // that drop and hits `redb::DatabaseAlreadyOpen`.
-        //
-        // The first attempt is synchronous and runtime-free, so every
-        // *uncontended* open — which includes all fresh `create`s — succeeds here
-        // and keeps working on a current-thread runtime. Only the
-        // `DatabaseAlreadyOpen` contention case has to *wait* for the prior
-        // actor's drop, which runs on the ambient runtime: release this worker
-        // with `block_in_place` so that drop can progress, then drive the bounded
-        // async poll (mirrors `spawn_stake_engine_if_staker`). Any *other* open
-        // error is not transient — surface it immediately rather than spinning.
-        match CurveTreeClient::open(path) {
-            Ok(client) => Ok(Self::spawn(client)),
-            Err(e) if e.is_already_open() => {
-                let handle = tokio::runtime::Handle::current();
-                let client = tokio::task::block_in_place(|| {
-                    handle.block_on(open_polling_lock_release(path))
-                })?;
-                Ok(Self::spawn(client))
-            }
-            Err(e) => Err(e),
-        }
+        Ok(Self::spawn(CurveTreeClient::open(path)?))
     }
 
     /// Rebuild a poisoned client in place, inside the actor ([`Recover`]).
@@ -922,17 +861,11 @@ impl CurveTreeHandle {
 
     /// Stop the actor and wait until its `on_stop` has run. When this returns
     /// the client has been dropped and the redb file is closed, so the store
-    /// can be reopened at once, by this process or another. Messages already queued are handled first (a graceful stop);
+    /// can be reopened at once, by this process or another. Messages already
+    /// queued are handled first (a graceful stop);
     /// an `ask` sent afterwards, through any clone, is
     /// [`CurveTreeHandleError::Unavailable`]. Idempotent: on an actor that
     /// has already stopped, it returns once the stop has completed.
-    #[cfg_attr(
-        not(test),
-        allow(
-            dead_code,
-            reason = "its caller is the engine's awaited close, step 6 of CURVE_TREE_CLIENT.md §11's plan, later in this PR"
-        )
-    )]
     pub(crate) async fn shutdown(&self) {
         // `stop_gracefully` errs only when the actor is no longer running,
         // which is a stop already under way; the wait below covers both.

@@ -148,7 +148,7 @@ mod tests {
         StakeEngineHandle,
         PersonaIdentity,
     ) {
-        let (tmp, engine) = staker_engine(SLOT, 7);
+        let (tmp, engine) = staker_engine(SLOT, 7).await;
         activate_persona(&engine, SLOT).await;
         let stake = engine.stake_handle().expect("staker has a StakeEngine");
         let active = stake

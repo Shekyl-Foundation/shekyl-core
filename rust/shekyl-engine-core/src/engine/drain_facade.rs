@@ -550,7 +550,7 @@ mod tests {
     /// the fee quote (no daemon round trip; the dummy daemon would fail one).
     #[tokio::test(flavor = "multi_thread")]
     async fn drain_on_an_idle_staker_has_no_active_persona() {
-        let (_tmp, engine) = staker_engine(3, SEED_MULT);
+        let (_tmp, engine) = staker_engine(3, SEED_MULT).await;
         let engine = Arc::new(RwLock::new(engine));
 
         let err = Engine::drain_to_principal(engine, AtomicUnits::from_raw(50_000))
@@ -580,7 +580,7 @@ mod tests {
         };
         use shekyl_types::PSlot;
 
-        let (_tmp, engine) = staker_engine(3, SEED_MULT);
+        let (_tmp, engine) = staker_engine(3, SEED_MULT).await;
         activate_persona(&engine, 3).await;
         let engine = Arc::new(RwLock::new(engine));
 

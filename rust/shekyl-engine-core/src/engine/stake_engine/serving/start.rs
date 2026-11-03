@@ -297,8 +297,8 @@ mod tests {
         crate::engine::test_support::non_staker_engine(7)
     }
 
-    fn staker_engine(slot: u32) -> (TempDir, Engine<SoloSigner>) {
-        crate::engine::test_support::staker_engine(slot, 7)
+    async fn staker_engine(slot: u32) -> (TempDir, Engine<SoloSigner>) {
+        crate::engine::test_support::staker_engine(slot, 7).await
     }
 
     async fn activate(engine: &Engine<SoloSigner>, slot: u32) {
@@ -322,7 +322,7 @@ mod tests {
 
     #[tokio::test(flavor = "multi_thread")]
     async fn an_idle_staker_gets_no_host_and_does_not_claim_the_slot() {
-        let (_tmp, engine) = staker_engine(3);
+        let (_tmp, engine) = staker_engine(3).await;
         let arc = Arc::new(RwLock::new(engine));
         let started =
             Engine::<SoloSigner>::start_serving_if_staker(arc.clone(), "http://127.0.0.1:1")
@@ -340,7 +340,7 @@ mod tests {
 
     #[tokio::test(flavor = "multi_thread")]
     async fn a_remote_daemon_is_refused_rather_than_served_over_the_principal() {
-        let (_tmp, engine) = staker_engine(3);
+        let (_tmp, engine) = staker_engine(3).await;
         activate(&engine, 3).await;
         let arc = Arc::new(RwLock::new(engine));
         let Err(err) =
@@ -368,7 +368,7 @@ mod tests {
 
     #[tokio::test(flavor = "multi_thread")]
     async fn a_second_start_is_already_running_while_the_first_host_is_held() {
-        let (_tmp, engine) = staker_engine(3);
+        let (_tmp, engine) = staker_engine(3).await;
         activate(&engine, 3).await;
         let arc = Arc::new(RwLock::new(engine));
         let first =

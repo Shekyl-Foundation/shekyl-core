@@ -1840,7 +1840,7 @@ async fn e2e_fcmp_spend_accepted_by_daemon() {
     let creds = super::lifecycle::Credentials::password_only(b"track2-spend");
     let (created, tmp) = create_wallet(daemon.rpc_port, &seed, b"track2-spend").await;
     let wallet_path = tmp.path().join("wallet");
-    created.close(&creds).expect("close created wallet");
+    created.close(&creds).await.expect("close created wallet");
 
     let rpc = HttpRpc::new(format!("http://127.0.0.1:{}", daemon.rpc_port))
         .await
@@ -2007,7 +2007,7 @@ async fn e2e_fcmp_spend_reorg_restores_pool_and_fee() {
     let creds = super::lifecycle::Credentials::password_only(b"track2-spend-reorg");
     let (created, tmp) = create_wallet(daemon.rpc_port, &seed, b"track2-spend-reorg").await;
     let wallet_path = tmp.path().join("wallet");
-    created.close(&creds).expect("close created wallet");
+    created.close(&creds).await.expect("close created wallet");
 
     let rpc = HttpRpc::new(format!("http://127.0.0.1:{}", daemon.rpc_port))
         .await
@@ -3454,7 +3454,7 @@ pub(super) async fn staker_wallet(
     engine
         .persist_bond_record(slot)
         .expect("persist bond record");
-    engine.close(&creds).expect("close created wallet");
+    engine.close(&creds).await.expect("close created wallet");
 
     let rpc = HttpRpc::new(format!("http://127.0.0.1:{rpc_port}"))
         .await
@@ -5867,6 +5867,7 @@ async fn e2e_arm3_phantom_slot_collected_at_open() {
     });
     lock.into_inner()
         .close(&creds)
+        .await
         .expect("close phantom staker");
     let rpc = HttpRpc::new(format!("http://127.0.0.1:{}", daemon.rpc_port))
         .await
@@ -5891,7 +5892,7 @@ async fn e2e_arm3_phantom_slot_collected_at_open() {
         "no actor spawns for the collected phantom"
     );
     eprintln!("arm #3 production discharge: phantom bonded_slots[{SLOT}] collected at open");
-    reopened.close(&creds).expect("close");
+    reopened.close(&creds).await.expect("close");
 }
 
 /// The build a captured chain names: the daemon's own, held to the checkout
