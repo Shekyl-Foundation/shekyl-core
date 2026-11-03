@@ -48,7 +48,6 @@
 //! This type still does not create transports; it takes one. The bound decides
 //! *which kind*, the construction site decides *whose*.
 
-use kameo::actor::ActorRef;
 use shekyl_archival_retention::HoldingsKind;
 use shekyl_curve_tree::BlockHeight;
 use shekyl_p_host::{PinReport, ServeSetPinner, StoreFacts, StoreIdentity};
@@ -57,8 +56,7 @@ use shekyl_p_store::BodyStore;
 #[cfg(test)]
 use shekyl_types::ShardId;
 
-use super::actor::StakeEngine;
-use super::persona::EraseReleasedShards;
+use super::body_store_actor::BodyStoreHandle;
 
 use crate::engine::curve_tree_actor::CurveTreeHandle;
 
@@ -109,11 +107,12 @@ pub(crate) struct EngineServeSetPinner<R: PersonaIsolatedTransport> {
 
 /// The body rows a pin release erases.
 pub(crate) enum ReleasedRows {
-    /// A store in this process. Tests have no stake actor.
+    /// A store in this process. Tests have no body-store actor.
     #[cfg(test)]
-    Store(BodyStore),
-    /// The stake actor's writer. The serving host never holds the key.
-    Actor(ActorRef<StakeEngine>),
+    Store(std::sync::Arc<BodyStore>),
+    /// The body store's owning actor (`CURVE_TREE_CLIENT.md` §11.1). The
+    /// serving host never holds the key.
+    Owner(BodyStoreHandle),
 }
 
 impl ReleasedRows {
@@ -128,12 +127,7 @@ impl ReleasedRows {
                 }
                 Ok(())
             }
-            Self::Actor(actor) => actor
-                .ask(EraseReleasedShards {
-                    shard_ids: ids.to_vec(),
-                })
-                .await
-                .map_err(|e| e.to_string()),
+            Self::Owner(bodies) => bodies.erase(ids.to_vec()).await,
         }
     }
 }

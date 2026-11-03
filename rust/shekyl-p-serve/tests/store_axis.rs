@@ -93,7 +93,7 @@ fn envelope_of(response: &[u8]) -> (HybridSignature, &[u8]) {
 async fn served_shard_is_the_put_frame() {
     let store = BodyStore::open_ephemeral(key()).expect("open");
     store.put_shard(shard(0), FRAME).expect("put");
-    let provider = StoreShardProvider::new(store.reader());
+    let provider = StoreShardProvider::new(Arc::new(store));
     let (ep, signer) = bind(Arc::new(provider)).await;
 
     let response = fetch(ep.addr(), "/shard/0").await;
@@ -120,7 +120,7 @@ async fn served_shard_is_the_put_frame() {
 async fn missing_shards_are_indistinguishable_404s() {
     let store = BodyStore::open_ephemeral(key()).expect("open");
     store.put_shard(shard(0), FRAME).expect("put");
-    let (ep, _) = bind(Arc::new(StoreShardProvider::new(store.reader()))).await;
+    let (ep, _) = bind(Arc::new(StoreShardProvider::new(Arc::new(store)))).await;
 
     let never_held = fetch(ep.addr(), "/shard/1").await;
     let unknown = fetch(ep.addr(), "/shard/77").await;
@@ -138,7 +138,7 @@ async fn erase_makes_a_held_shard_an_ordinary_404() {
     store.put_shard(shard(0), FRAME).expect("put");
     store.erase_shard(shard(0)).expect("erase");
 
-    let (ep, _) = bind(Arc::new(StoreShardProvider::new(store.reader()))).await;
+    let (ep, _) = bind(Arc::new(StoreShardProvider::new(Arc::new(store)))).await;
     let gone = fetch(ep.addr(), "/shard/0").await;
     assert!(
         gone.starts_with(b"HTTP/1.1 404 "),
@@ -152,7 +152,7 @@ async fn erase_makes_a_held_shard_an_ordinary_404() {
 fn provider_body_is_exactly_the_put_bytes() {
     let store = BodyStore::open_ephemeral(key()).expect("open");
     store.put_shard(shard(0), FRAME).expect("put");
-    let provider = StoreShardProvider::new(store.reader());
+    let provider = StoreShardProvider::new(Arc::new(store));
     let mut body = provider
         .shard_bytes(0)
         .expect("lookup")

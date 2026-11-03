@@ -174,15 +174,13 @@ where
             return Ok(None);
         };
 
-        // Outside the engine lock: both handles are actor asks, and the
-        // store lives on the stake actor, not on `Engine`. An empty store
-        // answers 404 until fill (`WSS-Q4`) lands. The reader still
-        // decrypts (`WSS-Q13` is not met). Pin-release erase asks this
-        // actor (`WSS-Q8`); the host does not receive the writer.
-        let bodies = stake
-            .serving_bodies()
-            .await
-            .map_err(|e| ServingStartError::Identity(Box::new(e)))?;
+        // The serving host reads bodies by message to the body store's
+        // owning actor, chunk by chunk, through a weak reference: it holds
+        // neither the store nor its key (`WSS-Q13`; `CURVE_TREE_CLIENT.md`
+        // §11.1). An empty store answers 404 until fill (`WSS-Q4`) lands.
+        // Pin-release erase asks the same owner (`WSS-Q8`).
+        let bodies: std::sync::Arc<dyn shekyl_p_host::HeldShardSource> =
+            std::sync::Arc::new(stake.bodies.reads());
 
         // Claim only once we know we will start a host. An idle staker must
         // not occupy the slot; a second start after activation must.
@@ -238,7 +236,9 @@ where
             curve_tree,
             claim_rpc,
             p_id.to_bytes(),
-            crate::engine::stake_engine::serve_set_source::ReleasedRows::Actor(stake.actor.clone()),
+            crate::engine::stake_engine::serve_set_source::ReleasedRows::Owner(
+                stake.bodies.clone(),
+            ),
         );
 
         Ok(Some(spawn_serving_task(

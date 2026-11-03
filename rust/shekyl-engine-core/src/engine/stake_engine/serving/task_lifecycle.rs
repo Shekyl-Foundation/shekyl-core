@@ -154,11 +154,12 @@ fn serving_identity() -> PersonaServing {
             tip.stamp_synced(BlockHeight::from_raw(9_000));
             tip
         },
-        bodies: shekyl_p_store::BodyStore::open_ephemeral(shekyl_p_store::StoreKey::from_bytes(
-            [0x7e; 32],
-        ))
-        .expect("ephemeral body store")
-        .reader(),
+        bodies: Arc::new(
+            shekyl_p_store::BodyStore::open_ephemeral(shekyl_p_store::StoreKey::from_bytes(
+                [0x7e; 32],
+            ))
+            .expect("ephemeral body store"),
+        ),
     }
 }
 

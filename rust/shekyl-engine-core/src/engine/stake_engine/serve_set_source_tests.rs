@@ -26,8 +26,10 @@ use shekyl_rpc_client::{Rpc, RpcError};
 use shekyl_types::{ChainCount, ShardId};
 use std::sync::Arc;
 
-fn test_bodies() -> BodyStore {
-    BodyStore::open_ephemeral(StoreKey::from_bytes([0x5a; 32])).expect("ephemeral body store")
+fn test_bodies() -> std::sync::Arc<BodyStore> {
+    std::sync::Arc::new(
+        BodyStore::open_ephemeral(StoreKey::from_bytes([0x5a; 32])).expect("ephemeral body store"),
+    )
 }
 
 /// A daemon serving one canned claim-source reply through the real
@@ -741,8 +743,12 @@ async fn the_same_climb_synchronized_still_releases_at_the_second_epoch_open() {
     bodies
         .put_shard(ShardId::from_raw(1), b"owed")
         .expect("plant owed shard");
-    let reader = bodies.reader();
-    let pinner = EngineServeSetPinner::new(curve_tree, rpc, [7; 32], ReleasedRows::Store(bodies));
+    let pinner = EngineServeSetPinner::new(
+        curve_tree,
+        rpc,
+        [7; 32],
+        ReleasedRows::Store(std::sync::Arc::clone(&bodies)),
+    );
 
     pinner
         .curve_tree
@@ -758,11 +764,11 @@ async fn the_same_climb_synchronized_still_releases_at_the_second_epoch_open() {
         assert_eq!(pins_in_store(&pinner.curve_tree).await, expected_pins);
     }
     assert!(
-        !reader.holds(ShardId::from_raw(9)).expect("holds"),
+        !bodies.holds(ShardId::from_raw(9)).expect("holds"),
         "the released shard's body row is erased with the pin"
     );
     assert!(
-        reader.holds(ShardId::from_raw(1)).expect("holds"),
+        bodies.holds(ShardId::from_raw(1)).expect("holds"),
         "the owed shard's body row stays"
     );
 }

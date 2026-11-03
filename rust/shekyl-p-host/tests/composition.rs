@@ -34,8 +34,9 @@ use shekyl_p_host::{
     PinnedServeSet, PriorityFailures, RefusingKey, ReportedSet, ServeCounters, ServeObligation,
     ServeSetPinner, Staleness, StalenessBound, StoreFacts, StoreIdentity,
 };
+use shekyl_p_serve::HeldShardSource;
 use shekyl_p_serve::{TestKeySigner, IDENTITY_ENVELOPE_LEN};
-use shekyl_p_store::{BodyStore, BodyStoreReader, StoreKey};
+use shekyl_p_store::{BodyStore, StoreKey};
 use shekyl_tor_control_wallet::service::{
     EventSink, OnionIdentity, ServingPosture, SupervisorPolicy, TorBinarySource, TorPosture,
     WalletTorControlConfig,
@@ -330,14 +331,14 @@ fn identity() -> OnionIdentity {
 /// Opaque frame the composition tests put and expect back.
 const HELD_FRAME: &[u8] = b"\x01held-shard-frame-for-composition";
 
-fn empty_bodies() -> BodyStoreReader {
-    BodyStore::open_ephemeral(StoreKey::from_bytes([0x11; 32]))
-        .expect("ephemeral body store")
-        .reader()
+fn empty_bodies() -> Arc<dyn HeldShardSource> {
+    Arc::new(
+        BodyStore::open_ephemeral(StoreKey::from_bytes([0x11; 32])).expect("ephemeral body store"),
+    )
 }
 
-fn bodies_holding(ids: &[u64]) -> BodyStoreReader {
-    bodies_writer_holding(ids).reader()
+fn bodies_holding(ids: &[u64]) -> Arc<dyn HeldShardSource> {
+    Arc::new(bodies_writer_holding(ids))
 }
 
 fn bodies_writer_holding(ids: &[u64]) -> BodyStore {
@@ -870,7 +871,7 @@ async fn a_refresh_pins_shards_gained_since_the_host_started() {
     // Hoisted: this test advances the chain, so it must advance the gate's
     // view of the chain too (see `tip_at`).
     let tip = tip_at(10_000);
-    let bodies = bodies_writer_holding(&[0]);
+    let bodies = Arc::new(bodies_writer_holding(&[0]));
 
     let dir = tempfile::tempdir().expect("tempdir");
     let host = PersonaServingHost::start(
@@ -881,7 +882,7 @@ async fn a_refresh_pins_shards_gained_since_the_host_started() {
             max_streams: 8,
             key: test_key(),
             tip: Arc::clone(&tip),
-            bodies: bodies.reader(),
+            bodies: Arc::clone(&bodies) as Arc<dyn HeldShardSource>,
         },
         &pinner,
         &PriorityFailures::new(),

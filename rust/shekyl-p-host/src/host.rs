@@ -10,8 +10,9 @@ use std::fmt;
 use std::sync::atomic::{AtomicU32, Ordering};
 use std::sync::{Arc, Mutex};
 
-use shekyl_p_serve::{PServeEndpoint, PassSigner, ServeCounterReader, StoreShardProvider};
-use shekyl_p_store::BodyStoreReader;
+use shekyl_p_serve::{
+    HeldShardSource, PServeEndpoint, PassSigner, ServeCounterReader, StoreShardProvider,
+};
 use shekyl_tor_control_wallet::service::{
     OnionIdentity, OnionServiceSpec, ServiceId, ServingPosture, TorPosture, WalletTorControl,
     WalletTorControlConfig,
@@ -66,10 +67,12 @@ pub struct PersonaServing {
     /// correct direction for a persona that cannot see the chain — but it
     /// is a wiring bug, not a posture.
     pub tip: Arc<DaemonTipCache>,
-    /// Read-only handle on `P`'s body store. The endpoint streams
-    /// `shard_frame` bodies from here; pin evidence still lives on the
-    /// curve-tree witness the pinner acquires (`WSS-Q1`(a)).
-    pub bodies: BodyStoreReader,
+    /// Where `P`'s held shard bodies are read from, chunk by chunk. The
+    /// endpoint streams `shard_frame` bodies from here; pin evidence still
+    /// lives on the curve-tree witness the pinner acquires (`WSS-Q1`(a)).
+    /// The source hands back plaintext copies, so the host holds no store
+    /// key (`WSS-Q13`); in the wallet it is the body-store actor.
+    pub bodies: Arc<dyn HeldShardSource>,
 }
 
 impl fmt::Debug for PersonaServing {
@@ -80,7 +83,7 @@ impl fmt::Debug for PersonaServing {
             .field("max_streams", &self.max_streams)
             .field("key", &"<dyn PassKey<IDENTITY_ENVELOPE_LEN>>")
             .field("tip", &self.tip)
-            .field("bodies", &"<BodyStoreReader>")
+            .field("bodies", &"<dyn HeldShardSource>")
             .finish()
     }
 }
