@@ -411,8 +411,8 @@ fn a_failed_facts_read_is_classified_by_its_cause() {
         TimelineBreak::FactsUnreadable,
     );
     let wrong_network = shekyl_rpc_types::IdentityMismatch::Network {
-        ours: shekyl_rpc_types::DaemonNetwork::Mainnet,
-        theirs: shekyl_rpc_types::DaemonNetwork::Testnet,
+        ours: shekyl_rpc_types::Network::Mainnet,
+        theirs: shekyl_rpc_types::Network::Testnet,
     };
     assert_eq!(
         TimelineBreak::from_facts_error(&RpcError::IdentityMismatch(wrong_network)),

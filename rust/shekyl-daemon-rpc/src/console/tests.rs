@@ -20,12 +20,12 @@ use shekyl_types::{BlockHash, TxHash};
 fn run(args: &[&str], address: Option<&str>) -> (i32, String) {
     // Mainnet: these harnesses drive the dispatch, not the handshake, and
     // their fake daemons answer mainnet.
-    run_on(shekyl_rpc_types::DaemonNetwork::Mainnet, args, address)
+    run_on(shekyl_rpc_types::Network::Mainnet, args, address)
 }
 
 /// [`run`], as a console started for `network`.
 fn run_on(
-    network: shekyl_rpc_types::DaemonNetwork,
+    network: shekyl_rpc_types::Network,
     args: &[&str],
     address: Option<&str>,
 ) -> (i32, String) {
@@ -42,7 +42,7 @@ fn run_on(
             std::ptr::null_mut(),
             addr.as_ref().map_or(std::ptr::null(), |a| a.as_ptr()),
             5,
-            network.to_cryptonote(),
+            network.code(),
             &raw mut ptr,
             &raw mut len,
         )
@@ -86,9 +86,9 @@ fn agreeing_get_version() -> String {
         current_height: 1,
         target_height: shekyl_rpc_types::Nullable::NULL,
         consensus_constants_digest: shekyl_rpc_types::CONSENSUS_CONSTANTS_DIGEST_HASH,
-        nettype: shekyl_rpc_types::DaemonNetwork::Mainnet,
+        nettype: shekyl_rpc_types::Network::Mainnet,
         genesis_hash: shekyl_rpc_types::HashHex::from_bytes(
-            shekyl_rpc_types::genesis_hash_for(shekyl_rpc_types::DaemonNetwork::Mainnet),
+            shekyl_rpc_types::genesis_hash_for(shekyl_rpc_types::Network::Mainnet),
         ),
         },
     })
@@ -1913,7 +1913,7 @@ fn the_sync_percentage_never_rounds_up_to_a_hundred() {
 /// handshake's reply is reused — `get_version` is asked once.
 #[test]
 fn the_status_line_names_the_network_get_version_reported() {
-    use shekyl_rpc_types::DaemonNetwork::Testnet;
+    use shekyl_rpc_types::Network::Testnet;
     let (address, log) = route_server_recording(vec![
         ("/get_info", info_reply(100)),
         ("/mining_status", mining_reply(false, MineSpeed::NONE)),
@@ -2277,9 +2277,9 @@ fn get_version_but(edit: impl FnOnce(&mut shekyl_rpc_types::GetVersionResponse))
         current_height: 1,
         target_height: shekyl_rpc_types::Nullable::NULL,
         consensus_constants_digest: shekyl_rpc_types::CONSENSUS_CONSTANTS_DIGEST_HASH,
-        nettype: shekyl_rpc_types::DaemonNetwork::Mainnet,
+        nettype: shekyl_rpc_types::Network::Mainnet,
         genesis_hash: shekyl_rpc_types::HashHex::from_bytes(shekyl_rpc_types::genesis_hash_for(
-            shekyl_rpc_types::DaemonNetwork::Mainnet,
+            shekyl_rpc_types::Network::Mainnet,
         )),
     };
     edit(&mut reply);
@@ -2343,7 +2343,7 @@ fn a_wrong_network_daemon_is_refused_even_though_every_other_axis_agrees() {
     // same digest and the same RPC version. Three of four axes are blind here.
     let addr = route_server(vec![(
         "json_rpc:get_version",
-        get_version_but(|r| r.nettype = shekyl_rpc_types::DaemonNetwork::Testnet),
+        get_version_but(|r| r.nettype = shekyl_rpc_types::Network::Testnet),
     )]);
     let (code, out) = run(&["print_height"], Some(&addr));
     assert_eq!(code, SHEKYL_DAEMON_CONSOLE_ERR_REQUEST, "{out}");

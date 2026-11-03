@@ -2736,11 +2736,10 @@ int shekyl_shell_relay_local(const uint8_t* blob, size_t len);
 std::size_t shekyl_peerlist_disclose(std::uint64_t session, shekyl_seam_address* out, std::size_t cap);
 /// Which network this process dials, for seed admission. `nettype` is
 /// `cryptonote::network_type` (0 mainnet, 1 testnet, 2 stagenet, 3
-/// fakechain). Called once from `core::init`, after that choice is
-/// settled and before any connector starts. Stagenet and fakechain admit
-/// no compiled seeds. This is not `shekyl_network_id`: that derivation is
-/// pure, and `get_config` builds every network's id on first use, so a
-/// record taken there would always end on stagenet. Returns 0, or -1 when
+/// regtest). Called once from `core::init`, after that choice is settled
+/// and before any connector starts. Stagenet and regtest admit no compiled
+/// seeds. This is not `shekyl_network_id`: that derivation is pure and
+/// answers for any network asked, so it cannot carry this record. Returns 0, or -1 when
 /// `nettype` is not one of those four (the record is unchanged).
 int shekyl_dialer_note_network(std::uint8_t nettype);
 /// One `get_peer_list` entry, from the Rust peer lists (RK-5a's export,

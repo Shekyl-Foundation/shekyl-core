@@ -121,7 +121,7 @@ pub struct SyncFacts {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct NodeIdentity {
     /// The network this daemon runs.
-    pub nettype: shekyl_rpc_types::DaemonNetwork,
+    pub nettype: shekyl_rpc_types::Network,
     /// Whether this is a release build.
     pub release_build: bool,
     /// The build's version string.

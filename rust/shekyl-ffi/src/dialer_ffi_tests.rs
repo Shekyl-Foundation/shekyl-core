@@ -245,13 +245,9 @@ fn a_closed_network_is_the_population() {
 
 #[test]
 fn a_noted_network_survives_every_id_derivation() {
-    const DERIVATION_ORDER: [DaemonNetwork; 3] = [
-        DaemonNetwork::Mainnet,
-        DaemonNetwork::Testnet,
-        DaemonNetwork::Stagenet,
-    ];
+    const DERIVATION_ORDER: [Network; 3] = [Network::Mainnet, Network::Testnet, Network::Stagenet];
     /// The first byte past `cryptonote::FAKECHAIN`.
-    const UNRECOGNIZED_NETTYPE: u8 = DaemonNetwork::Fakechain.to_cryptonote() + 1;
+    const UNRECOGNIZED_NETTYPE: u8 = Network::Regtest.code() + 1;
 
     // `NETWORK` is process-wide. The Tor seed test writes it under this
     // same lock; restoration stays inside the lock so a parallel test
@@ -260,7 +256,7 @@ fn a_noted_network_survives_every_id_derivation() {
     struct Restore;
     impl Drop for Restore {
         fn drop(&mut self) {
-            note_network(DaemonNetwork::Stagenet);
+            note_network(Network::Stagenet);
         }
     }
     let _restore = Restore;
@@ -272,63 +268,43 @@ fn a_noted_network_survives_every_id_derivation() {
         for network in DERIVATION_ORDER {
             let mut out = [0u8; 16];
             assert_eq!(
-                crate::network_id_ffi::shekyl_network_id(network.to_cryptonote(), out.as_mut_ptr()),
+                crate::network_id_ffi::shekyl_network_id(network.code(), out.as_mut_ptr()),
                 0
             );
         }
     };
 
-    assert_eq!(
-        shekyl_dialer_note_network(DaemonNetwork::Mainnet.to_cryptonote()),
-        0
-    );
+    assert_eq!(shekyl_dialer_note_network(Network::Mainnet.code()), 0);
     derive_each_static();
     assert_eq!(recorded(), SeedNetwork::Mainnet);
     assert_eq!(seeds(recorded()), seeds(SeedNetwork::Mainnet));
 
-    assert_eq!(
-        shekyl_dialer_note_network(DaemonNetwork::Testnet.to_cryptonote()),
-        0
-    );
+    assert_eq!(shekyl_dialer_note_network(Network::Testnet.code()), 0);
     derive_each_static();
     assert_eq!(recorded(), SeedNetwork::Testnet);
     assert_eq!(seeds(recorded()), seeds(SeedNetwork::Testnet));
 
-    assert_eq!(
-        shekyl_dialer_note_network(DaemonNetwork::Stagenet.to_cryptonote()),
-        0
-    );
+    assert_eq!(shekyl_dialer_note_network(Network::Stagenet.code()), 0);
     derive_each_static();
     assert_eq!(recorded(), SeedNetwork::None);
     assert!(seeds(recorded()).is_empty());
 
-    assert_eq!(
-        shekyl_dialer_note_network(DaemonNetwork::Fakechain.to_cryptonote()),
-        0
-    );
+    assert_eq!(shekyl_dialer_note_network(Network::Regtest.code()), 0);
     let mut mainnet_id = [0u8; 16];
-    let mut fakechain_id = [0u8; 16];
+    let mut regtest_id = [0u8; 16];
     assert_eq!(
-        crate::network_id_ffi::shekyl_network_id(
-            DaemonNetwork::Mainnet.to_cryptonote(),
-            mainnet_id.as_mut_ptr()
-        ),
+        crate::network_id_ffi::shekyl_network_id(Network::Mainnet.code(), mainnet_id.as_mut_ptr()),
         0
     );
     assert_eq!(
-        crate::network_id_ffi::shekyl_network_id(
-            DaemonNetwork::Fakechain.to_cryptonote(),
-            fakechain_id.as_mut_ptr()
-        ),
+        crate::network_id_ffi::shekyl_network_id(Network::Regtest.code(), regtest_id.as_mut_ptr()),
         0
     );
-    assert_eq!(mainnet_id, fakechain_id);
+    // Regtest's id is its own genesis's, not mainnet's (NI-Q8).
+    assert_ne!(mainnet_id, regtest_id);
     assert_eq!(recorded(), SeedNetwork::None);
 
-    assert_eq!(
-        shekyl_dialer_note_network(DaemonNetwork::Mainnet.to_cryptonote()),
-        0
-    );
+    assert_eq!(shekyl_dialer_note_network(Network::Mainnet.code()), 0);
     assert_eq!(shekyl_dialer_note_network(UNRECOGNIZED_NETTYPE), -1);
     assert_eq!(recorded(), SeedNetwork::Mainnet);
 }
@@ -342,15 +318,15 @@ fn a_closed_tor_network_draws_its_declaration_not_a_compiled_onion() {
     struct Restore;
     impl Drop for Restore {
         fn drop(&mut self) {
-            note_network(DaemonNetwork::Stagenet);
+            note_network(Network::Stagenet);
         }
     }
     let _restore = Restore;
 
     unbind();
     bind();
-    note_network(DaemonNetwork::Testnet);
-    let port = shekyl_daemon_config::Network::Testnet.p2p_port();
+    note_network(Network::Testnet);
+    let port = shekyl_daemon_config::Network::Testnet.ports().p2p;
     let host = shekyl_onion_v3::v3_onion_hostname(&[0x11; 32]);
     let declared = NetworkAddress::Tor {
         host: host.clone(),
@@ -415,10 +391,10 @@ fn compiled_seed_ports_match_the_daemon_network() {
     };
     assert!(seeds(SeedNetwork::Mainnet)
         .iter()
-        .all(|address| port(address) == Network::Mainnet.p2p_port()));
+        .all(|address| port(address) == Network::Mainnet.ports().p2p));
     assert!(seeds(SeedNetwork::Testnet)
         .iter()
-        .all(|address| port(address) == Network::Testnet.p2p_port()));
+        .all(|address| port(address) == Network::Testnet.ports().p2p));
     assert!(seeds(SeedNetwork::None).is_empty());
 }
 

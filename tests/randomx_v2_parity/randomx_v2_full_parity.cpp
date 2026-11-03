@@ -113,6 +113,7 @@
 #include <cstdlib>
 #include <cstring>
 #include <fstream>
+#include <stdexcept>
 #include <string>
 #include <vector>
 
@@ -304,28 +305,44 @@ namespace
     return v;
   }
 
-  // The mainnet genesis header around the pinned GENESIS_TX: what the
-  // deleted C++ `generate_genesis_block` assembled (the Rust owner is
-  // `shekyl-genesis-tool`'s `genesis_block`). Genesis is mined at difficulty
-  // 1, so the pinned nonce stands as written and no PoW search runs here.
-  bool generate_genesis_block(cryptonote::block &bl, const std::string &genesis_tx, uint32_t nonce, std::string &err)
+  // The network table's mainnet genesis transaction (`shekyl_network`,
+  // `rust/shekyl-network/genesis/mainnet.tx.hex`): a production coinbase the
+  // Rust genesis tool writes. The path is CMake's.
+  #ifndef MAINNET_GENESIS_TX_HEX_PATH
+  #define MAINNET_GENESIS_TX_HEX_PATH "rust/shekyl-network/genesis/mainnet.tx.hex"
+  #endif
+  std::string mainnet_genesis_tx_hex()
+  {
+    std::ifstream ifs(MAINNET_GENESIS_TX_HEX_PATH);
+    if (!ifs.good())
+      throw std::runtime_error(std::string("missing the network table's genesis at ") + MAINNET_GENESIS_TX_HEX_PATH);
+    std::string hex;
+    ifs >> hex;
+    return hex;
+  }
+
+  // The mainnet genesis header around the network table's genesis
+  // transaction: what the genesis tool's `genesis_block` assembles, nonce 0
+  // on every network (NETWORK_IDENTITY.md NI-Q1). Genesis is not mined, so
+  // no PoW search runs here.
+  bool generate_genesis_block(cryptonote::block &bl, const std::string &genesis_tx, std::string &err)
   {
     bl = {};
     cryptonote::blobdata tx_bl;
     if (!from_hex(genesis_tx, tx_bl))
     {
-      err = "GENESIS_TX is not hex";
+      err = "the genesis transaction is not hex";
       return false;
     }
     if (!cryptonote::parse_and_validate_tx_from_blob(tx_bl, bl.miner_tx))
     {
-      err = "GENESIS_TX does not parse as a transaction";
+      err = "the genesis transaction does not parse";
       return false;
     }
     bl.major_version = CURRENT_BLOCK_MAJOR_VERSION;
     bl.minor_version = CURRENT_BLOCK_MINOR_VERSION;
     bl.timestamp = 0;
-    bl.nonce = nonce;
+    bl.nonce = 0;
     shekyl_curve_tree_selene_hash_init(reinterpret_cast<uint8_t*>(&bl.curve_tree_root));
     // attestation_root: block_header() defaults to empty_attestation_root().
     bl.invalidate_hashes();
@@ -335,11 +352,7 @@ namespace
   bool genesis_case(Case &out, std::string &err)
   {
     cryptonote::block bl{};
-    if (!generate_genesis_block(
-          bl,
-          cryptonote::get_config(cryptonote::MAINNET).GENESIS_TX,
-          cryptonote::get_config(cryptonote::MAINNET).GENESIS_NONCE,
-          err))
+    if (!generate_genesis_block(bl, mainnet_genesis_tx_hex(), err))
     {
       return false;
     }

@@ -127,7 +127,7 @@ int remnant_run(const ShekylDaemonSnapshot* snapshot) noexcept
       const cryptonote::network_type console_nettype =
         testnet ? cryptonote::TESTNET
         : stagenet ? cryptonote::STAGENET
-        : regtest ? cryptonote::FAKECHAIN
+        : regtest ? cryptonote::REGTEST
         : cryptonote::MAINNET;
       daemonize::t_command_server rpc_commands{rpc_ip, rpc_port, console_nettype};
       if (rpc_commands.process_command_vec(command))

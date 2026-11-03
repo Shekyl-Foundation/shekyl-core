@@ -40,23 +40,14 @@ use std::process::{Child, Command, Stdio};
 use std::sync::{Arc, OnceLock};
 use std::time::{Duration, Instant};
 
-/// What a wallet requires of the `shekyld --network regtest` daemon these tests spawn.
-///
-/// **The only place `FakechainPolicy::Accept` is selected outside unit tests**
-/// (`VC-R3`): the harness constructs the client in-process, so the affordance
-/// needs no operator surface and none ships. A `fakechain` daemon reports
-/// mainnet's genesis hash and mainnet's constants digest — it is the same
-/// build — so `nettype` is the only axis that distinguishes it, which is
-/// exactly why the acceptance has to be explicit here rather than implied by
-/// a lever somewhere else.
-///
-/// These wallets are `Network::Mainnet` because fakechain shares mainnet's
-/// address format and the address enum has no fourth variant
-/// (`V3_WALLET_DECISION_LOG.md` :1397).
+/// What a wallet requires of the `shekyld --network regtest` daemon these
+/// tests spawn: the same as on any network. Regtest has its own genesis,
+/// prefixes and network id (`NETWORK_IDENTITY.md` NI-Q8), so a regtest
+/// wallet is `Network::Regtest` and checks a regtest daemon exactly as a
+/// mainnet wallet checks a mainnet one.
 fn regtest_expectation() -> super::DaemonExpectation {
     super::DaemonExpectation {
-        network: shekyl_address::Network::Mainnet,
-        fakechain: super::FakechainPolicy::Accept,
+        network: shekyl_address::Network::Regtest,
     }
 }
 
@@ -245,7 +236,7 @@ pub(super) fn mine_address_from_seed(
     network: shekyl_address::Network,
 ) -> String {
     use shekyl_crypto_pq::account::{account_from_seed, Network};
-    account_from_seed(seed, Network::Mainnet)
+    account_from_seed(seed, Network::Regtest)
         .expect("the keys")
         .1
         .to_address(network)
@@ -255,7 +246,7 @@ pub(super) fn mine_address_from_seed(
 
 fn default_mine_address(network: SpawnNetwork) -> String {
     let address_network = match network {
-        SpawnNetwork::Regtest => shekyl_address::Network::Mainnet,
+        SpawnNetwork::Regtest => shekyl_address::Network::Regtest,
         SpawnNetwork::Testnet => shekyl_address::Network::Testnet,
     };
     mine_address_from_seed(&[0x5a; 32], address_network)
@@ -494,7 +485,7 @@ impl RegtestDaemon {
         seed: &[u8; shekyl_crypto_pq::account::SEED_BYTES],
     ) -> RegtestDaemon {
         let serial = serial_lock().lock_owned().await;
-        let mine_address = mine_address_from_seed(seed, shekyl_address::Network::Mainnet);
+        let mine_address = mine_address_from_seed(seed, shekyl_address::Network::Regtest);
         Self::spawn(
             RegtestSpawn::new(Some(serial))
                 .with_mine_address(mine_address)
@@ -509,7 +500,7 @@ impl RegtestDaemon {
         schedule: Option<RegtestSchedule>,
     ) -> RegtestDaemon {
         let serial = serial_lock().lock_owned().await;
-        let mine_address = mine_address_from_seed(seed, shekyl_address::Network::Mainnet);
+        let mine_address = mine_address_from_seed(seed, shekyl_address::Network::Regtest);
         Self::spawn(
             RegtestSpawn::new(Some(serial))
                 .with_schedule(schedule)
@@ -1587,7 +1578,7 @@ async fn regtest_daemon_spawns_and_mines_to_wallet_address() {
     use shekyl_engine_prefs::WalletPrefs;
 
     let seed = [0x11u8; SEED_BYTES];
-    let mine_address = mine_address_from_seed(&seed, Network::Mainnet);
+    let mine_address = mine_address_from_seed(&seed, Network::Regtest);
     let serial = serial_lock().lock_owned().await;
     let daemon =
         RegtestDaemon::spawn(RegtestSpawn::new(Some(serial)).with_mine_address(mine_address)).await;
@@ -1605,7 +1596,7 @@ async fn regtest_daemon_spawns_and_mines_to_wallet_address() {
     let params = EngineCreateParams {
         base_path: &wallet_path,
         credentials: &creds,
-        network: Network::Mainnet,
+        network: Network::Regtest,
         capability: CapabilityInput::Full { seed: &seed },
         creation_timestamp: 0,
         restore_height_hint: 0,
@@ -1750,7 +1741,7 @@ async fn e2e_refresh_scans_coinbase_balance() {
     let params = super::lifecycle::EngineCreateParams {
         base_path: &wallet_path,
         credentials: &creds,
-        network: shekyl_address::Network::Mainnet,
+        network: shekyl_address::Network::Regtest,
         capability: super::lifecycle::CapabilityInput::Full { seed: &seed },
         creation_timestamp: 0,
         restore_height_hint: 0,
@@ -1850,7 +1841,7 @@ async fn e2e_fcmp_spend_accepted_by_daemon() {
     let wallet = Engine::<SoloSigner>::open_full(
         &wallet_path,
         &creds,
-        shekyl_address::Network::Mainnet,
+        shekyl_address::Network::Regtest,
         DaemonClient::verifying(rpc, regtest_expectation()),
         shekyl_engine_file::SafetyOverrides::none(),
     )
@@ -2017,7 +2008,7 @@ async fn e2e_fcmp_spend_reorg_restores_pool_and_fee() {
     let wallet = Engine::<SoloSigner>::open_full(
         &wallet_path,
         &creds,
-        shekyl_address::Network::Mainnet,
+        shekyl_address::Network::Regtest,
         DaemonClient::verifying(rpc, regtest_expectation()),
         shekyl_engine_file::SafetyOverrides::none(),
     )
@@ -2179,10 +2170,10 @@ async fn e2e_fcmp_spend_reorg_restores_pool_and_fee() {
     );
 }
 
-/// Mainnet [`EngineCreateParams`](super::lifecycle::EngineCreateParams) for the
-/// regtest wallets: FAKECHAIN uses the mainnet address format, and the KDF is
-/// the minimum-wall-clock relaxation the wallet-file tests share.
-fn mainnet_params<'a>(
+/// Regtest [`EngineCreateParams`](super::lifecycle::EngineCreateParams) for
+/// the regtest wallets; the KDF is the minimum-wall-clock relaxation the
+/// wallet-file tests share.
+fn regtest_params<'a>(
     base_path: &'a std::path::Path,
     creds: &'a super::lifecycle::Credentials<'a>,
     seed: &'a [u8; shekyl_crypto_pq::account::SEED_BYTES],
@@ -2190,7 +2181,7 @@ fn mainnet_params<'a>(
     super::lifecycle::EngineCreateParams {
         base_path,
         credentials: creds,
-        network: shekyl_address::Network::Mainnet,
+        network: shekyl_address::Network::Regtest,
         capability: super::lifecycle::CapabilityInput::Full { seed },
         creation_timestamp: 0,
         restore_height_hint: 0,
@@ -2219,7 +2210,7 @@ async fn mainnet_wallet(
 
 /// The shared create step behind [`mainnet_wallet`] and [`staker_wallet`]:
 /// tempdir, credentials, wallet RPC against the daemon port, and
-/// `Engine::create` over [`mainnet_params`]. Callers layer their own
+/// `Engine::create` over [`regtest_params`]. Callers layer their own
 /// follow-ons (address derivation; the staker's persist → close → reopen).
 /// The wallet base path is `tmp.path().join("wallet")`.
 async fn create_wallet(
@@ -2233,7 +2224,7 @@ async fn create_wallet(
     let tmp = tempfile::tempdir().expect("wallet tempdir");
     let wallet_path = tmp.path().join("wallet");
     let creds = super::lifecycle::Credentials::password_only(password);
-    let params = mainnet_params(&wallet_path, &creds, seed);
+    let params = regtest_params(&wallet_path, &creds, seed);
     let wallet = super::Engine::<super::SoloSigner>::create(
         params,
         super::DaemonClient::verifying(rpc, regtest_expectation()),
@@ -3456,7 +3447,7 @@ pub(super) async fn staker_wallet(
     let opened = super::Engine::<super::SoloSigner>::open_full(
         &base_path,
         &creds,
-        shekyl_address::Network::Mainnet,
+        shekyl_address::Network::Regtest,
         super::DaemonClient::verifying(rpc, regtest_expectation()),
         shekyl_engine_file::SafetyOverrides::none(),
     )
@@ -3481,7 +3472,7 @@ pub(super) fn persona_destination(
 ) -> super::pending::TxDestination {
     use shekyl_crypto_pq::account::{normalize_seed, Network};
     use shekyl_crypto_pq::archival_p::derive_archival_p_keys;
-    let keys = derive_archival_p_keys(&normalize_seed(seed), Network::Mainnet, slot)
+    let keys = derive_archival_p_keys(&normalize_seed(seed), Network::Regtest, slot)
         .expect("derive persona keys");
     super::pending::TxDestination::OwnPersona(keys.payment_destination())
 }
@@ -5869,7 +5860,7 @@ async fn e2e_arm3_phantom_slot_collected_at_open() {
     let reopened = super::Engine::<super::SoloSigner>::open_full(
         &tmp.path().join("wallet"),
         &creds,
-        shekyl_address::Network::Mainnet,
+        shekyl_address::Network::Regtest,
         super::DaemonClient::verifying(rpc, regtest_expectation()),
         shekyl_engine_file::SafetyOverrides::none(),
     )

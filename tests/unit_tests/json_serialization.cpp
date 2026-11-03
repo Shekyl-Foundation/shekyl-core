@@ -6,6 +6,8 @@
 #include <string>
 #include <cstring>
 #include <array>
+#include <fstream>
+#include <stdexcept>
 
 #include "byte_stream.h"
 #include "crypto/crypto.h"
@@ -232,21 +234,37 @@ namespace
     }
 } // anonymous
 
+// The network table's mainnet genesis transaction (`shekyl_network`,
+// `rust/shekyl-network/genesis/mainnet.tx.hex`): a production coinbase the
+// Rust genesis tool writes. The path is CMake's.
+#ifndef MAINNET_GENESIS_TX_HEX_PATH
+#define MAINNET_GENESIS_TX_HEX_PATH "rust/shekyl-network/genesis/mainnet.tx.hex"
+#endif
+static std::string mainnet_genesis_tx_hex()
+{
+  std::ifstream ifs(MAINNET_GENESIS_TX_HEX_PATH);
+  if (!ifs.good())
+    throw std::runtime_error(std::string("missing the network table's genesis at ") + MAINNET_GENESIS_TX_HEX_PATH);
+  std::string hex;
+  ifs >> hex;
+  return hex;
+}
+
 namespace test
 {
-    // The pinned mainnet GENESIS_TX: a production coinbase written by the
-    // Rust writer. The C++ `construct_miner_tx` that built this fixture was
-    // deleted with the C++ chain.
+    // The network table's mainnet genesis: a production coinbase written by
+    // the Rust writer. The C++ `construct_miner_tx` that built this fixture
+    // was deleted with the C++ chain.
     cryptonote::transaction
     make_miner_transaction()
     {
         cryptonote::blobdata blob;
         if (!epee::string_tools::parse_hexstr_to_binbuff(
-                cryptonote::get_config(cryptonote::MAINNET).GENESIS_TX, blob))
-            throw std::runtime_error{"GENESIS_TX is not hex"};
+                mainnet_genesis_tx_hex(), blob))
+            throw std::runtime_error{"the genesis transaction is not hex"};
         cryptonote::transaction tx{};
         if (!cryptonote::parse_and_validate_tx_from_blob(blob, tx))
-            throw std::runtime_error{"GENESIS_TX does not parse"};
+            throw std::runtime_error{"the genesis transaction does not parse"};
 
         crypto::hash id{0};
         if (!cryptonote::get_transaction_hash(tx, id))

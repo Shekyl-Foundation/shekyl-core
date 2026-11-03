@@ -238,11 +238,11 @@ mod tests {
             "{line}"
         );
         assert!(
-            line.contains("clearnet-listen=0.0.0.0:11021 (default)"),
+            line.contains("clearnet-listen=0.0.0.0:14021 (default)"),
             "{line}"
         );
         assert!(
-            line.contains("rpc-admin-listen=127.0.0.1:11029 (default)"),
+            line.contains("rpc-admin-listen=127.0.0.1:14029 (default)"),
             "{line}"
         );
         assert!(!line.contains("tor-file="), "{line}");

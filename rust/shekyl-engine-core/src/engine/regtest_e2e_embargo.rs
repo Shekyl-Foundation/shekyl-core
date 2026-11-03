@@ -123,7 +123,7 @@ async fn an_origin_whose_successor_drops_re_stems_to_its_alternate_and_never_flu
         RegtestSpawn::new(Some(serial))
             .with_mine_address(mine_address_from_seed(
                 &seed,
-                shekyl_address::Network::Mainnet,
+                shekyl_address::Network::Regtest,
             ))
             .with_peering(Peering::Closed {
                 p2p_port: origin_p2p,

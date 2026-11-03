@@ -95,7 +95,7 @@ use tokio::sync::Notify;
 use crate::facts::{
     BansBridge, ChainBridge, DoorBridge, DoorEntry, PoolBridge, StopBridge, Surroundings,
 };
-use crate::genesis::{daemon_network, pinned_genesis};
+use crate::genesis::pinned_genesis;
 use shekyl_ffi::seam_ffi::bans::BanPath;
 
 /// The runtime's blocking threads for `permits` hasher permits and an
@@ -272,7 +272,7 @@ impl Node {
             ml_kem_ek: address.ml_kem.clone(),
         });
         let miner_address = mine_address
-            .map(|address| MiningAddress::decode(&address.text, network.address_network()))
+            .map(|address| MiningAddress::decode(&address.text, network))
             .transpose()
             .map_err(|refused| OpenError::Rules(format!("the mine-address row: {refused}")))?;
         // Every template draws its `0x0C` commitment from this ring, and the
@@ -439,7 +439,7 @@ impl Node {
             Arc::new(RulesOf(rules)),
             surroundings,
             NodeIdentity {
-                nettype: daemon_network(network),
+                nettype: network,
                 release_build: args.release_build,
                 version: args.version,
                 start_time: started_at,
@@ -868,11 +868,11 @@ fn store_durability_line() -> String {
 fn genesis_pin_of(rules: ChainRules) -> GenesisPin {
     match rules {
         ChainRules::Scheduled(net) => GenesisPin::for_network(net),
-        // Regtest's block 0 is as deterministic as any network's, so its
-        // store is pinned too (S1, design review 2026-11-03). `validate`'s
-        // CEN-E1 leaves regtest unpinned (`ChainRules::trust`): harness
-        // chains mine their own genesis.
-        ChainRules::Regtest { .. } => GenesisPin::FAKECHAIN,
+        // Regtest's block 0 is its own genesis, pinned like any network's
+        // (NI-Q8).
+        ChainRules::Regtest { .. } => {
+            GenesisPin::for_network(shekyl_daemon_config::Network::Regtest)
+        }
     }
 }
 

@@ -148,7 +148,7 @@ pub fn render(network: Network, network_id: NetworkId) -> String {
 #[must_use]
 pub fn parse(text: &str) -> Option<(Network, NetworkId)> {
     let table: toml::Table = text.parse().ok()?;
-    let network = Network::from_word(table.get("network")?.as_str()?)?;
+    let network = Network::from_name(table.get("network")?.as_str()?)?;
     let hex = table.get("network-id")?.as_str()?;
     if hex.len() != 32 {
         return None;

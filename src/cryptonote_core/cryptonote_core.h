@@ -187,7 +187,7 @@ namespace cryptonote
       * @brief records the network and the relay entry
       *
       * The chain is the Rust store; this opens no database. The snapshot's
-      * network code selects FAKECHAIN as regtest does.
+      * network code selects the network, regtest included.
       *
       * @param snapshot the daemon's resolved configuration
       *

@@ -53,7 +53,7 @@ pub fn choosers(cli: &Cli) -> (Network, RunMode) {
         .iter()
         .find(|g| g.row.name == "network")
         .and_then(|g| match &g.value {
-            Value::Word(w) => Network::from_word(w),
+            Value::Word(w) => Network::from_name(w),
             _ => None,
         })
         .unwrap_or(Network::Mainnet);

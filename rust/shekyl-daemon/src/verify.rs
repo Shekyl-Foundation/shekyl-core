@@ -56,7 +56,7 @@ pub(crate) fn walk(
 ) -> Result<Walked, Stopped> {
     let network = config.network;
     Lock::creatable(&config.data_dir)?;
-    let Some(network_id) = (host.network_id_of)(network.cryptonote_code()) else {
+    let Some(network_id) = (host.network_id_of)(network.code()) else {
         return Err(Stopped::Failed(format!(
             "no network id for {}",
             network.name()

@@ -20,8 +20,7 @@ use shekyl_crypto_pq::bip39::{entropy_from_mnemonic, mnemonic_from_entropy};
 use shekyl_crypto_pq::wallet_envelope::KdfParams;
 use shekyl_engine_core::{
     CapabilityInput, Credentials, DaemonClient, DaemonExpectation, Engine, EngineCreateParams,
-    FakechainPolicy, Network, OpenedEngine, ServingStartError, SoloSigner, StakeFacade,
-    StakePosture,
+    Network, OpenedEngine, ServingStartError, SoloSigner, StakeFacade, StakePosture,
 };
 use shekyl_engine_file::paths::keys_path_from;
 use shekyl_engine_file::SafetyOverrides;
@@ -568,13 +567,7 @@ pub(crate) async fn make_daemon(
     // running this build's rules and RPC contract, before the first request.
     // `Refuse` on fakechain is the shipped value and there is no flag to
     // change it (VC-R3).
-    Ok(DaemonClient::verifying(
-        rpc,
-        DaemonExpectation {
-            network,
-            fakechain: FakechainPolicy::Refuse,
-        },
-    ))
+    Ok(DaemonClient::verifying(rpc, DaemonExpectation { network }))
 }
 
 /// Wrap a freshly opened / created engine in its shared arc — via

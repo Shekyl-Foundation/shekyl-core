@@ -190,13 +190,11 @@ TEST(mining_parity, randomx_v2_ffi_reproduces_the_canonical_kat)
   ASSERT_EQ(0, std::memcmp(via_ffi.data, expected.data(), expected.size()));
 }
 
-// The genesis identity pin (`genesis_identity_is_pow_independent`: the three
-// networks' genesis block ids, derived through the C++ `generate_genesis_block`)
-// is not here. That constructor was deleted with the C++ chain; the ids are
-// derived in pure Rust from the pinned GENESIS_TX and nonce by
-// rust/shekyl-genesis-tool/tests/genesis_block_ids.rs, and the mainnet id is
-// also derived from the captured h0 blob by
-// rust/shekyl-wire/tests/coinbase_hash.rs (MAINNET_GENESIS_BLOCK_ID).
+// The genesis identity pin is not here. The C++ `generate_genesis_block` was
+// deleted with the C++ chain; every network's genesis lives in the Rust
+// network table (rust/shekyl-network/genesis/), and
+// rust/shekyl-genesis-tool/tests/genesis_table.rs rebuilds each one from its
+// recipients file and holds the table to it.
 //
 // The genesis extra's byte-identity proof is not here. It read the fields
 // out of each network's genesis extra and handed them back to
@@ -204,8 +202,8 @@ TEST(mining_parity, randomx_v2_ffi_reproduces_the_canonical_kat)
 // commitment (SO-D12 increment 1) the writer draws its commitment in Rust
 // and takes none from its caller, so C++ has nothing to hand back and the
 // FFI writer cannot reproduce a fixed extra. The proof is in Rust, over the
-// pure writer the FFI wraps and against the same GENESIS_TX pins:
-// rust/shekyl-genesis-tool/tests/config_pin_gate.rs,
+// pure writer the FFI wraps and against the table's genesis:
+// rust/shekyl-genesis-tool/tests/genesis_table.rs,
 // the_pure_writer_reproduces_each_pinned_genesis_extra. Deleted here, not
 // kept as a weaker check (rule 15).
 

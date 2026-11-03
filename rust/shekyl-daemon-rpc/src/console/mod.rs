@@ -70,7 +70,7 @@ enum Source {
         /// must not produce a connection error. It is also the honest
         /// meaning of the check — "before the first request to this daemon"
         /// — rather than "before the console does anything".
-        checked: std::sync::OnceLock<Result<shekyl_rpc_types::DaemonNetwork, String>>,
+        checked: std::sync::OnceLock<Result<shekyl_rpc_types::Network, String>>,
     },
 }
 

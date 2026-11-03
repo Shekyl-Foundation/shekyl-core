@@ -28,8 +28,8 @@ use crate::display::short_address;
 use crate::outcome::{failed, refusal, CommandFailed, CommandResult};
 use crate::rpc_client::RpcSession;
 use shekyl_rpc_types::{
-    core_rpc_version_string, DaemonNetwork, GetInfoResponse, IdentityExpectation, IdentityMismatch,
-    IdentityRefusal,
+    core_rpc_version_string, GetInfoResponse, IdentityExpectation, IdentityMismatch,
+    IdentityRefusal, Network,
 };
 
 /// The wallet-convenience default thread count: `min(available cores, 4)`.
@@ -96,20 +96,11 @@ fn gate<'a>(
 /// on the same four axes every other client does: the RPC version, the
 /// consensus rules, the network and the genesis block. A network that is
 /// omitted or unknown does not decode, so there is no empty case to skip.
-/// A `--regtest` daemon reports `fakechain`, which no CLI network is, and
-/// is refused as it always was.
+/// Every network, regtest included, is checked the same way (NI-Q8).
 fn identity_gate(network: &str, url: &str, version: &Value) -> Result<(), CommandFailed> {
-    let ours = [
-        DaemonNetwork::Mainnet,
-        DaemonNetwork::Testnet,
-        DaemonNetwork::Stagenet,
-    ]
-    .into_iter()
-    .find(|candidate| candidate.as_str() == network)
-    .ok_or_else(|| {
+    let ours = Network::from_name(network).ok_or_else(|| {
         refusal(format!(
-            "This CLI is on a network it cannot name to the daemon ({network}); mining \
-             control needs mainnet, testnet or stagenet."
+            "This CLI is on a network it cannot name to the daemon ({network})."
         ))
     })?;
     IdentityExpectation::exact(ours)
@@ -343,14 +334,14 @@ pub(crate) fn show_mine_status(val: &Value) {
 mod tests {
     use super::{identity_gate, BUILT_IN_MINER_NOTICE};
     use shekyl_rpc_types::{
-        genesis_hash_for, DaemonNetwork, GetVersionResponse, HashHex, Nullable, RpcStatus,
+        genesis_hash_for, GetVersionResponse, HashHex, Network, Nullable, RpcStatus,
         CONSENSUS_CONSTANTS_DIGEST_HASH, CORE_RPC_VERSION,
     };
 
     const URL: &str = "http://127.0.0.1:12029";
 
     /// What a daemon of this build answers `get_version` with on `network`.
-    fn version_reply(network: DaemonNetwork) -> serde_json::Value {
+    fn version_reply(network: Network) -> serde_json::Value {
         serde_json::to_value(GetVersionResponse {
             status: RpcStatus::ok(),
             version: CORE_RPC_VERSION,
@@ -366,12 +357,8 @@ mod tests {
 
     #[test]
     fn the_gate_passes_a_daemon_on_this_clis_network() {
-        for network in [
-            DaemonNetwork::Mainnet,
-            DaemonNetwork::Testnet,
-            DaemonNetwork::Stagenet,
-        ] {
-            identity_gate(network.as_str(), URL, &version_reply(network))
+        for network in Network::ALL {
+            identity_gate(network.name(), URL, &version_reply(network))
                 .unwrap_or_else(|e| panic!("{network}: {}", e.message));
         }
     }
@@ -380,7 +367,7 @@ mod tests {
     /// refused, and the refusal names both networks and the endpoint.
     #[test]
     fn the_gate_refuses_a_daemon_on_another_network() {
-        let refused = identity_gate("testnet", URL, &version_reply(DaemonNetwork::Mainnet))
+        let refused = identity_gate("testnet", URL, &version_reply(Network::Mainnet))
             .expect_err("a mainnet daemon is not a testnet daemon");
         assert!(
             refused.message.starts_with("Network mismatch:")
@@ -392,15 +379,14 @@ mod tests {
         );
     }
 
-    /// A `--regtest` daemon reports `fakechain`. No CLI network is that, so
-    /// mining control refuses it, as it did when the network came from
-    /// `get_info`.
+    /// A regtest daemon is a network like the others (NI-Q8): a mainnet CLI
+    /// refuses it on the network axis.
     #[test]
-    fn the_gate_refuses_a_fakechain_daemon() {
-        let refused = identity_gate("mainnet", URL, &version_reply(DaemonNetwork::Fakechain))
-            .expect_err("a fakechain daemon is not a mainnet daemon");
+    fn the_gate_refuses_a_regtest_daemon_from_mainnet() {
+        let refused = identity_gate("mainnet", URL, &version_reply(Network::Regtest))
+            .expect_err("a regtest daemon is not a mainnet daemon");
         assert!(
-            refused.message.contains("reports fakechain"),
+            refused.message.contains("reports regtest"),
             "{}",
             refused.message
         );
@@ -410,7 +396,7 @@ mod tests {
     /// a daemon on another RPC version is refused on that, by version.
     #[test]
     fn the_gate_refuses_a_daemon_on_another_rpc_version() {
-        let mut reply = version_reply(DaemonNetwork::Testnet);
+        let mut reply = version_reply(Network::Testnet);
         reply["version"] = (CORE_RPC_VERSION - 1).into();
         let refused = identity_gate("testnet", URL, &reply).expect_err("an older daemon");
         assert!(
@@ -424,7 +410,7 @@ mod tests {
     /// A reply that does not name a network is not a daemon on this one.
     #[test]
     fn the_gate_refuses_a_reply_without_a_network() {
-        let mut reply = version_reply(DaemonNetwork::Testnet);
+        let mut reply = version_reply(Network::Testnet);
         reply.as_object_mut().expect("object").remove("nettype");
         let refused = identity_gate("testnet", URL, &reply).expect_err("no network named");
         assert!(
@@ -441,8 +427,8 @@ mod tests {
 
     #[test]
     fn the_gate_refuses_a_cli_network_it_cannot_name() {
-        let refused = identity_gate("fakechain", URL, &version_reply(DaemonNetwork::Fakechain))
-            .expect_err("the CLI is never on fakechain");
+        let refused = identity_gate("fakechain", URL, &version_reply(Network::Regtest))
+            .expect_err("no network is spelled fakechain");
         assert!(refused.message.contains("fakechain"), "{}", refused.message);
     }
 

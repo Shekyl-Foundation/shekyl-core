@@ -14,7 +14,7 @@ use super::*;
 fn an_empty_store_holds_the_pinned_genesis_and_the_chain_handle_answers_it() {
     let dir = tempfile::tempdir().expect("temp");
     let node = open_at(dir.path(), Arc::new(|| {}));
-    let want = BlockHash::from_bytes(shekyl_rpc_types::genesis_hash_for(DaemonNetwork::Fakechain));
+    let want = BlockHash::from_bytes(shekyl_rpc_types::genesis_hash_for(Network::Regtest));
     let identity = node.handles().chain.identity().expect("identity");
     assert_eq!(identity.genesis_hash, want);
     let at = node
@@ -120,7 +120,7 @@ fn stop_closes_the_store_withdraws_the_board_and_a_second_stop_is_a_no_op() {
     .expect("the store closed, so it opens again");
     let snap = store.begin_read().expect("read");
     let tip = snap.tip().expect("tip").recorded.expect("genesis");
-    let want = BlockHash::from_bytes(shekyl_rpc_types::genesis_hash_for(DaemonNetwork::Fakechain));
+    let want = BlockHash::from_bytes(shekyl_rpc_types::genesis_hash_for(Network::Regtest));
     assert_eq!(tip.hash, want);
     assert_eq!(
         node.handles().chain.identity(),
@@ -323,7 +323,7 @@ fn a_regtest_node_refuses_a_testnet_store_and_leaves_it_unwritten() {
             assert_eq!(
                 conflict.recorded,
                 Some(BlockHash::from_bytes(shekyl_rpc_types::genesis_hash_for(
-                    DaemonNetwork::Testnet
+                    Network::Testnet
                 )))
             );
         }

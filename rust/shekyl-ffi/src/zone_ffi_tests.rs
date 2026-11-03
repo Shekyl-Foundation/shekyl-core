@@ -333,7 +333,7 @@ fn a_tor_only_start_admits_the_compiled_onion_seeds() {
     struct Restore;
     impl Drop for Restore {
         fn drop(&mut self) {
-            crate::dialer_ffi::note_network(shekyl_rpc_types::DaemonNetwork::Stagenet);
+            crate::dialer_ffi::note_network(shekyl_rpc_types::Network::Stagenet);
         }
     }
     let _restore = Restore;
@@ -355,7 +355,7 @@ fn a_tor_only_start_admits_the_compiled_onion_seeds() {
     assert_eq!(unsafe { shekyl_seam_set_ceiling(&raw const ceiling) }, 0);
     let network_id = [9u8; 16];
     let host = ensure(network_id).expect("zone host");
-    crate::dialer_ffi::note_network(shekyl_rpc_types::DaemonNetwork::Testnet);
+    crate::dialer_ffi::note_network(shekyl_rpc_types::Network::Testnet);
 
     assert!(
         crate::dialer_ffi::start_connector(ConnectorId::Tor, &host.engine),

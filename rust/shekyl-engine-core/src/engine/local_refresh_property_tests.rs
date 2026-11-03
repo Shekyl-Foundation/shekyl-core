@@ -1537,8 +1537,8 @@ async fn refresh_after_one_fetch_failure(
 #[tokio::test(start_paused = true)]
 async fn an_identity_refusal_stops_the_fetch_without_retrying() {
     let wrong_network = RpcError::IdentityMismatch(shekyl_rpc_client::IdentityMismatch::Network {
-        ours: shekyl_rpc_client::DaemonNetwork::Mainnet,
-        theirs: shekyl_rpc_client::DaemonNetwork::Testnet,
+        ours: shekyl_rpc_client::Network::Mainnet,
+        theirs: shekyl_rpc_client::Network::Testnet,
     });
     assert_eq!(
         refresh_after_one_fetch_failure(wrong_network).await.err(),

@@ -20,7 +20,7 @@ use shekyl_daemon_config::{paths, Network, RunMode};
 
 /// The default data directory, as UTF-8, of the network `network` names.
 fn default_for(word: &str) -> Option<String> {
-    let network = Network::from_word(word)?;
+    let network = Network::from_name(word)?;
     let root = paths::root(&crate::platform::current(), RunMode::User, "data-dir").ok()?;
     paths::data_dir_default(&root, network)
         .into_os_string()

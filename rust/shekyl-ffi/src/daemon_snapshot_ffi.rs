@@ -95,7 +95,7 @@ pub struct ShekylDaemonSnapshot {
     /// The resolved data directory, NUL-terminated; read by core.
     pub data_dir: *const c_char,
     /// The network, as `cryptonote::network_type`: 0 mainnet, 1 testnet,
-    /// 2 stagenet, 3 fakechain (regtest).
+    /// 2 stagenet, 3 regtest.
     pub network: u8,
     /// Offline: both connectors off; read by core and the protocol handler.
     pub offline: bool,
@@ -188,7 +188,7 @@ impl SnapshotData {
         };
         Self {
             data_dir: c(&config.data_dir.display().to_string()),
-            network: config.network.cryptonote_code(),
+            network: config.network.code(),
             offline: config.offline(),
             fixed_difficulty: config.dev.difficulty.unwrap_or(0),
             sync: config.dev.sync,
@@ -428,7 +428,11 @@ mod tests {
         );
         assert!(data.client_endpoint.present);
         assert_eq!(data.client_endpoint.octets, [127, 0, 0, 1]);
-        assert_eq!(data.client_endpoint.port, 11029);
+        assert_eq!(
+            data.client_endpoint.port,
+            shekyl_daemon_config::Network::Regtest.ports().rpc,
+            "regtest's own RPC port (NI-Q8)"
+        );
         assert_eq!(data.mine_threads, 0, "auto reaches the miner as 0");
         assert!(data.mine_header().is_none());
         assert_eq!(data.data_dir(), d.path().display().to_string());

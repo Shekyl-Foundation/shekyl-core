@@ -53,7 +53,7 @@ async fn sync_from_a_peer(blocks: u64, seed: [u8; shekyl_crypto_pq::account::SEE
     let source_p2p = RegtestDaemon::free_port();
     let sink_p2p = RegtestDaemon::free_port_excluding(&[source_p2p]);
     let joiner_p2p = RegtestDaemon::free_port_excluding(&[source_p2p, sink_p2p]);
-    let address = mine_address_from_seed(&seed, shekyl_address::Network::Mainnet);
+    let address = mine_address_from_seed(&seed, shekyl_address::Network::Regtest);
     let _sink = RegtestDaemon::spawn(RegtestSpawn::new(None).with_peering(Peering::Linked {
         p2p_port: sink_p2p,
         peer_p2p_port: source_p2p,

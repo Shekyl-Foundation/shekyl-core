@@ -88,12 +88,10 @@ fn decode_get_info(raw: &[u8]) -> Result<GetInfoResponse, String> {
 /// The network's name as the status line prints it. A fakechain reads as
 /// mainnet there, as it always has: the line distinguished testnet and
 /// stagenet and called everything else mainnet.
-pub(super) const fn network_label(nettype: shekyl_rpc_types::DaemonNetwork) -> &'static str {
+pub(super) const fn network_label(nettype: shekyl_rpc_types::Network) -> &'static str {
     match nettype {
-        shekyl_rpc_types::DaemonNetwork::Testnet => "testnet",
-        shekyl_rpc_types::DaemonNetwork::Stagenet => "stagenet",
-        shekyl_rpc_types::DaemonNetwork::Mainnet | shekyl_rpc_types::DaemonNetwork::Fakechain => {
-            "mainnet"
-        }
+        shekyl_rpc_types::Network::Testnet => "testnet",
+        shekyl_rpc_types::Network::Stagenet => "stagenet",
+        shekyl_rpc_types::Network::Mainnet | shekyl_rpc_types::Network::Regtest => "mainnet",
     }
 }

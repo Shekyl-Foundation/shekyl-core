@@ -52,7 +52,7 @@ typedef struct shekyl_rpc_chain_tip_facts {
 // The rules digest is NOT here: it is compiled into the Rust image from
 // `config/`, so the handler reads its own constant and never asks C++ for it.
 typedef struct shekyl_rpc_identity_facts {
-    uint8_t  nettype;           // cryptonote::network_type (MAINNET=0 .. FAKECHAIN=3)
+    uint8_t  nettype;           // cryptonote::network_type (MAINNET=0 .. REGTEST=3)
     uint8_t  reserved[7];
     uint8_t  genesis_hash[32];  // block 0's id
 } shekyl_rpc_identity_facts;

@@ -577,24 +577,23 @@ fn rpc_section(r: &mut Reader<'_>) -> RpcRead {
 fn mine_section(r: &mut Reader<'_>, network: Network) -> Mine {
     let address = match r.address("mine-address") {
         Read::Present(text) => {
-            let decoded =
-                shekyl_address::ShekylAddress::decode_for_network(&text, network.address_network())
-                    .map_err(|error| error.to_string())
-                    .and_then(|decoded| {
-                        if !decoded.has_pqc_segment() {
-                            return Err(
-                                "the address has no post-quantum segments; mine to the full address"
-                                    .to_owned(),
-                            );
-                        }
-                        shekyl_crypto_pq::account::coinbase_recipient(
-                            &decoded.spend_key,
-                            &decoded.view_key,
-                            &decoded.ml_kem_encap_key,
-                        )
-                        .map(|x25519| (decoded, x25519))
-                        .map_err(|refused| refused.to_string())
-                    });
+            let decoded = shekyl_address::ShekylAddress::decode_for_network(&text, network)
+                .map_err(|error| error.to_string())
+                .and_then(|decoded| {
+                    if !decoded.has_pqc_segment() {
+                        return Err(
+                            "the address has no post-quantum segments; mine to the full address"
+                                .to_owned(),
+                        );
+                    }
+                    shekyl_crypto_pq::account::coinbase_recipient(
+                        &decoded.spend_key,
+                        &decoded.view_key,
+                        &decoded.ml_kem_encap_key,
+                    )
+                    .map(|x25519| (decoded, x25519))
+                    .map_err(|refused| refused.to_string())
+                });
             match decoded {
                 Ok((decoded, x25519)) => Some(MineAddress {
                     text,

@@ -9,9 +9,7 @@
 //! module fetches `get_version` over the blocking control transport and
 //! formats the refusal.
 
-use shekyl_rpc_types::{
-    core_rpc_version_string, DaemonNetwork, IdentityExpectation, IdentityMismatch,
-};
+use shekyl_rpc_types::{core_rpc_version_string, IdentityExpectation, IdentityMismatch, Network};
 
 use crate::ctl_client;
 
@@ -32,7 +30,7 @@ impl Source {
     /// the identity handshake: no second request, and never this console's
     /// own flag read back. In-process, it is the identity facts `get_version`
     /// itself is built from.
-    pub(super) fn network(&self) -> Result<DaemonNetwork, String> {
+    pub(super) fn network(&self) -> Result<Network, String> {
         match self {
             Source::Live(_) => {
                 let chain = crate::handles::live_chain()
@@ -74,12 +72,8 @@ impl Source {
 /// The identity handshake against a remote daemon. Its verdict is the
 /// network the daemon reported, which the expectation has checked is this
 /// console's own.
-fn handshake(
-    address: &str,
-    timeout: std::time::Duration,
-    nettype: u8,
-) -> Result<DaemonNetwork, String> {
-    let network = DaemonNetwork::from_cryptonote(nettype).ok_or_else(|| {
+fn handshake(address: &str, timeout: std::time::Duration, nettype: u8) -> Result<Network, String> {
+    let network = Network::from_code(nettype).ok_or_else(|| {
         format!(
             "refusing to render: this console was given network code {nettype}, which this \
              build does not know. It cannot say what it expects, so it will not compare."

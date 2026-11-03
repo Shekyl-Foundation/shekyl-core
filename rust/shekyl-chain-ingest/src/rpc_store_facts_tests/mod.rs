@@ -159,7 +159,7 @@ impl NodeFacts for TestNode {
 
 fn identity() -> NodeIdentity {
     NodeIdentity {
-        nettype: shekyl_rpc_types::DaemonNetwork::Mainnet,
+        nettype: shekyl_rpc_types::Network::Mainnet,
         release_build: false,
         version: "3.1.0-test".to_owned(),
         start_time: 1_700_000_000,

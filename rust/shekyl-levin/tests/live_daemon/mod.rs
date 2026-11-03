@@ -253,7 +253,7 @@ pub fn connect_from(source: Ipv4Addr, port: u16) -> Result<TcpStream, ConnectFro
 /// FAKECHAIN (`--network regtest`) derives its id from fakechain's genesis pin.
 pub fn regtest_network_id() -> shekyl_p2p_transport::NetworkId {
     shekyl_p2p_transport::network_id_from_genesis(&shekyl_rpc_types::genesis_hash_for(
-        shekyl_rpc_types::DaemonNetwork::Fakechain,
+        shekyl_rpc_types::Network::Regtest,
     ))
 }
 

@@ -36,7 +36,7 @@ use shekyl_peerlist::Peerlist;
 use std::net::SocketAddr;
 
 pub use shekyl_peerlist::{ConnectorId, NetworkAddress};
-use shekyl_rpc_types::DaemonNetwork;
+use shekyl_rpc_types::Network;
 use shekyl_seam::{connector_from_index, Hub, SocketId, SyncPayload};
 use shekyl_thread_ledger::{DedicatedThread, ThreadName};
 use shekyl_timing_engine::{EngineError, Handle, MonotonicClock, OwnerClass};
@@ -62,7 +62,7 @@ static LOOPS: Mutex<[Option<DedicatedThread>; ConnectorId::COUNT]> =
 static TIP: Mutex<Option<SyncPayload>> = Mutex::new(None);
 
 /// Which network's seeds to admit. `None` until
-/// [`shekyl_dialer_note_network`], and `None` for stagenet and fakechain,
+/// [`shekyl_dialer_note_network`], and `None` for stagenet and regtest,
 /// which have no compiled seeds.
 static NETWORK: Mutex<SeedNetwork> = Mutex::new(SeedNetwork::None);
 
@@ -125,13 +125,13 @@ pub(crate) fn set_network_id(network_id: [u8; 16]) {
 }
 
 /// The daemon's chosen network, mapped onto the seed list that network
-/// admits. Stagenet and fakechain admit none. An id derivation must not
+/// admits. Stagenet and regtest admit none. An id derivation must not
 /// call this: [`crate::network_id_ffi::shekyl_network_id`] is pure.
-pub(crate) fn note_network(network: DaemonNetwork) {
+pub(crate) fn note_network(network: Network) {
     let seeds_of = match network {
-        DaemonNetwork::Mainnet => SeedNetwork::Mainnet,
-        DaemonNetwork::Testnet => SeedNetwork::Testnet,
-        DaemonNetwork::Stagenet | DaemonNetwork::Fakechain => SeedNetwork::None,
+        Network::Mainnet => SeedNetwork::Mainnet,
+        Network::Testnet => SeedNetwork::Testnet,
+        Network::Stagenet | Network::Regtest => SeedNetwork::None,
     };
     *NETWORK.lock().expect("network") = seeds_of;
 }
@@ -146,7 +146,7 @@ pub(crate) fn note_network(network: DaemonNetwork) {
 /// end on stagenet and clearnet would admit no seeds.
 #[no_mangle]
 pub extern "C" fn shekyl_dialer_note_network(nettype: u8) -> i32 {
-    let Some(net) = DaemonNetwork::from_cryptonote(nettype) else {
+    let Some(net) = Network::from_code(nettype) else {
         return -1;
     };
     note_network(net);

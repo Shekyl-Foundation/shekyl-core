@@ -34,6 +34,9 @@ use std::str::FromStr;
 
 use shekyl_crypto_hash::cshake256_32;
 
+mod genesis;
+pub use genesis::Genesis;
+
 /// A Shekyl network. The discriminant is the network's one code: the
 /// wallet file's network byte, the FFI's network argument and the C++
 /// `cryptonote::network_type` (NI-F5).
@@ -131,6 +134,18 @@ impl Network {
         self.row().permits.contains(&lever)
     }
 
+    /// This network's genesis.
+    #[must_use]
+    pub const fn genesis(self) -> &'static Genesis {
+        self.row().genesis
+    }
+
+    /// The network id: the derived form of the network (NI-R10).
+    #[must_use]
+    pub fn network_id(self) -> NetworkId {
+        network_id_from_genesis(&self.genesis().hash())
+    }
+
     /// Whether this network accepts the staging flag `flag` (NI-R9).
     #[must_use]
     pub fn stages(self, flag: Staging) -> bool {
@@ -187,6 +202,8 @@ pub struct Row {
     pub permits: &'static [Lever],
     /// The staging flags this network accepts: test networks only.
     pub staging: &'static [Staging],
+    /// The genesis.
+    pub genesis: &'static Genesis,
 }
 
 /// A network's Bech32m address prefixes (human-readable parts).
@@ -314,6 +331,7 @@ const ROWS: [Row; 4] = [
         subdirectory: None,
         permits: &[],
         staging: &[],
+        genesis: &genesis::MAINNET,
     },
     Row {
         network: Network::Testnet,
@@ -332,6 +350,7 @@ const ROWS: [Row; 4] = [
         subdirectory: Some("testnet"),
         permits: &[],
         staging: STAGED,
+        genesis: &genesis::TESTNET,
     },
     Row {
         network: Network::Stagenet,
@@ -350,6 +369,7 @@ const ROWS: [Row; 4] = [
         subdirectory: Some("stagenet"),
         permits: &[],
         staging: STAGED,
+        genesis: &genesis::STAGENET,
     },
     Row {
         network: Network::Regtest,
@@ -368,6 +388,7 @@ const ROWS: [Row; 4] = [
         subdirectory: Some("regtest"),
         permits: &Lever::ALL,
         staging: STAGED,
+        genesis: &genesis::REGTEST,
     },
 ];
 

@@ -330,7 +330,7 @@ pub use shekyl_rpc_types::{RejectCause, SubmitTransactionRequest, SubmitVerdict}
 // The identity verdict [`RpcError::IdentityMismatch`] and
 // [`DaemonFault::Identity`] carry, with the types inside it, for the same
 // reason: a consumer that names the verdict reaches it through this crate.
-pub use shekyl_rpc_types::{DaemonNetwork, HashHex, IdentityAxis, IdentityMismatch};
+pub use shekyl_rpc_types::{HashHex, IdentityAxis, IdentityMismatch, Network};
 
 /// The HTTP `Content-Type` a daemon route expects: EPEE binary routes (`*.bin`,
 /// e.g. `get_o_indexes.bin`, `get_blocks_by_height.bin`) are
@@ -711,7 +711,7 @@ pub trait Rpc: Sync + Clone {
 #[cfg(test)]
 mod tests {
     use super::{
-        fee_tier_for, DaemonFault, DaemonNetwork, FeePriority, HashHex, IdentityMismatch, RpcError,
+        fee_tier_for, DaemonFault, FeePriority, HashHex, IdentityMismatch, Network, RpcError,
     };
     use shekyl_rpc_types::FeeTier;
 
@@ -720,8 +720,8 @@ mod tests {
     #[test]
     fn every_failure_is_classified_by_its_remedy() {
         let wrong_network = IdentityMismatch::Network {
-            ours: DaemonNetwork::Mainnet,
-            theirs: DaemonNetwork::Testnet,
+            ours: Network::Mainnet,
+            theirs: Network::Testnet,
         };
         for (err, fault) in [
             (
@@ -787,8 +787,8 @@ mod tests {
             ),
             (
                 IdentityMismatch::Network {
-                    ours: DaemonNetwork::Mainnet,
-                    theirs: DaemonNetwork::Testnet,
+                    ours: Network::Mainnet,
+                    theirs: Network::Testnet,
                 },
                 &["network mismatch:", "the daemon runs testnet"][..],
             ),
@@ -796,7 +796,7 @@ mod tests {
                 IdentityMismatch::Genesis {
                     ours: digest(3),
                     theirs: digest(4),
-                    network: DaemonNetwork::Mainnet,
+                    network: Network::Mainnet,
                 },
                 &["genesis block mismatch:", "different chain"][..],
             ),

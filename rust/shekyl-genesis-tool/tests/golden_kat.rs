@@ -22,11 +22,6 @@ use shekyl_wire::tx_extra::{
     self, TxExtraField, COINBASE_NONCE_BYTES, HYBRID_KEM_CT_BYTES, PQC_LEAF_ENTRY_LEN,
 };
 
-/// Synthetic nonce for the block-id pin. It was testnet's `GENESIS_NONCE`
-/// until the nonce was rotated; nothing here depends on the config, so the
-/// vector stays as recorded.
-const KAT_NONCE: u32 = 10101;
-
 // --- pinned vectors (recaptured 2026-08-16: genesis-txkey-v2 payment identity) ---
 // Re-pinned 2026-11-03 with "One secret, one derivation" (NI-R7, NI-R10,
 // `docs/V3_WALLET_DECISION_LOG.md`): the fixture recipients' keys are now
@@ -49,7 +44,9 @@ const KAT_BLOB_LEN: usize = 6466;
 const KAT_BLOB_SHA256_HEX: &str =
     "c6f746ab4f138d466c03e3d27772de740b9a33d8885da7d52ae7badf04f12d3a";
 const KAT_TX_HASH_HEX: &str = "b1d9360bc3d676699678af78eba140554b2e6afc9d5ffe2905bd1b4b95ec4f2b";
-const KAT_BLOCK_ID_HEX: &str = "aa45634caf8a0e6c63f14a217d82c88296cbb10ec93c9474773ae27f66ded874";
+// The block id is the genesis header over the tx, nonce 0 on every network
+// (NI-Q1); the tx pins above do not depend on the header.
+const KAT_BLOCK_ID_HEX: &str = "457c32f67081a701690f55231c22f70368d24183b5aaf6bdf50006479908e544";
 // ----------------------------------------------------------------------------
 
 fn fixture_recipients() -> Vec<Recipient> {
@@ -83,7 +80,7 @@ fn golden_kat() {
     let built = build_genesis_tx(Network::Testnet, &recipients).expect("build");
     let blob = built.tx.serialize();
     let blob_sha256 = hex::encode(Sha256::digest(&blob));
-    let block = genesis_block(built.tx, KAT_NONCE).expect("block");
+    let block = genesis_block(built.tx).expect("block");
 
     // Capture aid: on any mismatch the actual values are printed here.
     eprintln!("tx_secret      = {}", hex::encode(tx_secret));

@@ -100,56 +100,17 @@ fn fee_estimates_from_value(result: &Value) -> Result<FeeEstimates, RpcError> {
 ///
 /// Cross-cutting lock 5 (`WALLET_REWRITE_PLAN.md` :216): the daemon's
 /// network is verified before any wallet operation. Comparison itself lives
-/// in [`shekyl_rpc_types::IdentityExpectation`]; this type is the wallet
-/// mapping (`shekyl_address::Network` has no `Fakechain`).
+/// in [`shekyl_rpc_types::IdentityExpectation`]: the daemon's network is the
+/// wallet's, on every network (`NETWORK_IDENTITY.md` NI-Q8).
 #[derive(Debug, Clone)]
 pub struct DaemonExpectation {
     /// The network this wallet is bound to.
     pub network: shekyl_address::Network,
-    /// Whether a `fakechain` daemon is acceptable.
-    pub fakechain: FakechainPolicy,
-}
-
-/// Whether a wallet may run against a `shekyld --regtest` daemon (`VC-D6`).
-///
-/// **Typed, defaulted to `Refuse`, and armed only in-process by the regtest
-/// harness and by tests. There is no operator flag and none ships** (`VC-R3`).
-/// A `fakechain` daemon takes mainnet's configuration
-/// (`cryptonote_config.h:562`), so it reports mainnet's genesis hash, mainnet's
-/// constants digest and the same RPC version: three of the four axes are blind
-/// to it by construction and `nettype` is the only one that can see it. A
-/// shipped flag would therefore be a documented off-switch for the sole
-/// defence against a mainnet wallet scanning a regtest chain with real
-/// addresses. The asymmetry decides it — no flag costs a rare workflow some
-/// friction; the flag costs the defence.
-///
-/// Reopening criterion: a *named* operator task that requires it, at which
-/// point the surface is derived from that task rather than provisioned ahead
-/// of it.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
-pub enum FakechainPolicy {
-    /// A daemon reporting `fakechain` is refused. The default, and the only
-    /// value any shipped path selects.
-    #[default]
-    Refuse,
-    /// A `fakechain` daemon is accepted. Set by `regtest_e2e` and by tests.
-    Accept,
 }
 
 impl DaemonExpectation {
     fn pins(&self) -> shekyl_rpc_types::IdentityExpectation {
-        let network = match self.network {
-            shekyl_address::Network::Mainnet => shekyl_rpc_types::DaemonNetwork::Mainnet,
-            shekyl_address::Network::Testnet => shekyl_rpc_types::DaemonNetwork::Testnet,
-            shekyl_address::Network::Stagenet => shekyl_rpc_types::DaemonNetwork::Stagenet,
-            shekyl_address::Network::Regtest => shekyl_rpc_types::DaemonNetwork::Fakechain,
-        };
-        match self.fakechain {
-            FakechainPolicy::Refuse => shekyl_rpc_types::IdentityExpectation::exact(network),
-            FakechainPolicy::Accept => {
-                shekyl_rpc_types::IdentityExpectation::exact_or_fakechain(network)
-            }
-        }
+        shekyl_rpc_types::IdentityExpectation::exact(self.network)
     }
 }
 
@@ -490,9 +451,9 @@ mod tests {
             current_height: 1,
             target_height: shekyl_rpc_types::Nullable::NULL,
             consensus_constants_digest: shekyl_rpc_types::CONSENSUS_CONSTANTS_DIGEST_HASH,
-            nettype: shekyl_rpc_types::DaemonNetwork::Mainnet,
+            nettype: shekyl_rpc_types::Network::Mainnet,
             genesis_hash: shekyl_rpc_types::HashHex::from_bytes(
-                shekyl_rpc_types::genesis_hash_for(shekyl_rpc_types::DaemonNetwork::Mainnet),
+                shekyl_rpc_types::genesis_hash_for(shekyl_rpc_types::Network::Mainnet),
             ),
         };
         edit(&mut reply);
@@ -509,7 +470,6 @@ mod tests {
     fn mainnet_expectation() -> DaemonExpectation {
         DaemonExpectation {
             network: shekyl_address::Network::Mainnet,
-            fakechain: FakechainPolicy::Refuse,
         }
     }
 
@@ -610,15 +570,15 @@ mod tests {
         // JSON for every network, so a testnet daemon from this same tree
         // carries the SAME digest and the SAME RPC version.
         let err = first_request_error(
-            version_reply(|r| r.nettype = shekyl_rpc_types::DaemonNetwork::Testnet),
+            version_reply(|r| r.nettype = shekyl_rpc_types::Network::Testnet),
             mainnet_expectation(),
         )
         .await;
         assert_eq!(
             refused_on(&err),
             shekyl_rpc_types::IdentityMismatch::Network {
-                ours: shekyl_rpc_types::DaemonNetwork::Mainnet,
-                theirs: shekyl_rpc_types::DaemonNetwork::Testnet,
+                ours: shekyl_rpc_types::Network::Mainnet,
+                theirs: shekyl_rpc_types::Network::Testnet,
             }
         );
         let out = err.to_string();
@@ -629,31 +589,33 @@ mod tests {
         );
     }
 
+    /// NI-Q8: a regtest daemon is a network like the others. A mainnet
+    /// wallet refuses it on the network axis; a regtest wallet takes it.
     #[tokio::test]
-    async fn a_fakechain_daemon_is_refused_by_default_and_accepted_only_when_armed() {
-        let fakechain =
-            || version_reply(|r| r.nettype = shekyl_rpc_types::DaemonNetwork::Fakechain);
-
-        // Default: refused. This is the shipped behaviour, and there is no
-        // operator flag that changes it (VC-R3).
-        let err = first_request_error(fakechain(), mainnet_expectation()).await;
+    async fn a_regtest_daemon_is_refused_by_mainnet_and_taken_by_regtest() {
+        let regtest = || {
+            version_reply(|r| {
+                r.nettype = shekyl_rpc_types::Network::Regtest;
+                r.genesis_hash = shekyl_rpc_types::HashHex::from_bytes(
+                    shekyl_rpc_types::genesis_hash_for(shekyl_rpc_types::Network::Regtest),
+                );
+            })
+        };
+        let err = first_request_error(regtest(), mainnet_expectation()).await;
         assert!(matches!(
             refused_on(&err),
             shekyl_rpc_types::IdentityMismatch::Network { .. }
         ));
-
-        // Armed in-process, as the regtest harness does.
         let client = client_for(
-            fakechain(),
+            regtest(),
             DaemonExpectation {
-                network: shekyl_address::Network::Mainnet,
-                fakechain: FakechainPolicy::Accept,
+                network: shekyl_address::Network::Regtest,
             },
         )
         .await;
         assert!(
             client.ensure_identity().await.is_ok(),
-            "the harness must be able to run against its own regtest daemon"
+            "a regtest wallet runs against a regtest daemon"
         );
     }
 

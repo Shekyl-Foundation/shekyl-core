@@ -104,7 +104,7 @@ impl StemSinkPair {
         let serial = serial_lock().lock_owned().await;
         let origin_p2p = RegtestDaemon::free_port();
         let sink_p2p = RegtestDaemon::free_port_excluding(&[origin_p2p]);
-        let mine_address = mine_address_from_seed(seed, shekyl_address::Network::Mainnet);
+        let mine_address = mine_address_from_seed(seed, shekyl_address::Network::Regtest);
         let sink = RegtestDaemon::spawn(RegtestSpawn::new(None).with_peering(Peering::Linked {
             p2p_port: sink_p2p,
             peer_p2p_port: origin_p2p,

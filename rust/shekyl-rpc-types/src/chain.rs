@@ -36,7 +36,7 @@
 
 use serde::{Deserialize, Serialize};
 
-use crate::consensus_digest::DaemonNetwork;
+use crate::consensus_digest::Network;
 use crate::hash::HashHex;
 use crate::nullable::Nullable;
 
@@ -563,7 +563,7 @@ pub struct GetVersionResponse {
     /// An unrecognised value is a deserialization error, never a default: a
     /// daemon reporting a network this build does not know is a daemon this
     /// build cannot vouch for.
-    pub nettype: DaemonNetwork,
+    pub nettype: Network,
     /// Hash of block 0 — the **genesis** axis.
     ///
     /// Carried here rather than read from `on_get_block_hash([0])`
