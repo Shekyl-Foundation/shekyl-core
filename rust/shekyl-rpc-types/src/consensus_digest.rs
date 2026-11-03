@@ -18,8 +18,6 @@
 //!
 //! [`CORE_RPC_VERSION`]: crate::CORE_RPC_VERSION
 
-
-
 use crate::hash::HashHex;
 
 include!(concat!(env!("OUT_DIR"), "/consensus_constants_digest.rs"));
