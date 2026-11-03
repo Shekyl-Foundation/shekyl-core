@@ -1200,101 +1200,118 @@ is landed code the `WSS-13` unwind re-keys to the shard unit (`WALLET_SIDE_STORE
 
 ---
 
-## 11. Store residency across a close and a reopen — PROPOSED 2026-11-02, for review
+## 11. The curve-tree store, owned by one actor — PROPOSED 2026-11-02, for review
 
-**The problem.** A wallet's curve-tree store is one redb file, and redb
-locks it for as long as its `Database` lives. That `Database` is inside a
-`LeafStore` shared as `Arc<LeafStore>` by three holders: the writer client
-inside the `CurveTreeActor` task, the `WriterRecovery` carried by every
-`CurveTreeHandle` clone (the engine's and `LocalPendingTx`'s), and the
-`ServingReader`s inside the stake engine's serving tasks. The file is free
-only when the last of them drops, and two of them are tasks, which end after
-the engine that owned them has gone. A reopen straight after a close
-(`close` → `open_full`, the wallet RPC's close-and-reopen) can therefore
-meet `DatabaseAlreadyOpen`.
+**The problem.** A wallet's curve-tree store is one redb file, locked for as
+long as its `Database` lives. Today that `Database` sits in a `LeafStore`
+shared as `Arc<LeafStore>` by three holders: the writer client inside the
+`CurveTreeActor` task, the `WriterRecovery` carried by every
+`CurveTreeHandle` clone, and the `ServingReader`s inside the stake engine's
+serving tasks. The file is free only when the last of them drops, and two
+of them are tasks that end after the engine that owned them has gone. A
+reopen straight after a close can meet `DatabaseAlreadyOpen`, so
+`open_and_spawn` retries for up to `REOPEN_LOCK_RELEASE_TIMEOUT` (2 s,
+`c82b07a291`, `f5565b5d1b`). That is a timer doing an event's job, never
+derived at the floor device; it ran out once under load
+(`persistence_trait_save_state_round_trip`, 2026-10-31).
 
-**What stands today** (`c82b07a291`, `f5565b5d1b`): `CurveTreeHandle::
-open_and_spawn` retries the open every 2 ms for up to
-`REOPEN_LOCK_RELEASE_TIMEOUT` (2 s) while the error is
-`DatabaseAlreadyOpen`, under `block_in_place`. Three defects:
+The defect is shared ownership, not the timer. A resource that several
+tasks hold has no owner whose stop can be awaited, so nobody can say when
+it is released, and the code is left guessing. A6 (`RefreshHandle::join`
+returning while its producer still held the engine `Arc`) was the same
+defect on a different resource.
 
-1. **A timer doing an event's job** (`05-system-thinking.mdc`, one
-   mechanism, one job). Nothing knows how long the residual holders take;
-   the release *is* an event, and this waits for a guess at it.
-2. **The guess is not derived** (`76-device-provisioning-floor.mdc`). 2 s
-   is not measured at the floor device, and the release includes redb's
-   flush on drop. It ran out once on a loaded workstation
-   (`persistence_trait_save_state_round_trip`, `Io(CurveTreeStore { fault:
-   LockedElsewhere, .. })`, 2026-10-31; 5/5 alone).
-3. **It cannot tell its cases apart.** A file held by another process, a
-   file held by a live engine in this process, and a file a closed engine
-   is still releasing all read `DatabaseAlreadyOpen`. The first two wait
-   out the 2 s for nothing; only the third should wait at all.
+**The rule this section proposes, for the engine generally:** *a resource
+whose release matters has exactly one owning actor; others reach it by
+message, never by a shared handle; and the owner's stop is awaited.* When
+the await returns, the resource is gone.
 
-**Proposed: residency is tracked in-process, and the release is signalled.**
-One home, `shekyl-curve-tree` (no async runtime; std locks only).
+**What kameo guarantees** (read at source, `kameo` 0.20.0,
+`src/actor/spawn.rs`; rule 17). The actor loop ends; linked children are
+told to stop and their mailboxes awaited closed; `on_stop` runs; then
+`shutdown_result` is set, which is what `wait_for_shutdown` awaits; the
+actor value is dropped only after that. So:
 
-- **The registry.** A process-wide table of open stores, keyed by the
-  file's canonical path (for a file not yet created, the canonical parent
-  plus the file name). An entry is inserted when `LeafStore::open` opens the
-  `Database`, under the table's lock, and removed by `LeafStore`'s `Drop`
-  **after** the `Database` has dropped, so removal means the file lock is
-  gone. Removal notifies a condition variable.
-- **Two states per entry.** *Held* while an owner lease lives; *releasing*
-  once the last lease has dropped and only residual `Arc<LeafStore>`s
-  remain.
-- **The owner lease.** `CurveTreeClient::open` mints the store's one lease
-  and the client carries it. The engine moves it out into the
-  `CurveTreeHandle` (shared by every clone, like the actor cell), so the
-  store turns *releasing* when the last engine-side handle drops: an
-  explicit `close`, the wallet RPC's `drop(engine)`, or any other path that
-  drops the engine. A client whose lease is never taken (tests, the
-  benches) stays *held* until it drops, as today.
-- **Open, by case.**
-  - No entry, and redb opens: as today.
-  - No entry, and redb says `DatabaseAlreadyOpen`: another process holds
-    the file. Refused at once (`StoreOpenFault::LockedElsewhere`); no wait.
-  - Entry *held*: this process is using the store. Refused at once with a
-    distinct fault (proposed `HeldInThisProcess`), never waited on.
-  - Entry *releasing*: wait on the condition variable until the entry is
-    removed, then open. No timer decides the outcome. A warning names the
-    path and the wait every 10 s while it lasts (reporting only, rule 82),
-    so a holder that never lets go is visible rather than silent.
-- **Deleted with it** (`15-deletion-and-debt.mdc`):
+- anything the actor releases **in `on_stop`** is released before
+  `wait_for_shutdown` returns;
+- anything it releases in its own `Drop` is not (today's polling exists
+  for exactly this);
+- a supervision tree does not extend the guarantee to children: a child's
+  mailbox closes before the child's own `on_stop` runs (`notify_links`
+  takes it first), so a parent can outrun a child's cleanup. A resource
+  shared between a parent and its children is shared ownership again.
+
+**The design.**
+
+- **One owner.** The `CurveTreeActor` owns the `LeafStore` and the writer
+  client outright. No `Arc<LeafStore>` leaves it. `WriterRecovery` and
+  `ServingReader` as shared handles are deleted.
+- **Recovery inside the owner.** On `ClientError::Poisoned` the actor
+  rebuilds the in-memory tree from the store it already holds and keeps
+  running. The external respawn (`kill` → `wait_for_shutdown` →
+  `WriterRecovery::resume` → swap into the shared `Arc<Mutex<ActorRef>>`
+  cell) is deleted with the cell; a handle is a plain `ActorRef`. This
+  loses nothing: the workspace builds with `panic = "abort"`, so a panic
+  ends the process and the respawn path only ever served returned errors.
+- **Serving reads are messages.** The serving loop asks the actor for a
+  shard body; the actor reads it into owned bytes (a read transaction of a
+  few milliseconds) and replies. The seconds-long transfer runs on the
+  caller's copy, so ingest never waits behind it, which is the concern
+  `ServingReader` was built for (§9.5 item 3 of
+  `ARCHIVAL_CHALLENGE_MECHANISM.md`). The cost is one copy of the body
+  per serve, at most 3.33 MB.
+- **Close is a message, and it is awaited.** `Engine::close` becomes
+  `async`: it stops the actor and awaits `wait_for_shutdown`. `on_stop`
+  takes the client out (`Option::take`) and drops it, so the `Database` and
+  the file lock are gone before the await returns. The wallet RPC's close
+  awaits it instead of `drop(engine)`.
+- **Reopen has no retry.** `DatabaseAlreadyOpen` now means another process,
+  or a live engine in this one, holds the file. Both are refused at once
+  (`LockedElsewhere`, whose doc becomes true). Deleted:
   `open_polling_lock_release`, `REOPEN_LOCK_RELEASE_TIMEOUT`,
   `REOPEN_LOCK_RELEASE_POLL`, and `open_and_spawn`'s `block_in_place`
-  branch with its current-thread panic caveat. The wait moves into the
-  sync open in the curve-tree crate; `open_and_spawn` still runs it off the
-  async worker.
-- **Tests that can fail** (rule 47):
-  - A *releasing* store reopens only after its residual reader drops,
-    driven by the test (the reader is dropped from another thread after the
-    reopen has started waiting), with no sleep in the assertion.
-  - A *held* store refuses a second open at once with `HeldInThisProcess`.
-  - A file locked by a `Database` opened outside the registry (standing in
-    for another process) refuses at once with `LockedElsewhere`.
-  - The engine's close-then-reopen
-    (`persistence_trait_save_state_round_trip`) passes with a serving reader
-    deliberately held past the close, which the 2 s timer could not
-    guarantee.
+  branch with its current-thread panic caveat.
+- **An engine dropped without `close`** still stops its actor when its
+  last `ActorRef` drops, asynchronously. A reopen that races that is
+  refused with `LockedElsewhere`, not waited on; every production close
+  path awaits `close`.
+
+**Tests that can fail** (rule 47):
+
+- close, then reopen at once, passes with no retry anywhere, on a loaded
+  multi-thread runtime (the case the 2 s timer lost);
+- a serve read and an ingest interleave: a serve request returns owned
+  bytes while a block ingests, and the bytes match the pinned body;
+- a poisoned client is rebuilt inside the actor, and the next ingest
+  succeeds through the same `ActorRef`;
+- a second open while an engine is live is refused at once.
+
+**Scope and what it touches.** `shekyl-curve-tree` (ownership of
+`LeafStore`; `ServingReader` and `WriterRecovery` removed),
+`shekyl-engine-core` (`curve_tree_actor.rs`, `Engine::close`, the stake
+engine's serving tasks), `shekyl-p-host` (the serve-set witness holds a
+`ServingReader` today and moves to the reply bytes), `shekyl-wallet-rpc`
+(awaited close), and the GUI wallet, which today runs `persist_for_close`
+and then drops the engine (`engine_session.rs:304`, `:450`) as the wallet
+RPC does, and must await the close instead (a cross-repo change). That is a design round with its own PRs,
+not a fix.
 
 **Questions for the ruling.**
 
-- **Q1 — the leak case.** A residual holder that never drops leaves a
-  reopen waiting forever (with the warning). Accept that, since it is a
-  bug the warning names, or put a ceiling on the wait whose expiry refuses
-  with a typed fault? A ceiling is a decision bound, not a wait bound, and
-  would need a floor-device derivation of its own.
-- **Q2 — a process-wide table.** The curve-tree crate holds no
-  module-level state today. The table exists because the redb lock is
-  process-wide state already; it records what the lock does not say.
-- **Q3 — the second fault.** `StoreOpenFault::LockedElsewhere` is
-  documented as "another process holds the store's single-writer lock",
-  which today is also what an in-process holder produces. The wallet
-  contract maps it to `WALLET_LOCKED_ELSEWHERE` (-29008,
-  `shekyl-wallet-contract/src/error.rs`). A `HeldInThisProcess` arm makes
-  the doc true and needs its own mapping: the same -29008, or a new code
-  that tells the user to close the wallet this process already has open.
+- **Q1 — the rule's reach.** Adopt "one owning actor, message access,
+  awaited stop" as the engine's rule for every resource whose release
+  matters (this store, the wallet file lock, the `.pstore`, the stake
+  engine), recorded in `25-rust-architecture.mdc` or its own rule; or
+  apply it to this store first and generalise after.
+- **Q2 — the serve copy.** One owned copy per serve (≤ 3.33 MB) in
+  exchange for no shared read handle. If that copy is too costly at the
+  floor device, the alternative is a reader actor that owns its own read
+  transaction per request and is stopped and awaited before the owner,
+  which needs its own lifecycle message.
+- **Q3 — the order of work.** Ship the awaited close first (it removes the
+  timer and the flake while the readers still share the store, by having
+  `close` stop the serving tasks and await them before stopping the
+  owner), then move serving reads to messages; or do both in one round.
 
 Timeframes (`05-system-thinking.mdc`): now only. The store's format, the
 chain and V4 are untouched.
