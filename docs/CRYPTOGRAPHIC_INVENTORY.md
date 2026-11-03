@@ -135,10 +135,10 @@ one mechanism, so distinctness is an intra-mechanism property; a flat all-pairs 
 would be a category error (and would spuriously flag the legitimate cross-mechanism
 reuse of `b"nonce"`).
 
-**Census (dated snapshot, 2026-10-18, counted from the TSV's production rows): 127 registered rows across the five mechanisms —
-129 including the two one-entry micro-buckets.** The `shekyl/`-prefix lens saw ~28 at SA-3b — a severalfold undercount, which is the
+**Census (dated snapshot, 2026-11-04, counted from the TSV's production rows): 125 registered rows across the five mechanisms —
+130 including the two micro-buckets.** The `shekyl/`-prefix lens saw ~28 at SA-3b — a severalfold undercount, which is the
 measure of the blind spot SA-3b closes (SIGNATURE_ALIGNMENT §3.1). (The table below
-sums to 129: the five mechanisms 127, plus the two 1-entry micro-buckets.) **This table is a
+sums to 130: the five mechanisms 125, plus the two micro-buckets, 1 + 4.) **This table is a
 snapshot, not the checked copy** — the per-mechanism counts are pinned once, against
 the parsed TSV rows, in `domain_registry.rs::PRODUCTION_PINS`; when the registry
 legitimately changes, that pin fails and this table is refreshed with a new as-of
@@ -227,17 +227,18 @@ TSV.
 
 | Mechanism | Entry point | Count | Frozen-inherited |
 |---|---|---|---|
-| 1 — cSHAKE256 customization | `cshake256_*`, `CShake256Core::new` | 53 | 0 |
-| 2 — HKDF salt + info | `Hkdf::new(Some(salt))`, `.expand(info)` | 8 salts + 40 infos | 0 |
+| 1 — cSHAKE256 customization | `cshake256_*`, `CShake256Core::new` | 55 | 0 |
+| 2 — HKDF salt + info | `Hkdf::new(Some(salt))`, `.expand(info)` | 7 salts + 37 infos | 0 |
 | 3 — FROST transcript label | `RecommendedTranscript::new`, `.domain_separate`, `Curve::CONTEXT/ID` | 4 | 3 |
 | 4 — Blake2b DST | first `Blake2b512::update`; `sal_dst` tags | 8 | 0 |
 | 5 — keccak / schnorr challenge DST | schnorr domain; `keccak256(..)` hash-to-point/scalar prefix | 14 | 8 |
 | 6 — SHA3-256 direct-prefix (micro-bucket) | prefix fed straight to `Sha3_256` | 1 | 0 |
-| 7 — Noise prologue label (micro-bucket) | a label's own bytes mixed into a Noise handshake hash as prologue | 1 | 0 |
+| 7 — Noise prologue label (micro-bucket) | a label's own bytes mixed into a Noise handshake hash as prologue | 4 | 0 |
 
 Distinctness identity is per-mechanism; mechanism 2 is keyed by `(salt, info)`, since
-three info labels (`shekyl-ed25519-spend/-view/-ml-kem-768`) are reused across two
-derivations that differ only by salt — legitimately distinct, not a collision.
+three info labels (`shekyl-ed25519-spend/-view/-ml-kem-768`) are reused by the wallet
+derivation and the harness fixture wallet's test-only derivation, which differ only by
+salt — legitimately distinct, not a collision.
 
 **Frozen vs. live.** 11 of the 129 are **frozen-inherited** (mech-3: the FROST
 ciphersuite id/context and the SAL-multisig transcript root; mech-5: the FCMP++
