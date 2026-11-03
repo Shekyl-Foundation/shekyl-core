@@ -213,6 +213,19 @@ pub fn main(remnant: Remnant, args: &[OsString], host: &Host) -> i32 {
             return EXIT_FAILED;
         }
     };
+    // `mine = on`: the configured miner, once open has returned. `None`
+    // is the `mine-threads` row. A refusal drops the node (its `Drop`
+    // stops it) and the start fails here, rather than inside open where
+    // the same stop would run twice.
+    if config.mine.start {
+        if let Err(refused) = node.mining().start(None) {
+            tell(
+                &mut std::io::stderr(),
+                &format!("shekyld: the miner did not start: {refused}"),
+            );
+            return EXIT_FAILED;
+        }
+    }
     if !shekyl_ffi::seam_ffi::install_process_sockets(node.sockets()) {
         tell(
             &mut std::io::stderr(),

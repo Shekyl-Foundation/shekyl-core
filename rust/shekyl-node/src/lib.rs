@@ -53,12 +53,12 @@
 //! keys, while chain sync's state reads `Synced`: from open on regtest,
 //! and on every other network once chain sync's cutover publishes. With no
 //! address it posts nothing, and [`Node::posting`] says why. The miner
-//! ([`MiningControl`]) hashes what is posted. With `mine = on` the node
-//! starts it once, as the last step of open, with the `mine-threads`
-//! count; it idles until a job is posted. Off, it starts on
-//! `start_mining`. Either way `start_mining` and `stop_mining` act on the
-//! running node, and a restart returns to the configuration. Stop
-//! withdraws the board.
+//! ([`MiningControl`]) hashes what is posted. With `mine = on` the daemon's
+//! sequence starts it once, after [`Node::open`] returns, with the
+//! `mine-threads` count (`start(None)`); it idles until a job is posted.
+//! Off, it starts on `start_mining`. Either way `start_mining` and
+//! `stop_mining` act on the running node, and a restart returns to the
+//! configuration. Stop withdraws the board.
 
 #![deny(unsafe_code)]
 
@@ -170,9 +170,6 @@ pub enum OpenError {
     /// Chain sync's owner did not start.
     #[error("chain sync did not start: {0}")]
     Sync(String),
-    /// `mine = on`, and the miner refused to start.
-    #[error("the miner did not start: {0}")]
-    Mining(MiningRefused),
 }
 
 /// What [`Node::open`] needs from the composition root, which holds `main`.
@@ -548,16 +545,6 @@ impl Node {
             #[cfg(test)]
             budget: test_budget,
         };
-        // `mine = on`: the configured miner, once, as open's last step
-        // (Rick, 2026-11-02). `None` is the `mine-threads` row's count. The
-        // operator asked for a miner, so a refusal is open's: the node
-        // stops and the start fails loud rather than run without one.
-        if args.config.mine.start {
-            if let Err(refused) = node.mining.start(None) {
-                node.stop();
-                return Err(OpenError::Mining(refused));
-            }
-        }
         Ok(node)
     }
 

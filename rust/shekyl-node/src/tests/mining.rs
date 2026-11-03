@@ -230,9 +230,10 @@ fn a_thread_count_past_the_hosts_parallelism_starts_nothing() {
     assert_eq!(refused.diagnostic.code, codes::TOO_MANY_THREADS);
     assert!(!running, "no miner started");
 }
-/// `mine = on` on regtest at difficulty one: open starts the miner once,
-/// with no RPC call, and the chain grows past genesis (Rick,
-/// 2026-11-02). Red edit: leave the start to `start_mining`.
+/// `mine = on` on regtest at difficulty one: open does not start the
+/// miner. `start(None)` does, once, with the `mine-threads` row and no
+/// RPC call, and the chain grows past genesis (Rick, 2026-11-02). Red
+/// edit: leave the start to `start_mining`, or start it inside open.
 #[test]
 fn mine_on_mines_a_real_block_with_no_rpc_call() {
     let dir = tempfile::tempdir().expect("temp");
@@ -253,21 +254,25 @@ fn mine_on_mines_a_real_block_with_no_rpc_call() {
         ],
     );
     assert!(config.mine.start);
-    let node = match Node::open(OpenArgs {
+    let node = Node::open(OpenArgs {
         config: &config,
         version: "test".to_owned(),
         protocol_version: 1,
         release_build: false,
         request_stop: Arc::new(|| {}),
         relay_local: crate::no_relay(),
-    }) {
-        Ok(node) => node,
-        Err(OpenError::Mining(MiningRefused::Start(
-            shekyl_miner::MinerStartRefused::OnePermit,
-        ))) => return, // a one-permit host never mines
-        Err(other) => panic!("the node did not open: {other}"),
-    };
-    assert!(node.mining().running(), "open started the miner");
+    })
+    .unwrap_or_else(|error| panic!("the node did not open: {error}"));
+    assert!(!node.mining().running(), "open does not start the miner");
+    match node.mining().start(None) {
+        Ok(()) => {}
+        Err(MiningRefused::Start(shekyl_miner::MinerStartRefused::OnePermit)) => return,
+        Err(other) => panic!("the miner did not start: {other}"),
+    }
+    assert!(
+        node.mining().running(),
+        "the configured row started the miner"
+    );
     let handles = node.handles();
     let started = std::time::Instant::now();
     loop {
