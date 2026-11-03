@@ -13,7 +13,7 @@ use std::time::Duration;
 
 use tokio::io::{AsyncRead, AsyncReadExt, AsyncWrite, AsyncWriteExt, ReadBuf};
 
-use super::{bytes, directions, RecordStream};
+use super::{bytes, directions, wire_of, RecordStream, READ_STALL};
 
 struct Gate {
     inner: Arc<Mutex<GateInner>>,
@@ -226,6 +226,69 @@ async fn a_read_that_keeps_moving_is_not_a_stall() {
         .expect("the read task finishes")
         .expect("slow ciphertext is not a stall");
     assert_eq!(got, plain);
+}
+
+/// One byte of a record, then nothing. The stall is [`READ_STALL`] from
+/// the last byte. A second short of it, the read is still open.
+#[tokio::test(start_paused = true)]
+async fn a_partial_record_stalls_at_the_read_stall() {
+    let inbound = wire_of(&bytes(32)).await;
+    let (gate, grant) = Gate::new(inbound);
+    let ((_, _), (d_send, d_recv)) = directions();
+    let mut daemon = RecordStream::new(gate, d_send, d_recv);
+    let task = tokio::spawn(async move {
+        let mut got = vec![0u8; 32];
+        daemon.read_exact(&mut got).await
+    });
+    tokio::task::yield_now().await;
+    grant.read(1);
+    tokio::task::yield_now().await;
+    let short = READ_STALL
+        .checked_sub(Duration::from_secs(1))
+        .expect("the stall is longer than a second");
+    tokio::time::advance(short).await;
+    tokio::task::yield_now().await;
+    assert!(
+        !task.is_finished(),
+        "a partial record is open inside the stall"
+    );
+    tokio::time::advance(Duration::from_secs(1)).await;
+    tokio::task::yield_now().await;
+    let error = task
+        .await
+        .expect("the read task finishes")
+        .expect_err("a partial record with no further byte stalls");
+    assert_eq!(error.kind(), io::ErrorKind::TimedOut);
+}
+
+/// Nothing has arrived, so the wait is the idle the caller set, not
+/// [`READ_STALL`]. The stream is open after the stall and closed at the
+/// idle.
+#[tokio::test(start_paused = true)]
+async fn an_untouched_stream_waits_out_its_idle() {
+    let (gate, _grant) = Gate::new(Vec::new());
+    let ((_, _), (d_send, d_recv)) = directions();
+    let mut daemon = RecordStream::new(gate, d_send, d_recv);
+    let idle = READ_STALL.checked_mul(2).expect("the idle fits");
+    daemon.set_idle(idle);
+    let task = tokio::spawn(async move {
+        let mut buf = [0u8; 1];
+        daemon.read(&mut buf).await
+    });
+    tokio::task::yield_now().await;
+    tokio::time::advance(READ_STALL).await;
+    tokio::task::yield_now().await;
+    assert!(
+        !task.is_finished(),
+        "an untouched stream stays open through the read stall"
+    );
+    tokio::time::advance(READ_STALL).await;
+    tokio::task::yield_now().await;
+    let error = task
+        .await
+        .expect("the read task finishes")
+        .expect_err("the configured idle closes an untouched stream");
+    assert_eq!(error.kind(), io::ErrorKind::TimedOut);
 }
 
 /// Shutdown writes the close record through the same drain as a response.
