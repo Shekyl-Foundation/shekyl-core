@@ -71,7 +71,6 @@ GROUPS = [
             "ShekylSeamObserved": "shekyl_seam_observed",
             "ShekylSeamOpenResult": "shekyl_seam_open_result",
             "ShekylSeamBoardRow": "shekyl_seam_board_row",
-            "ShekylSeamSessionCounts": "shekyl_seam_session_counts_t",
             "ShekylSeamHandshakeResult": "shekyl_seam_handshake_result",
             "ShekylRpcPeerFacts": "shekyl_rpc_peer_facts",
             "ShekylBanView": "shekyl_ban_view",
@@ -80,8 +79,8 @@ GROUPS = [
     },
     {
         # The daemon RPC's twins of the C++ facts it still reads. The peer
-        # list and the session counts are owned Rust rows, so they are not
-        # paired here; `shekyl-ffi` pairs the C exports.
+        # list is an owned Rust row, so it is not paired here; `shekyl-ffi`
+        # pairs that C export. Session counts have no C export.
         "crate": "rust/shekyl-daemon-rpc/src/lib.rs",
         "namespace": "rust_daemon_rpc",
         "headers": [

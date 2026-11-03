@@ -8,9 +8,9 @@
 //! A count is an integer: [`shekyl_seam_board_count`] for one connector
 //! and direction, [`shekyl_seam_board_direction_count`] for that direction
 //! on every connector. Both count a row whether or not the handshake has
-//! finished. [`shekyl_seam_session_counts`] counts the rows that **have**
-//! finished it, per direction, from one snapshot, and is the one export
-//! here that says when there is no hub. Address walks use [`shekyl_seam_board`]: one snapshot, and
+//! finished. The handshaken counts are
+//! [`crate::rpc_peerlist_ffi::session_counts`], which the daemon reads;
+//! this module does not export them. Address walks use [`shekyl_seam_board`]: one snapshot, and
 //! each visit is one fixed-size row. An id is
 //! [`shekyl_seam_session_established`] or [`shekyl_seam_session_connector`].
 //! Those do not copy the board. The row is the admission id, the
@@ -132,63 +132,6 @@ pub extern "C" fn shekyl_seam_board_direction_count(direction: u32) -> u64 {
         return 0;
     };
     u64::try_from(hub.board().direction_count(direction)).unwrap_or(u64::MAX)
-}
-
-/// [`shekyl_seam_session_counts`] wrote the counts.
-pub const SHEKYL_SEAM_COUNT_OK: i32 = 0;
-/// `out` was null. Nothing was written.
-pub const SHEKYL_SEAM_COUNT_ERR_NULL: i32 = -1;
-/// No hub is bound in this process. Nothing was written: there are no
-/// counts to give, which is not counts of zero.
-pub const SHEKYL_SEAM_COUNT_ERR_NO_HUB: i32 = -2;
-
-/// The board's sessions, per direction, over **one** snapshot.
-///
-/// A session is a row that has finished the Levin handshake. A row before
-/// its handshake is a socket, not a session: it cannot relay, the hub's
-/// socket counts already report it, and an inbound one costs whoever opened
-/// it almost nothing, so counting it would let anyone inflate what this
-/// node reports. Both counts are on every connector.
-#[repr(C)]
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub struct ShekylSeamSessionCounts {
-    pub outbound: u64,
-    pub inbound: u64,
-}
-
-const _: () = {
-    assert!(std::mem::offset_of!(ShekylSeamSessionCounts, outbound) == 0);
-    assert!(std::mem::offset_of!(ShekylSeamSessionCounts, inbound) == 8);
-    assert!(std::mem::size_of::<ShekylSeamSessionCounts>() == 16);
-};
-
-/// The process hub's session counts, from one snapshot of its board.
-///
-/// Wraps [`crate::rpc_peerlist_ffi::session_counts`]: one definition of a
-/// session. The daemon reads that function. This export remains because
-/// the header declares it and the layout gate pairs the struct. No C++
-/// calls it.
-///
-/// A null `out` returns [`SHEKYL_SEAM_COUNT_ERR_NULL`] and writes nothing.
-/// No hub returns [`SHEKYL_SEAM_COUNT_ERR_NO_HUB`] and writes nothing:
-/// zero sessions is an answer, and a missing hub is not that answer.
-///
-/// # Safety
-///
-/// `out` is null or points to a writable [`ShekylSeamSessionCounts`].
-#[no_mangle]
-pub unsafe extern "C" fn shekyl_seam_session_counts(out: *mut ShekylSeamSessionCounts) -> i32 {
-    if out.is_null() {
-        return SHEKYL_SEAM_COUNT_ERR_NULL;
-    }
-    let Some((outbound, inbound)) = crate::rpc_peerlist_ffi::session_counts() else {
-        return SHEKYL_SEAM_COUNT_ERR_NO_HUB;
-    };
-    // SAFETY: `out` is non-null, and the caller's contract makes it writable.
-    unsafe {
-        out.write(ShekylSeamSessionCounts { outbound, inbound });
-    }
-    SHEKYL_SEAM_COUNT_OK
 }
 
 /// Visit the process hub's board, one fixed-size row per call.
@@ -361,7 +304,7 @@ mod tests {
         assert_eq!(bound, 0);
         assert_eq!(unsafe { shekyl_seam_set_ceiling(&raw const ceiling) }, 0);
         assert_eq!(shekyl_seam_install_loopback(), 0);
-        assert_eq!(session_counts(), Ok(counts(0, 0)), "a hub with no rows");
+        assert_eq!(session_counts(), Some((0, 0)), "a hub with no rows");
 
         let mut seen = Seen {
             rows: Vec::new(),
@@ -420,7 +363,7 @@ mod tests {
         assert_eq!(shekyl_seam_board_direction_count(UNNAMED_INDEX), 0);
         assert_eq!(
             session_counts(),
-            Ok(counts(0, 0)),
+            Some((0, 0)),
             "a row before its handshake occupies a dial slot (the count \
              above) and is not a session"
         );
@@ -428,7 +371,7 @@ mod tests {
         shekyl_zone_session_established(opened.id);
         assert_eq!(
             session_counts(),
-            Ok(counts(1, 0)),
+            Some((1, 0)),
             "the handshake makes it a session, in its own direction"
         );
         assert_eq!(visit(&mut seen), 0);
@@ -449,7 +392,7 @@ mod tests {
         shekyl_seam_close(opened.id);
         assert_eq!(
             session_counts(),
-            Ok(counts(0, 0)),
+            Some((0, 0)),
             "a closed session is not one"
         );
         assert_eq!(shekyl_seam_session_established(opened.id), NO_ROW);
@@ -475,7 +418,7 @@ mod tests {
         assert!(seen.pointer_was_null);
         assert_eq!(
             session_counts(),
-            Err(SHEKYL_SEAM_COUNT_ERR_NO_HUB),
+            None,
             "unbound again: no hub, which is not zero sessions"
         );
 
@@ -483,26 +426,13 @@ mod tests {
         armer.join().expect("armer");
     }
 
-    fn counts(outbound: u64, inbound: u64) -> ShekylSeamSessionCounts {
-        ShekylSeamSessionCounts { outbound, inbound }
-    }
-
-    /// The counts, or the code that says why there are none.
-    fn session_counts() -> Result<ShekylSeamSessionCounts, i32> {
-        // Values no board can hold, so a write is told apart from none.
-        let untouched = counts(u64::MAX, u64::MAX);
-        let mut out = untouched;
-        match unsafe { shekyl_seam_session_counts(&raw mut out) } {
-            SHEKYL_SEAM_COUNT_OK => Ok(out),
-            code => {
-                assert_eq!(out, untouched, "a refusal writes nothing");
-                Err(code)
-            }
-        }
+    /// The handshaken counts. `None` is no hub, which is not zero sessions.
+    fn session_counts() -> Option<(u64, u64)> {
+        crate::rpc_peerlist_ffi::session_counts()
     }
 
     /// **A missing hub is not zero sessions.** The other counts in this
-    /// file answer `0` for it. This one's reader turns the counts into
+    /// file answer `0` for it. The session read turns the counts into
     /// "this node has a peer" and "this node has N connections", so `0`
     /// here would report a node whose p2p layer is not up as a node with
     /// nobody to talk to.
@@ -512,10 +442,6 @@ mod tests {
         unsafe {
             shekyl_seam_bind(std::ptr::null_mut(), None);
         }
-        assert_eq!(session_counts(), Err(SHEKYL_SEAM_COUNT_ERR_NO_HUB));
-        assert_eq!(
-            unsafe { shekyl_seam_session_counts(std::ptr::null_mut()) },
-            SHEKYL_SEAM_COUNT_ERR_NULL
-        );
+        assert_eq!(session_counts(), None);
     }
 }
