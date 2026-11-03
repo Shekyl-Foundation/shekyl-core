@@ -259,7 +259,7 @@ mod tests {
     /// A staker with no active persona has nothing to fund.
     #[tokio::test(flavor = "multi_thread")]
     async fn stake_in_on_an_idle_staker_has_no_active_persona() {
-        let (_tmp, engine) = staker_engine(3, SEED_MULT);
+        let (_tmp, engine) = staker_engine(3, SEED_MULT).await;
         let err = engine
             .stake_in_request(AtomicUnits::from_raw(50_000))
             .await
@@ -273,7 +273,7 @@ mod tests {
     /// funding aside.
     #[tokio::test(flavor = "multi_thread")]
     async fn stake_in_request_is_a_single_output_to_the_active_persona() {
-        let (_tmp, engine) = staker_engine(3, SEED_MULT);
+        let (_tmp, engine) = staker_engine(3, SEED_MULT).await;
         activate_persona(&engine, 3).await;
         let amount = AtomicUnits::from_raw(50_000);
 

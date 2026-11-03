@@ -128,9 +128,9 @@ pub enum SendError {
     /// [`Self::SpendUnavailableRebuilding`]: that is the *benign, self-healing*
     /// "tree is behind" state (the cursor read **succeeded** and returned a
     /// height below `synced_height`); this is a *hard* infrastructure failure
-    /// (the cursor read **failed** — the actor is fail-stopped). It is terminal
-    /// until the engine-side actor respawn (R1-Q4) lands; a retry against a
-    /// dead actor reproduces it.
+    /// (the cursor read **failed** — the actor has stopped). It is terminal
+    /// for the session: the actor is not restarted, so a retry reproduces it
+    /// and reopening the wallet is the remedy.
     #[error("curve-tree unavailable: {detail}")]
     CurveTreeUnavailable {
         /// Stringified [`CurveTreeHandleError`](crate::engine::curve_tree_actor::CurveTreeHandleError).

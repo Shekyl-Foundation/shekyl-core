@@ -283,6 +283,7 @@ id = "serve-floor-verdict"
 spec = [
   "rust/shekyl-p-serve/src",
   ":(exclude,glob)rust/shekyl-p-serve/src/*_tests.rs",
+  "rust/shekyl-engine-core/src/engine/stake_engine/body_store_actor.rs",
 ]
 stale_through = [
   { through = "155e85a130", note = "PR #995. Its code commit, bfcf46c092, is arm B of the same capture: every line of the verdict was read on it beside arm A and holds there, with an abandoned full segment at 3.8 ms against 3.9. The two commits after it reword doc comments in delivery.rs and serve.rs and change no code." },
@@ -304,6 +305,8 @@ stale_through = [
   { through = "08af7470a1", note = "The pass transcript opens with a stream byte, so a served response signs 113 bytes where it signed 112, and a header that does not decode is refused before the store. A valid economy header is the previous 72 bytes with a leading zero. The floor verdict prices an abandoned request, which never reaches the signature; the extra byte is on the header check ahead of the body. Not re-measured." },
   { through = "1871825227", note = "The module comment in serve.rs states that 73-byte header and 113-byte transcript. No executable code changed, so a served response costs what it did at 08af7470a1. Not re-measured." },
   { through = "efa02f64b", note = "The served identity pin is regenerated from the same seeds, so the signature covers the 113-byte transcript 08af7470a1 already signs. Fixture bytes only. No read, hash, sign or socket operation on the serve path changed. Not re-measured." },
+  { through = "24ef80f60c", note = "The serve provider reads a held shard through HeldShardSource. A served body asks the body-store actor once to open and once per chunk; the endpoint's blocking thread waits, and the actor does the redb read and the AEAD open. An abandoned request that never opens a shard does not pay that hop. The floor probe's BodyStore source still reads in process. A response's bytes are unchanged. Not re-measured; the rows stay stale from the sealed-body decrypt." },
+  { through = "d85697a328", note = "The body-store actor leaves the engine runtime for its own one-worker runtime, sk-body-store, whose threads lower themselves to serving nice before they take work. The redb read and the chunk decrypt of a served body run there for the whole session. The endpoint thread still only waits. Not re-measured; the rows stay stale." },
 ]
 
 [[path_set]]
@@ -313,6 +316,7 @@ spec = [
   ":(exclude,glob)rust/shekyl-p-serve/src/*_tests.rs",
   "rust/shekyl-p-fetch/src",
   ":(exclude,glob)rust/shekyl-p-fetch/src/*_tests.rs",
+  "rust/shekyl-engine-core/src/engine/stake_engine/body_store_actor.rs",
 ]
 stale_through = [
   { through = "765d6991ba", note = "PR #969 (dev, 2026-10-05): the pass-digest audit bound to its types — a rewritten doc comment in served_frame.rs and pass_anchor.rs and a new test in delivery.rs. No production code path changed, so no cost moved. Heard here by the next branch to merge it, since the gate landed between the two." },
@@ -362,6 +366,8 @@ stale_through = [
   { through = "3a1e5a9d4", note = "SO-D12 4c: Malformed::FrameLong carries the count of content bytes left ahead of the envelope, the value the reader already held when it refused. One u64 in an error value on a refused read; a good read is unchanged. Not re-measured." },
   { through = "6cf2bff68", note = "SO-D12 4c: Timeouts::fetch_ceiling in shekyl-p-fetch client.rs is a const fn summing the existing bounds, called at compile time by the bundle producer; no fetch runs it. The producer now starts at most MAX_INFLIGHT (8) challenge reads at once where it spawned every due read and let the rest queue on the client's semaphore, so the client's concurrency is the 8 it already was. No read, hash, signature or socket operation is added. Not re-measured." },
   { through = "6e5d82e510", note = "The fetch client can read its SOCKS address at each fetch (the managed Tor's route) instead of holding one: a function call before the TCP connect, and with no route the fetch is Stall::NoRoute before any I/O. The dial, the head and body reads and the countersignature check are unchanged. Not re-measured." },
+  { through = "24ef80f60c", note = "The serve provider reads a held shard through HeldShardSource. A served body asks the body-store actor once to open and once per chunk; the endpoint's blocking thread waits, and the actor does the redb read and the AEAD open. One actor round trip per chunk is added on the wallet's serve path. The floor probe's BodyStore source still reads in process, and the fetch client is unchanged. A response's bytes are unchanged. Not re-measured; the rows stay stale." },
+  { through = "d85697a328", note = "The body-store actor leaves the engine runtime for its own one-worker runtime, sk-body-store, whose threads lower themselves to serving nice before they take work. The redb read and the chunk decrypt of a served body run there for the whole session. The endpoint thread still only waits, and the fetch client is unchanged. Not re-measured; the rows stay stale." },
 ]
 
 [[constant]]
@@ -919,6 +925,10 @@ stale_through = [
   { through = "1871825227", note = "The request-header doc and its length assertion name the stream byte (1 + 32 + 8 + 32). The constant stays 73. No function on the spend path changed. Not measured." },
   { through = "501c0896eb", note = "ESR-16 completion, ruling 3: SEGMENT_FREEZE_REORG_MARGIN_BLOCKS in segment.rs reads shekyl_types::ARCHIVAL_REORG_DEPTH_BLOCKS instead of a constant curve-tree's own build script generated from the same key. The value stays 720; tree build, path assembly and the prover do the same work. Not measured." },
   { through = "72168f6f2e", note = "DEL-008's Rust half (#1212): doc comments only, in shekyl-curve-tree's client.rs and redb_backend.rs and shekyl-fcmp's tree.rs, re-tensed because the frozen-segment count they contrasted with is deleted. No function, constant or code path changed; nothing the capture prices moved." },
+  { through = "f6276873bf", note = "CurveTreeClient forwards the store facts a serve-set witness reads (sync tip, missing pins, prune flag, pruned segments) and gains rebuild, which resumes the in-memory tree over the store it already holds. Those are the witness and the poison recovery. Tree build, path assembly and the prover are untouched. Not measured; the rows stay stale." },
+  { through = "c28af0881e", note = "test_tamper_poison, compiled only under the test-tamper feature, sets the client's poisoned flag. No production function changed. The spend path is untouched. Not measured." },
+  { through = "cbc978bfd5", note = "ServingReader and WriterRecovery are deleted, and with them the frozen-segment body read and the external resume handle. The client's fact forwards remain. Path assembly, tree build and the prover do the same work. Not measured; the rows stay stale." },
+  { through = "981fc8af04", note = "is_already_open is deleted from ClientError and StoreError, and the LockedElsewhere doc says the lock is not transient. No spend-path function changed. Not measured." },
 ]
 
 [[constant]]

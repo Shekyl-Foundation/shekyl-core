@@ -464,7 +464,7 @@ impl Served {
                 .expect("put shard 0");
         }
         let provider = Arc::new(Shards {
-            store: StoreShardProvider::new(store.reader()),
+            store: StoreShardProvider::new(Arc::new(store)),
             one_leaf: synthetic(size_of(1).1),
             eighth: synthetic(size_of(2).1),
             full: synthetic(size_of(3).1),

@@ -313,7 +313,7 @@ mod tests {
         mark_known(&engine, txid);
         engine.set_tx_note(txid, "keep me".to_owned()).expect("set");
         // Release the advisory lock before reopening.
-        engine.close(&creds).expect("close");
+        engine.close(&creds).await.expect("close");
 
         // Reopen the same wallet files: the note is durable state.
         let opened = Engine::<SoloSigner>::open_full(

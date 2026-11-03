@@ -217,7 +217,7 @@ async fn staker_auto_start_single_flight_and_shutdown_releases_the_engine() {
     engine
         .persist_bond_record(PSlot::from_raw(3))
         .expect("persist bond record");
-    engine.close(&creds).expect("close created wallet");
+    engine.close(&creds).await.expect("close created wallet");
 
     let opened = Engine::<SoloSigner>::open_full(
         &base_path,
@@ -270,7 +270,7 @@ async fn staker_auto_start_single_flight_and_shutdown_releases_the_engine() {
     let engine = Arc::try_unwrap(arc)
         .unwrap_or_else(|_| panic!("the shut-down task must not hold the engine arc"))
         .into_inner();
-    engine.close(&creds).expect("close after shutdown");
+    engine.close(&creds).await.expect("close after shutdown");
 }
 
 /// A stopped scan can be started again: the slot is reusable across
@@ -293,7 +293,7 @@ async fn pscan_can_be_restarted_after_shutdown() {
     engine
         .persist_bond_record(PSlot::from_raw(0))
         .expect("persist bond record");
-    engine.close(&creds).expect("close created wallet");
+    engine.close(&creds).await.expect("close created wallet");
     let engine = Engine::<SoloSigner>::open_full(
         &base_path,
         &creds,

@@ -104,8 +104,8 @@ pub(crate) enum ClaimOrchestrationError {
     /// or a malformed reply — the untrusted-boundary refusals).
     #[error("claim-source fetch failed: {0}")]
     Source(#[from] EmissionSourceError),
-    /// A curve-tree handle call failed (client refusal or a stopped actor —
-    /// terminal until the engine respawns the actor).
+    /// A curve-tree handle call failed (client refusal, or a stopped actor,
+    /// which is terminal for the session).
     #[error("curve tree unavailable or refused: {0:?}")]
     Tree(CurveTreeHandleError),
     /// No submittable reference can be anchored right now (chain too short,
