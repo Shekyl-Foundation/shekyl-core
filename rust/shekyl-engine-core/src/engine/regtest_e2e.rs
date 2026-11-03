@@ -6614,11 +6614,11 @@ async fn native_handlers_apply_their_own_request_caps() {
         .await
         .expect("restricted /get_transactions over cap");
     assert_eq!(
-        status(&over),
-        "Too many transactions requested in restricted mode",
-        "a restricted listener must refuse more than {TX_CAP} hashes; if this \
-         says OK the handler saw a null connection context and the restricted \
-         gate is inert again"
+        over.pointer("/error/code")
+            .and_then(serde_json::Value::as_i64),
+        Some(shekyl_rpc_types::errors::ErrorClass::OverResourceBound.code()),
+        "a bounded listener must refuse more than {TX_CAP} hashes; if this \
+         has no error the handler saw an unbounded caller and the cap is inert"
     );
 
     // At the cap, restricted: served. Pins the boundary rather than "refuses
@@ -6645,9 +6645,11 @@ async fn native_handlers_apply_their_own_request_caps() {
         .await
         .expect("restricted /is_key_image_spent over cap");
     assert_eq!(
-        status(&ki_over),
-        "Too many key images queried in restricted mode",
-        "a restricted listener must refuse more than {KI_CAP} key images"
+        ki_over
+            .pointer("/error/code")
+            .and_then(serde_json::Value::as_i64),
+        Some(shekyl_rpc_types::errors::ErrorClass::OverResourceBound.code()),
+        "a bounded listener must refuse more than {KI_CAP} key images"
     );
 
     // Blast radius: the same over-cap request on the admin listener is served.

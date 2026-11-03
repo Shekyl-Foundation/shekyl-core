@@ -29,7 +29,7 @@
 //! Handler for the `/json_rpc` endpoint (JSON-RPC 2.0 dispatch).
 
 #[cfg(test)]
-use super::native::{frame_native, join_fault, native_method_for, pow_hash_entitled, NativeMethod};
+use super::native::{frame_native, join_fault, native_method_for, NativeMethod};
 use super::native::{native_fault, native_method, NativeFail};
 use crate::authority::{refusal, Authority};
 #[cfg(test)]
@@ -190,14 +190,12 @@ mod tests {
     /// exposes `get_connections` (this node's live peer set) and the ban/mining
     /// controls to unauthenticated callers on the public listener.
     const SPECIFIED_ADMIN_METHODS: &[&str] = &[
-        "calc_pow",
         "generateblocks",
         "get_connections",
         "set_bans",
         "get_bans",
         "banned",
         "flush_txpool",
-        "get_coinbase_tx_sum",
         "get_alternate_chains",
         "relay_tx",
         "sync_info",
@@ -269,8 +267,8 @@ mod tests {
             NativeMethod::RequestArchivalShard,
             true,
         ),
-        ("calc_pow", NativeMethod::CalcPow, true),
-        ("get_coinbase_tx_sum", NativeMethod::CoinbaseTxSum, true),
+        ("calc_pow", NativeMethod::CalcPow, false),
+        ("get_coinbase_tx_sum", NativeMethod::CoinbaseTxSum, false),
         ("get_alternate_chains", NativeMethod::AlternateChains, true),
         ("get_curve_tree_info", NativeMethod::CurveTreeInfo, false),
         (
@@ -334,17 +332,6 @@ mod tests {
         // whether it is answered at all is the C++ table's to say — and that
         // table carries no row for it.
         assert!(native_method_for("hard_fork_info").is_none());
-    }
-
-    /// A bounded caller never makes the node compute a pow hash, however the
-    /// request is phrased — the whole truth table, since only one of its four
-    /// cells may be true.
-    #[test]
-    fn pow_hash_is_never_computed_for_a_bounded_caller() {
-        assert!(pow_hash_entitled(true, false), "asked for, the host");
-        assert!(!pow_hash_entitled(true, true), "asked for, but bounded");
-        assert!(!pow_hash_entitled(false, false), "not asked for");
-        assert!(!pow_hash_entitled(false, true), "not asked for, bounded");
     }
 
     /// Each native name is gated exactly as specified, and none is gated on

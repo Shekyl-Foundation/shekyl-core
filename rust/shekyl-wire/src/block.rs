@@ -389,6 +389,30 @@ const POW_TAIL_BYTES: usize = PREIMAGE_HASH_BYTES + MIN_TX_COUNT_VARINT;
 pub const MIN_POW_BLOB_SIZE: usize =
     HEADER_LEADING_VARINTS + HEADER_HASH_FIELDS + HEADER_NONCE_BYTES + POW_TAIL_BYTES;
 
+/// The longest hashing blob [`PowBlob::read`] accepts.
+///
+/// A hashing blob is the header, the transaction-tree hash and the
+/// transaction-count varint. It does not carry the block body, so
+/// [`MAX_BLOCK_BLOB_SIZE`] is not this length. The versions are at the
+/// width of a `u8`, the timestamp at the width of a `u64`, and the count
+/// at the preimage parser's own cap ([`READ_LEN_CAP`] plus the miner).
+pub const MAX_POW_BLOB_SIZE: usize = max_pow_blob_size();
+
+/// The largest `tx_count` [`PowBlob::read`] accepts: one more than
+/// [`READ_LEN_CAP`], because the count includes the miner.
+const MAX_POW_TX_COUNT: u64 = READ_LEN_CAP as u64 + 1;
+
+const fn max_pow_blob_size() -> usize {
+    use crate::varint::varint_len;
+    varint_len(u8::MAX as u64)
+        + varint_len(u8::MAX as u64)
+        + varint_len(u64::MAX)
+        + HEADER_HASH_FIELDS
+        + HEADER_NONCE_BYTES
+        + PREIMAGE_HASH_BYTES
+        + varint_len(MAX_POW_TX_COUNT)
+}
+
 /// The PoW preimage, parsed: the header, the transaction-tree hash, and the
 /// count the trailing varint carries (`tx_count = n_tx + 1`, the miner
 /// included). [`Block::pow_blob`] writes this and nothing else.
@@ -552,6 +576,38 @@ mod tests {
         let bytes = blob.write();
         assert_eq!(bytes.len(), MIN_POW_BLOB_SIZE);
         assert_eq!(PowBlob::read(&bytes).expect("the minimum parses"), blob);
+        // The RT-W10 harness (`examples/rt_w10_request_cost.rs` in
+        // `shekyl-pow-randomx`) repeats these two lengths as literals so
+        // that crate does not depend on this one. A change here updates
+        // the harness in the same commit.
+        assert_eq!(MIN_POW_BLOB_SIZE, 136);
+        assert_eq!(MAX_BLOCK_BLOB_SIZE, 33_000_128);
+    }
+
+    /// The format maximum is what the widest field encodings actually write,
+    /// and it is a hashing blob, not a block body.
+    #[test]
+    fn the_longest_pow_blob_is_what_the_widest_fields_write() {
+        let blob = PowBlob {
+            header: BlockHeader {
+                major_version: u8::MAX,
+                minor_version: u8::MAX,
+                timestamp: u64::MAX,
+                previous: BlockHash::from_bytes([0xff; 32]),
+                nonce: u32::MAX,
+                curve_tree_root: CurveTreeRoot::from_bytes([0xff; 32]),
+                attestation_root: AttestationRoot::from_bytes([0xff; 32]),
+            },
+            tx_tree_hash: TxTreeHash::from_bytes([0xff; 32]),
+            tx_count: MAX_POW_TX_COUNT,
+        };
+        let bytes = blob.write();
+        assert_eq!(bytes.len(), MAX_POW_BLOB_SIZE);
+        const {
+            assert!(MAX_POW_BLOB_SIZE > MIN_POW_BLOB_SIZE);
+            assert!(MAX_POW_BLOB_SIZE < MAX_BLOCK_BLOB_SIZE);
+        }
+        assert_eq!(PowBlob::read(&bytes).expect("the maximum parses"), blob);
     }
 
     #[test]

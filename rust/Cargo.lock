@@ -4334,6 +4334,8 @@ dependencies = [
  "curve25519-dalek",
  "hex",
  "http",
+ "hyper",
+ "hyper-util",
  "rand_chacha 0.3.1",
  "rand_core 0.6.4",
  "serde",
