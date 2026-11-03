@@ -275,6 +275,7 @@ pub(crate) async fn get_wallet_info(
             shekyl_engine_core::Network::Mainnet => "MAINNET",
             shekyl_engine_core::Network::Testnet => "TESTNET",
             shekyl_engine_core::Network::Stagenet => "STAGENET",
+            shekyl_engine_core::Network::Regtest => "REGTEST",
         }
         .to_owned();
 

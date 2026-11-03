@@ -82,9 +82,10 @@ enum Cmd {
     },
 }
 
-/// Clap value parser: delegates to [`Network::from_str`] (case-insensitive).
+/// Clap value parser: delegates to [`Network::from_str`] (one spelling
+/// per network).
 fn parse_network(s: &str) -> Result<Network, String> {
-    Network::from_str(s)
+    Network::from_str(s).map_err(|e| e.to_string())
 }
 
 /// Repo root as seen at compile time (`rust/shekyl-genesis-tool` → repo).
@@ -102,7 +103,7 @@ fn default_recipients(explicit: Option<PathBuf>, net: Network) -> PathBuf {
     explicit.unwrap_or_else(|| {
         default_repo_root()
             .join("config")
-            .join(format!("genesis_recipients.{}.json", net.as_str()))
+            .join(format!("genesis_recipients.{}.json", net.name()))
     })
 }
 
@@ -122,7 +123,7 @@ fn run(cmd: Cmd) -> Result<(), GenesisToolError> {
                  to the allocation\n\
                  - recipients skeleton (addresses only, safe to commit): {skel}",
                 count = GENESIS_RECIPIENT_COUNT,
-                net = network.as_str(),
+                net = network.name(),
                 dir = out_dir.display(),
                 skel = skeleton.display(),
             );
@@ -137,7 +138,7 @@ fn run(cmd: Cmd) -> Result<(), GenesisToolError> {
             let built = build_genesis_tx(network, &recipients)?;
             eprintln!(
                 "genesis coinbase [{net}]: {n} outputs, tx hash {hash}, {len} hex chars",
-                net = network.as_str(),
+                net = network.name(),
                 n = recipients.len(),
                 hash = hex::encode(built.tx_hash),
                 len = built.hex.len(),
@@ -157,7 +158,7 @@ fn run(cmd: Cmd) -> Result<(), GenesisToolError> {
                 if o.matches {
                     eprintln!(
                         "{net}: OK ({len} hex chars)",
-                        net = o.network.as_str(),
+                        net = o.network.name(),
                         len = o.pinned_len
                     );
                 } else {
@@ -165,13 +166,13 @@ fn run(cmd: Cmd) -> Result<(), GenesisToolError> {
                     match o.first_mismatch {
                         Some(at) => eprintln!(
                             "{net}: MISMATCH at hex offset {at} (built {b} chars, pinned {p})",
-                            net = o.network.as_str(),
+                            net = o.network.name(),
                             b = o.built_len,
                             p = o.pinned_len,
                         ),
                         None => eprintln!(
                             "{net}: MISMATCH — length differs (built {b} chars, pinned {p})",
-                            net = o.network.as_str(),
+                            net = o.network.name(),
                             b = o.built_len,
                             p = o.pinned_len,
                         ),
@@ -202,7 +203,7 @@ fn run(cmd: Cmd) -> Result<(), GenesisToolError> {
             let block = genesis_block(built.tx, nonce)?;
             println!(
                 "network={net} nonce={nonce} tx_hash={hash} block_id={id}",
-                net = network.as_str(),
+                net = network.name(),
                 hash = hex::encode(tx_hash),
                 id = hex::encode(block.hash()),
             );

@@ -305,7 +305,7 @@ async fn restore_wallet_engine(
                 )?;
             (master_seed, SeedFormat::Bip39)
         }
-        Network::Testnet => {
+        Network::Testnet | Network::Regtest => {
             let decoded = Zeroizing::new(hex::decode(mnemonic.trim()).map_err(|_| {
                 WalletRpcError::InvalidParams(
                     "invalid testnet seed (expected a 32-byte raw seed as hex)".into(),
@@ -557,7 +557,7 @@ fn generate_seed_material(
                 .map_err(|e| WalletRpcError::InternalError(format!("bip39 account: {e}")))?;
             Ok((master, SeedFormat::Bip39, SeedBackup::Mnemonic(mnemonic)))
         }
-        Network::Testnet => {
+        Network::Testnet | Network::Regtest => {
             let mut raw = [0u8; RAW_SEED_BYTES];
             OsRng.fill_bytes(&mut raw);
             let seed_hex = Zeroizing::new(hex::encode(raw));
@@ -574,6 +574,7 @@ fn network_to_derivation(network: Network) -> DerivationNetwork {
         Network::Mainnet => DerivationNetwork::Mainnet,
         Network::Testnet => DerivationNetwork::Testnet,
         Network::Stagenet => DerivationNetwork::Stagenet,
+        Network::Regtest => DerivationNetwork::Fakechain,
     }
 }
 
@@ -595,6 +596,7 @@ fn network_str(network: Network) -> &'static str {
         Network::Mainnet => "MAINNET",
         Network::Testnet => "TESTNET",
         Network::Stagenet => "STAGENET",
+        Network::Regtest => "REGTEST",
     }
 }
 

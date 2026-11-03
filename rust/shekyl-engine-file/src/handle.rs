@@ -397,7 +397,7 @@ impl WalletFile {
 
         let keys_bytes = seal_keys_file(
             params.password,
-            params.network.as_u8(),
+            params.network.code(),
             params.seed_format,
             params.capability,
             params.creation_timestamp,
@@ -1141,7 +1141,7 @@ impl WalletFile {
 /// vets a byte read from disk) share one implementation, keeping the
 /// defensive-decode path auditable in a single place.
 fn decode_network(v: u8) -> Result<Network, WalletFileError> {
-    Network::from_u8(v).ok_or(WalletFileError::UnknownNetwork(v))
+    Network::from_code(v).ok_or(WalletFileError::UnknownNetwork(v))
 }
 
 /// Best-effort pre-flight detection of a cross-filesystem `save_as`

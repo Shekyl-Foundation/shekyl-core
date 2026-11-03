@@ -37,7 +37,7 @@ fn canonical_address_bytes_layout_is_pinned() {
     let addr = test_address();
     let bytes = canonical_address_bytes(&addr);
     assert_eq!(bytes.len(), 1 + 32 + 32 + 1184);
-    assert_eq!(bytes[0], Network::Mainnet.as_u8());
+    assert_eq!(bytes[0], Network::Mainnet.code());
     assert_eq!(&bytes[1..33], &[0xAA; 32]);
     assert_eq!(&bytes[33..65], &[0xBB; 32]);
     assert_eq!(&bytes[65..], &[0xCC; 1184][..]);

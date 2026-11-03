@@ -142,6 +142,7 @@ impl DaemonExpectation {
             shekyl_address::Network::Mainnet => shekyl_rpc_types::DaemonNetwork::Mainnet,
             shekyl_address::Network::Testnet => shekyl_rpc_types::DaemonNetwork::Testnet,
             shekyl_address::Network::Stagenet => shekyl_rpc_types::DaemonNetwork::Stagenet,
+            shekyl_address::Network::Regtest => shekyl_rpc_types::DaemonNetwork::Fakechain,
         };
         match self.fakechain {
             FakechainPolicy::Refuse => shekyl_rpc_types::IdentityExpectation::exact(network),

@@ -220,7 +220,7 @@ pub unsafe extern "C" fn shekyl_address_encode(
         return ShekylBuffer::null();
     }
 
-    let Some(net) = shekyl_address::Network::from_u8(network) else {
+    let Some(net) = shekyl_address::Network::from_code(network) else {
         return ShekylBuffer::null();
     };
 
@@ -291,7 +291,7 @@ pub unsafe extern "C" fn shekyl_address_decode(
 
     match shekyl_address::ShekylAddress::decode(encoded) {
         Ok(addr) => {
-            *network_out = addr.network.as_u8();
+            *network_out = addr.network.code();
             std::ptr::copy_nonoverlapping(addr.spend_key.as_ptr(), spend_key_out, 32);
             std::ptr::copy_nonoverlapping(addr.view_key.as_ptr(), view_key_out, 32);
             ShekylBuffer::from_vec(addr.ml_kem_encap_key)

@@ -56,23 +56,23 @@ fn each_networks_genesis_block_id_is_the_published_pin() {
     for (net, pinned_id) in PINNED_GENESIS_BLOCK_IDS {
         let pin = pins.for_network(net);
         let blob = hex::decode(&pin.genesis_tx_hex)
-            .unwrap_or_else(|e| panic!("{}: GENESIS_TX is not hex: {e}", net.as_str()));
+            .unwrap_or_else(|e| panic!("{}: GENESIS_TX is not hex: {e}", net.name()));
         let tx = Transaction::from_bytes(&blob)
-            .unwrap_or_else(|e| panic!("{}: GENESIS_TX does not parse: {e}", net.as_str()));
+            .unwrap_or_else(|e| panic!("{}: GENESIS_TX does not parse: {e}", net.name()));
         let block = genesis_block(tx, pin.genesis_nonce)
-            .unwrap_or_else(|e| panic!("{}: genesis block: {e}", net.as_str()));
+            .unwrap_or_else(|e| panic!("{}: genesis block: {e}", net.name()));
 
         assert_eq!(
             block.header.nonce,
             pin.genesis_nonce,
             "{}: the difficulty-1 genesis keeps its pinned nonce",
-            net.as_str()
+            net.name()
         );
         assert_eq!(
             hex::encode(block.hash()),
             pinned_id,
             "{}: genesis block id moved",
-            net.as_str()
+            net.name()
         );
     }
 }

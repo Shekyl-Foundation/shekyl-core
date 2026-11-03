@@ -3830,6 +3830,7 @@ dependencies = [
  "serde",
  "shekyl-crypto-hash",
  "shekyl-encoding",
+ "shekyl-network",
  "tempfile",
  "thiserror",
 ]

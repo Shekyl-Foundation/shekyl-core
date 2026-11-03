@@ -98,6 +98,7 @@ impl GenesisPin {
             Network::Mainnet => Self::MAINNET,
             Network::Testnet => Self::TESTNET,
             Network::Stagenet => Self::STAGENET,
+            Network::Regtest => Self::FAKECHAIN,
         }
     }
 

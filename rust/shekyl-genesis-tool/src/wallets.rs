@@ -64,6 +64,7 @@ fn derivation_for(net: Network) -> DerivationNetwork {
         Network::Mainnet => DerivationNetwork::Mainnet,
         Network::Testnet => DerivationNetwork::Testnet,
         Network::Stagenet => DerivationNetwork::Stagenet,
+        Network::Regtest => DerivationNetwork::Fakechain,
     }
 }
 
@@ -88,7 +89,7 @@ pub fn generate_wallets(net: Network) -> Result<Vec<GeneratedWallet>, GenesisToo
                     .map_err(|e| invalid(format!("bip39 account: {e:?}")))?;
                 (blob, SeedBackup::Mnemonic(mnemonic))
             }
-            Network::Testnet => {
+            Network::Testnet | Network::Regtest => {
                 let mut raw = [0u8; RAW_SEED_BYTES];
                 OsRng.fill_bytes(&mut raw);
                 let seed_hex = Zeroizing::new(hex::encode(raw));
@@ -169,12 +170,12 @@ fn refuse_git_worktree(dir: &Path) -> Result<(), GenesisToolError> {
 
 /// Final custody filename for wallet `index` on `net`.
 fn custody_filename(net: Network, index: u32) -> String {
-    format!("genesis-wallet-{}-{:02}.txt", net.as_str(), index)
+    format!("genesis-wallet-{}-{:02}.txt", net.name(), index)
 }
 
 /// Final recipients-skeleton filename for `net`.
 fn skeleton_filename(net: Network) -> String {
-    format!("genesis_recipients.{}.json", net.as_str())
+    format!("genesis_recipients.{}.json", net.name())
 }
 
 /// Create a directory with mode `0700` on Unix (owner-only). On non-Unix the
@@ -224,10 +225,10 @@ fn write_ceremony_tree(
     net: Network,
     wallets: &[GeneratedWallet],
 ) -> Result<(), GenesisToolError> {
-    let net_name = net.as_str();
+    let net_name = net.name();
     let role = match net {
         Network::Mainnet | Network::Stagenet => "Founder allocation",
-        Network::Testnet => "Developer",
+        Network::Testnet | Network::Regtest => "Developer",
     };
 
     for w in wallets {

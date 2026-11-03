@@ -73,7 +73,7 @@ pub struct Recipient {
 /// readable without re-importing the address type's method name.
 #[must_use]
 pub fn network_str(net: Network) -> &'static str {
-    net.as_str()
+    net.name()
 }
 
 /// Parse and validate a recipients file body for `expected` network.

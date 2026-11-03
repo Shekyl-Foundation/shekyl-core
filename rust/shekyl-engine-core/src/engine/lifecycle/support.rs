@@ -31,6 +31,7 @@ pub(crate) fn network_to_derivation(network: Network) -> DerivationNetwork {
         Network::Mainnet => DerivationNetwork::Mainnet,
         Network::Testnet => DerivationNetwork::Testnet,
         Network::Stagenet => DerivationNetwork::Stagenet,
+        Network::Regtest => DerivationNetwork::Fakechain,
     }
 }
 

@@ -36,7 +36,7 @@ fn recipients_files_are_valid() {
     for net in [Network::Mainnet, Network::Testnet, Network::Stagenet] {
         let path = repo_root()
             .join("config")
-            .join(format!("genesis_recipients.{}.json", net.as_str()));
+            .join(format!("genesis_recipients.{}.json", net.name()));
         let recipients =
             load_and_validate(&path, net).unwrap_or_else(|e| panic!("{}: {e}", path.display()));
         assert_eq!(recipients.len(), 5);
@@ -63,19 +63,19 @@ fn config_pins_parse_from_real_header() {
         assert!(
             !pin.genesis_tx_hex.is_empty(),
             "{}: GENESIS_TX empty",
-            net.as_str()
+            net.name()
         );
         assert_eq!(
             pin.genesis_tx_hex.len() % 2,
             0,
             "{}: GENESIS_TX odd length {}",
-            net.as_str(),
+            net.name(),
             pin.genesis_tx_hex.len()
         );
         assert!(
             pin.genesis_tx_hex.bytes().all(|b| b.is_ascii_hexdigit()),
             "{}: GENESIS_TX not hex",
-            net.as_str()
+            net.name()
         );
         // Nonces are network-distinct today; a zero would be a parse miss
         // against the live header (mainnet 10000, testnet 10101, stagenet 10002).
@@ -83,7 +83,7 @@ fn config_pins_parse_from_real_header() {
             pin.genesis_nonce,
             0,
             "{}: GENESIS_NONCE parsed as 0",
-            net.as_str()
+            net.name()
         );
     }
     assert_ne!(
@@ -114,7 +114,7 @@ fn genesis_hex_matches_config_pin() {
             o.matches,
             "{}: rebuilt genesis hex does not match the cryptonote_config.h pin \
              (built {} chars, pinned {}, first mismatch {:?})",
-            o.network.as_str(),
+            o.network.name(),
             o.built_len,
             o.pinned_len,
             o.first_mismatch
@@ -139,7 +139,7 @@ fn genesis_hex_matches_config_pin() {
 fn the_pure_writer_reproduces_each_pinned_genesis_extra() {
     let pins = load_config_pins(&repo_root().join("src/cryptonote_config.h")).expect("pins");
     for net in [Network::Mainnet, Network::Testnet, Network::Stagenet] {
-        let name = net.as_str();
+        let name = net.name();
         let blob = hex::decode(&pins.for_network(net).genesis_tx_hex).expect("pinned hex");
         let tx = Transaction::from_bytes(&blob).unwrap_or_else(|e| panic!("{name}: {e}"));
         let extra = &tx.prefix.extra;

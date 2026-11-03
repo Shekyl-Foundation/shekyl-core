@@ -689,15 +689,18 @@ impl RuleSchedule {
     const TESTNET: Self = Self::IDENTITY;
     /// Stagenet's schedule.
     const STAGENET: Self = Self::IDENTITY;
+    /// Regtest's schedule.
+    const REGTEST: Self = Self::IDENTITY;
 
-    /// The schedule for `network`. Three values, one lookup: nettype selects
-    /// data, never control flow (rule 71).
+    /// The schedule for `network`. One value per network, one lookup:
+    /// nettype selects data, never control flow (rule 71).
     #[must_use]
     pub const fn for_network(network: Network) -> Self {
         match network {
             Network::Mainnet => Self::MAINNET,
             Network::Testnet => Self::TESTNET,
             Network::Stagenet => Self::STAGENET,
+            Network::Regtest => Self::REGTEST,
         }
     }
 

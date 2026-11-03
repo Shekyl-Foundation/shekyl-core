@@ -49,7 +49,7 @@ impl ConfigPins {
     #[must_use]
     pub fn for_network(&self, net: Network) -> &ConfigGenesis {
         match net {
-            Network::Mainnet => &self.mainnet,
+            Network::Mainnet | Network::Regtest => &self.mainnet,
             Network::Testnet => &self.testnet,
             Network::Stagenet => &self.stagenet,
         }
@@ -248,7 +248,7 @@ pub fn verify_networks(
     let pins = load_config_pins(config_h_path)?;
     let mut outcomes = Vec::with_capacity(3);
     for net in [Network::Mainnet, Network::Testnet, Network::Stagenet] {
-        let path = recipients_dir.join(format!("genesis_recipients.{}.json", net.as_str()));
+        let path = recipients_dir.join(format!("genesis_recipients.{}.json", net.name()));
         let recipients = load_and_validate(&path, net)?;
         let built = build_genesis_tx(net, &recipients)?;
         let pinned = &pins.for_network(net).genesis_tx_hex;

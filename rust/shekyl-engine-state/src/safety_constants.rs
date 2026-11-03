@@ -119,6 +119,17 @@ impl NetworkSafetyConstants {
         }
     }
 
+    /// Regtest defaults: mainnet's, so a regtest wallet runs the
+    /// parameter set mainnet does.
+    pub const fn regtest() -> Self {
+        Self {
+            max_reorg_depth: BlockCount::from_raw(10),
+            key_reuse_mitigation2: true,
+            default_skip_to_height: BlockHeight::ZERO,
+            default_refresh_from_block_height: BlockHeight::ZERO,
+        }
+    }
+
     /// Dispatch the per-network defaults from a typed `Network`.
     ///
     /// This is the single entry point callers should use; adding a new
@@ -130,6 +141,7 @@ impl NetworkSafetyConstants {
             Network::Mainnet => Self::mainnet(),
             Network::Testnet => Self::testnet(),
             Network::Stagenet => Self::stagenet(),
+            Network::Regtest => Self::regtest(),
         }
     }
 }
@@ -148,6 +160,14 @@ const _: () = assert!(
 const _: () = assert!(
     NetworkSafetyConstants::stagenet().key_reuse_mitigation2,
     "key_reuse_mitigation2 must be true on stagenet",
+);
+const _: () = assert!(
+    NetworkSafetyConstants::regtest().key_reuse_mitigation2,
+    "key_reuse_mitigation2 must be true on regtest",
+);
+const _: () = assert!(
+    !NetworkSafetyConstants::regtest().max_reorg_depth.is_zero(),
+    "max_reorg_depth must be at least 1 on regtest",
 );
 const _: () = assert!(
     !NetworkSafetyConstants::mainnet().max_reorg_depth.is_zero(),
@@ -179,6 +199,10 @@ mod tests {
         assert_eq!(
             NetworkSafetyConstants::for_network(Network::Stagenet),
             NetworkSafetyConstants::stagenet(),
+        );
+        assert_eq!(
+            NetworkSafetyConstants::for_network(Network::Regtest),
+            NetworkSafetyConstants::regtest(),
         );
     }
 

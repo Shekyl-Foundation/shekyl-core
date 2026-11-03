@@ -29,7 +29,7 @@ fn emit_genesis_pins() {
     for net in [Network::Mainnet, Network::Testnet, Network::Stagenet] {
         let rec_path = root
             .join("config")
-            .join(format!("genesis_recipients.{}.json", net.as_str()));
+            .join(format!("genesis_recipients.{}.json", net.name()));
         let recipients = load_and_validate(&rec_path, net).expect("recipients");
         let built = build_genesis_tx(net, &recipients).expect("build tx");
         let nonce = pins.for_network(net).genesis_nonce;
@@ -41,14 +41,14 @@ fn emit_genesis_pins() {
         eprintln!(
             "{net}: nonce={nonce} tx_hash={tx_hash} block_id={block_id} hex_len={}",
             tx_hex.len(),
-            net = net.as_str()
+            net = net.name()
         );
 
         let old_hex = &pins.for_network(net).genesis_tx_hex;
         assert!(
             config_text.contains(old_hex),
             "{}: pinned hex not found in cryptonote_config.h",
-            net.as_str()
+            net.name()
         );
         config_text = config_text.replacen(old_hex, &tx_hex, 1);
 
