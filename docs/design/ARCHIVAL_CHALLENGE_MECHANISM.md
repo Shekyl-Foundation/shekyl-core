@@ -1847,11 +1847,12 @@ actor is not its writer — the `WSS-13` unwind,
 under its own authorization). §9.6 item 4's "feed
 `pin_serve_set` from the bond record" therefore could not be implemented by
 handing the serving host a store handle: that is a second writer beside the
-one whose message loop is the serialization. The split: the host holds a
-read-only `ServingReader` (redb readers are MVCC snapshots, so serving reads
-run concurrently with block ingest at no cost), and the pin runs on the
-actor's own object behind a `ServeSetPinner` seam. The serving side now has
-no write to reach.
+one whose message loop is the serialization. The split: the pin runs on the
+actor's own object behind a `ServeSetPinner` seam, and the host holds no
+store handle at all, reading the store facts its witness checks through the
+same seam (`CURVE_TREE_CLIENT.md` §11). The serving side has no write to
+reach. *Records-was (until 2026-11-02):* the host held a read-only
+`ServingReader`, which kept the store's file open past the wallet's close.
 
 **3. The serve-set's provenance is closed against drift, not against
 forgery — stated rather than implied.** `ServeSet`'s only constructor takes
@@ -2010,8 +2011,10 @@ stays drawable, and challengeable, through E's close — roughly 9,280 blocks
 after a 720-block gate would have released.
 
 It bites at the pin rather than one layer up because
-`StoreShardProvider` is **serve-set-blind**: it holds only a `ServingReader`
-and answers for any shard whose bytes are in the store. So the leak is
+`StoreShardProvider` is **serve-set-blind**: it holds only a read route to
+`P`'s body store (`HeldShardSource`, a message to the store's owning actor;
+`CURVE_TREE_CLIENT.md` §11.1) and answers for any shard whose bytes are in
+the store. So the leak is
 currently what *keeps the obligation met* — a dropped-but-still-pinned shard
 is still served. Releasing on a reorg depth would have converted a disk leak
 into a miss, then a slash: §9.7's own asymmetry pointed the wrong way.
