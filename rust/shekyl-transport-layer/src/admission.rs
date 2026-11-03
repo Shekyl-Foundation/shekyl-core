@@ -4,6 +4,7 @@
 // BSD-3-Clause
 
 //! Socket admission without sockets. The occupancy table is the live set.
+//! Bans on that table are [`bans`].
 //!
 //! Accept compares the process-wide inbound occupancy — every connector's
 //! inbound row, summed — with [`InboundCeiling`](shekyl_peer_policy::InboundCeiling)
@@ -20,10 +21,12 @@ use shekyl_peer_policy::InboundCeiling;
 use shekyl_timing_engine::Tick;
 
 use crate::accept_rate::{accept_bound, AcceptGate, RateRefusal};
-use crate::ban::{BanLeft, BanList, Ipv4Subnet, ListedBan};
+use crate::ban::BanList;
 use crate::declaration::{declaration, Assessment, BannableInbound, ConnectorId, InboundIdentity};
 use crate::dial::check_dial;
 use crate::{CloseCause, CloseKind};
+
+mod bans;
 
 /// Which way the socket was opened.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
@@ -345,12 +348,31 @@ struct Live {
     endpoint: ObservedEndpoint,
 }
 
+/// The ban list's timing owner, as the table tells it of a deadline that
+/// has become the earliest. Called outside the table's lock.
+#[derive(Clone)]
+struct BanExpiry(Arc<dyn Fn(Tick) + Send + Sync>);
+
+impl std::fmt::Debug for BanExpiry {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str("BanExpiry")
+    }
+}
+
 #[derive(Debug)]
 struct Inner {
     next_id: u64,
     occupancy: Occupancy,
     live: HashMap<SocketId, Live>,
     bans: BanList,
+    /// The ban list's timing owner, once one is installed
+    /// ([`Sockets::set_ban_expiry`]).
+    ban_expiry: Option<BanExpiry>,
+    /// The generation a running ban timer claimed. `None` when no task
+    /// holds the claim. A start for that generation does nothing. A later
+    /// generation takes the claim at once; the earlier task clears the
+    /// field on drop only while it still names that earlier generation.
+    timer_generation: Option<u64>,
     /// An operator cap for one connector. `None` means that connector has
     /// no cap of its own. The process ceiling applies either way.
     zone_caps: [Option<u32>; ConnectorId::COUNT],
@@ -369,10 +391,20 @@ impl Inner {
             occupancy: Occupancy::new(),
             live: HashMap::new(),
             bans: BanList::new(),
+            ban_expiry: None,
+            timer_generation: None,
             zone_caps: [None; ConnectorId::COUNT],
             clearnet_rate,
             refusals: AcceptRefusals::default(),
         }
+    }
+
+    /// The timing owner to tell of `until`, when a ban just stored made it
+    /// the earliest deadline.
+    fn expiry_for(&self, until: Tick) -> Option<BanExpiry> {
+        (self.bans.earliest() == Some(until))
+            .then(|| self.ban_expiry.clone())
+            .flatten()
     }
 
     fn holds(&self) -> bool {
@@ -560,7 +592,7 @@ impl Sockets {
             "clearnet inbound observation does not match its declaration"
         );
         let mut inner = self.lock();
-        if inner.bans.is_banned(ip, now) {
+        if inner.bans.is_banned(ip) {
             return Err(AcceptRefusal::FullOrBanned.record(&mut inner));
         }
         if let Err(refusal) = refuse_inbound(&inner, ConnectorId::Clearnet, ceiling) {
@@ -585,9 +617,9 @@ impl Sockets {
 
     /// Outbound clearnet. The inbound ceiling does not apply. A banned
     /// address is still refused.
-    pub fn open_clearnet(&self, ip: IpAddr, now: Tick) -> Result<OpenSocket, OpenError> {
+    pub fn open_clearnet(&self, ip: IpAddr) -> Result<OpenSocket, OpenError> {
         let mut inner = self.lock();
-        if inner.bans.is_banned(ip, now) {
+        if inner.bans.is_banned(ip) {
             return Err(admission_refused());
         }
         self.mint(
@@ -634,79 +666,6 @@ impl Sockets {
     pub fn close(&self, id: SocketId, cause: CloseCause) -> CloseResult {
         let mut inner = self.lock();
         release(&mut inner, id, cause)
-    }
-
-    /// Whether `host` is banned at `now`. The lookup drops an expired entry.
-    pub fn is_banned(&self, host: IpAddr, now: Tick) -> bool {
-        self.lock().bans.is_banned(host, now)
-    }
-
-    /// Ban `host` until `until` and close live sockets to that host.
-    /// A deadline that has already passed bans nothing and closes nothing.
-    /// A deadline that is not later than the one stored does not shorten it.
-    /// Each closed socket is [`CloseKind::LocalClose`], once.
-    pub fn ban_host(&self, host: IpAddr, until: Tick, now: Tick) -> Vec<SocketId> {
-        let mut inner = self.lock();
-        if !inner.bans.ban_host(host, until, now) {
-            return Vec::new();
-        }
-        close_matching(&mut inner, BanSubject::Host(host))
-    }
-
-    /// Ban an IPv4 subnet and close live IPv4 sockets inside it.
-    /// The deadline rule is the same as [`Self::ban_host`].
-    pub fn ban_subnet(&self, subnet: Ipv4Subnet, until: Tick, now: Tick) -> Vec<SocketId> {
-        let mut inner = self.lock();
-        if !inner.bans.ban_subnet(subnet, until, now) {
-            return Vec::new();
-        }
-        close_matching(&mut inner, BanSubject::Subnet(subnet))
-    }
-
-    /// Ban `host` until it is lifted, and close live sockets to it.
-    /// A ban that is already permanent closes nothing new.
-    pub fn ban_host_permanent(&self, host: IpAddr) -> Vec<SocketId> {
-        let mut inner = self.lock();
-        if !inner.bans.ban_host_permanent(host) {
-            return Vec::new();
-        }
-        close_matching(&mut inner, BanSubject::Host(host))
-    }
-
-    /// Ban `subnet` until it is lifted, and close live sockets inside it.
-    pub fn ban_subnet_permanent(&self, subnet: Ipv4Subnet) -> Vec<SocketId> {
-        let mut inner = self.lock();
-        if !inner.bans.ban_subnet_permanent(subnet) {
-            return Vec::new();
-        }
-        close_matching(&mut inner, BanSubject::Subnet(subnet))
-    }
-
-    /// Remove a host ban. Sockets that are already open stay open.
-    pub fn lift_host(&self, host: IpAddr) -> bool {
-        self.lock().bans.lift_host(host)
-    }
-
-    /// Remove a subnet ban. Sockets that are already open stay open.
-    pub fn lift_subnet(&self, subnet: Ipv4Subnet) -> bool {
-        self.lock().bans.lift_subnet(subnet)
-    }
-
-    /// Drop every ban. Open sockets stay open. The daemon lifts one entry
-    /// at a time; a test process uses this because the list outlives the
-    /// `node_server` that used to own it.
-    pub fn clear_bans(&self) {
-        self.lock().bans.clear();
-    }
-
-    /// Time left on the longest ban that covers `host`.
-    pub fn remaining(&self, host: IpAddr, now: Tick) -> Option<BanLeft> {
-        self.lock().bans.remaining(host, now)
-    }
-
-    /// Bans still in force, with nanoseconds left from `now`.
-    pub fn listed(&self, now: Tick) -> Vec<ListedBan> {
-        self.lock().bans.listed(now)
     }
 
     /// How many live sockets this connector has in this direction.
@@ -803,38 +762,6 @@ impl Default for Sockets {
     fn default() -> Self {
         Self::new()
     }
-}
-
-#[derive(Clone, Copy)]
-enum BanSubject {
-    Host(IpAddr),
-    Subnet(Ipv4Subnet),
-}
-
-fn endpoint_is_subject(subject: BanSubject, endpoint: ObservedEndpoint) -> bool {
-    match (subject, endpoint) {
-        (BanSubject::Host(host), ObservedEndpoint::Host(observed)) => observed == host,
-        (BanSubject::Subnet(subnet), ObservedEndpoint::Host(IpAddr::V4(observed))) => {
-            subnet.contains(observed)
-        }
-        (BanSubject::Host(_) | BanSubject::Subnet(_), ObservedEndpoint::Zone)
-        | (BanSubject::Subnet(_), ObservedEndpoint::Host(IpAddr::V6(_))) => false,
-    }
-}
-
-fn close_matching(inner: &mut Inner, subject: BanSubject) -> Vec<SocketId> {
-    let ids: Vec<SocketId> = inner
-        .live
-        .iter()
-        .filter(|(_, live)| endpoint_is_subject(subject, live.endpoint))
-        .map(|(id, _)| *id)
-        .collect();
-    for id in &ids {
-        let result = release(inner, *id, CloseCause::new(CloseKind::LocalClose));
-        debug_assert!(matches!(result, CloseResult::Recorded(_)));
-    }
-    debug_assert!(inner.holds());
-    ids
 }
 
 fn release(inner: &mut Inner, id: SocketId, cause: CloseCause) -> CloseResult {

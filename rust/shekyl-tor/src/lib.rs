@@ -32,7 +32,7 @@ use shekyl_net_address::NetworkAddress;
 use shekyl_peer_policy::InboundCeiling;
 use shekyl_runtime::Pool;
 use shekyl_timing_engine::{Clock, Handle, Tick};
-use shekyl_transport_layer::{CloseCause, CloseKind, Sockets};
+use shekyl_transport_layer::{CloseCause, CloseKind, DialEnd, Sockets};
 use tokio::net::TcpListener;
 use tokio::sync::{mpsc, oneshot};
 
@@ -41,7 +41,9 @@ mod publish;
 mod replies;
 
 pub use publish::{publish_forward, publish_with_control, InboundPosture, PublishFault};
-pub use replies::{proxy_reply_marks, refused, socks_reply_is_our_request};
+pub use replies::{
+    refused, reply_end, socks_reply_is_our_request, stamp_reply, stamp_stream_end, Observed,
+};
 
 pub use drive::{accept_inbound, accept_one, dial_one, Accept, Admitted, Dial, Inbound};
 
@@ -225,7 +227,10 @@ where
             sockets: self.sockets.clone(),
             dial_within: self.dial_within,
             gap_within: self.gap_within,
-            on_cause: Arc::clone(&self.on_cause),
+            on_end: {
+                let on_cause = Arc::clone(&self.on_cause);
+                Arc::new(move |end: DialEnd| on_cause(end.cause()))
+            },
             send_queue_bytes: self.send_queue_bytes,
             admitted: self.admitted_tx.clone(),
         };

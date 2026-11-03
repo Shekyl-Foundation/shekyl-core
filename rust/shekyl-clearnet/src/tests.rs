@@ -697,6 +697,9 @@ fn a_socks_refusal_carries_the_reply_byte() {
 #[path = "gap_tests.rs"]
 mod gap_tests;
 
+#[path = "admission_tests.rs"]
+mod admission_tests;
+
 /// A gate refusing every inbound from one host after its first, whose
 /// connector admits `burst` at once and one more every `every`: the linger
 /// cap for a span is `burst + span / every`. Test shapes, not ruled values.

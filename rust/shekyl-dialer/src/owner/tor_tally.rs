@@ -8,9 +8,9 @@
 //! Held is the outbound sessions this dialer kept plus the inbound Tor
 //! sessions whose handshake has finished. A handshake still open is not
 //! one: the probe of this node's own onion is dropped in that handshake,
-//! so it never moves the quiet line or the ladder (`TOR_SUPERVISOR.md`
+//! so it never moves the quiet line or the judge (`TOR_SUPERVISOR.md`
 //! §4.5). An inbound session is not a dial: it does not move `opened` or
-//! `unopened`, and the quiet stretch does not start again (§4.2).
+//! `unopened` (§4.2).
 //!
 //! The adopt poster calls [`Dialer::session_closed`] while it holds the
 //! table lock, and that mutex is not re-entrant, so the close does not
@@ -23,8 +23,9 @@
 //! off the board.
 
 use shekyl_draw_rng::RelayRng;
-use shekyl_peerlist::{CloseCause, ConnectorId, Direction};
+use shekyl_peerlist::{ConnectorId, Direction};
 use shekyl_seam::SocketId;
+use shekyl_transport_layer::DialEnd;
 
 use super::{Dialer, Shared};
 
@@ -34,8 +35,7 @@ impl Dialer {
     ///
     /// Held sessions are the outbound ones this dialer kept plus the
     /// inbound Tor sessions on the board. A handshake still open is not
-    /// held. The session is not a dial: `opened` and `unopened` stay, and
-    /// the quiet stretch does not start again.
+    /// held. The session is not a dial: `opened` and `unopened` stay.
     pub fn note_inbound_tor(&self) {
         self.with_inbound(Self::publish_tor_held);
     }
@@ -47,11 +47,11 @@ impl Dialer {
     pub fn session_closed_from_seam<R: RelayRng + ?Sized>(
         &self,
         id: SocketId,
-        cause: CloseCause,
+        end: DialEnd,
         rng: &mut R,
     ) {
         self.note_inbound_tor();
-        self.session_closed(id, cause, rng);
+        self.session_closed(id, end, rng);
     }
 
     /// Read each connector's inbound rows into the cache, then run `body`.
@@ -65,6 +65,7 @@ impl Dialer {
                 shared.inbound[connector.index()] =
                     board.established_sessions(*connector, Direction::Inbound);
             }
+            Self::observe_sessions(board, &mut shared, self.hub.now());
             body(&mut shared)
         })
     }

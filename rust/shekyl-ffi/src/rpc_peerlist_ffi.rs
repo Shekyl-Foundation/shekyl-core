@@ -8,8 +8,9 @@
 //! from C++ with the C++ peerlist's deletion, 2026-10-13).
 //!
 //! The entries carry no clock: the lists hold none (slice 1 brief §4).
-//! `blocked` is the transport layer's ban on the address's host, asked
-//! through the hub. Nothing here changes the lists.
+//! `blocked` is whether a ban the lists hold covers the address, read once
+//! every ban event the transport's ban list has posted is applied. Nothing
+//! here changes the lists but those events.
 //!
 //! Offline is not a result of these exports. The RPC answers it from the
 //! bit `configure` recorded, before it calls here. An online daemon with
@@ -18,7 +19,6 @@
 
 use std::ffi::{c_char, c_void};
 
-use shekyl_dialer::BanSnapshot;
 use shekyl_peerlist::{ConnectorId, ListName, NetworkAddress, Peerlist};
 
 use crate::dialer_ffi::dialer;
@@ -73,31 +73,33 @@ fn render(address: &NetworkAddress) -> (String, u32, u16) {
 /// `None` when there are no peer lists to read.
 fn entries(public_only: bool) -> Option<PeerListOwner> {
     let dialer = dialer()?;
-    let bans = BanSnapshot::take(dialer.hub());
-    let snapshot = dialer.shared().lists.snapshot();
-    let mut rows: Vec<(NetworkAddress, ListName)> = snapshot
-        .into_iter()
-        .filter(|(address, _)| {
-            !public_only || Peerlist::connector_of(address) == Some(ConnectorId::Clearnet)
-        })
-        .collect();
-    rows.sort_by_key(|(_, list)| matches!(list, ListName::Gray));
+    let mut rows: Vec<(NetworkAddress, ListName, bool)> = {
+        let shared = dialer.shared();
+        shared
+            .lists
+            .snapshot()
+            .into_iter()
+            .filter(|(address, _)| {
+                !public_only || Peerlist::connector_of(address) == Some(ConnectorId::Clearnet)
+            })
+            .map(|(address, list)| {
+                let blocked = shared.lists.is_banned(&address);
+                (address, list, blocked)
+            })
+            .collect()
+    };
+    rows.sort_by_key(|(_, list, _)| matches!(list, ListName::Gray));
     let mut hosts = Vec::new();
     let mut facts = Vec::new();
-    for (address, list) in &rows {
+    for (address, list, blocked) in &rows {
         let (host, ip, port) = render(address);
-        let blocked = match address {
-            NetworkAddress::Ipv4 { ip, .. } => bans.covers((*ip).into()),
-            NetworkAddress::Ipv6 { ip, .. } => bans.covers((*ip).into()),
-            NetworkAddress::Tor { .. } => false,
-        };
         facts.push(ShekylRpcPeerFacts {
             host: std::ptr::null(),
             host_len: host.len(),
             ip,
             port,
             white: u8::from(matches!(list, ListName::White)),
-            blocked: u8::from(blocked),
+            blocked: u8::from(*blocked),
         });
         hosts.push(host);
     }
@@ -179,14 +181,12 @@ pub unsafe extern "C" fn shekyl_rpc_peerlist_sizes(out_white: *mut u64, out_gray
         return FACTS_ERR_NULL;
     };
     let now = dialer.hub().now();
-    let mut bans = BanSnapshot::take(dialer.hub());
     let (white, gray) = {
         let mut shared = dialer.shared();
         let mut kept = shared.kept_addresses(ConnectorId::Clearnet);
         let white = shared.lists.white_count(
             ConnectorId::Clearnet,
             now,
-            &mut bans,
             &mut kept,
             &mut crate::secure_relay_rng::SecureRelayRng,
         );
@@ -285,6 +285,38 @@ mod tests {
         }
         unsafe { shekyl_rpc_peer_list_free(owner) };
         out
+    }
+
+    /// `blocked` follows the ban list: an entry a ban covers is blocked as
+    /// soon as the ban is made, and not once it is lifted, with no owner
+    /// loop running to drain the events. Red edit: apply no queued event in
+    /// `Dialer::shared`.
+    #[test]
+    fn an_entry_is_blocked_while_a_ban_covers_it() {
+        let _bind = seam_bind_lock().lock();
+        unbind();
+        bind();
+        let dialer = dialer().expect("built at the bind");
+        for address in [v4(1), v4(2)] {
+            dialer
+                .admit_operator(&address, Tick::new(1), &mut SecureRelayRng)
+                .expect("admitted");
+        }
+        let banned: std::net::IpAddr = "11.17.0.2".parse().expect("ip");
+        let hub = crate::seam_ffi::hub().expect("bound");
+        drop(hub.ban_host_permanent(banned));
+        let blocked = |want: &str| {
+            listed(true)
+                .iter()
+                .find(|(host, ..)| host == want)
+                .expect(want)
+                .4
+        };
+        assert!(blocked("11.17.0.2"), "the ban covers it");
+        assert!(!blocked("11.17.0.1"));
+        assert!(hub.lift_host(banned));
+        assert!(!blocked("11.17.0.2"), "lifted");
+        unbind();
     }
 
     /// An online daemon with no peer lists is a fault on both exports, not
@@ -408,14 +440,12 @@ pub fn peer_counts() -> Option<PeerCounts> {
     let dialer = dialer()?;
     let sockets = |connector, direction| hub.socket_count(connector, direction);
     let now = dialer.hub().now();
-    let mut bans = BanSnapshot::take(dialer.hub());
     let (white, gray) = {
         let mut shared = dialer.shared();
         let mut kept = shared.kept_addresses(ConnectorId::Clearnet);
         let white = shared.lists.white_count(
             ConnectorId::Clearnet,
             now,
-            &mut bans,
             &mut kept,
             &mut crate::secure_relay_rng::SecureRelayRng,
         );

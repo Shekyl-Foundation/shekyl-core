@@ -23,7 +23,7 @@ The Tor lane's Pi run of 2026-10-31 (shekyl-dev `8049fe7`, `data/tsr-acceptance/
 - recovery took 2 min 44 s after the unblock, against 6 s in the refuse block of 2026-10-25, because the six cooled addresses were waiting out their first cooldown;
 - Tor said nothing about its network the whole time (`TSR-Q14`).
 
-**Why the guard failed.** `Dialer::ladder` (`shekyl-dialer/src/owner/quiet.rs:67`) returns the first step only after K unopened attempts and S elapsed: K = 13, S = 364.5 s on Tor.
+**Why the guard failed.** `Dialer::ladder` (`shekyl-dialer/src/owner/quiet.rs` line 67 at `821beb1215`; *records-was:* #1235 deleted the guard) returns the first step only after K unopened attempts and S elapsed: K = 13, S = 364.5 s on Tor.
 - Each silent drop takes the full 105 s `SocksTimeout`, with 5 in flight, so the block produced 12 failures. K was never reached.
 - Worse, every failure before a count-based guard engages is judged against its address. A white test that fails on the climb is demoted (`partition.rs:454`, `fail_test`'s white arm). With six white entries and K = 13, an outage can empty white before the guard can act.
 - Tuning K and S lower narrows that window, but cannot close it.
@@ -55,7 +55,7 @@ A rule like revision 1's ("the link worked if a session was held or a stream ope
 
 - **Each connector already marks its failures.** It stamps every close cause with marks (`shekyl-transport-layer/src/cause.rs`): `RETRY` (`:143`), `NAMES_DESTINATION` (`:146`), `PROVES_MISBEHAVIOUR` (`:149`), `WINDOW_TIMEOUT` (`:156`).
   - This is Rick's 2026-10-24 rule that each layer owns its rejections.
-  - The Tor connector's reply table is `shekyl-tor/src/replies.rs` (`proxy_reply_marks`, `:89`).
+  - The Tor connector's reply table is `shekyl-tor/src/replies.rs` (`proxy_reply_marks`, line 89 at `821beb1215`; *records-was:* #1235 replaced it with `stamp_reply`).
   - Clearnet stamps its own causes, `LocalClose` among them (`shekyl-clearnet/src/drive.rs`).
 - **Each connector already has its backoff values.** The dial profile (`shekyl-transport-layer/src/profile.rs`) holds retries, waits, the cooldown ladder and the window.
 - **The judge ignores what a failure means.** `Peerlist::apply` (`shekyl-peerlist/src/peerlist.rs:594`) drops an address on proven misbehaviour. Every other failure goes to `fail_test`, the same way whatever the marks say.

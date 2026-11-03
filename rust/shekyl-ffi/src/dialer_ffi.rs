@@ -24,20 +24,20 @@
 //! bind in the remnant's `init` (`DAEMON_CONFIG_CUTOVER.md` §2.2 step 8).
 
 use std::path::Path;
-use std::sync::{Arc, Mutex, MutexGuard};
+use std::sync::{Arc, Mutex};
 
 use shekyl_daemon_config::sections::P2p;
 /// The probe's handshake. The managed-Tor driver names it here, and does
 /// not depend on the dialer crate.
 pub use shekyl_dialer::ProbeHandshake;
-use shekyl_dialer::{seeds, BanSnapshot, Dialer, LoadError, NonceTake, SeedNetwork, Shared};
+use shekyl_dialer::{seeds, Dialer, LoadError, NonceTake, SeedNetwork};
 use shekyl_options::PeerEndpoint;
 use shekyl_peerlist::Peerlist;
 use std::net::SocketAddr;
 
 pub use shekyl_peerlist::{ConnectorId, NetworkAddress};
 use shekyl_rpc_types::DaemonNetwork;
-use shekyl_seam::{connector_from_index, CloseCause, Hub, SocketId, SyncPayload};
+use shekyl_seam::{connector_from_index, Hub, SocketId, SyncPayload};
 use shekyl_thread_ledger::{DedicatedThread, ThreadName};
 use shekyl_timing_engine::{EngineError, Handle, MonotonicClock, OwnerClass};
 /// Each connector's dial profile: the dialer, the reservation the daemon
@@ -277,9 +277,9 @@ pub(crate) fn stop() {
 /// `SessionRefused` cause is the lists' `PayloadRefused`. The row is
 /// already off the board, and this poster does not hold the table lock,
 /// so an inbound Tor session leaves the held count here.
-pub(crate) fn on_closed(id: SocketId, cause: CloseCause) {
+pub(crate) fn on_closed(id: SocketId, end: shekyl_transport_layer::DialEnd) {
     if let Some(dialer) = dialer() {
-        dialer.session_closed_from_seam(id, cause, &mut SecureRelayRng);
+        dialer.session_closed_from_seam(id, end, &mut SecureRelayRng);
     }
 }
 
@@ -288,10 +288,6 @@ pub(crate) fn note_inbound_tor() {
     if let Some(dialer) = dialer() {
         dialer.note_inbound_tor();
     }
-}
-
-fn with_shared<T>(f: impl FnOnce(MutexGuard<'_, Shared>) -> T) -> Option<T> {
-    dialer().map(|dialer| f(dialer.shared()))
 }
 
 /// [`shekyl_dial_take_handshake_nonce`]: not a nonce of this node's.
@@ -498,14 +494,13 @@ pub unsafe extern "C" fn shekyl_peerlist_disclose(
         return 0;
     };
     let now = hub.now();
-    let mut bans = BanSnapshot::take(hub);
-    let sample = with_shared(|mut shared| {
+    let sample = {
+        let mut shared = dialer.shared();
         let mut kept = shared.kept_addresses(connector);
         shared
             .lists
-            .disclose(connector, now, &mut bans, &mut kept, &mut SecureRelayRng)
-    })
-    .unwrap_or_default();
+            .disclose(connector, now, &mut kept, &mut SecureRelayRng)
+    };
     let mut written = 0;
     for address in sample.iter().take(cap) {
         if let Some(entry) = entry_of(address) {

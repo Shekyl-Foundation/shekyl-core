@@ -9,15 +9,77 @@
 
 use std::ffi::{c_char, CStr};
 use std::net::{IpAddr, Ipv4Addr};
-
+use std::sync::Arc;
 use std::time::Duration;
 
 use shekyl_seam::{deadline_after, BanLeft, Ipv4Subnet, ListedBan, Sockets};
+use shekyl_timing_engine::{Clock, Handle, MonotonicClock, OwnerClass};
 
 /// The subnet a ban names, for the daemon's owners.
 pub use shekyl_seam::Ipv4Subnet as Subnet;
 
 use super::{ban_now, hub, process_sockets};
+
+/// Start the ban list's timer on `runtime` for `sockets`, if that table
+/// does not already have one for the process engine now running.
+///
+/// The node calls this at open. An offline node has no zone host, and the
+/// zone host is not what ends a ban: the timer is the table's. A zone host
+/// calls it again; the table already holding the timer for this engine
+/// does nothing. After the engine closes, the task ends and the next start
+/// arms the earliest deadline again.
+pub fn start(runtime: &tokio::runtime::Handle, sockets: Sockets) {
+    let (engine, generation) = super::process_engine_generation();
+    spawn_expiry(runtime, &engine, sockets, generation);
+}
+
+/// Start the ban list's timing owner (Rick, 2026-10-31): one owner on the
+/// process engine holds the earliest ban deadline; when it fires, every
+/// ban due ends and the next deadline is armed. It is the only expiry: a
+/// lookup never ends a ban. The table tells it of each deadline a new ban
+/// makes the earliest ([`Sockets::set_ban_expiry`]), holding it only
+/// weakly, so the task owns the registration. A task on `runtime`, not a
+/// thread of its own (decision B, Rick 2026-10-25). It ends when the engine
+/// closes or the runtime stops.
+pub(crate) fn spawn_expiry(
+    runtime: &tokio::runtime::Handle,
+    engine: &Handle<MonotonicClock>,
+    sockets: Sockets,
+    generation: u64,
+) {
+    let Some(timer) = sockets.take_ban_timer(generation) else {
+        return;
+    };
+    let owner = match engine.register(OwnerClass::Housekeeping) {
+        Ok(owner) => Arc::new(owner),
+        Err(err) => {
+            tracing::error!(
+                "the ban list's timer could not start ({err:?}): a timed ban stays in force \
+                 until it is lifted"
+            );
+            drop(timer);
+            return;
+        }
+    };
+    let arming = Arc::downgrade(&owner);
+    sockets.set_ban_expiry(Arc::new(move |deadline| {
+        if let Some(owner) = arming.upgrade() {
+            if let Err(err) = owner.arm(deadline) {
+                tracing::debug!("the ban list's timer is not running ({err:?})");
+            }
+        }
+    }));
+    drop(runtime.spawn(async move {
+        let _timer = timer;
+        while owner.wait_wake_async().await.is_ok() {
+            if let Some(next) = sockets.expire_bans(owner.clock().now()) {
+                if owner.arm(next).is_err() {
+                    return;
+                }
+            }
+        }
+    }));
+}
 
 /// What a ban names.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -246,12 +308,11 @@ pub fn is_banned_permanently(host: IpAddr) -> bool {
     matches!(BanPath::process().remaining(host), Some(BanLeft::Permanent))
 }
 
-/// Whether `host` is banned at the process clock.
+/// Whether a ban in force covers `host`.
 ///
 /// A bound hub answers from the table it was built with. With no hub, the
-/// process table answers, and a deadline that has passed is not a ban: the
-/// lookup drops it. A permanent ban is in force at every tick. This is a
-/// read; it closes nothing.
+/// process table answers. A timed ban is in force until the ban list's
+/// timer ends it ([`spawn_expiry`]). This is a read; it changes nothing.
 #[must_use]
 pub fn host_is_banned(host: IpAddr) -> bool {
     BanPath::process().is_banned(host)
