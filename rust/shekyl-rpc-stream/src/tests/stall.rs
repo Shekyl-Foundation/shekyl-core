@@ -227,3 +227,43 @@ async fn a_read_that_keeps_moving_is_not_a_stall() {
         .expect("slow ciphertext is not a stall");
     assert_eq!(got, plain);
 }
+
+/// Shutdown writes the close record through the same drain as a response.
+/// No accepted byte for four seconds is the write stall.
+#[tokio::test(start_paused = true)]
+async fn a_shutdown_with_no_progress_stalls() {
+    let (gate, _grant) = Gate::new(Vec::new());
+    let ((send, recv), _) = directions();
+    let mut client = RecordStream::new(gate, send, recv);
+    let task = tokio::spawn(async move { client.shutdown().await });
+    tokio::task::yield_now().await;
+    tokio::time::advance(Duration::from_secs(5)).await;
+    tokio::task::yield_now().await;
+    let error = task
+        .await
+        .expect("the shutdown task finishes")
+        .expect_err("no progress stalls");
+    assert_eq!(error.kind(), io::ErrorKind::TimedOut);
+}
+
+/// One byte of the close record every three seconds is progress. The
+/// stall is four seconds without a byte, so a moving shutdown finishes.
+#[tokio::test(start_paused = true)]
+async fn a_shutdown_that_keeps_moving_is_not_a_stall() {
+    let (gate, grant) = Gate::new(Vec::new());
+    let ((send, recv), _) = directions();
+    let mut client = RecordStream::new(gate, send, recv);
+    let task = tokio::spawn(async move { client.shutdown().await });
+    tokio::task::yield_now().await;
+    for _ in 0..2_000 {
+        if task.is_finished() {
+            break;
+        }
+        tokio::time::advance(Duration::from_secs(3)).await;
+        grant.write(1);
+        tokio::task::yield_now().await;
+    }
+    task.await
+        .expect("the shutdown task finishes")
+        .expect("slow progress is not a stall");
+}

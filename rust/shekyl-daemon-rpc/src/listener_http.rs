@@ -7,15 +7,16 @@
 //! records.
 //!
 //! Header-read and idle are one hyper timer: 4 seconds, the message-1
-//! deadline. That timer is HTTP/1's, so a plaintext listener speaks
-//! HTTP/1 only. HTTP/2 has no equivalent on this builder, and a peer
-//! that finished its preface would sit idle holding a connection slot.
-//! A channel connection does not use this timer for idle — its record
-//! stream owns a long idle, so a session is not opened again through a
-//! new handshake — and that listener is not built here. A response write
-//! that makes no progress for 4 seconds closes the connection. That
-//! stall bound is every listener's, including the channel's record
-//! stream.
+//! deadline. That timer belongs to hyper's HTTP/1 connection, so a
+//! plaintext listener is an HTTP/1 server. HTTP/2 is not a type this
+//! module can build and not a feature this crate links: its preface has
+//! no header or idle timer, and a peer that finished one would sit idle
+//! holding a connection slot. A channel connection does not use this
+//! timer for idle — its record stream owns a long idle, so a session is
+//! not opened again through a new handshake — and that listener is not
+//! built here. A response write that makes no progress for 4 seconds
+//! closes the connection. That stall bound is every listener's,
+//! including the channel's record stream.
 
 use std::future::Future;
 use std::io::{self, IoSlice};
@@ -25,8 +26,8 @@ use std::time::Duration;
 
 use axum::serve::Listener;
 use axum::Router;
-use hyper_util::rt::{TokioExecutor, TokioIo, TokioTimer};
-use hyper_util::server::conn::auto::Builder;
+use hyper::server::conn::http1;
+use hyper_util::rt::{TokioIo, TokioTimer};
 use hyper_util::service::TowerToHyperService;
 use tokio::io::{AsyncRead, AsyncWrite, ReadBuf};
 use tokio::sync::watch;
@@ -85,19 +86,12 @@ fn handle_connection(
     let signal_tx = signal_tx.clone();
     let close_rx = close_rx.clone();
     tokio::spawn(async move {
-        // HTTP/1 only. `http1_only` is ignored by
-        // `serve_connection_with_upgrades`, which sniffs an HTTP/2 preface
-        // and then has no header or idle timer. Plaintext RPC has no
-        // upgrade.
-        let mut builder = Builder::new(TokioExecutor::new()).http1_only();
-        // The timer is what makes the header-read bound real. On a
-        // plaintext listener it is also the idle bound: hyper arms it
-        // again while waiting for the next request line.
-        builder
-            .http1()
-            .timer(TokioTimer::new())
-            .header_read_timeout(Some(HEADER_READ));
-        let mut conn = pin!(builder.serve_connection(io, hyper_service));
+        // HTTP/1 is the connection type. There is no preface sniff and no
+        // HTTP/2 arm: a plaintext RPC connection does not upgrade. The
+        // timer is what makes the header-read bound real, and on this
+        // listener it is also the idle bound: hyper arms it again while
+        // waiting for the next request line.
+        let mut conn = pin!(plaintext_builder().serve_connection(io, hyper_service));
         let mut signal_closed = pin!(signal_tx.closed());
         let mut shutting_down = false;
         loop {
@@ -116,6 +110,17 @@ fn handle_connection(
         }
         drop(close_rx);
     });
+}
+
+/// The HTTP/1 connection a plaintext listener serves. [`HEADER_READ`] is
+/// the header-read bound, and hyper arms that same timer again while it
+/// waits for the next request line, which is the idle bound.
+fn plaintext_builder() -> http1::Builder {
+    let mut builder = http1::Builder::new();
+    builder
+        .timer(TokioTimer::new())
+        .header_read_timeout(Some(HEADER_READ));
+    builder
 }
 
 /// Closes a connection whose response write makes no progress for `bound`.
@@ -153,6 +158,30 @@ impl<T> StallWrite<T> {
     fn wrote(&mut self) {
         self.wait = None;
     }
+
+    /// One poll of the inner writer. [`Poll::Pending`] arms the stall.
+    /// Any [`Poll::Ready`] is progress and clears it, including a
+    /// completed write of zero bytes and an error: the wait measures a
+    /// writer that has not answered, not a writer that answered empty.
+    fn drive<R>(
+        &mut self,
+        cx: &mut Context<'_>,
+        poll: impl FnOnce(Pin<&mut T>, &mut Context<'_>) -> Poll<io::Result<R>>,
+    ) -> Poll<io::Result<R>>
+    where
+        T: Unpin,
+    {
+        match poll(Pin::new(&mut self.inner), cx) {
+            Poll::Pending => match self.poll_pending(cx) {
+                Poll::Pending => Poll::Pending,
+                Poll::Ready(error) => Poll::Ready(Err(error)),
+            },
+            ready => {
+                self.wrote();
+                ready
+            }
+        }
+    }
 }
 
 impl<T: AsyncRead + Unpin> AsyncRead for StallWrite<T> {
@@ -171,45 +200,16 @@ impl<T: AsyncWrite + Unpin> AsyncWrite for StallWrite<T> {
         cx: &mut Context<'_>,
         buf: &[u8],
     ) -> Poll<io::Result<usize>> {
-        let this = self.get_mut();
-        match Pin::new(&mut this.inner).poll_write(cx, buf) {
-            Poll::Pending => match this.poll_pending(cx) {
-                Poll::Pending => Poll::Pending,
-                Poll::Ready(error) => Poll::Ready(Err(error)),
-            },
-            other => {
-                this.wrote();
-                other
-            }
-        }
+        self.get_mut()
+            .drive(cx, |inner, cx| inner.poll_write(cx, buf))
     }
 
     fn poll_flush(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<io::Result<()>> {
-        let this = self.get_mut();
-        match Pin::new(&mut this.inner).poll_flush(cx) {
-            Poll::Pending => match this.poll_pending(cx) {
-                Poll::Pending => Poll::Pending,
-                Poll::Ready(error) => Poll::Ready(Err(error)),
-            },
-            other => {
-                this.wrote();
-                other
-            }
-        }
+        self.get_mut().drive(cx, AsyncWrite::poll_flush)
     }
 
     fn poll_shutdown(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<io::Result<()>> {
-        let this = self.get_mut();
-        match Pin::new(&mut this.inner).poll_shutdown(cx) {
-            Poll::Pending => match this.poll_pending(cx) {
-                Poll::Pending => Poll::Pending,
-                Poll::Ready(error) => Poll::Ready(Err(error)),
-            },
-            other => {
-                this.wrote();
-                other
-            }
-        }
+        self.get_mut().drive(cx, AsyncWrite::poll_shutdown)
     }
 
     fn poll_write_vectored(
@@ -217,20 +217,222 @@ impl<T: AsyncWrite + Unpin> AsyncWrite for StallWrite<T> {
         cx: &mut Context<'_>,
         bufs: &[IoSlice<'_>],
     ) -> Poll<io::Result<usize>> {
-        let this = self.get_mut();
-        match Pin::new(&mut this.inner).poll_write_vectored(cx, bufs) {
-            Poll::Pending => match this.poll_pending(cx) {
-                Poll::Pending => Poll::Pending,
-                Poll::Ready(error) => Poll::Ready(Err(error)),
-            },
-            other => {
-                this.wrote();
-                other
-            }
-        }
+        self.get_mut()
+            .drive(cx, |inner, cx| inner.poll_write_vectored(cx, bufs))
     }
 
     fn is_write_vectored(&self) -> bool {
         self.inner.is_write_vectored()
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use std::collections::VecDeque;
+    use std::sync::{Arc, Mutex};
+    use std::task::Waker;
+
+    use axum::routing::get;
+    use axum::Router;
+    use hyper_util::service::TowerToHyperService;
+    use tokio::io::{AsyncReadExt, AsyncWriteExt};
+
+    use super::*;
+
+    fn app() -> Router {
+        Router::new().route("/", get(|| async { "ok" }))
+    }
+
+    /// Bytes the test has offered the writer. An empty queue is a writer
+    /// that has not answered. `Some(0)` is an empty completion, which is
+    /// still an answer.
+    struct Hold {
+        state: Arc<Mutex<HoldState>>,
+    }
+
+    struct HoldState {
+        answers: VecDeque<usize>,
+        waker: Option<Waker>,
+    }
+
+    struct Grant {
+        state: Arc<Mutex<HoldState>>,
+    }
+
+    impl Grant {
+        fn answer(&self, n: usize) {
+            let mut state = self.state.lock().expect("the hold");
+            state.answers.push_back(n);
+            if let Some(waker) = state.waker.take() {
+                waker.wake();
+            }
+        }
+    }
+
+    fn hold() -> (Hold, Grant) {
+        let state = Arc::new(Mutex::new(HoldState {
+            answers: VecDeque::new(),
+            waker: None,
+        }));
+        (
+            Hold {
+                state: Arc::clone(&state),
+            },
+            Grant { state },
+        )
+    }
+
+    impl AsyncRead for Hold {
+        fn poll_read(
+            self: Pin<&mut Self>,
+            _cx: &mut Context<'_>,
+            _buf: &mut ReadBuf<'_>,
+        ) -> Poll<io::Result<()>> {
+            Poll::Pending
+        }
+    }
+
+    impl AsyncWrite for Hold {
+        fn poll_write(
+            self: Pin<&mut Self>,
+            cx: &mut Context<'_>,
+            buf: &[u8],
+        ) -> Poll<io::Result<usize>> {
+            let mut state = self.get_mut().state.lock().expect("the hold");
+            match state.answers.pop_front() {
+                Some(0) => Poll::Ready(Ok(0)),
+                Some(n) => Poll::Ready(Ok(n.min(buf.len()))),
+                None => {
+                    state.waker = Some(cx.waker().clone());
+                    Poll::Pending
+                }
+            }
+        }
+
+        fn poll_flush(self: Pin<&mut Self>, _cx: &mut Context<'_>) -> Poll<io::Result<()>> {
+            Poll::Ready(Ok(()))
+        }
+
+        fn poll_shutdown(self: Pin<&mut Self>, _cx: &mut Context<'_>) -> Poll<io::Result<()>> {
+            Poll::Ready(Ok(()))
+        }
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn a_write_with_no_progress_stalls() {
+        let (hold, _grant) = hold();
+        let mut io = StallWrite::new(hold, WRITE_STALL);
+        let task = tokio::spawn(async move { io.write(&[1, 2, 3, 4]).await });
+        tokio::task::yield_now().await;
+        tokio::time::advance(WRITE_STALL + Duration::from_secs(1)).await;
+        tokio::task::yield_now().await;
+        let error = task
+            .await
+            .expect("the write task finishes")
+            .expect_err("no progress stalls");
+        assert_eq!(error.kind(), io::ErrorKind::TimedOut);
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn a_write_that_keeps_moving_is_not_a_stall() {
+        let (hold, grant) = hold();
+        let mut io = StallWrite::new(hold, WRITE_STALL);
+        let task = tokio::spawn(async move { io.write_all(&[1, 2, 3, 4]).await });
+        tokio::task::yield_now().await;
+        for _ in 0..8 {
+            if task.is_finished() {
+                break;
+            }
+            tokio::time::advance(Duration::from_secs(3)).await;
+            grant.answer(1);
+            tokio::task::yield_now().await;
+        }
+        task.await
+            .expect("the write task finishes")
+            .expect("slow progress is not a stall");
+    }
+
+    /// An empty completion is an answer. The stall measures a writer that
+    /// has not returned, so `Ok(0)` starts the wait over: three seconds
+    /// later a byte still lands, where a timer that ignored the empty
+    /// answer would already have fired.
+    #[tokio::test(start_paused = true)]
+    async fn an_empty_write_is_progress() {
+        let (hold, grant) = hold();
+        let mut io = StallWrite::new(hold, WRITE_STALL);
+        let task = tokio::spawn(async move {
+            let empty = io.write(&[1, 2, 3]).await?;
+            let bytes = io.write(&[1, 2, 3]).await?;
+            Ok::<(usize, usize), io::Error>((empty, bytes))
+        });
+        tokio::task::yield_now().await;
+        tokio::time::advance(Duration::from_secs(3)).await;
+        grant.answer(0);
+        tokio::task::yield_now().await;
+        tokio::time::advance(Duration::from_secs(3)).await;
+        grant.answer(3);
+        tokio::task::yield_now().await;
+        let (empty, bytes) = task
+            .await
+            .expect("the write task finishes")
+            .expect("the empty answer reset the stall");
+        assert_eq!(empty, 0);
+        assert_eq!(bytes, 3);
+    }
+
+    async fn serve_half(server: tokio::io::DuplexStream) -> Result<(), hyper::Error> {
+        let server = TokioIo::new(server);
+        let service = TowerToHyperService::new(app());
+        pin!(plaintext_builder().serve_connection(server, service)).await
+    }
+
+    /// One second inside the header bound, so the "still open" check is
+    /// taken before the timer fires.
+    fn inside_header_bound() -> Duration {
+        HEADER_READ
+            .checked_sub(Duration::from_secs(1))
+            .expect("the header bound is longer than a second")
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn an_incomplete_header_closes_at_the_header_bound() {
+        let (mut client, server) = tokio::io::duplex(64);
+        let serve = tokio::spawn(serve_half(server));
+        client
+            .write_all(b"GET / HTTP/1.1\r\nHost: t\r\n")
+            .await
+            .expect("the partial request fits the duplex");
+        tokio::task::yield_now().await;
+        tokio::time::advance(inside_header_bound()).await;
+        tokio::task::yield_now().await;
+        assert!(!serve.is_finished(), "a second remains on the header bound");
+        tokio::time::advance(Duration::from_secs(2)).await;
+        tokio::task::yield_now().await;
+        assert!(
+            serve.is_finished(),
+            "the header bound closed the connection"
+        );
+        let result = serve.await.expect("the serve task");
+        assert!(result.is_err(), "an incomplete header fails the connection");
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn an_idle_keep_alive_closes_at_the_header_bound() {
+        let (mut client, server) = tokio::io::duplex(1024);
+        let serve = tokio::spawn(serve_half(server));
+        client
+            .write_all(b"GET / HTTP/1.1\r\nHost: t\r\n\r\n")
+            .await
+            .expect("the request fits the duplex");
+        let mut buf = [0u8; 256];
+        let n = client.read(&mut buf).await.expect("the response");
+        assert!(n > 0, "the request was served");
+        tokio::task::yield_now().await;
+        tokio::time::advance(inside_header_bound()).await;
+        tokio::task::yield_now().await;
+        assert!(!serve.is_finished(), "a second remains on the idle bound");
+        tokio::time::advance(Duration::from_secs(2)).await;
+        tokio::task::yield_now().await;
+        assert!(serve.is_finished(), "idle closed the connection");
     }
 }

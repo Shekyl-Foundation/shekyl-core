@@ -502,8 +502,8 @@ impl Listener {
 }
 
 /// The lifecycle half of [`serve_listeners`], independent of the core so it
-/// can be tested as one: one `axum::serve` per bound socket, every accepted
-/// connection admitted through the shared tracker, and every acceptor
+/// can be tested as one: one plaintext HTTP/1 serve per bound socket, every
+/// accepted connection admitted through the shared tracker, and every acceptor
 /// stopped by the same level-triggered signal — including one that has not
 /// been polled when the signal arrives, which is the ordering that used to
 /// hang `shekyl_daemon_rpc_stop`. An acceptor that fails must not leave the

@@ -820,6 +820,38 @@ async fn calc_pow_hashes_under_the_caches_the_validator_holds() {
             ask(BlockHeight::ZERO, &hex::encode(&blob), &hex::encode(named.to_bytes())),
             Ok(hex::encode(compute_hash(&held, &blob)))
         );
+        // One shared bucket. The first bounded hash spends the one hash
+        // the bucket holds. The second is empty and spends nothing. The
+        // host hashes from an empty bucket.
+        let budget = hash_budget();
+        let priced = CalcPowRequest {
+            height: mined[2].height.to_raw(),
+            block_blob: hex::encode(&blob),
+            seed_hash: String::new(),
+        };
+        assert!(calc_pow(&facts, &priced, true, &budget).is_ok());
+        match calc_pow(&facts, &priced, true, &budget) {
+            Err(RpcFault::Refused(refusal)) => {
+                assert_eq!(
+                    refusal.code,
+                    shekyl_rpc_types::errors::ErrorClass::OverResourceBound.code()
+                );
+                assert_eq!(
+                    refusal
+                        .data
+                        .as_ref()
+                        .and_then(|data| data.get("code"))
+                        .and_then(serde_json::Value::as_str),
+                    Some("rpc.bound.budget")
+                );
+            }
+            other => panic!("the second hash finds an empty bucket: {other:?}"),
+        }
+        let empty = shekyl_daemon_rpc::hash_budget::HashBudget::empty(std::time::Instant::now());
+        assert!(
+            calc_pow(&facts, &priced, false, &empty).is_ok(),
+            "the host does not pay"
+        );
         let far = 1_000_000u64;
         let seed_height = shekyl_chain_rules::seed_height(BlockHeight::from_raw(far))
             .expect("not genesis")
@@ -884,17 +916,20 @@ async fn calc_pow_never_derives_a_cache() {
         let facts = facts_with_caches(Arc::clone(&store), path, RULES, Arc::clone(&caches));
         let blob = hex::encode(mined[2].template.block.pow_blob());
         let fresh = BlockHash::from_bytes([7; 32]);
+        let not_held_request = CalcPowRequest {
+            height: 2,
+            block_blob: blob.clone(),
+            seed_hash: hex::encode(fresh.to_bytes()),
+        };
         assert_eq!(
-            calc_pow(
-                &facts,
-                &CalcPowRequest {
-                    height: 2,
-                    block_blob: blob.clone(),
-                    seed_hash: hex::encode(fresh.to_bytes()),
-                },
-                false,
-                &hash_budget(),
-            ),
+            calc_pow(&facts, &not_held_request, false, &hash_budget()),
+            not_held(fresh)
+        );
+        // An empty bucket and a seed that will not hash is the parameter
+        // refusal, not the empty bucket. The spend sits after admission.
+        let empty = shekyl_daemon_rpc::hash_budget::HashBudget::empty(std::time::Instant::now());
+        assert_eq!(
+            calc_pow(&facts, &not_held_request, true, &empty),
             not_held(fresh)
         );
         let named_by_height = mined[2].seed;

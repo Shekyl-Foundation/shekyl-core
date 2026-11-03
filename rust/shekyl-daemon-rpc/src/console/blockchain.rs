@@ -27,12 +27,7 @@ fn fetch_block_headers_range(
     // restricted rule does not apply — as `print_block` says.
     let reply = native_json_rpc(src, "get_block_headers_range", &request, |_core| {
         let chain = super::open_chain()?;
-        crate::methods::get_block_headers_range(
-            chain.as_chain_facts(),
-            &request,
-            false,
-            &crate::hash_budget::HashBudget::new(std::time::Instant::now()),
-        )
+        crate::methods::get_block_headers_range(chain.as_chain_facts(), &request, false)
     })?;
     require_ok(&reply.status)?;
     Ok(reply.headers)

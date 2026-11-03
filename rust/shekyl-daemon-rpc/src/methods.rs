@@ -142,6 +142,18 @@ impl RpcRefusal {
             data: serde_json::to_value(&error.diagnostic).ok(),
         }
     }
+
+    /// The JSON-RPC error object every surface serializes (RW-Q3). `id`
+    /// is the request's on `/json_rpc` and null on the other surfaces.
+    #[must_use]
+    pub fn to_json_rpc(&self, id: serde_json::Value) -> crate::types::JsonRpcResponse {
+        crate::types::JsonRpcResponse::error_with_data(
+            id,
+            self.code,
+            self.message.clone(),
+            self.data.clone(),
+        )
+    }
 }
 
 /// A bounded connection asked for more than one request may
@@ -775,15 +787,6 @@ pub fn project_transactions(
 
 // ── RK-5b: the header remainder ─────────────────────────────────────────────
 
-/// Whether the reply includes the PoW hash the node recorded when it
-/// validated the block (`recorded_pow`). That is a store read. It does
-/// not run RandomX, so `budget` is not spent, for one header or for a
-/// range. The host's administrator and a bounded caller are the same
-/// here. Not asking reads nothing.
-fn recorded_pow_hash(requested: bool, _budget: &crate::hash_budget::HashBudget) -> bool {
-    requested
-}
-
 /// The request parsers for the four RK-5b methods.
 ///
 /// Each names **its own** fields, because a caller that sent the wrong shape
@@ -885,9 +888,7 @@ const TIP_READ_ATTEMPTS: usize = 4;
 pub fn get_last_block_header(
     facts: &dyn ChainFacts,
     fill_pow_hash: bool,
-    budget: &crate::hash_budget::HashBudget,
 ) -> Result<GetLastBlockHeaderResponse, RpcFault> {
-    let pow = recorded_pow_hash(fill_pow_hash, budget);
     let tip = facts.chain_tip()?;
     // **The readiness check the C++ had, and only here.** `CHECK_CORE_READY()`
     // guarded `on_get_last_block_header` alone among this slice's methods —
@@ -916,7 +917,7 @@ pub fn get_last_block_header(
     // block 0); `newest_block` keeps the empty case total.
     let mut top = newest_block(tip.chain_height);
     for _ in 0..TIP_READ_ATTEMPTS {
-        let at = facts.block_header_at(BlockLookup::Height(top), pow)?;
+        let at = facts.block_header_at(BlockLookup::Height(top), fill_pow_hash)?;
         let Some(header) = at.header else {
             // The height came from a chain height, so it was below the tip
             // when it was chosen. Absent now means either the store cannot
@@ -957,7 +958,6 @@ pub fn get_block_header_by_hash(
     facts: &dyn ChainFacts,
     request: &GetBlockHeaderByHashRequest,
     bounded: bool,
-    budget: &crate::hash_budget::HashBudget,
 ) -> Result<GetBlockHeaderByHashResponse, RpcFault> {
     if bounded && request.hashes.len() > RESTRICTED_BLOCK_COUNT {
         return Err(bound_fault(
@@ -967,10 +967,10 @@ pub fn get_block_header_by_hash(
             request.hashes.len() as u64,
         ));
     }
-    let pow = recorded_pow_hash(request.fill_pow_hash, budget);
     let mut block_headers = Vec::with_capacity(request.hashes.len());
     for hash in &request.hashes {
-        let at = facts.block_header_at(BlockLookup::Hash(hash.to_bytes()), pow)?;
+        let at =
+            facts.block_header_at(BlockLookup::Hash(hash.to_bytes()), request.fill_pow_hash)?;
         block_headers.push(BlockHeaderSlot {
             hash: *hash,
             block_header: at.header.as_ref().map(block_header),
@@ -987,7 +987,6 @@ pub fn get_block_headers_range(
     facts: &dyn ChainFacts,
     request: &GetBlockHeadersRangeRequest,
     bounded: bool,
-    budget: &crate::hash_budget::HashBudget,
 ) -> Result<GetBlockHeadersRangeResponse, RpcFault> {
     // **Both endpoints are bounded against the tip before any per-height
     // work.** The C++ refused `start > end` *and* either endpoint at or past
@@ -1031,11 +1030,10 @@ pub fn get_block_headers_range(
             span,
         ));
     }
-    let pow = recorded_pow_hash(request.fill_pow_hash, budget);
     let mut headers = Vec::new();
     for raw in request.start_height..=request.end_height {
         let height = BlockHeight::from_raw(raw);
-        let at = facts.block_header_at(BlockLookup::Height(height), pow)?;
+        let at = facts.block_header_at(BlockLookup::Height(height), request.fill_pow_hash)?;
         let Some(header) = at.header else {
             // **A missing header here can only mean the chain shortened.**
             // On the height path the shim returns `found == 0` for exactly
@@ -1394,12 +1392,6 @@ pub fn sync_info(
 #[cfg(test)]
 pub(crate) mod tests {
     use super::*;
-    use crate::hash_budget::HashBudget;
-    use std::time::Instant;
-
-    fn budget() -> HashBudget {
-        HashBudget::new(Instant::now())
-    }
     use crate::chain_facts::{
         decode_target_count, BlockAt, BlockFacts, BlockHashAt, BlockHeaderAt, BlockHeaderFacts,
         ChainTip, DaemonIdentity, FeeEstimate, NetStats,
@@ -1983,7 +1975,7 @@ pub(crate) mod tests {
         );
 
         let mut ours: serde_json::Value = serde_json::to_value(&out).unwrap();
-        // Head of the `get_version` chain (`_v43` = 3.66). A bump that
+        // Head of the `get_version` chain (`_v44` = 3.67). A bump that
         // forgets this include fails on `version` below.
         let mut oracle: serde_json::Value = serde_json::from_str(include_str!(
             "../../shekyl-rpc-types/tests/vectors/rpc/get_version_synced_v44.json"
@@ -2516,29 +2508,22 @@ pub(crate) mod tests {
 
     // ── RK-5b: the header remainder ────────────────────────────────────────
 
-    /// `fill_pow_hash` is the hash recorded at validation. A bounded caller
-    /// receives it with an empty hash budget, and not asking leaves the
-    /// field empty.
+    /// `fill_pow_hash` is the hash recorded at validation. Asking includes
+    /// it. Not asking leaves the field empty.
     #[test]
-    fn fill_pow_hash_is_served_to_a_bounded_caller_without_spending() {
+    fn fill_pow_hash_is_the_recorded_hash() {
         let f = facts(true, 0);
-        let empty = HashBudget::empty(Instant::now());
-        let held = empty.held_ns();
-        let filled = get_last_block_header(&f, true, &empty).expect("the recorded hash");
+        let filled = get_last_block_header(&f, true).expect("the recorded hash");
         assert!(filled.block_header.pow_hash.is_some());
-        let bare = get_last_block_header(&f, false, &empty).expect("no hash asked");
+        let bare = get_last_block_header(&f, false).expect("no hash asked");
         assert!(bare.block_header.pow_hash.is_none());
-        assert_eq!(empty.held_ns(), held);
     }
 
     /// A bounded range within the header cap, asking for the recorded hash
-    /// on every header, is served. The hash budget is not spent: an empty
-    /// bucket would have refused a charge of more than one hash.
+    /// on every header, is served. The hash is a store read.
     #[test]
-    fn a_bounded_header_range_with_fill_pow_hash_does_not_spend_the_hash_budget() {
+    fn a_bounded_header_range_serves_the_recorded_hash() {
         let f = facts(false, 0);
-        let empty = HashBudget::empty(Instant::now());
-        let held = empty.held_ns();
         let out = get_block_headers_range(
             &f,
             &GetBlockHeadersRangeRequest {
@@ -2547,12 +2532,10 @@ pub(crate) mod tests {
                 fill_pow_hash: true,
             },
             true,
-            &empty,
         )
         .expect("three headers are inside the 1,000-header cap");
         assert_eq!(out.headers.len(), 3);
         assert!(out.headers.iter().all(|header| header.pow_hash.is_some()));
-        assert_eq!(empty.held_ns(), held, "fill_pow_hash is a store read");
     }
 
     /// A block arriving between choosing the tip and projecting it does not
@@ -2573,7 +2556,7 @@ pub(crate) mod tests {
         let before = f.tip.as_ref().expect("a tip").chain_height;
         f.tip_growth_remaining.store(1, Ordering::Relaxed);
 
-        let out = get_last_block_header(&f, false, &budget()).expect("the tip, after one retry");
+        let out = get_last_block_header(&f, false).expect("the tip, after one retry");
         // The header returned is the *new* tip, not the height chosen from
         // the pre-growth snapshot. One growth makes the old exclusive end
         // (`next_height`) the new tip ordinal.
@@ -2593,7 +2576,7 @@ pub(crate) mod tests {
     fn a_chain_that_never_settles_is_refused_rather_than_spun_on() {
         let f = facts(true, 0);
         f.tip_growth_remaining.store(u64::MAX, Ordering::Relaxed);
-        let out = get_last_block_header(&f, false, &budget());
+        let out = get_last_block_header(&f, false);
         assert!(
             matches!(&out, Err(RpcFault::Refused(r)) if r.code == CORE_RPC_ERROR_CODE_CORE_BUSY),
             "{out:?}"
@@ -2623,7 +2606,7 @@ pub(crate) mod tests {
     #[test]
     fn an_unsynchronized_node_refuses_to_report_a_tip() {
         let unsynced = facts(false, 900_000);
-        let out = get_last_block_header(&unsynced, false, &budget());
+        let out = get_last_block_header(&unsynced, false);
         assert!(
             matches!(&out, Err(RpcFault::Refused(r)) if r.code == CORE_RPC_ERROR_CODE_CORE_BUSY),
             "{out:?}"
@@ -2640,7 +2623,7 @@ pub(crate) mod tests {
             end_height: 0,
             fill_pow_hash: false,
         };
-        assert!(get_block_headers_range(&unsynced, &range, false, &budget()).is_ok());
+        assert!(get_block_headers_range(&unsynced, &range, false).is_ok());
         assert!(get_fee_estimate(&unsynced, &GetFeeEstimateRequest::default()).is_ok());
         assert!(get_block_header_by_hash(
             &unsynced,
@@ -2649,7 +2632,6 @@ pub(crate) mod tests {
                 fill_pow_hash: false,
             },
             false,
-            &budget(),
         )
         .is_ok());
     }
@@ -2666,7 +2648,7 @@ pub(crate) mod tests {
             hashes: vec![known, absent, known],
             fill_pow_hash: false,
         };
-        let out = get_block_header_by_hash(&f, &request, false, &budget()).expect("per-element");
+        let out = get_block_header_by_hash(&f, &request, false).expect("per-element");
         assert_eq!(out.block_headers.len(), 3, "one slot per requested hash");
         assert!(out.block_headers[0].block_header.is_some());
         assert!(
@@ -2692,17 +2674,17 @@ pub(crate) mod tests {
             fill_pow_hash: false,
         };
         // Exactly at the cap: 1000 headers, heights 0..=999.
-        assert!(get_block_headers_range(&f, &range(0, 999), true, &budget()).is_ok());
+        assert!(get_block_headers_range(&f, &range(0, 999), true).is_ok());
         // One more header — the value the C++ admitted.
         assert!(matches!(
-            get_block_headers_range(&f, &range(0, 1000), true, &budget()),
+            get_block_headers_range(&f, &range(0, 1000), true),
             Err(RpcFault::Refused(_))
         ));
         // Unrestricted, neither is capped.
-        assert!(get_block_headers_range(&f, &range(0, 1000), false, &budget()).is_ok());
+        assert!(get_block_headers_range(&f, &range(0, 1000), false).is_ok());
         // An inverted range is refused before any chain read.
         assert!(matches!(
-            get_block_headers_range(&f, &range(5, 4), false, &budget()),
+            get_block_headers_range(&f, &range(5, 4), false),
             Err(RpcFault::Refused(_))
         ));
     }
@@ -2731,7 +2713,7 @@ pub(crate) mod tests {
 
         let before = reads();
         assert!(matches!(
-            get_block_headers_range(&f, &range(0, u64::MAX), false, &budget()),
+            get_block_headers_range(&f, &range(0, u64::MAX), false),
             Err(RpcFault::Refused(refusal)) if refusal.code == CORE_RPC_ERROR_CODE_TOO_BIG_HEIGHT
         ));
         assert_eq!(
@@ -2745,7 +2727,7 @@ pub(crate) mod tests {
         let past = chain.next_height().to_raw();
         let before = reads();
         assert!(matches!(
-            get_block_headers_range(&f, &range(past, past), false, &budget()),
+            get_block_headers_range(&f, &range(past, past), false),
             Err(RpcFault::Refused(_))
         ));
         assert_eq!(reads(), before, "the exclusive end is not readable");
@@ -2754,7 +2736,7 @@ pub(crate) mod tests {
         // off by one in the other direction.
         let last = chain.tip().expect("non-empty fake").to_raw();
         let before = reads();
-        assert!(get_block_headers_range(&f, &range(last, last), false, &budget()).is_ok());
+        assert!(get_block_headers_range(&f, &range(last, last), false).is_ok());
         assert_eq!(reads(), before + 1, "exactly one header for one height");
     }
 
@@ -2787,7 +2769,6 @@ pub(crate) mod tests {
                 fill_pow_hash: false,
             },
             false,
-            &budget(),
         );
         let Err(RpcFault::Refused(refusal)) = out else {
             panic!("a vanished height is a refusal, not a fault: {out:?}");

@@ -146,7 +146,7 @@ fn a_pow_hash_in_flight_does_not_hold_the_facts_lock() {
     use std::time::{Duration, Instant};
 
     use shekyl_daemon_rpc::chain_facts::ChainFacts;
-    use shekyl_daemon_rpc::read_facts::{ChainReadFacts, PowSeed};
+    use shekyl_daemon_rpc::read_facts::{ChainReadFacts, PowAdmission, PowSeed};
     use shekyl_hash_budget::Class;
 
     /// The hash thread has not reached `acquire`.
@@ -157,8 +157,9 @@ fn a_pow_hash_in_flight_does_not_hold_the_facts_lock() {
     let dir = tempfile::tempdir().expect("temp");
     let node = open_at(dir.path(), Arc::new(|| {}));
     let budget = node.budget();
-    // Every free permit. `pow_hash` then waits in `acquire` instead of
-    // hashing, which is the wait a chain read must not share.
+    // Every free permit. `hash_admitted` then waits in `acquire` instead
+    // of hashing, which is the wait a chain read must not share. The
+    // admission is the lookup and takes no permit.
     let held: Vec<_> = (0..budget.permits())
         .map_while(|_| budget.try_acquire(Class::Chain))
         .collect();
@@ -168,15 +169,17 @@ fn a_pow_hash_in_flight_does_not_hold_the_facts_lock() {
     );
     let hashing = {
         let chain = Arc::clone(&node.handles().chain);
-        std::thread::spawn(move || {
-            ChainReadFacts::pow_hash(&*chain, &[], PowSeed::Given(BlockHash::NULL))
-        })
+        let admitted = match ChainReadFacts::admit_pow(&*chain, PowSeed::Given(BlockHash::NULL)) {
+            Ok(PowAdmission::Admitted(admitted)) => admitted,
+            other => panic!("the null seed is held at open: {other:?}"),
+        };
+        std::thread::spawn(move || ChainReadFacts::hash_admitted(&*chain, &[], &admitted))
     };
     let entered = Instant::now();
     while budget.waiting(Class::CalcPow) == 0 {
         if hashing.is_finished() {
             let finished = hashing.join().expect("pow thread");
-            panic!("pow_hash finished without waiting for a permit: {finished:?}");
+            panic!("hash_admitted finished without waiting for a permit: {finished:?}");
         }
         assert!(
             entered.elapsed() < ENTER_BOUND,

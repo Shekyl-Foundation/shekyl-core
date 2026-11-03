@@ -29,7 +29,7 @@
 //! Handler for the `/json_rpc` endpoint (JSON-RPC 2.0 dispatch).
 
 #[cfg(test)]
-use super::native::{admit_pow_hash, frame_native, join_fault, native_method_for, NativeMethod};
+use super::native::{frame_native, join_fault, native_method_for, NativeMethod};
 use super::native::{native_fault, native_method, NativeFail};
 use crate::authority::{refusal, Authority};
 #[cfg(test)]
@@ -332,19 +332,6 @@ mod tests {
         // whether it is answered at all is the C++ table's to say — and that
         // table carries no row for it.
         assert!(native_method_for("hard_fork_info").is_none());
-    }
-
-    /// `fill_pow_hash` is the recorded hash. An empty budget still serves
-    /// it, and not asking does not.
-    #[test]
-    fn fill_pow_hash_does_not_spend_the_hash_budget() {
-        use crate::hash_budget::HashBudget;
-        use std::time::Instant;
-        let empty = HashBudget::empty(Instant::now());
-        let held = empty.held_ns();
-        assert!(admit_pow_hash(true, &empty));
-        assert!(!admit_pow_hash(false, &empty));
-        assert_eq!(empty.held_ns(), held);
     }
 
     /// Each native name is gated exactly as specified, and none is gated on

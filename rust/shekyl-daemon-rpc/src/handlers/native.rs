@@ -16,19 +16,12 @@ use crate::authority::Authority;
 use crate::chain_facts::FfiP2pFacts;
 use crate::core::CoreRpc;
 use crate::handles::ChainReadHandle;
-use crate::hash_budget::HashBudget;
 use crate::methods::{InternalFault, RpcFault};
 use crate::server::AppState;
 use crate::types::JsonRpcResponse;
 use shekyl_rpc_types::errors::RpcError;
 use std::sync::Arc;
 use tracing::warn;
-
-/// Whether the reply includes the PoW hash recorded at validation.
-/// `fill_pow_hash` is a store read, so `budget` is not spent.
-pub(super) fn admit_pow_hash(requested: bool, _budget: &HashBudget) -> bool {
-    requested
-}
 
 /// A JSON-RPC method this crate serves itself.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -172,8 +165,7 @@ pub(super) async fn native_method(
                 Ok(request) => request,
                 Err(fault) => return Some(Err(NativeFail::Fault(fault))),
             };
-            let budget = Arc::clone(&state.hash_budget);
-            let fill_pow_hash = admit_pow_hash(request.fill_pow_hash, &budget);
+            let fill_pow_hash = request.fill_pow_hash;
             Some(frame_native(
                 on_chain(state, move |chain| {
                     crate::methods::get_block(chain.as_ref(), &request, fill_pow_hash)
@@ -218,14 +210,10 @@ pub(super) async fn native_method(
                 Ok(request) => request,
                 Err(fault) => return Some(Err(NativeFail::Fault(fault))),
             };
-            let budget = Arc::clone(&state.hash_budget);
+            let fill_pow_hash = request.fill_pow_hash;
             Some(frame_native(
                 on_chain(state, move |chain| {
-                    crate::methods::get_last_block_header(
-                        chain.as_ref(),
-                        request.fill_pow_hash,
-                        &budget,
-                    )
+                    crate::methods::get_last_block_header(chain.as_ref(), fill_pow_hash)
                 })
                 .await,
             ))
@@ -236,15 +224,9 @@ pub(super) async fn native_method(
                 Err(fault) => return Some(Err(NativeFail::Fault(fault))),
             };
             let bounded = authority.bounded();
-            let budget = Arc::clone(&state.hash_budget);
             Some(frame_native(
                 on_chain(state, move |chain| {
-                    crate::methods::get_block_header_by_hash(
-                        chain.as_ref(),
-                        &request,
-                        bounded,
-                        &budget,
-                    )
+                    crate::methods::get_block_header_by_hash(chain.as_ref(), &request, bounded)
                 })
                 .await,
             ))
@@ -255,15 +237,9 @@ pub(super) async fn native_method(
                 Err(fault) => return Some(Err(NativeFail::Fault(fault))),
             };
             let bounded = authority.bounded();
-            let budget = Arc::clone(&state.hash_budget);
             Some(frame_native(
                 on_chain(state, move |chain| {
-                    crate::methods::get_block_headers_range(
-                        chain.as_ref(),
-                        &request,
-                        bounded,
-                        &budget,
-                    )
+                    crate::methods::get_block_headers_range(chain.as_ref(), &request, bounded)
                 })
                 .await,
             ))
@@ -323,8 +299,7 @@ pub(super) async fn native_method(
                 Ok(request) => request,
                 Err(fault) => return Some(Err(NativeFail::Fault(fault))),
             };
-            let budget = Arc::clone(&state.hash_budget);
-            let fill_pow_hash = admit_pow_hash(request.fill_pow_hash, &budget);
+            let fill_pow_hash = request.fill_pow_hash;
             Some(frame_native(
                 on_chain(state, move |chain| {
                     crate::methods::get_block_header_by_height(
@@ -348,7 +323,12 @@ pub(super) async fn native_method(
             let budget = Arc::clone(&state.hash_budget);
             Some(frame_native(
                 on_chain(state, move |chain| {
-                    crate::read_methods::calc_pow(chain.as_ref(), &request, bounded, &budget)
+                    crate::read_methods::calc_pow(
+                        chain.as_ref(),
+                        &request,
+                        bounded,
+                        budget.as_ref(),
+                    )
                 })
                 .await,
             ))
@@ -367,7 +347,11 @@ pub(super) async fn native_method(
                 async {
                     // Wait on the async task, then hold the permit inside the
                     // scan. Cancelling the request must not free the permit
-                    // while the blocking read is still on disk.
+                    // while the blocking read is still on disk. The pool is
+                    // one blocking thread (`daemon_rpc_budget`), and this
+                    // scan is the disk read that thread is for. The sum is
+                    // one snapshot, so the walk is one task; the permit is
+                    // what keeps a second scan off that thread.
                     let permit = if bounded {
                         Some(
                             reads

@@ -364,6 +364,38 @@ impl<T: AsyncRead + AsyncWrite + Unpin> RecordStream<T> {
         result
     }
 
+    /// The write stall on one poll. Pending arms [`WRITE_STALL`]. Ready
+    /// clears it, including an empty completion and an error: the wait
+    /// measures a writer that has not answered.
+    ///
+    /// `poll_drain` clears the same wait when a byte leaves, so a poll
+    /// that is still pending after progress restarts the wait here.
+    /// Shutdown is that write: the close record drains through
+    /// `poll_write`, and this is the bound on it. `stalled` is the success
+    /// a deadline that returned `Ok` would report. The deadline returns
+    /// `Err`.
+    fn bound_write<R>(
+        &mut self,
+        cx: &mut Context<'_>,
+        result: Poll<io::Result<R>>,
+        stalled: R,
+    ) -> Poll<io::Result<R>> {
+        if result.is_pending() {
+            if let Poll::Ready(timed_out) = poll_deadline(
+                &mut self.write_wait,
+                &mut self.write_wait_for,
+                WRITE_STALL,
+                cx,
+                "the response write made no progress",
+            ) {
+                return self.guard(Poll::Ready(timed_out.map(|()| stalled)));
+            }
+        } else {
+            self.write_wait = None;
+        }
+        self.guard(result)
+    }
+
     /// Write out the sealed record waiting for the transport.
     fn poll_drain(&mut self, cx: &mut Context<'_>) -> Poll<io::Result<()>> {
         while self.out_pos < self.out.len() {
@@ -734,45 +766,19 @@ impl<T: AsyncRead + AsyncWrite + Unpin> AsyncWrite for RecordStream<T> {
             return Poll::Ready(Err(io::Error::from(io::ErrorKind::BrokenPipe)));
         }
         let result = this.write_step(cx, buf);
-        if matches!(result, Poll::Pending) {
-            if let Poll::Ready(timed_out) = poll_deadline(
-                &mut this.write_wait,
-                &mut this.write_wait_for,
-                WRITE_STALL,
-                cx,
-                "the response write made no progress",
-            ) {
-                return this.guard(Poll::Ready(timed_out.map(|()| 0)));
-            }
-        } else if result.is_ready() {
-            this.write_wait = None;
-        }
-        this.guard(result)
+        this.bound_write(cx, result, 0)
     }
 
     fn poll_flush(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<io::Result<()>> {
         let this = self.get_mut();
         let result = this.flush_step(cx);
-        if matches!(result, Poll::Pending) {
-            if let Poll::Ready(timed_out) = poll_deadline(
-                &mut this.write_wait,
-                &mut this.write_wait_for,
-                WRITE_STALL,
-                cx,
-                "the response write made no progress",
-            ) {
-                return this.guard(Poll::Ready(timed_out));
-            }
-        } else if result.is_ready() {
-            this.write_wait = None;
-        }
-        this.guard(result)
+        this.bound_write(cx, result, ())
     }
 
     fn poll_shutdown(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<io::Result<()>> {
         let this = self.get_mut();
         let result = this.shutdown_step(cx);
-        this.guard(result)
+        this.bound_write(cx, result, ())
     }
 }
 

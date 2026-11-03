@@ -1550,7 +1550,7 @@ both as authority, which is why an expensive public fact
 the admin listener.
 
 - **What is bounded:** the four batch caps
-  ([`methods.rs:512-527`](../../rust/shekyl-daemon-rpc/src/methods.rs):
+  ([`methods.rs:621-638`](../../rust/shekyl-daemon-rpc/src/methods.rs):
   `RESTRICTED_BLOCK_COUNT`, `RESTRICTED_BLOCK_HEADER_RANGE`,
   `RESTRICTED_TRANSACTIONS_COUNT`, `RESTRICTED_SPENT_KEY_IMAGES_COUNT`) and
   the expensive computation `calc_pow`, a bounded `get_coinbase_tx_sum`,
@@ -1575,11 +1575,14 @@ the admin listener.
     (`charges ≤ share × elapsed + capacity`). The share is a quarter of
     one core. One charge is `HASH_CPU_NANOS`, the header series' thread-CPU
     99th percentile, 1,290,885,199 ns. A one-second burst of the share
-    cannot pay that charge, so the burst holds one hash and a request for
-    more is `OverResourceBound` without spending. One hash while the
-    bucket is empty is the same refusal. The host's administrator does not
-    pay. `fill_pow_hash` does not pay: it is the hash recorded at
-    validation, and a bounded caller is held to the header cap.
+    cannot pay that charge, so the bucket holds one hash. A `calc_pow`
+    spends that hash after the seed's cache is held and before RandomX.
+    A `calc_pow` while the bucket is empty is `OverResourceBound` and
+    spends nothing. A request that will not hash — a bad blob, a bad
+    seed, a seed this node does not hold, or a seed above the tip —
+    spends nothing. The host's administrator does not pay.
+    `fill_pow_hash` does not pay: it is the hash recorded at validation,
+    and a bounded caller is held to the header cap.
   - A bounded `get_coinbase_tx_sum` takes the one coinbase-read permit
     and then runs on the blocking pool. The permit is one because a cold
     read waits on disk. It does not pay the hash budget. The host's

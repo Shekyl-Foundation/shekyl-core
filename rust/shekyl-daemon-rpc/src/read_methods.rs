@@ -32,7 +32,8 @@ use crate::methods::{
     RESTRICTED_TRANSACTIONS_COUNT, TX_PARSE_FAILED,
 };
 use crate::read_facts::{
-    ChainReadFacts, CoinbaseRange, CurveTreeFacts, ListedTx, PowAt, PowSeed, SpentAt,
+    ChainReadFacts, CoinbaseRange, CurveTreeFacts, ListedTx, PowAdmission, PowDecline, PowSeed,
+    SpentAt,
 };
 use shekyl_chain_rules::{EmissionEpochFacts, EmissionEpochStanding};
 use shekyl_rpc_types::methods::caller_bounded;
@@ -169,7 +170,11 @@ pub fn get_coinbase_tx_sum(
 /// [`RpcFault::Refused`]: the blob is not hex (`WRONG_BLOCKBLOB`), longer
 /// than the hashing blob (`OverResourceBound`), the seed is not 32 bytes of hex,
 /// the seed height is above the tip, or the seed's cache is not held (all
-/// `WRONG_PARAM`). The facts' fault otherwise.
+/// `WRONG_PARAM`). A bounded caller whose request will hash and whose
+/// bucket is empty is `OverResourceBound` and spends nothing. The facts'
+/// fault otherwise. The hash budget is spent after the seed is admitted
+/// and before RandomX, so a bad blob, a bad seed, a seed above the tip,
+/// and a seed whose cache is not held return without spending.
 pub fn calc_pow(
     facts: &dyn ChainReadFacts,
     request: &CalcPowRequest,
@@ -191,11 +196,6 @@ pub fn calc_pow(
             u64::try_from(blob.len()).unwrap_or(u64::MAX),
         ));
     }
-    if bounded {
-        budget
-            .charge("calc_pow", 1)
-            .map_err(|error| RpcFault::Refused(crate::methods::RpcRefusal::of_error(&error)))?;
-    }
     let seed = if request.seed_hash.is_empty() {
         PowSeed::AtHeight(BlockHeight::from_raw(request.height))
     } else {
@@ -208,21 +208,30 @@ pub fn calc_pow(
             }
         }
     };
-    match facts.pow_hash(&blob, seed)? {
-        PowAt::Hashed(pow) => Ok(hex::encode(pow.to_bytes())),
-        PowAt::SeedNotHeld { seed } => Err(RpcFault::Refused(RpcRefusal::wrong_param(&format!(
-            "Seed {} is not held: calc_pow hashes under held seeds only",
-            hex::encode(seed.to_bytes())
-        )))),
-        PowAt::SeedAboveTip { seed_height, tip } => {
-            Err(RpcFault::Refused(RpcRefusal::wrong_param(&format!(
+    let admitted = match facts.admit_pow(seed)? {
+        PowAdmission::Admitted(admitted) => admitted,
+        PowAdmission::Declined(PowDecline::SeedNotHeld { seed }) => {
+            return Err(RpcFault::Refused(RpcRefusal::wrong_param(&format!(
+                "Seed {} is not held: calc_pow hashes under held seeds only",
+                hex::encode(seed.to_bytes())
+            ))))
+        }
+        PowAdmission::Declined(PowDecline::SeedAboveTip { seed_height, tip }) => {
+            return Err(RpcFault::Refused(RpcRefusal::wrong_param(&format!(
                 "No seed for height {}: its seed height {} is above the chain's top block {}",
                 request.height,
                 seed_height.to_raw(),
                 tip.to_raw()
             ))))
         }
+    };
+    if bounded {
+        budget
+            .spend("calc_pow", std::time::Instant::now())
+            .map_err(|error| RpcFault::Refused(RpcRefusal::of_error(&error)))?;
     }
+    let pow = facts.hash_admitted(&blob, &admitted)?;
+    Ok(hex::encode(pow.to_bytes()))
 }
 
 /// `get_curve_tree_info`: the curve tree after the top block.
@@ -471,7 +480,8 @@ pub fn get_archival_shard_coverage(
 ///
 /// # Errors
 ///
-/// The facts' fault.
+/// [`RpcFault::Refused`] when a bounded caller asks for more than
+/// [`RESTRICTED_BLOCK_COUNT`] heights. The facts' fault otherwise.
 pub fn get_blocks_by_height(
     facts: &dyn ChainReadFacts,
     request: &GetBlocksByHeightRequest,
@@ -558,8 +568,8 @@ pub fn get_transactions(
         archived: Vec::new(),
         unavailable_tx: Vec::new(),
     };
-    // The per-request cap applies to a bounded caller (§6.3); RT-W10 step 2
-    // replaces it with the bound per row.
+    // The inherited cap (§6.3). A bounded caller over it is
+    // `OverResourceBound`. The bound lives in this handler.
     if caller_bounded(host) && request.txs_hashes.len() > RESTRICTED_TRANSACTIONS_COUNT {
         return Err(bound_exceeded(
             "get_transactions",
@@ -648,4 +658,186 @@ pub fn is_key_image_spent(
             })
             .collect(),
     })
+}
+
+#[cfg(test)]
+mod tests {
+    use std::sync::atomic::{AtomicBool, Ordering};
+
+    use shekyl_rpc_types::errors::ErrorClass;
+    use shekyl_rpc_types::GetBlocksByHeightRequest;
+    use shekyl_types::{BlockHash, BlockHeight, KeyImage, PCanonicalId, PowHash, TxHash};
+
+    use crate::chain_facts::FactsFault;
+    use crate::info_facts::PoolScope;
+    use crate::methods::{RpcFault, RpcRefusal, RESTRICTED_BLOCK_COUNT};
+    use crate::read_facts::{
+        AdmittedPow, AltChainFacts, BlocksAt, ChainReadFacts, ClaimSource, CoinbaseRange,
+        CurveTreeFacts, PowAdmission, PowSeed, ShardCoverage, SpentAt, TransactionsAt,
+    };
+
+    use super::get_blocks_by_height;
+
+    /// Answers `blocks_by_height` with nothing and panics on every other
+    /// read. The cap test watches [`Self::read`].
+    struct HeightProbe {
+        read: AtomicBool,
+    }
+
+    fn unread() -> ! {
+        panic!("the height cap returns before any other chain read")
+    }
+
+    impl ChainReadFacts for HeightProbe {
+        fn blocks_by_height(&self, _heights: &[BlockHeight]) -> Result<BlocksAt, FactsFault> {
+            self.read.store(true, Ordering::SeqCst);
+            Ok(BlocksAt {
+                blocks: Vec::new(),
+                failed: None,
+            })
+        }
+
+        fn transactions(
+            &self,
+            _ids: &[TxHash],
+            _scope: PoolScope,
+        ) -> Result<TransactionsAt, FactsFault> {
+            unread()
+        }
+
+        fn output_indices(&self, _txid: &TxHash) -> Result<Option<Vec<u64>>, FactsFault> {
+            unread()
+        }
+
+        fn key_images_spent(&self, _key_images: &[KeyImage]) -> Result<Vec<SpentAt>, FactsFault> {
+            unread()
+        }
+
+        fn alt_block_hashes(&self) -> Result<Vec<BlockHash>, FactsFault> {
+            unread()
+        }
+
+        fn alternate_chains(&self) -> Result<Vec<AltChainFacts>, FactsFault> {
+            unread()
+        }
+
+        fn curve_tree(&self) -> Result<CurveTreeFacts, FactsFault> {
+            unread()
+        }
+
+        fn curve_tree_after(
+            &self,
+            _height: BlockHeight,
+        ) -> Result<Option<CurveTreeFacts>, FactsFault> {
+            unread()
+        }
+
+        fn coinbase_sum(
+            &self,
+            _start: BlockHeight,
+            _count: u64,
+        ) -> Result<CoinbaseRange, FactsFault> {
+            unread()
+        }
+
+        fn admit_pow(&self, _seed: PowSeed) -> Result<PowAdmission, FactsFault> {
+            unread()
+        }
+
+        fn hash_admitted(
+            &self,
+            _pow_blob: &[u8],
+            _admitted: &AdmittedPow,
+        ) -> Result<PowHash, FactsFault> {
+            unread()
+        }
+
+        fn emission_claim_source(
+            &self,
+            _persona: &PCanonicalId,
+        ) -> Result<ClaimSource, FactsFault> {
+            unread()
+        }
+
+        fn shard_coverage(&self) -> Result<ShardCoverage, FactsFault> {
+            unread()
+        }
+    }
+
+    fn probe() -> HeightProbe {
+        HeightProbe {
+            read: AtomicBool::new(false),
+        }
+    }
+
+    fn heights(count: usize) -> GetBlocksByHeightRequest {
+        GetBlocksByHeightRequest {
+            heights: vec![0; count],
+            prune: false,
+        }
+    }
+
+    /// The method owns the cap. One past it refuses before the chain is
+    /// read, and the refusal is the one JSON-RPC error object. At the cap,
+    /// and for the host at any count, the chain is read.
+    #[test]
+    fn the_block_cap_refuses_before_the_chain_is_read() {
+        let over = heights(RESTRICTED_BLOCK_COUNT + 1);
+        let facts = probe();
+        let fault = get_blocks_by_height(&facts, &over, false).unwrap_err();
+        assert!(!facts.read.load(Ordering::SeqCst));
+        let RpcFault::Refused(refusal) = fault else {
+            panic!("the cap is a refusal");
+        };
+        let value = serde_json::to_value(refusal.to_json_rpc(serde_json::Value::Null))
+            .expect("a refusal serializes");
+        assert_eq!(value["jsonrpc"], "2.0");
+        assert!(value["id"].is_null());
+        assert!(value.get("result").is_none());
+        assert_eq!(
+            value
+                .pointer("/error/code")
+                .and_then(serde_json::Value::as_i64),
+            Some(ErrorClass::OverResourceBound.code())
+        );
+        let message = value
+            .pointer("/error/message")
+            .and_then(serde_json::Value::as_str)
+            .unwrap_or("");
+        assert!(message.contains("1000"), "{message}");
+        assert!(message.contains("1001"), "{message}");
+        assert_eq!(
+            value
+                .pointer("/error/data/code")
+                .and_then(serde_json::Value::as_str),
+            Some("rpc.bound.exceeded")
+        );
+
+        let at_cap = probe();
+        let served = get_blocks_by_height(&at_cap, &heights(RESTRICTED_BLOCK_COUNT), false)
+            .expect("a thousand heights are inside the cap");
+        assert!(at_cap.read.load(Ordering::SeqCst));
+        assert!(served.status.is_ok());
+
+        let host = probe();
+        assert!(get_blocks_by_height(&host, &over, true).is_ok());
+        assert!(host.read.load(Ordering::SeqCst), "the host is not capped");
+    }
+
+    /// The same object `Authority::refusal` builds, so a handler cannot
+    /// drift onto a second encoding.
+    #[test]
+    fn a_refusal_and_the_authority_share_one_error_object() {
+        use shekyl_rpc_types::errors::{Diagnostic, RpcError};
+        let error = RpcError::new(
+            ErrorClass::OverResourceBound,
+            Diagnostic::new("rpc.bound.exceeded", "over"),
+        );
+        let from_refusal = RpcRefusal::of_error(&error).to_json_rpc(serde_json::Value::Null);
+        let from_authority = crate::authority::refusal(serde_json::Value::Null, &error);
+        assert_eq!(
+            serde_json::to_value(from_refusal).unwrap(),
+            serde_json::to_value(from_authority).unwrap()
+        );
+    }
 }
