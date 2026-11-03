@@ -432,7 +432,10 @@ fn registries_are_the_expected_size_at_this_increment() {
     // with its implementation, `SO-D12` increment 3.
     // 162 → 161 on 2026-10-28: CEN-L10 (the C++ freeze/reader) went to
     // bucket 3 with the store flip (PDM-Q12; SAR-5) and left this registry.
-    assert_eq!(CenRow::ALL.len(), 161);
+    // 161 → 160 on 2026-11-03: CEN-E2 (the anchor floor and anchored reorg
+    // cap) went to bucket 3 with S1 (no coded checkpoints) and left this
+    // registry.
+    assert_eq!(CenRow::ALL.len(), 160);
     assert_eq!(PolicyRow::ALL.len(), 8);
 }
 
