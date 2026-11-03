@@ -365,7 +365,10 @@ pub(super) async fn native_method(
             let reads = Arc::clone(&state.coinbase_reads);
             Some(frame_native(
                 async {
-                    let _permit = if bounded {
+                    // Wait on the async task, then hold the permit inside the
+                    // scan. Cancelling the request must not free the permit
+                    // while the blocking read is still on disk.
+                    let permit = if bounded {
                         Some(
                             reads
                                 .acquire_owned()
@@ -376,6 +379,7 @@ pub(super) async fn native_method(
                         None
                     };
                     on_chain(state, move |chain| {
+                        let _permit = permit;
                         crate::read_methods::get_coinbase_tx_sum(chain.as_ref(), &request)
                     })
                     .await

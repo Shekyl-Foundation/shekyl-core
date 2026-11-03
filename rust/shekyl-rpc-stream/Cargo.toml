@@ -31,7 +31,9 @@ shekyl-rpc-types = { path = "../shekyl-rpc-types" }
 # (TX_WEIGHT_LIMIT, RT-O6 part 2); a test, not a production edge.
 shekyl-wire = { path = "../shekyl-wire" }
 hex = "0.4"
-tokio = { version = "1", default-features = false, features = ["io-util", "macros", "rt"] }
+# `test-util`: the stall tests pause time. A drain is spaced across the
+# stall bound, and a quiet transport is not.
+tokio = { version = "1", default-features = false, features = ["io-util", "macros", "rt", "time", "test-util"] }
 
 [lints]
 workspace = true

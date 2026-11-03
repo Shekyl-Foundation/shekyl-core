@@ -1586,7 +1586,7 @@ the admin listener.
     administrator does not take the permit.
 - **Header-read, idle, and a stalled response write.** The header-read
   bound is the message-1 deadline, 4 seconds, on every listener. A
-  plaintext listener uses hyper's one timer for that bound and for idle,
+  plaintext listener speaks HTTP/1 only and uses hyper's one timer for that bound and for idle,
   so idle is 4 seconds there too. A channel connection does not set that
   timer: idle is the record stream's, one hour until RT-W11's pool sets
   its own, and a record already started still fails after 4 seconds

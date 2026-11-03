@@ -372,6 +372,9 @@ impl<T: AsyncRead + AsyncWrite + Unpin> RecordStream<T> {
                 return Poll::Ready(Err(io::Error::from(io::ErrorKind::WriteZero)));
             }
             self.out_pos += n;
+            // A byte left. The stall is no progress, not a slow drain, so
+            // the next wait starts from this write.
+            self.write_wait = None;
         }
         self.out.clear();
         self.out_pos = 0;
@@ -638,6 +641,10 @@ impl<T: AsyncRead + AsyncWrite + Unpin> RecordStream<T> {
             self.wire_len += got;
             if got == 0 {
                 self.eof = true;
+            } else {
+                // Ciphertext arrived. A record that is still short starts
+                // its stall again; the previous wait did see progress.
+                self.read_wait = None;
             }
         }
     }

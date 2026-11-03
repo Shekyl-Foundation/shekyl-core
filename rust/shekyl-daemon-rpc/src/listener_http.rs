@@ -7,12 +7,15 @@
 //! records.
 //!
 //! Header-read and idle are one hyper timer: 4 seconds, the message-1
-//! deadline. A channel connection does not use this timer for idle — its
-//! record stream owns a long idle, so a session is not opened again
-//! through a new handshake — and that listener is not built here. A
-//! response write that makes no progress for 4 seconds closes the
-//! connection. That stall bound is every listener's, including the
-//! channel's record stream.
+//! deadline. That timer is HTTP/1's, so a plaintext listener speaks
+//! HTTP/1 only. HTTP/2 has no equivalent on this builder, and a peer
+//! that finished its preface would sit idle holding a connection slot.
+//! A channel connection does not use this timer for idle — its record
+//! stream owns a long idle, so a session is not opened again through a
+//! new handshake — and that listener is not built here. A response write
+//! that makes no progress for 4 seconds closes the connection. That
+//! stall bound is every listener's, including the channel's record
+//! stream.
 
 use std::future::Future;
 use std::io::{self, IoSlice};
@@ -82,8 +85,11 @@ fn handle_connection(
     let signal_tx = signal_tx.clone();
     let close_rx = close_rx.clone();
     tokio::spawn(async move {
-        let mut builder = Builder::new(TokioExecutor::new());
-        builder.http2().enable_connect_protocol();
+        // HTTP/1 only. `http1_only` is ignored by
+        // `serve_connection_with_upgrades`, which sniffs an HTTP/2 preface
+        // and then has no header or idle timer. Plaintext RPC has no
+        // upgrade.
+        let mut builder = Builder::new(TokioExecutor::new()).http1_only();
         // The timer is what makes the header-read bound real. On a
         // plaintext listener it is also the idle bound: hyper arms it
         // again while waiting for the next request line.
@@ -91,7 +97,7 @@ fn handle_connection(
             .http1()
             .timer(TokioTimer::new())
             .header_read_timeout(Some(HEADER_READ));
-        let mut conn = pin!(builder.serve_connection_with_upgrades(io, hyper_service));
+        let mut conn = pin!(builder.serve_connection(io, hyper_service));
         let mut signal_closed = pin!(signal_tx.closed());
         let mut shutting_down = false;
         loop {
