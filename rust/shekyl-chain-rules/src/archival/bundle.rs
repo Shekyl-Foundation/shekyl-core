@@ -202,6 +202,7 @@
 use core::fmt;
 use std::collections::btree_map::Entry;
 use std::collections::BTreeMap;
+use std::num::NonZeroU64;
 
 use shekyl_archival_retention::{
     draw_commit, select_draw, BundleBody, BundleKept, BundleRef, BundleWireError, DrawableEpoch,
@@ -211,7 +212,7 @@ use shekyl_crypto_pq::fn_dsa_hybrid::{
     FnDsaHybridPublicKey, FnDsaHybridSignature, HybridEd25519FnDsa,
 };
 use shekyl_crypto_pq::signature::{SignatureScheme as _, SCHEME_DOMAIN_WITNESS_BUNDLE};
-use shekyl_types::archival::{DrawCommitment, ReceiptSignPk};
+use shekyl_types::archival::DrawCommitment;
 use shekyl_types::{BlockHash, BlockHeight, PCanonicalId, SettlementEpoch};
 
 use crate::census::CenRow;
@@ -279,9 +280,11 @@ pub trait BundleView {
     /// verifier asks only when [`Self::support_count`] is not zero.
     fn support_roster(&self, h: BlockHeight) -> Result<Option<Vec<SupportSeat>>, Self::Fault>;
 
-    /// The archive width the support draw selects a shard from. `None` is
-    /// the view's hole. Asked only when the block issued support draws.
-    fn archive_width(&self, h: BlockHeight) -> Result<Option<u64>, Self::Fault>;
+    /// The archive width the support draw selects a shard from: the roster's
+    /// width at `h_open` of `h`'s epoch, never zero (an epoch whose archive
+    /// had no closed shard has no support stream). `None` is the view's
+    /// hole. Asked only when the block issued support draws.
+    fn archive_width(&self, h: BlockHeight) -> Result<Option<NonZeroU64>, Self::Fault>;
 }
 
 /// One complete tree scheduled at a block: the persona and the receipt
@@ -290,8 +293,9 @@ pub trait BundleView {
 pub struct SupportSeat {
     /// The tree.
     pub persona: PCanonicalId,
-    /// Its receipt key, as the bond record carries it.
-    pub receipt_key: ReceiptSignPk,
+    /// Its receipt key, parsed: the epoch snapshot's, which parsed the bond
+    /// record's when it was built (`SO-D12` S1).
+    pub receipt_key: FnDsaHybridPublicKey,
 }
 
 /// The section checker: form, the window, then the budget. The only
@@ -308,6 +312,13 @@ pub use bundle_section::{
     check_section, check_section_until_switch, fill_section, open_reference, SectionCharge,
     SectionCheckFailed, SectionRefused, SectionStanding,
 };
+
+/// The support stream's carry (`SO-D12` S2): STAGED with the rest of this
+/// module, and on the connect path with admission at the switch.
+#[path = "support_carry.rs"]
+mod support_carry;
+
+pub use support_carry::{seats_with_carry, SupportCarry, WindowClosed};
 
 /// `epoch`'s drawable epoch, if the view holds the one filed for it. A
 /// value filed under another epoch is not this epoch's `D`, and the

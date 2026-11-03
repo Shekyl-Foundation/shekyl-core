@@ -7,7 +7,7 @@
 //!
 //! A child of `archival_write_tests` so these tests call that file's
 //! `connect_empty` and `pop`. A windowless schedule writes
-//! [`BlockDraws::ZERO`] and [`SupportCount::NONE`], and the boundary
+//! [`BlockDraws::ZERO`] and [`SupportSeats::EMPTY`], and the boundary
 //! retires both on the same floor. The next height reads
 //! the prior row, and an opening block starts again from [`BlockDraws::ZERO`].
 //! A reduction past the shortfall, and a missing prior row, halt the writer
@@ -16,7 +16,7 @@
 use shekyl_archival_retention::{draw_count, draw_horizon};
 use shekyl_chain_rules::{BlockDrawsFloor, Corrupt, DrawCountFault, RuleSet};
 use shekyl_store_codec::Canonical;
-use shekyl_types::archival::{BlockDraws, SupportCount};
+use shekyl_types::archival::{BlockDraws, SupportSeats};
 use shekyl_types::{BlockCount, BlockHeight};
 
 use crate::apply_policy::ApplyPolicy;
@@ -38,11 +38,11 @@ fn support_of(
     store: &ChainStore,
     height: BlockHeight,
     floor: BlockDrawsFloor,
-) -> Option<SupportCount> {
+) -> Option<SupportSeats> {
     store
         .begin_read()
         .expect("read")
-        .support_block_count(height, floor)
+        .support_block_seats(height, floor)
         .expect("the floor admits the read")
 }
 
@@ -70,14 +70,14 @@ fn a_windowless_schedule_writes_a_zero_row_that_the_boundary_retires() {
     for height in 0u64..=3 {
         let delta = connect_empty(&store, &mut grown, rules);
         assert_eq!(delta.draws(), zero);
-        assert_eq!(delta.support_count(), SupportCount::NONE);
+        assert_eq!(delta.support_seats(), &SupportSeats::EMPTY);
         assert_eq!(
             draws_of(&store, BlockHeight::from_raw(height), BlockDrawsFloor::NONE),
             Some(zero)
         );
         assert_eq!(
             support_of(&store, BlockHeight::from_raw(height), BlockDrawsFloor::NONE),
-            Some(SupportCount::NONE)
+            Some(SupportSeats::EMPTY)
         );
     }
     pop(&store);
@@ -96,7 +96,7 @@ fn a_windowless_schedule_writes_a_zero_row_that_the_boundary_retires() {
     // Height 4 is the boundary of B = 2. Rows strictly below `(2 − 1)·2` go.
     let delta = connect_empty(&store, &mut grown, rules);
     assert_eq!(delta.draws(), zero);
-    assert_eq!(delta.support_count(), SupportCount::NONE);
+    assert_eq!(delta.support_seats(), &SupportSeats::EMPTY);
     assert_eq!(
         draws_of(&store, BlockHeight::from_raw(0), BlockDrawsFloor::NONE),
         None
@@ -119,7 +119,7 @@ fn a_windowless_schedule_writes_a_zero_row_that_the_boundary_retires() {
     );
     assert_eq!(
         support_of(&store, BlockHeight::from_raw(2), BlockDrawsFloor::NONE),
-        Some(SupportCount::NONE)
+        Some(SupportSeats::EMPTY)
     );
     assert_eq!(
         draws_of(&store, BlockHeight::from_raw(4), BlockDrawsFloor::NONE),
@@ -127,7 +127,7 @@ fn a_windowless_schedule_writes_a_zero_row_that_the_boundary_retires() {
     );
     assert_eq!(
         support_of(&store, BlockHeight::from_raw(4), BlockDrawsFloor::NONE),
-        Some(SupportCount::NONE)
+        Some(SupportSeats::EMPTY)
     );
 
     let floor = BlockDrawsFloor::retired_by(2, rules.settlement_schedule());
@@ -149,7 +149,7 @@ fn a_windowless_schedule_writes_a_zero_row_that_the_boundary_retires() {
     let refused_support = store
         .begin_read()
         .expect("read")
-        .support_block_count(BlockHeight::ZERO, floor)
+        .support_block_seats(BlockHeight::ZERO, floor)
         .unwrap_err();
     assert!(
         matches!(
@@ -178,7 +178,7 @@ fn a_windowless_schedule_writes_a_zero_row_that_the_boundary_retires() {
     );
     let delta = connect_empty(&store, &mut grown, rules);
     assert_eq!(delta.draws(), zero);
-    assert_eq!(delta.support_count(), SupportCount::NONE);
+    assert_eq!(delta.support_seats(), &SupportSeats::EMPTY);
     assert_eq!(
         draws_of(&store, BlockHeight::from_raw(0), BlockDrawsFloor::NONE),
         None

@@ -146,16 +146,11 @@ pub fn draw_targets<V: BundleView>(
         }
     }
     for seat in records::support_seats(view, h, seed, hash.as_bytes(), issued)? {
-        let Ok(receipt_key) = FnDsaHybridPublicKey::from_receipt_sign_pk(&seat.receipt_key) else {
-            return Err(BundleRefused::Unanswered(BundleUnanswered::Draw {
-                draw: seat.draw,
-            }));
-        };
         draws.push(Drawn {
             draw: seat.draw,
             persona: seat.persona,
             shard: seat.shard,
-            receipt_key,
+            receipt_key: seat.receipt_key,
             origin: DrawOrigin::Support,
         });
     }

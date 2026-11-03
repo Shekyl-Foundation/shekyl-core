@@ -886,6 +886,17 @@ digest and the list would agree. A wrong `D` is the way that happens, and
 4. **Direction analysis** — §6.1 (layer 1 sees a list that changed
    after admission, layer 2 guards `D`, layer 3 is dominated).
 5. **Ground (3) of the on-chain rejection WITHDRAWN** — §6.6.
+6. **Amendment of 2026-11-01 — derivation 2's output is the epoch
+   snapshot, not `D` alone** (`SO-D12q`; `ARCHIVAL_SUPPORT_DRAW.md` §13.1).
+   Both derivations emit, through one emitter, `D` with its receipt
+   keys, the complete trees that were support members at `h_open(E)`
+   with theirs, and the archive width (`final_count` at `h_open(E)`), and
+   the persisted digest covers all three
+   (`shekyl/archival-drawable-epoch-v2`). The walk back restores a
+   complete tree released or demoted above the open, so it is a member
+   for the rest of `E` in both derivations, as a released compact pair
+   stays in `D`. Rewriting a complete tree's journalled pre-image is now
+   drift, as rewriting a compact one always was.
 
 ### 6.4 Disposition at the site: a store-invariant Fault, never a verdict
 
