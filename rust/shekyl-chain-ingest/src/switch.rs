@@ -450,6 +450,7 @@ impl Message<Reorganize> for Connector {
             Switched::BeyondCap { evidence, .. } | Switched::BelowFloor { evidence, .. } => {
                 Some(*evidence)
             }
+            Switched::Done(done) => deep_reorg(done),
             _ => None,
         };
         if let Some(evidence) = evidence {
@@ -670,11 +671,36 @@ fn heavier(chain: &AltChain) -> shekyl_chain_store::codec::FollowingDegraded {
         .entries()
         .last()
         .expect("a heavier alternative names its tip");
-    shekyl_chain_store::codec::FollowingDegraded {
+    shekyl_chain_store::codec::FollowingDegraded::HeavierRefused {
         fork_at: chain.root().height,
         tip: tip.id,
         work: tip.block.cumulative_difficulty(),
     }
+}
+
+/// The deep-reorg alarm (S1, design review 2026-11-03): a switch that
+/// popped more blocks than the lock window un-confirms outputs a wallet
+/// already treated as spendable (`shekyl_consensus::DEFAULT_LOCK_WINDOW`,
+/// the wallet's `SPENDABLE_AGE` and curve-tree maturity). The switch
+/// landed; the latch reports it and refuses nothing. `None` for a switch at
+/// or inside the window.
+fn deep_reorg(done: &SwitchDone) -> Option<shekyl_chain_store::codec::FollowingDegraded> {
+    let window = u64::try_from(shekyl_consensus::DEFAULT_LOCK_WINDOW).expect("the window fits u64");
+    let depth = u64::try_from(done.demoted.len()).expect("a pop count fits u64");
+    if depth <= window {
+        return None;
+    }
+    let (first, _) = *done.demoted.first()?;
+    let (_, old_tip) = *done.demoted.last()?;
+    let (_, new_tip) = *done.promoted.last()?;
+    Some(shekyl_chain_store::codec::FollowingDegraded::DeepReorg {
+        depth: BlockCount::from_raw(depth),
+        fork_at: first
+            .checked_sub_count(BlockCount::ONE)
+            .expect("a demoted block is above genesis"),
+        old_tip,
+        new_tip,
+    })
 }
 
 /// `E5-Q6`: the depth `chain` would pop from `tip`, against the cap in

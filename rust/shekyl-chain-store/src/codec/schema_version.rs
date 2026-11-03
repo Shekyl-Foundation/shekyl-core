@@ -391,9 +391,16 @@ use super::{Canonical, CodecError};
 ///   `archival_drawable_digest` row a `34` binary wrote is a `-v1` digest
 ///   the settlement compare would refuse. A `34` file is refused at open.
 ///   Rebuild from the block corpus, as at every bump.
+/// - `36` — the `following_degraded` latch gains a second evidence kind, the
+///   deep-reorg alarm (S1, design review 2026-11-03): a switch that popped
+///   more than the lock window. The cell's value is tagged — `0` a refused
+///   heavier chain (`fork_at ‖ tip ‖ work`, as before), `1` a deep reorg
+///   (`depth ‖ fork_at ‖ old_tip ‖ new_tip`) — so a `35` cell does not decode
+///   as one; `following_degraded.snap` re-pins it. A `35` file is refused at
+///   open. Rebuild from the block corpus, as at every bump.
 ///
 /// [`FamilySet`]: crate::family_set::FamilySet
-pub const SCHEMA_VERSION: SchemaVersion = SchemaVersion::new(35);
+pub const SCHEMA_VERSION: SchemaVersion = SchemaVersion::new(36);
 
 /// A layout version as stored in the `schema_version` cell.
 ///
@@ -450,7 +457,7 @@ mod tests {
         // Moves with every layout bump, on purpose: the history list above
         // this constant is the record, and this line is what makes a bump
         // without a history entry visible in review.
-        assert_eq!(SCHEMA_VERSION, SchemaVersion::new(35));
+        assert_eq!(SCHEMA_VERSION, SchemaVersion::new(36));
         assert_eq!(SCHEMA_VERSION.encode(), [35, 0, 0, 0, 0, 0, 0, 0]);
         assert_eq!(
             SchemaVersion::decode(&[35, 0, 0, 0, 0, 0, 0, 0]),

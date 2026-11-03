@@ -11,6 +11,12 @@ There is no V3.1 / V3.2 / V3.x release train.
 
 ## Pre-genesis
 
+- **A node that returns to a heavier chain forking deeper than `D_max` cannot follow it by switching and has to re-bootstrap.** `D_max` is the switch's local limit from the pruning horizon, not a consensus refusal (CEN-E2 REJECTED, S1, design review 2026-11-03): the node raises the following-degraded latch and stays on its chain. A fresh or returning node is where that cost lands, and the bootstrap mechanism is what pays it.
+  - Owner: the bootstrap lane — [`DAEMON_REDB_STORE.md`](design/DAEMON_REDB_STORE.md) §1.3a.5 (PB-B1, PB-B3)
+  - Target: pre-genesis
+- **`get_info` shows the following-degraded latch as a flag, not which kind set it.** The latch now has two kinds of evidence (a refused heavier chain; a switch deeper than the lock window, S1), and `following_degraded` on the wire is a `bool`. An operator reading the RPC cannot tell a deep reorg the node followed from a heavier chain it refused, or read the depth and tips.
+  - Owner: [`RPC_WIRE.md`](design/RPC_WIRE.md); the field is `get_info`'s ([`DAEMON_RPC_KV_GET_INFO.md`](design/DAEMON_RPC_KV_GET_INFO.md))
+  - Target: pre-genesis
 - **An older chain layout is still removed at open, and the permanent layout-change policy is unruled.** `open_chain` refuses a newer layout and keeps it; the older-layout removal is the alpha wipe, marked temporary in the code. A DRS round rules the replacement: a layout bump ships with its migration, tested on a store of the previous version; a store with no path is refused, never removed; the daemon deletes nothing (move aside or refuse); the pool file follows the same rules, which first needs a way to tell a pre-v1 pool seal (the chain's number, 27 and up) from a newer pool version, since today's comparison would read the old seal as newer.
   - Owner: the DRS line — [`DAEMON_REDB_STORE.md`](design/DAEMON_REDB_STORE.md) §11.1 (S3, design review 2026-11-03)
   - Target: pre-genesis (trigger: before mainnet genesis)

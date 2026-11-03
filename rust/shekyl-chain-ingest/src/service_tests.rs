@@ -2474,12 +2474,12 @@ async fn the_sync_owners_alarm_sets_the_latch_once_and_publishes_it() {
     );
     let mut latch = service.watch_latch().await.expect("the connector answers");
     assert_eq!(*latch.borrow(), None, "a fresh store's latch is clear");
-    let first = FollowingDegraded {
+    let first = FollowingDegraded::HeavierRefused {
         fork_at: BlockHeight::from_raw(3),
         tip: BlockHash::from_bytes([0x5a; 32]),
         work: shekyl_difficulty::CumulativeDifficulty::from_raw(77),
     };
-    let later = FollowingDegraded {
+    let later = FollowingDegraded::HeavierRefused {
         fork_at: BlockHeight::from_raw(1),
         tip: BlockHash::from_bytes([0x5b; 32]),
         work: shekyl_difficulty::CumulativeDifficulty::from_raw(99),

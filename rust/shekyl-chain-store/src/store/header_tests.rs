@@ -235,12 +235,12 @@ fn a_missing_zero_or_malformed_pin_is_corruption_not_unpinned() {
 #[test]
 fn the_following_degraded_latch_is_one_way_and_keeps_its_first_evidence() {
     let path = tmp("following-degraded");
-    let first = FollowingDegraded {
+    let first = FollowingDegraded::HeavierRefused {
         fork_at: shekyl_types::BlockHeight::from_raw(40),
         tip: shekyl_types::BlockHash::from_bytes([0xa1; 32]),
         work: shekyl_difficulty::CumulativeDifficulty::from_raw(101),
     };
-    let later = FollowingDegraded {
+    let later = FollowingDegraded::HeavierRefused {
         fork_at: shekyl_types::BlockHeight::from_raw(7),
         tip: shekyl_types::BlockHash::from_bytes([0xa2; 32]),
         work: shekyl_difficulty::CumulativeDifficulty::from_raw(900),

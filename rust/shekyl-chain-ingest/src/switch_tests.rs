@@ -203,6 +203,56 @@ async fn a_promoted_block_that_fails_validate_rolls_back_and_removes_its_suffix(
     y.close().await;
 }
 
+/// Switch `x` (which mines `depth` blocks above the prefix) onto `y`'s
+/// heavier branch of `depth + 1`, and return what the latch holds after.
+async fn switch_of_depth(
+    name: &str,
+    depth: usize,
+) -> (
+    Vec<Mined>,
+    Vec<Mined>,
+    Option<shekyl_chain_store::codec::FollowingDegraded>,
+) {
+    let mut x = with_prefix(&format!("{name}-x"), PREFIX).await;
+    let mut y = with_prefix(&format!("{name}-y"), PREFIX).await;
+    let count = u64::try_from(depth).expect("fits");
+    let a = x.mine(count).await;
+    y.idle();
+    let b = y.mine(count + 1).await;
+    let plan = offer_branch(&x, &b).await;
+    let Switched::Done(done) = x.reorganize(&plan).await.expect("switch") else {
+        panic!("the switch did not land");
+    };
+    assert_eq!(done.demoted.len(), depth, "the switch popped {depth}");
+    let latch = x.following_degraded().await;
+    x.close().await;
+    y.close().await;
+    (a, b, latch)
+}
+
+/// S1's deep-reorg alarm: a switch that pops exactly the lock window raises
+/// nothing; one block deeper lands and raises the latch with its evidence —
+/// the depth, the fork height, and the tips it left and connected. The
+/// window is `shekyl_consensus::DEFAULT_LOCK_WINDOW`, never restated.
+#[tokio::test]
+async fn a_switch_deeper_than_the_lock_window_raises_the_alarm_and_lands() {
+    let window = shekyl_consensus::DEFAULT_LOCK_WINDOW;
+    let (_, _, at_window) = switch_of_depth("switch-alarm-at", window).await;
+    assert_eq!(at_window, None, "a switch of exactly the window is quiet");
+
+    let (a, b, deeper) = switch_of_depth("switch-alarm-past", window + 1).await;
+    assert_eq!(
+        deeper,
+        Some(shekyl_chain_store::codec::FollowingDegraded::DeepReorg {
+            depth: shekyl_types::BlockCount::from_raw(u64::try_from(window + 1).expect("fits")),
+            fork_at: BlockHeight::from_raw(PREFIX - 1),
+            old_tip: a.last().expect("A").hash,
+            new_tip: b.last().expect("B").hash,
+        }),
+        "one block deeper reports the switch it made"
+    );
+}
+
 /// Rewrite the recorded blocks at `heights` (all below a fork point) with
 /// timestamp `at`, keeping each row's identity coherent: the blob,
 /// `block_info`'s hash and timestamp, and the hash index all name the
@@ -444,8 +494,8 @@ async fn a_switch_popping_exactly_the_cap_lands_and_one_more_is_refused_locally(
             assert_eq!(beyond.cap.to_raw(), LEVERED_CAP);
             let latch = x2.following_degraded().await;
             assert_eq!(
-                latch.map(|held| held.tip),
-                Some(evidence.tip),
+                latch,
+                Some(evidence),
                 "a stored fork past the cap sets following_degraded; \
                  skipping note_degraded on BeyondCap leaves it clear"
             );
@@ -496,8 +546,8 @@ async fn a_pop_below_the_undo_floor_is_a_local_fail_stop_not_a_verdict() {
             );
             let latch = x.following_degraded().await;
             assert_eq!(
-                latch.map(|held| (held.fork_at, held.tip)),
-                Some((evidence.fork_at, evidence.tip)),
+                latch,
+                Some(evidence),
                 "a BelowFloor switch sets following_degraded; \
                  skipping note_degraded on BelowFloor leaves the cell clear"
             );
