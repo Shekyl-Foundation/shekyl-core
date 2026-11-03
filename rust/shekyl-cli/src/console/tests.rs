@@ -1867,10 +1867,25 @@ fn an_unknown_tip_is_named() {
 }
 
 fn mining_reply(active: bool, speed: MineSpeed) -> String {
+    mining_status_body("OK", active, speed)
+}
+
+fn mining_status_body(status: &str, active: bool, speed: MineSpeed) -> String {
     serde_json::json!({
-        "status": "OK",
+        "status": status,
         "active": active,
         "speed": speed,
+        "threads_count": 0,
+        "address": "",
+        "pow_algorithm": "randomx",
+        "block_target": 120,
+        "block_reward": 0,
+        "difficulty": 0,
+        "wide_difficulty": "0",
+        "difficulty_top64": 0,
+        "height": 0,
+        "pool_retired": false,
+        "no_template": null,
     })
     .to_string()
 }
@@ -2141,12 +2156,7 @@ fn a_busy_mining_status_reads_as_syncing() {
         ("/get_info", info_reply(100)),
         (
             "/mining_status",
-            serde_json::json!({
-                "status": "BUSY",
-                "active": false,
-                "speed": MineSpeed::NONE,
-            })
-            .to_string(),
+            mining_status_body("BUSY", false, MineSpeed::NONE),
         ),
     ]);
     let (code, out) = run(&["daemon", "status"], Some(&address));
@@ -2307,6 +2317,8 @@ fn a_different_rules_digest_is_refused_without_inventing_an_ordering() {
 
 #[test]
 fn a_wrong_network_daemon_is_refused_even_though_every_other_axis_agrees() {
+    // The handshake refuses before `chain height` renders. Removing the
+    // handshake lets this daemon's height print.
     // The case only this axis can see: the digest is generated from ONE JSON
     // for every network, so a testnet daemon built from this tree carries the
     // same digest and the same RPC version. Three of four axes are blind here.
@@ -2640,6 +2652,258 @@ fn a_pool_stats_reply_missing_a_member_is_refused_on_the_console() {
     assert_eq!(code, SHEKYL_DAEMON_CONSOLE_ERR_REQUEST, "{out}");
     assert!(
         out.contains("malformed get_transaction_pool_stats reply"),
+        "{out}"
+    );
+}
+
+fn rpc_result(value: impl serde::Serialize) -> String {
+    serde_json::json!({"jsonrpc": "2.0", "id": "0", "result": value}).to_string()
+}
+
+/// A 64-character token that is not hex is not a block hash. Dropping the
+/// hex check sends it to the daemon.
+#[test]
+fn a_non_hex_block_token_is_refused_before_a_request() {
+    let (address, log) = route_server_recording(vec![]);
+    let token = "z".repeat(64);
+    let (code, out) = run(&["block", "show", &token], Some(&address));
+    assert_eq!(code, SHEKYL_DAEMON_CONSOLE_ERR_REQUEST, "{out}");
+    assert!(out.contains("is not a block hash"), "{out}");
+    assert!(log.lock().unwrap().is_empty(), "no request: {out}");
+}
+
+/// A key image is 64 hex characters. Anything else is refused at parse.
+#[test]
+fn chain_spent_refuses_a_token_that_is_not_a_key_image() {
+    let (address, log) = route_server_recording(vec![]);
+    let (code, out) = run(&["chain", "spent", "xyz"], Some(&address));
+    assert_eq!(code, SHEKYL_DAEMON_CONSOLE_ERR_REQUEST, "{out}");
+    assert!(out.contains("is not a hash"), "{out}");
+    assert!(log.lock().unwrap().is_empty(), "no request: {out}");
+}
+
+#[test]
+fn chain_coinbase_sum_prints_the_emission_and_the_fee() {
+    use shekyl_rpc_types::{GetCoinbaseTxSumResponse, RpcStatus};
+    let reply = GetCoinbaseTxSumResponse {
+        status: RpcStatus::ok(),
+        emission_amount: 1_000_000_000,
+        wide_emission_amount: "0".to_owned(),
+        emission_amount_top64: 0,
+        fee_amount: 2_000_000_000,
+        wide_fee_amount: "0".to_owned(),
+        fee_amount_top64: 0,
+    };
+    let (address, log) =
+        route_server_recording(vec![("json_rpc:get_coinbase_tx_sum", rpc_result(&reply))]);
+    let (code, out) = run(
+        &["chain", "coinbase", "sum", "--from", "1", "--to", "3"],
+        Some(&address),
+    );
+    assert_eq!(code, SHEKYL_DAEMON_CONSOLE_OK, "{out}");
+    assert!(out.contains("emission:") && out.contains("fee:"), "{out}");
+    let asked = log.lock().unwrap().clone();
+    assert!(
+        asked
+            .iter()
+            .any(|(_, body)| body.contains("get_coinbase_tx_sum")),
+        "{asked:?}"
+    );
+}
+
+#[test]
+fn tx_relay_posts_the_id() {
+    use shekyl_rpc_types::mining::StatusOnlyResponse;
+    use shekyl_rpc_types::RpcStatus;
+    let hash = "ab".repeat(32);
+    let reply = StatusOnlyResponse {
+        status: RpcStatus::ok(),
+    };
+    let (address, log) = route_server_recording(vec![("json_rpc:relay_tx", rpc_result(&reply))]);
+    let (code, out) = run(&["tx", "relay", &hash], Some(&address));
+    assert_eq!(code, SHEKYL_DAEMON_CONSOLE_OK, "{out}");
+    assert!(out.contains(&hash), "{out}");
+    let asked = log.lock().unwrap().clone();
+    assert!(
+        asked
+            .iter()
+            .any(|(_, body)| body.contains("relay_tx") && body.contains(&hash)),
+        "{asked:?}"
+    );
+}
+
+#[test]
+fn txpool_list_prints_each_entry_and_short_prints_hashes() {
+    use shekyl_rpc_types::pool::{GetTransactionPoolHashesResponse, GetTransactionPoolResponse};
+    use shekyl_rpc_types::{HashHex, RpcStatus};
+    let id = HashHex::from_hex(&"cd".repeat(32)).unwrap();
+    let full = GetTransactionPoolResponse {
+        status: RpcStatus::ok(),
+        transactions: vec![shekyl_rpc_types::pool::PoolTxInfo {
+            id_hash: id,
+            blob_size: 40,
+            weight: 40,
+            fee: 1,
+            relayed: true,
+            tx_blob: String::new(),
+        }],
+        spent_key_images: Vec::new(),
+    };
+    let short = GetTransactionPoolHashesResponse {
+        status: RpcStatus::ok(),
+        tx_hashes: vec![id],
+    };
+    let (address, _) = route_server_recording(vec![(
+        "/get_transaction_pool",
+        serde_json::to_string(&full).unwrap(),
+    )]);
+    let (code, out) = run(&["txpool", "list"], Some(&address));
+    assert_eq!(code, SHEKYL_DAEMON_CONSOLE_OK, "{out}");
+    assert!(out.contains(&id.to_string()), "{out}");
+    let (address, log) = route_server_recording(vec![(
+        "/get_transaction_pool_hashes",
+        serde_json::to_string(&short).unwrap(),
+    )]);
+    let (code, out) = run(&["txpool", "list", "--short"], Some(&address));
+    assert_eq!(code, SHEKYL_DAEMON_CONSOLE_OK, "{out}");
+    assert!(
+        log.lock()
+            .unwrap()
+            .iter()
+            .any(|(path, _)| path == "/get_transaction_pool_hashes"),
+        "{out}"
+    );
+}
+
+#[test]
+fn txpool_flush_with_no_id_names_the_pool() {
+    use shekyl_rpc_types::mining::StatusOnlyResponse;
+    use shekyl_rpc_types::RpcStatus;
+    let reply = StatusOnlyResponse {
+        status: RpcStatus::ok(),
+    };
+    let (address, _) = route_server_recording(vec![("json_rpc:flush_txpool", rpc_result(&reply))]);
+    let (code, out) = run(&["txpool", "flush"], Some(&address));
+    assert_eq!(code, SHEKYL_DAEMON_CONSOLE_OK, "{out}");
+    assert!(out.contains("flushed the pool"), "{out}");
+}
+
+#[test]
+fn ban_words_print_the_daemon_reply() {
+    use shekyl_rpc_types::bans::{BannedResponse, GetBan, GetBansResponse};
+    use shekyl_rpc_types::mining::StatusOnlyResponse;
+    use shekyl_rpc_types::RpcStatus;
+    let ok = rpc_result(&StatusOnlyResponse {
+        status: RpcStatus::ok(),
+    });
+    let list = rpc_result(&GetBansResponse {
+        status: RpcStatus::ok(),
+        bans: vec![GetBan {
+            host: "203.0.113.7".to_owned(),
+            seconds: 0,
+            permanent: true,
+        }],
+    });
+    let show = rpc_result(&BannedResponse {
+        status: RpcStatus::ok(),
+        banned: true,
+        seconds: 30,
+        permanent: false,
+    });
+    let (address, _) = route_server_recording(vec![
+        ("json_rpc:get_bans", list),
+        ("json_rpc:set_bans", ok.clone()),
+        ("json_rpc:banned", show),
+    ]);
+    let (code, out) = run(&["ban", "list"], Some(&address));
+    assert_eq!(code, SHEKYL_DAEMON_CONSOLE_OK, "{out}");
+    assert!(out.contains("203.0.113.7"), "{out}");
+    let (code, out) = run(
+        &["ban", "add", "203.0.113.7", "--duration", "30s"],
+        Some(&address),
+    );
+    assert_eq!(code, SHEKYL_DAEMON_CONSOLE_OK, "{out}");
+    assert!(out.contains("30 s"), "{out}");
+    let (code, out) = run(&["ban", "show", "203.0.113.7"], Some(&address));
+    assert_eq!(code, SHEKYL_DAEMON_CONSOLE_OK, "{out}");
+    assert!(out.contains("30 s"), "{out}");
+    let (code, out) = run(&["ban", "remove", "203.0.113.7"], Some(&address));
+    assert_eq!(code, SHEKYL_DAEMON_CONSOLE_OK, "{out}");
+    assert!(out.contains("lifted"), "{out}");
+}
+
+#[test]
+fn option_show_prints_the_source_and_a_refusal_is_class_and_code() {
+    use shekyl_rpc_types::errors::{Diagnostic, ErrorClass};
+    let shown = rpc_result(serde_json::json!({
+        "options": [{
+            "name": "log-level",
+            "source": "runtime",
+            "runtime": true,
+            "value": "info"
+        }]
+    }));
+    let (address, _) = route_server_recording(vec![("json_rpc:option_show", shown)]);
+    let (code, out) = run(&["option", "show", "log-level"], Some(&address));
+    assert_eq!(code, SHEKYL_DAEMON_CONSOLE_OK, "{out}");
+    assert!(
+        out.contains("log-level") && out.contains("runtime"),
+        "{out}"
+    );
+    assert!(out.contains("info"), "{out}");
+
+    let grant = ErrorClass::OutsideTheGrant;
+    let refused = serde_json::json!({
+        "jsonrpc": "2.0",
+        "id": "0",
+        "error": {
+            "code": grant.code(),
+            "message": "english the operator must not see",
+            "data": Diagnostic::new("rpc.grant", "english the operator must not see"),
+        }
+    });
+    let (address, _) = route_server_recording(vec![("json_rpc:option_set", refused.to_string())]);
+    let (code, out) = run(&["option", "set", "log-level", "info"], Some(&address));
+    assert_eq!(code, SHEKYL_DAEMON_CONSOLE_ERR_REQUEST, "{out}");
+    assert!(out.contains("OutsideTheGrant rpc.grant"), "{out}");
+    assert!(!out.contains("english"), "{out}");
+
+    let method = ErrorClass::RefusedByMethod;
+    let refused = serde_json::json!({
+        "jsonrpc": "2.0",
+        "id": "0",
+        "error": {
+            "code": method.code(),
+            "message": "english the operator must not see",
+            "data": Diagnostic::new("rpc.method", "english the operator must not see"),
+        }
+    });
+    let (address, _) = route_server_recording(vec![("json_rpc:option_set", refused.to_string())]);
+    let (code, out) = run(&["option", "set", "log-level", "info"], Some(&address));
+    assert_eq!(code, SHEKYL_DAEMON_CONSOLE_ERR_REQUEST, "{out}");
+    assert!(out.contains("RefusedByMethod rpc.method"), "{out}");
+    assert!(!out.contains("english"), "{out}");
+}
+
+#[test]
+fn daemon_stop_is_the_stop_route() {
+    use shekyl_rpc_types::mining::StatusOnlyResponse;
+    use shekyl_rpc_types::RpcStatus;
+    let (address, log) = route_server_recording(vec![(
+        "/stop_daemon",
+        serde_json::to_string(&StatusOnlyResponse {
+            status: RpcStatus::ok(),
+        })
+        .unwrap(),
+    )]);
+    let (code, out) = run(&["daemon", "stop"], Some(&address));
+    assert_eq!(code, SHEKYL_DAEMON_CONSOLE_OK, "{out}");
+    assert!(out.contains("stopping"), "{out}");
+    assert!(
+        log.lock()
+            .unwrap()
+            .iter()
+            .any(|(path, _)| path == "/stop_daemon"),
         "{out}"
     );
 }

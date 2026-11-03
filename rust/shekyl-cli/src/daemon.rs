@@ -9,18 +9,17 @@
 //! first request. The SOCKS proxy, the loopback down-hint and the timeout
 //! are this client's; the bytes are the shared transport's.
 
-use serde::Deserialize;
 use serde_json::Value;
 use std::fmt;
-use std::sync::OnceLock;
+use std::sync::{Arc, OnceLock};
 use std::time::Duration;
 
 use shekyl_rpc_client::RpcError;
 use shekyl_rpc_transport::SyncDaemon;
 
 use shekyl_rpc_transport::network_posture::{host_of, is_loopback_host};
-use shekyl_rpc_types::mining::MineSpeed;
-use shekyl_rpc_types::GetInfoResponse;
+use shekyl_rpc_types::mining::{MinerThreads, MiningStatusResponse, StartMiningRequest};
+use shekyl_rpc_types::{GetInfoResponse, RpcStatus};
 
 /// Errors from the daemon RPC client with differentiated failure modes.
 #[derive(Debug)]
@@ -37,16 +36,15 @@ pub enum DaemonError {
     SocksFailure(String),
     TlsFailure(String),
     MalformedResponse(String),
+    /// A JSON-RPC refusal: the error class and the diagnostic code.
     RpcError {
-        code: i64,
-        message: String,
+        class: String,
+        diagnostic: String,
     },
-    /// Path-RPC `status: "BUSY"` — `/start_mining` is `CHECK_CORE_READY`
+    /// Path-RPC status `BUSY` — `/start_mining` is `CHECK_CORE_READY`
     /// (`is_synchronized`); a syncing daemon will not mine.
     Busy,
-    /// Path-RPC `status: "Already mining"`.
-    AlreadyMining,
-    /// Any other non-OK path-RPC `status` string, shown as the daemon wrote it.
+    /// Any other non-OK path-RPC status, shown as the daemon wrote it.
     Refused(String),
     Other(String),
 }
@@ -79,16 +77,10 @@ impl fmt::Display for DaemonError {
             Self::MalformedResponse(detail) => {
                 write!(f, "Daemon returned a malformed response: {detail}")
             }
-            Self::RpcError { code, message } => {
-                write!(f, "Daemon RPC error (code {code}): {message}")
-            }
+            Self::RpcError { class, diagnostic } => write!(f, "{class} {diagnostic}"),
             Self::Busy => write!(
                 f,
                 "The daemon is still syncing and will not start mining until it is caught up."
-            ),
-            Self::AlreadyMining => write!(
-                f,
-                "The daemon is already mining. Run \"mine stop\" first to change the thread count."
             ),
             Self::Refused(message) => write!(f, "The daemon refused: {message}"),
             Self::Other(detail) => write!(f, "Daemon client error: {detail}"),
@@ -97,19 +89,6 @@ impl fmt::Display for DaemonError {
 }
 
 impl std::error::Error for DaemonError {}
-
-/// The fields `mine status` / the already-mining preflight read.
-/// Extra daemon fields (`pow_algorithm`, …) are ignored on purpose.
-#[derive(Debug, Deserialize)]
-pub struct MiningStatus {
-    pub active: bool,
-    pub speed: MineSpeed,
-    pub threads_count: u64,
-    #[serde(default)]
-    pub address: String,
-    #[serde(default)]
-    pub difficulty: u64,
-}
 
 /// How long one daemon request waits. The views, mining, `tx show`, the
 /// shard reads and the startup check share it.
@@ -125,7 +104,7 @@ pub struct DaemonClient {
     /// See [`DaemonError::ConnectionRefused`]: attached to every refused
     /// connection this client reports.
     down_hint: Option<String>,
-    rpc: OnceLock<SyncDaemon>,
+    rpc: OnceLock<Arc<SyncDaemon>>,
 }
 
 /// Normalize a daemon address to the URL form the transports expect: a
@@ -184,16 +163,28 @@ impl DaemonClient {
         })
     }
 
-    /// The shared client, connected on the first call.
-    fn rpc(&self) -> Result<&SyncDaemon, DaemonError> {
-        let rpc = SyncDaemon::connect(self.url.clone(), self.proxy.clone(), DAEMON_TIMEOUT)
-            .map_err(|error| classify_transport(&error))?;
+    /// The shared client, connected on the first call. Views, `tx show`,
+    /// mining, the shard reads and the startup check all post through it.
+    pub fn transport(&self) -> Result<Arc<SyncDaemon>, DaemonError> {
+        if let Some(existing) = self.rpc.get() {
+            return Ok(Arc::clone(existing));
+        }
+        let rpc = Arc::new(
+            SyncDaemon::connect(self.url.clone(), self.proxy.clone(), DAEMON_TIMEOUT)
+                .map_err(|error| classify_transport(&error))?,
+        );
         // A concurrent first request may have stored one. Either client
         // speaks to the same daemon.
-        match self.rpc.set(rpc) {
-            Ok(()) => Ok(self.rpc.get().expect("this call stored the client")),
-            Err(_) => Ok(self.rpc.get().expect("another call stored the client")),
+        match self.rpc.set(Arc::clone(&rpc)) {
+            Ok(()) => Ok(rpc),
+            Err(_) => Ok(Arc::clone(
+                self.rpc.get().expect("another call stored the client"),
+            )),
         }
+    }
+
+    fn rpc(&self) -> Result<Arc<SyncDaemon>, DaemonError> {
+        self.transport()
     }
 
     /// The SOCKS proxy, when the client was built with one.
@@ -241,16 +232,7 @@ impl DaemonClient {
         let parsed = self.post_json("/json_rpc", &body)?;
 
         if let Some(err) = parsed.get("error") {
-            let code = err
-                .get("code")
-                .and_then(serde_json::Value::as_i64)
-                .unwrap_or(-1);
-            let message = err
-                .get("message")
-                .and_then(|m| m.as_str())
-                .unwrap_or("unknown")
-                .to_string();
-            return Err(DaemonError::RpcError { code, message });
+            return Err(refusal_of(err));
         }
 
         parsed
@@ -265,7 +247,7 @@ impl DaemonClient {
     /// a member that is absent means the contract moved, not a safe zero. In
     /// particular a missing `restricted` cannot read as unrestricted.
     pub fn get_info(&self) -> Result<GetInfoResponse, DaemonError> {
-        let value = self.json_rpc("get_info", &serde_json::json!({}))?;
+        let value = self.json_rpc(posted_json("get_info")?, &serde_json::json!({}))?;
         serde_json::from_value(value)
             .map_err(|e| DaemonError::MalformedResponse(format!("get_info: {e}")))
     }
@@ -277,7 +259,7 @@ impl DaemonClient {
     /// which reads the version before anything else. It is where a daemon
     /// names its network; `get_info` stopped repeating it at 3.54 (RK-Q6).
     pub fn get_version_result(&self) -> Result<Value, DaemonError> {
-        self.json_rpc("get_version", &serde_json::json!({}))
+        self.json_rpc(posted_json("get_version")?, &serde_json::json!({}))
     }
 
     /// Operator coverage list. Empty params; the daemon orders the rows.
@@ -287,7 +269,10 @@ impl DaemonClient {
     pub fn archival_shard_coverage(
         &self,
     ) -> Result<shekyl_rpc_types::GetArchivalShardCoverageResponse, DaemonError> {
-        let value = self.json_rpc("get_archival_shard_coverage", &serde_json::json!({}))?;
+        let value = self.json_rpc(
+            posted_json("get_archival_shard_coverage")?,
+            &serde_json::json!({}),
+        )?;
         serde_json::from_value(value).map_err(|e| {
             DaemonError::MalformedResponse(format!("get_archival_shard_coverage: {e}"))
         })
@@ -332,26 +317,55 @@ impl DaemonClient {
     /// Start the daemon's miner. It mines to the daemon's `mine-address`.
     /// The request is `{ threads }` (N2).
     pub fn start_mining(&self, threads: u64) -> Result<(), DaemonError> {
-        self.path_rpc(
-            "/start_mining",
-            &serde_json::json!({
-                "threads": threads,
-            }),
-        )
-        .map(|_| ())
+        let count = u32::try_from(threads)
+            .ok()
+            .and_then(std::num::NonZeroU32::new)
+            .ok_or_else(|| DaemonError::Other("thread count is not a positive count".into()))?;
+        let body = serde_json::to_value(StartMiningRequest {
+            threads: MinerThreads::Count(count),
+        })
+        .map_err(|error| DaemonError::MalformedResponse(error.to_string()))?;
+        self.path_rpc(posted_rest("/start_mining")?, &body)
+            .map(|_| ())
     }
 
     /// Stop mining on the daemon (CU-3).
     pub fn stop_mining(&self) -> Result<(), DaemonError> {
-        self.path_rpc("/stop_mining", &serde_json::json!({}))
+        self.path_rpc(posted_rest("/stop_mining")?, &serde_json::json!({}))
             .map(|_| ())
     }
 
     /// Query the daemon's mining state (CU-3).
-    pub fn mining_status(&self) -> Result<MiningStatus, DaemonError> {
-        let value = self.path_rpc("/mining_status", &serde_json::json!({}))?;
+    pub fn mining_status(&self) -> Result<MiningStatusResponse, DaemonError> {
+        let value = self.path_rpc(posted_rest("/mining_status")?, &serde_json::json!({}))?;
         serde_json::from_value(value)
             .map_err(|e| DaemonError::MalformedResponse(format!("mining_status: {e}")))
+    }
+}
+
+fn posted_json(name: &str) -> Result<&'static str, DaemonError> {
+    shekyl_rpc_types::methods::json_rpc(name)
+        .map(|method| method.name)
+        .ok_or_else(|| DaemonError::Other(format!("{name} is not a daemon method")))
+}
+
+fn posted_rest(path: &str) -> Result<&'static str, DaemonError> {
+    shekyl_rpc_types::methods::rest_path(path)
+        .map(|method| method.name)
+        .ok_or_else(|| DaemonError::Other(format!("{path} is not a daemon method")))
+}
+
+/// A JSON-RPC `error` object, as its class and diagnostic code.
+fn refusal_of(error: &Value) -> DaemonError {
+    match shekyl_rpc_types::errors::read_error_object(error) {
+        Some(refusal) => DaemonError::RpcError {
+            class: format!("{:?}", refusal.class),
+            diagnostic: refusal.diagnostic.code,
+        },
+        None => {
+            let code = error.get("code").and_then(Value::as_i64).unwrap_or(-1);
+            DaemonError::Refused(format!("unclassified {code}"))
+        }
     }
 }
 
@@ -361,16 +375,7 @@ impl DaemonClient {
 fn classify_path_body(parsed: Value) -> Result<Value, DaemonError> {
     if let Some(err) = parsed.get("error") {
         if err.is_object() {
-            let code = err
-                .get("code")
-                .and_then(serde_json::Value::as_i64)
-                .unwrap_or(-1);
-            let message = err
-                .get("message")
-                .and_then(|m| m.as_str())
-                .unwrap_or("unknown")
-                .to_string();
-            return Err(DaemonError::RpcError { code, message });
+            return Err(refusal_of(err));
         }
         if let Some(message) = err.as_str() {
             return Err(DaemonError::Refused(message.to_owned()));
@@ -387,11 +392,12 @@ fn classify_path_body(parsed: Value) -> Result<Value, DaemonError> {
 /// Map a path-RPC `status` field. `"OK"` continues; known refusals become
 /// typed errors so callers never print `daemon replied: BUSY`.
 fn classify_path_status(status: &str) -> Result<(), DaemonError> {
-    match status {
-        "OK" => Ok(()),
-        "BUSY" => Err(DaemonError::Busy),
-        "Already mining" => Err(DaemonError::AlreadyMining),
-        other => Err(DaemonError::Refused(other.to_owned())),
+    match RpcStatus(status.to_owned()).kind() {
+        shekyl_rpc_types::StatusKind::Ok => Ok(()),
+        shekyl_rpc_types::StatusKind::Busy => Err(DaemonError::Busy),
+        shekyl_rpc_types::StatusKind::Offline | shekyl_rpc_types::StatusKind::Other => {
+            Err(DaemonError::Refused(status.to_owned()))
+        }
     }
 }
 
@@ -445,10 +451,10 @@ mod tests {
             classify_path_status("BUSY"),
             Err(DaemonError::Busy)
         ));
-        assert!(matches!(
-            classify_path_status("Already mining"),
-            Err(DaemonError::AlreadyMining)
-        ));
+        match classify_path_status("Already mining") {
+            Err(DaemonError::Refused(msg)) => assert_eq!(msg, "Already mining"),
+            other => panic!("expected Refused, got {other:?}"),
+        }
         match classify_path_status("Failed, wrong address") {
             Err(DaemonError::Refused(msg)) => assert!(msg.contains("wrong address")),
             other => panic!("expected Refused, got {other:?}"),
@@ -457,18 +463,24 @@ mod tests {
 
     #[test]
     fn path_body_reads_a_json_rpc_error_envelope() {
+        let class = shekyl_rpc_types::errors::ErrorClass::OutsideTheGrant;
         let parsed = serde_json::json!({
             "jsonrpc": "2.0",
             "id": null,
             "error": {
-                "code": -32601,
-                "message": "this connection's grant does not include mining"
+                "code": class.code(),
+                "message": "this connection's grant does not include mining",
+                "data": {
+                    "code": "rpc.grant",
+                    "params": [],
+                    "message": "this connection's grant does not include mining"
+                }
             }
         });
         match classify_path_body(parsed) {
-            Err(DaemonError::RpcError { code, message }) => {
-                assert_eq!(code, -32601);
-                assert!(message.contains("grant"));
+            Err(DaemonError::RpcError { class, diagnostic }) => {
+                assert_eq!(class, "OutsideTheGrant");
+                assert_eq!(diagnostic, "rpc.grant");
             }
             other => panic!("expected RpcError, got {other:?}"),
         }

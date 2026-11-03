@@ -8,20 +8,12 @@
 //! [`shekyl_rpc_transport::SyncDaemon`], the client the renderer posts
 //! through.
 
-use std::sync::Arc;
-use std::time::Duration;
-
-use shekyl_rpc_transport::SyncDaemon;
 use shekyl_rpc_types::DaemonNetwork;
 
 use crate::console::{self, Source};
-use crate::daemon::DaemonClient;
+use crate::daemon::{DaemonClient, DaemonError};
 use crate::outcome::{refusal, CommandResult};
 use crate::resolve::View;
-
-/// A view is a handful of requests. Long enough for a remote daemon,
-/// short enough that a dead one returns to the prompt.
-const VIEW_TIMEOUT: Duration = Duration::from_secs(15);
 
 pub(crate) fn command(
     daemon: Option<&DaemonClient>,
@@ -29,17 +21,12 @@ pub(crate) fn command(
     view: &View,
 ) -> CommandResult<String> {
     let Some(daemon) = daemon else {
-        return Err(refusal(
-            "Daemon not configured. Use --daemon-address to set the daemon endpoint.",
-        ));
+        return Err(refusal(DaemonError::NotConfigured.to_string()));
     };
-    let rpc = SyncDaemon::connect(
-        daemon.url().to_owned(),
-        daemon.proxy().map(str::to_owned),
-        VIEW_TIMEOUT,
-    )
-    .map_err(|error| refusal(error.to_string()))?;
-    let source = Source::new(Arc::new(rpc), network.to_cryptonote());
+    let rpc = daemon
+        .transport()
+        .map_err(|error| refusal(error.to_string()))?;
+    let source = Source::new(rpc, network.to_cryptonote());
     console::execute(&source, view).map_err(refusal)
 }
 

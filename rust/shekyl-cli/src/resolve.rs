@@ -111,6 +111,61 @@ pub enum View {
     DaemonStatus,
     /// `txpool stats`.
     TxpoolStats,
+    /// `chain coinbase sum --from --to`.
+    ChainCoinbaseSum {
+        /// First height.
+        from: u64,
+        /// Last height.
+        to: u64,
+    },
+    /// `tx relay <id>`.
+    TxRelay {
+        /// The transaction id.
+        hash: String,
+    },
+    /// `txpool list [--short]`.
+    TxpoolList {
+        /// Hashes only.
+        short: bool,
+    },
+    /// `txpool flush [id]`. `None` flushes the pool.
+    TxpoolFlush {
+        /// One transaction, or the whole pool.
+        id: Option<String>,
+    },
+    /// `ban list`.
+    BanList,
+    /// `ban add`. `duration` is seconds.
+    BanAdd {
+        /// The host, or an IPv4 subnet.
+        ip: String,
+        /// How long, when the ban is not until lifted.
+        duration: Option<u64>,
+    },
+    /// `ban remove`.
+    BanRemove {
+        /// The host.
+        ip: String,
+    },
+    /// `ban show`.
+    BanShow {
+        /// The host.
+        ip: String,
+    },
+    /// `option set`.
+    OptionSet {
+        /// The option name.
+        name: String,
+        /// The value text.
+        value: String,
+    },
+    /// `option show`.
+    OptionShow {
+        /// One row, or every row the caller may see.
+        name: Option<String>,
+    },
+    /// `daemon stop`.
+    DaemonStop,
 }
 
 impl View {
@@ -132,6 +187,17 @@ impl View {
             Self::SyncStatus => "sync status",
             Self::DaemonStatus => "daemon status",
             Self::TxpoolStats => "txpool stats",
+            Self::ChainCoinbaseSum { .. } => "chain coinbase sum",
+            Self::TxRelay { .. } => "tx relay",
+            Self::TxpoolList { .. } => "txpool list",
+            Self::TxpoolFlush { .. } => "txpool flush",
+            Self::BanList => "ban list",
+            Self::BanAdd { .. } => "ban add",
+            Self::BanRemove { .. } => "ban remove",
+            Self::BanShow { .. } => "ban show",
+            Self::OptionSet { .. } => "option set",
+            Self::OptionShow { .. } => "option show",
+            Self::DaemonStop => "daemon stop",
         }
     }
 }

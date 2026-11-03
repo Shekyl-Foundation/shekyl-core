@@ -110,6 +110,9 @@ fn parse_ready(id: CommandId, tail: Tail<'_>, args: &[&str]) -> ResolvedCommand 
         ChainStats => parse_chain_stats(args),
         ChainAlt => bare(id, args, ResolvedCommand::Daemon(View::ChainAlt)),
         ChainSpent => one_word(id, args, parse_chain_spent),
+        ChainCoinbaseSum => parse_header_span(CommandId::ChainCoinbaseSum, args, |from, to| {
+            View::ChainCoinbaseSum { from, to }
+        }),
         BlockShow => one_word(id, args, parse_block_show),
         BlockHeaderList => parse_header_list(args),
         PeerList => parse_peer_list(args),
@@ -119,6 +122,20 @@ fn parse_ready(id: CommandId, tail: Tail<'_>, args: &[&str]) -> ResolvedCommand 
         SyncStatus => bare(id, args, ResolvedCommand::Daemon(View::SyncStatus)),
         DaemonStatus => bare(id, args, ResolvedCommand::Daemon(View::DaemonStatus)),
         TxpoolStats => bare(id, args, ResolvedCommand::Daemon(View::TxpoolStats)),
+        TxpoolList => parse_txpool_list(args),
+        TxpoolFlush => parse_txpool_flush(args),
+        BanList => bare(id, args, ResolvedCommand::Daemon(View::BanList)),
+        BanAdd => parse_ban_add(args),
+        BanRemove => one_word(id, args, |ip| {
+            parse_host(ip, View::BanRemove { ip: ip.to_owned() })
+        }),
+        BanShow => one_word(id, args, |ip| {
+            parse_host(ip, View::BanShow { ip: ip.to_owned() })
+        }),
+        OptionSet => parse_option_set(args),
+        OptionShow => parse_option_show(args),
+        DaemonStop => bare(id, args, ResolvedCommand::Daemon(View::DaemonStop)),
+        TxRelay => one_word(id, args, parse_tx_relay),
         Version => bare(id, args, ResolvedCommand::Version),
         Wallet => bare(id, args, ResolvedCommand::Wallet),
         Stake => bare(id, args, ResolvedCommand::Stake),
@@ -179,7 +196,9 @@ fn parse_ready(id: CommandId, tail: Tail<'_>, args: &[&str]) -> ResolvedCommand 
         // Subjects. `walk` asks for a verb before this match; the arm keeps
         // the match exhaustive if that ever changes.
         Tx | Request | Uri | Shard | ShardList | Mine | Prove | Check | Block | BlockHeader
-        | Peer | P2p | Sync | Daemon | Txpool => diag(catalog::need_verb(id)),
+        | Peer | P2p | Sync | Daemon | Txpool | ChainCoinbase | Ban | Option => {
+            diag(catalog::need_verb(id))
+        }
     }
 }
 
@@ -236,15 +255,25 @@ fn parse_block_show(word: &str) -> ResolvedCommand {
 }
 
 fn parse_header_list(args: &[&str]) -> ResolvedCommand {
-    let split = match flags(CommandId::BlockHeaderList, args) {
+    parse_header_span(CommandId::BlockHeaderList, args, |from, to| {
+        View::BlockHeaderList { from, to }
+    })
+}
+
+fn parse_header_span(
+    id: CommandId,
+    args: &[&str],
+    build: impl FnOnce(u64, u64) -> View,
+) -> ResolvedCommand {
+    let split = match flags(id, args) {
         Ok(split) => split,
         Err(command) => return command,
     };
     if !split.positional.is_empty() {
-        return diag(usage(CommandId::BlockHeaderList));
+        return diag(usage(id));
     }
     let (Some(from), Some(to)) = (split.value("--from"), split.value("--to")) else {
-        return diag(usage(CommandId::BlockHeaderList));
+        return diag(usage(id));
     };
     let from = match parse_u64("--from", from) {
         Ok(height) => height,
@@ -257,7 +286,123 @@ fn parse_header_list(args: &[&str]) -> ResolvedCommand {
     if from > to {
         return diag("--from is after --to".to_owned());
     }
-    ResolvedCommand::Daemon(View::BlockHeaderList { from, to })
+    ResolvedCommand::Daemon(build(from, to))
+}
+
+fn parse_tx_relay(word: &str) -> ResolvedCommand {
+    match parse_hash(word) {
+        Ok(hash) => ResolvedCommand::Daemon(View::TxRelay { hash }),
+        Err(_) => diag(format!("{word:?} is not a hash")),
+    }
+}
+
+fn parse_txpool_list(args: &[&str]) -> ResolvedCommand {
+    let split = match flags(CommandId::TxpoolList, args) {
+        Ok(split) => split,
+        Err(command) => return command,
+    };
+    if !split.positional.is_empty() {
+        return diag(usage(CommandId::TxpoolList));
+    }
+    ResolvedCommand::Daemon(View::TxpoolList {
+        short: split.has("--short"),
+    })
+}
+
+fn parse_txpool_flush(args: &[&str]) -> ResolvedCommand {
+    match args {
+        [] => ResolvedCommand::Daemon(View::TxpoolFlush { id: None }),
+        [word] => match parse_hash(word) {
+            Ok(hash) => ResolvedCommand::Daemon(View::TxpoolFlush { id: Some(hash) }),
+            Err(_) => diag(format!("{word:?} is not a hash")),
+        },
+        _ => diag(usage(CommandId::TxpoolFlush)),
+    }
+}
+
+fn parse_host(word: &str, view: View) -> ResolvedCommand {
+    if host_token(word) {
+        ResolvedCommand::Daemon(view)
+    } else {
+        diag(format!("{word:?} is not an IP address"))
+    }
+}
+
+fn host_token(word: &str) -> bool {
+    let (address, prefix) = word.split_once('/').unwrap_or((word, ""));
+    if address.parse::<std::net::IpAddr>().is_err() {
+        return false;
+    }
+    prefix.is_empty() || prefix.parse::<u8>().is_ok()
+}
+
+fn parse_ban_add(args: &[&str]) -> ResolvedCommand {
+    let split = match flags(CommandId::BanAdd, args) {
+        Ok(split) => split,
+        Err(command) => return command,
+    };
+    let [ip] = split.positional.as_slice() else {
+        return diag(usage(CommandId::BanAdd));
+    };
+    if !host_token(ip) {
+        return diag(format!("{ip:?} is not an IP address"));
+    }
+    let duration = match split.value("--duration") {
+        None => None,
+        Some(value) => match parse_ig_duration(value) {
+            Ok(seconds) => Some(seconds),
+            Err(message) => return diag(message),
+        },
+    };
+    ResolvedCommand::Daemon(View::BanAdd {
+        ip: (*ip).to_owned(),
+        duration,
+    })
+}
+
+/// An IG-6 duration: an integer and `ms`, `s`, `min`, `h` or `d`.
+fn parse_ig_duration(raw: &str) -> Result<u64, String> {
+    let raw = raw.trim();
+    let split_at = raw
+        .find(|c: char| c.is_ascii_alphabetic())
+        .ok_or_else(|| format!("{raw:?} is not a duration"))?;
+    let digits = raw[..split_at].trim();
+    let unit = raw[split_at..].trim();
+    if digits.is_empty() {
+        return Err(format!("{raw:?} is not a duration"));
+    }
+    let count: u64 = digits
+        .parse()
+        .map_err(|_| format!("{raw:?} is not a duration"))?;
+    let seconds = match unit {
+        "ms" => Some(count.div_ceil(1000)),
+        "s" => Some(count),
+        "min" => count.checked_mul(60),
+        "h" => count.checked_mul(60 * 60),
+        "d" => count.checked_mul(60 * 60 * 24),
+        _ => None,
+    };
+    seconds.ok_or_else(|| format!("{raw:?} is not a duration"))
+}
+
+fn parse_option_set(args: &[&str]) -> ResolvedCommand {
+    match args {
+        [name, value] => ResolvedCommand::Daemon(View::OptionSet {
+            name: (*name).to_owned(),
+            value: (*value).to_owned(),
+        }),
+        _ => diag(usage(CommandId::OptionSet)),
+    }
+}
+
+fn parse_option_show(args: &[&str]) -> ResolvedCommand {
+    match args {
+        [] => ResolvedCommand::Daemon(View::OptionShow { name: None }),
+        [name] => ResolvedCommand::Daemon(View::OptionShow {
+            name: Some((*name).to_owned()),
+        }),
+        _ => diag(usage(CommandId::OptionShow)),
+    }
 }
 
 fn parse_peer_list(args: &[&str]) -> ResolvedCommand {

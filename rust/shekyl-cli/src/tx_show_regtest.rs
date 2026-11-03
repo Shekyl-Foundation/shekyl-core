@@ -35,12 +35,17 @@ fn tx_show_reads_the_wallet_or_the_daemon() {
     let _flushed = daemon.delta_after(Duration::from_secs(1));
 
     let records = format!("wallet holds {}", found.held);
+    let client = daemon.client();
+    let endpoint = DaemonEndpoint {
+        client: &client,
+        network: DaemonNetwork::Fakechain,
+    };
     let held_at = daemon.marks();
     let held = report(&TxShow {
         id: &found.held,
         wallet_records: Some(&records),
         body: false,
-        daemon: Some(&daemon.endpoint()),
+        daemon: Some(&endpoint),
     })
     .expect("the wallet's record");
     let held_delta = daemon.delta_after_mark(&held_at, Duration::from_secs(1));
@@ -55,7 +60,7 @@ fn tx_show_reads_the_wallet_or_the_daemon() {
         id: &found.genesis,
         wallet_records: Some(""),
         body: false,
-        daemon: Some(&daemon.endpoint()),
+        daemon: Some(&endpoint),
     })
     .unwrap_or_else(|error| panic!("the daemon's view: {error}"));
     let foreign_delta = daemon.delta_until(&foreign_at, &request_line(transactions_method()));
@@ -79,7 +84,7 @@ fn tx_show_reads_the_wallet_or_the_daemon() {
         id: &found.held,
         wallet_records: Some(&records),
         body: true,
-        daemon: Some(&daemon.endpoint()),
+        daemon: Some(&endpoint),
     })
     .expect("the bytes");
     let body_delta = daemon.delta_until(&body_at, &request_line(transactions_method()));
@@ -287,13 +292,8 @@ impl Regtest {
         }
     }
 
-    fn endpoint(&self) -> DaemonEndpoint<'_> {
-        DaemonEndpoint {
-            url: &self.url,
-            proxy: None,
-            network: DaemonNetwork::Fakechain,
-            down_hint: None,
-        }
+    fn client(&self) -> crate::daemon::DaemonClient {
+        crate::daemon::DaemonClient::new(&self.url, None, None, None).expect("daemon client")
     }
 
     fn marks(&self) -> Vec<u64> {

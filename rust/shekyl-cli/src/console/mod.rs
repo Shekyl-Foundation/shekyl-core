@@ -20,6 +20,7 @@ mod blockchain;
 mod identity;
 mod info;
 mod node;
+mod operator;
 mod status;
 #[cfg(test)]
 mod tests;
@@ -224,11 +225,10 @@ pub(super) fn json_rpc_result<T: serde::de::DeserializeOwned>(
         )
     })?;
     if let Some(error) = envelope.get("error") {
-        let message = error
-            .get("message")
-            .and_then(serde_json::Value::as_str)
-            .unwrap_or("no reason given");
-        return Err(format!("{method} failed: {message}"));
+        return Err(match shekyl_rpc_types::errors::read_error_object(error) {
+            Some(refusal) => format!("{:?} {}", refusal.class, refusal.diagnostic.code),
+            None => format!("{method} failed"),
+        });
     }
     let result = envelope
         .get("result")
@@ -507,6 +507,11 @@ fn fetch_transactions(
 /// Run one already-parsed daemon word.
 ///
 /// `now` is read once so a command's whole output describes one instant.
+/// The daemon's software version, the same text `version` prints for it.
+pub(crate) fn daemon_software_version(source: &Source) -> Result<String, String> {
+    node::version(source)
+}
+
 pub(crate) fn execute(source: &Source, view: &crate::resolve::View) -> Result<String, String> {
     let now = unix_now();
     match view {
@@ -529,6 +534,21 @@ pub(crate) fn execute(source: &Source, view: &crate::resolve::View) -> Result<St
         crate::resolve::View::SyncStatus => sync_info(source),
         crate::resolve::View::DaemonStatus => show_status(source, now),
         crate::resolve::View::TxpoolStats => node::print_transaction_pool_stats(source),
+        crate::resolve::View::ChainCoinbaseSum { from, to } => {
+            operator::chain_coinbase_sum(source, *from, *to)
+        }
+        crate::resolve::View::TxRelay { hash } => operator::tx_relay(source, hash),
+        crate::resolve::View::TxpoolList { short } => operator::txpool_list(source, *short),
+        crate::resolve::View::TxpoolFlush { id } => operator::txpool_flush(source, id.as_deref()),
+        crate::resolve::View::BanList => operator::ban_list(source),
+        crate::resolve::View::BanAdd { ip, duration } => operator::ban_add(source, ip, *duration),
+        crate::resolve::View::BanRemove { ip } => operator::ban_remove(source, ip),
+        crate::resolve::View::BanShow { ip } => operator::ban_show(source, ip),
+        crate::resolve::View::OptionSet { name, value } => {
+            operator::option_set(source, name, value)
+        }
+        crate::resolve::View::OptionShow { name } => operator::option_show(source, name.as_deref()),
+        crate::resolve::View::DaemonStop => operator::daemon_stop(source),
     }
 }
 

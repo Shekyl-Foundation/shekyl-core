@@ -543,7 +543,7 @@ pub fn run(
             ResolvedCommand::Version => present(
                 &presentation,
                 "version",
-                Ok(cmd_version(&rpc)),
+                Ok(cmd_version(&rpc, daemon_client, daemon_network)),
                 show_version,
             ),
             ResolvedCommand::Wallet => present(
@@ -663,10 +663,11 @@ fn next_line(
     }
 }
 
-/// The CLI's own version, and the wallet-RPC version when the server answers.
+/// The CLI's own version, the wallet server's when one answers, and the
+/// daemon's when one is configured.
 ///
-/// The local version does not depend on the server. A server that cannot be
-/// asked is `wallet_rpc_error` on a successful report, not a missing line.
+/// The local version does not depend on either. A server that cannot be
+/// asked is an error field on a successful report, not a missing line.
 #[derive(serde::Serialize)]
 struct VersionReport {
     cli_version: &'static str,
@@ -676,6 +677,10 @@ struct VersionReport {
     api_version: Option<i64>,
     #[serde(skip_serializing_if = "Option::is_none")]
     wallet_rpc_error: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    daemon_version: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    daemon_error: Option<String>,
 }
 
 fn version_report(
@@ -691,22 +696,43 @@ fn version_report(
                 .map(str::to_owned),
             api_version: val.get("api_version").and_then(serde_json::Value::as_i64),
             wallet_rpc_error: None,
+            daemon_version: None,
+            daemon_error: None,
         },
         Err(error) => VersionReport {
             cli_version,
             version: None,
             api_version: None,
             wallet_rpc_error: Some(error),
+            daemon_version: None,
+            daemon_error: None,
         },
     }
 }
 
-fn cmd_version(rpc: &RpcSession) -> VersionReport {
+fn cmd_version(
+    rpc: &RpcSession,
+    daemon: Option<&crate::daemon::DaemonClient>,
+    network: DaemonNetwork,
+) -> VersionReport {
     let response = match rpc.call("get_version", serde_json::json!({})) {
         Ok(val) => Ok(val),
         Err(error) => Err(format!("wallet RPC unreachable: {error}")),
     };
-    version_report(shekyl_version::VERSION_FULL, response)
+    let mut report = version_report(shekyl_version::VERSION_FULL, response);
+    if let Some(daemon) = daemon {
+        match daemon.transport() {
+            Ok(transport) => {
+                let source = crate::console::Source::new(transport, network.to_cryptonote());
+                match crate::console::daemon_software_version(&source) {
+                    Ok(version) => report.daemon_version = Some(version),
+                    Err(error) => report.daemon_error = Some(error),
+                }
+            }
+            Err(error) => report.daemon_error = Some(error.to_string()),
+        }
+    }
+    report
 }
 
 fn show_version(report: &VersionReport) {
@@ -718,6 +744,11 @@ fn show_version(report: &VersionReport) {
             let api = report.api_version.unwrap_or(0);
             println!("shekyl-wallet-rpc {server} (api v{api})");
         }
+    }
+    match (&report.daemon_version, &report.daemon_error) {
+        (Some(version), _) => println!("shekyld {version}"),
+        (None, Some(error)) => eprintln!("shekyld: {error}"),
+        (None, None) => {}
     }
 }
 

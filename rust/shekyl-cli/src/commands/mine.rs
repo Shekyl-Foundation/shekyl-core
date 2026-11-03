@@ -24,7 +24,7 @@
 use serde_json::{json, Value};
 use shekyl_rpc_types::mining::MineSpeed;
 
-use crate::daemon::DaemonClient;
+use crate::daemon::{DaemonClient, DaemonError};
 use crate::display::short_address;
 use crate::outcome::{failed, refusal, CommandFailed, CommandResult};
 use shekyl_rpc_types::{
@@ -53,9 +53,7 @@ fn gate(
     network: DaemonNetwork,
 ) -> Result<(&DaemonClient, GetInfoResponse), CommandFailed> {
     let Some(dc) = daemon else {
-        return Err(refusal(
-            "Daemon not configured. Use --daemon-address to set the daemon endpoint.",
-        ));
+        return Err(refusal(DaemonError::NotConfigured.to_string()));
     };
 
     // F2 — the daemon's identity, read before anything else is asked of
@@ -478,7 +476,7 @@ mod tests {
             ("json_rpc:get_info", info),
             (
                 "/mining_status",
-                r#"{"status":"OK","active":false,"speed":{"count":0,"window":0},"threads_count":0,"address":"4test","difficulty":1}"#.to_owned(),
+                r#"{"status":"OK","active":false,"speed":{"count":0,"window":0},"threads_count":0,"address":"4test","pow_algorithm":"randomx","block_target":120,"block_reward":0,"difficulty":1,"wide_difficulty":"1","difficulty_top64":0,"height":0,"pool_retired":false,"no_template":null}"#.to_owned(),
             ),
             ("/start_mining", r#"{"status":"OK"}"#.to_owned()),
         ]);

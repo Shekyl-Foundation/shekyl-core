@@ -7,20 +7,13 @@
 
 use super::info::{fetch_get_info, network_label};
 use super::Source;
-use shekyl_rpc_types::mining::MineSpeed;
+use shekyl_rpc_types::mining::{MineSpeed, MiningStatusResponse};
 
 /// Where [`mining_speed`] leaves raw hashes and starts a metric prefix.
 const PREFIX_FROM_HASHES: u128 = 1_000;
 
-/// The `/mining_status` reply, as much of it as `show_status` reads.
-///
-/// In-process the status is the node's miner. Remotely it is
-/// `/mining_status`. Required fields (no `#[serde(default)]`): a renamed
-/// field is an error naming it, where a defaulted `active` would report a
-/// mining daemon as idle.
-#[derive(serde::Deserialize)]
-struct MiningStatusProvisional {
-    status: shekyl_rpc_types::RpcStatus,
+/// The two fields the status line prints from `MiningStatusResponse`.
+struct MiningLine {
     active: bool,
     speed: MineSpeed,
 }
@@ -30,7 +23,7 @@ enum MiningReadout {
     /// The daemon answered. `BUSY` is its own arm because a syncing daemon
     /// answers the question with "ask me later", which is neither idle nor
     /// mining.
-    Ready(MiningStatusProvisional),
+    Ready(MiningLine),
     Syncing,
     /// The remote daemon would not say. A view listener answers
     /// `/mining_status` with a grant refusal, and a daemon that does not
@@ -70,15 +63,18 @@ fn fetch_mining_status(src: &Source) -> Result<MiningReadout, String> {
         }
         Err(_) => return Ok(MiningReadout::Unavailable),
     };
-    let reply: MiningStatusProvisional =
+    let reply: MiningStatusResponse =
         serde_json::from_str(&raw).map_err(|e| format!("malformed mining_status reply: {e}"))?;
-    if reply.status.0 == shekyl_rpc_types::RpcStatus::BUSY {
+    if reply.status.kind() == shekyl_rpc_types::StatusKind::Busy {
         return Ok(MiningReadout::Syncing);
     }
     if !reply.status.is_ok() {
         return Err(reply.status.0);
     }
-    Ok(MiningReadout::Ready(reply))
+    Ok(MiningReadout::Ready(MiningLine {
+        active: reply.active,
+        speed: reply.speed,
+    }))
 }
 
 /// A hash rate for a human: `get_metric_prefix` + `get_mining_speed`.

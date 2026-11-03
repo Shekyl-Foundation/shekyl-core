@@ -9,31 +9,19 @@
 //! asked. Otherwise the report is the daemon's view. `--body` fetches the
 //! bytes from the daemon. A failed wallet read stops the command.
 
-use std::sync::Arc;
-use std::time::Duration;
-
 use serde_json::Value;
-use shekyl_rpc_transport::SyncDaemon;
 use shekyl_rpc_types::DaemonNetwork;
 
 use crate::commands::{format_amount_str, format_height, unspendable_reason_text};
 use crate::console::{self, Source, TxRender};
-use crate::daemon::DaemonClient;
+use crate::daemon::{DaemonClient, DaemonError};
 use crate::outcome::{failed, refusal, CommandResult};
 use crate::rpc_client::RpcSession;
 
-const NOT_CONFIGURED: &str =
-    "Daemon not configured. Use --daemon-address to set the daemon endpoint.";
-
-/// How long one daemon fetch waits. A show is one handshake and one read.
-const DAEMON_TIMEOUT: Duration = Duration::from_secs(30);
-
 /// The daemon a show may ask, when one is configured.
 pub(crate) struct DaemonEndpoint<'a> {
-    pub url: &'a str,
-    pub proxy: Option<String>,
+    pub client: &'a DaemonClient,
     pub network: DaemonNetwork,
-    pub down_hint: Option<&'a str>,
 }
 
 /// One show. `wallet_records` is `None` when no wallet is open, and empty
@@ -87,7 +75,8 @@ pub(crate) fn report(show: &TxShow<'_>) -> Result<String, String> {
         let records = show.wallet_records.expect("held means records");
         let Some(daemon) = show.daemon else {
             return Ok(format!(
-                "{records}\n\nThe serialized bytes could not be fetched from the daemon: {NOT_CONFIGURED}"
+                "{records}\n\nThe serialized bytes could not be fetched from the daemon: {}",
+                DaemonError::NotConfigured
             ));
         };
         return match fetch(daemon, &id, true) {
@@ -202,7 +191,11 @@ fn neither(wallet_open: bool, id: &str) -> String {
 }
 
 fn not_configured(wallet_open: bool, id: &str) -> String {
-    format!("{} {NOT_CONFIGURED}", wallet_clause(wallet_open, id))
+    format!(
+        "{} {}",
+        wallet_clause(wallet_open, id),
+        DaemonError::NotConfigured
+    )
 }
 
 /// The daemon endpoint `command` builds.
@@ -211,22 +204,22 @@ pub(crate) fn endpoint_for<'a>(
     network: DaemonNetwork,
 ) -> DaemonEndpoint<'a> {
     DaemonEndpoint {
-        url: daemon.url(),
-        proxy: daemon.proxy().map(str::to_owned),
+        client: daemon,
         network,
-        down_hint: daemon.down_hint(),
     }
 }
 
 fn fetch(daemon: &DaemonEndpoint<'_>, id: &str, body: bool) -> Result<TxRender, String> {
-    let rpc = SyncDaemon::connect(daemon.url.to_owned(), daemon.proxy.clone(), DAEMON_TIMEOUT)
+    let rpc = daemon
+        .client
+        .transport()
         .map_err(|error| with_hint(daemon, &error.to_string()))?;
-    let source = Source::new(Arc::new(rpc), daemon.network.to_cryptonote());
+    let source = Source::new(rpc, daemon.network.to_cryptonote());
     console::show_transaction(&source, id, body)
 }
 
 fn with_hint(daemon: &DaemonEndpoint<'_>, detail: &str) -> String {
-    match daemon.down_hint {
+    match daemon.client.down_hint() {
         Some(hint) => format!("{detail}\n{hint}"),
         None => detail.to_owned(),
     }

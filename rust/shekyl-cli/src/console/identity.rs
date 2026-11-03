@@ -71,21 +71,24 @@ fn handshake(rpc: &shekyl_rpc_transport::SyncDaemon, nettype: u8) -> Result<Daem
 pub(super) fn get_version_result(
     rpc: &shekyl_rpc_transport::SyncDaemon,
 ) -> Result<serde_json::Value, String> {
+    let method = shekyl_rpc_types::methods::json_rpc("get_version")
+        .expect("get_version is a daemon method")
+        .name;
     let body = serde_json::to_vec(&serde_json::json!({
-        "jsonrpc": "2.0", "id": "0", "method": "get_version", "params": {},
+        "jsonrpc": "2.0", "id": "0", "method": method, "params": {},
     }))
     .map_err(|e| format!("cannot encode the handshake request: {e}"))?;
     let raw = rpc
         .post("/json_rpc", body)
         .map_err(|error| error.to_string())?;
-    json_rpc_result(&raw, "get_version").map_err(|reason| {
-        if reason.starts_with("get_version failed:") {
-            reason
-        } else {
+    json_rpc_result(&raw, method).map_err(|reason| {
+        if reason.starts_with("malformed ") {
             format!(
                 "{} (evidence: {reason})",
                 console_identity_message(&IdentityMismatch::unreadable())
             )
+        } else {
+            reason
         }
     })
 }
