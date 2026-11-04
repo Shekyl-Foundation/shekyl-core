@@ -635,8 +635,12 @@ rationale strengthened.**
     code. The field's width changes what a signature attests, so
     `sig_format_version`, the payload layout version (R5-c), is **2**,
     and a layout-1 signature is refused as an unknown layout version.
-    The envelope version (`shekylmsgsig1.`) and the canonical length do
-    not change: the id is hashed, never carried. Vectors:
+    The id sits at a **fixed position** (byte 1 of the preimage input,
+    right after `sig_format_version`) with a **fixed width** (16 bytes),
+    ahead of the variable-length segment, and never in the customization
+    string (Rick, 2026-11-04). The envelope version (`shekylmsgsig1.`)
+    and the canonical length do not change: the id is hashed, never
+    carried. Vectors:
     `docs/test_vectors/MSG_SIGN_PREIMAGE_V2.json`, rebuilt and checked by
     `scripts/kat/msg_sign_preimage_oracle.py`.
 - **R3-c — the view-tier forward reference is DELETED, not

@@ -58,7 +58,11 @@ signed_hash(i) = cSHAKE256-32(S = "shekyl/fcmp-spend-signing-v1",
 
 `network_id` is the 16-byte genesis-derived id of the network the spend is
 for (`NETWORK_IDENTITY.md` NI-Q4, NI-R10): a signature is valid on one
-network by construction. The KAT (`pqc_signing_preimage_kat.rs`)
+network by construction. It sits in the hash **input**, at a **fixed
+position** (byte 0 of `X`) with a **fixed width** (16 bytes), ahead of every
+variable-length field, so `X` is unambiguous without framing; it is never
+moved after a variable-length field or into the customization string, which
+stays one constant registry row (Rick, 2026-11-04). The KAT (`pqc_signing_preimage_kat.rs`)
 pins the captured payload bytes, and each hash per network against
 `scripts/kat/spend_signing_hash_oracle.py`, which computes the hashes on a stdlib
 sponge (`scripts/kat/stdlib_cshake.py`) that shares no code with the Rust.
