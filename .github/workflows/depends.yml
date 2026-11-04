@@ -6,7 +6,7 @@ on:
   # cross-compiles (~124 billed minutes) on every merge group; the depends
   # tree is not the cross-lane surface the queue exists to test.
   pull_request:
-    types: [opened, synchronize, reopened, edited]
+    types: [opened, synchronize, reopened]
     # Which legs a pull request runs is scripts/ci/depends_legs.py's (the
     # `legs` job below): all six when the depends tree, the Makefile, this
     # workflow or that script changes; the MinGW leg alone when a change can
@@ -37,7 +37,7 @@ on:
 # queue out ALL runners (measured: ~80% of CI wait). `github.ref` is
 # unique per PR (refs/pull/N/merge), so only same-PR runs supersede.
 concurrency:
-  group: depends-${{ github.ref }}${{ github.event.action == 'edited' && !contains(toJSON(github.event.changes), '"base":') && '-edited' || '' }}
+  group: depends-${{ github.ref }}
   cancel-in-progress: true
 
 permissions:
@@ -59,7 +59,6 @@ jobs:
   # The legs this run takes, as a matrix (scripts/ci/depends_legs.py). It
   # fails closed: anything it cannot decide runs every leg.
   legs:
-    if: (github.event.action != 'edited' || contains(toJSON(github.event.changes), '"base":'))
     name: 'Depends legs'
     runs-on: ubuntu-latest
     outputs:
@@ -78,7 +77,7 @@ jobs:
 
   build-cross:
     needs: legs
-    if: (github.event.action != 'edited' || contains(toJSON(github.event.changes), '"base":')) && (needs.legs.outputs.legs != '[]')
+    if: needs.legs.outputs.legs != '[]'
     runs-on: ubuntu-latest
     # A nightly red reaches a human: the on-failure step opens or comments
     # on a tracking issue (the slow-gate nightly's route).

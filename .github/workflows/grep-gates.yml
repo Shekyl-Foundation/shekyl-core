@@ -42,12 +42,12 @@ on:
     types: [checks_requested]
     branches: [dev]
   pull_request:
-    types: [opened, synchronize, reopened, edited]
+    types: [opened, synchronize, reopened]
   push:
     branches: [dev, main]
 
 concurrency:
-  group: grep-gates-${{ github.ref }}${{ github.event.action == 'edited' && !contains(toJSON(github.event.changes), '"base":') && '-edited' || '' }}
+  group: grep-gates-${{ github.ref }}
   cancel-in-progress: true
 
 permissions:
@@ -55,7 +55,6 @@ permissions:
 
 jobs:
   grep-gates:
-    if: (github.event.action != 'edited' || contains(toJSON(github.event.changes), '"base":'))
     name: "Grep gates (bundled)"
     runs-on: ubuntu-latest
     timeout-minutes: 15
@@ -161,11 +160,13 @@ jobs:
           run_one "Workflow files parse and are well-formed" \
             python3 scripts/ci/check_workflows_parse.py
           # A pull_request trigger filtered on branches does not run while a
-          # PR's base is another branch, and a retarget fires `edited`, which
-          # the default activity types do not include. That is how #1254 and
-          # #1259 merged with CodeQL and the doc gates never started. This
-          # job has no path filter, so a workflow edit cannot hide from it.
-          run_one "pull_request triggers run on every base, including a retarget" \
+          # PR's base is another branch. That is how #1254 and #1259 merged
+          # with CodeQL and the doc gates never started. The `edited` type
+          # is refused too: it ran every workflow on each PR body edit with
+          # every job skipped, and the newest check run per name is the one
+          # the PR reports (#1264, #1267). This job has no path filter, so a
+          # workflow edit cannot hide from it.
+          run_one "pull_request triggers run on every base and only on code" \
             python3 scripts/ci/check_pr_event_triggers.py
           # A setup step that fetches with a depth would make a developer's
           # shared clone shallow when the steps are run locally; it carries

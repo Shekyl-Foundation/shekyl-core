@@ -3,32 +3,44 @@
 #
 # All rights reserved.
 # BSD-3-Clause
-"""Every pull_request workflow runs on any base, and again when retargeted.
+"""Every pull_request workflow runs on any base, and only on code events.
 
 A `branches:` filter on `pull_request` means the workflow does not run while
-the PR's base is some other branch. Retargeting the PR fires `pull_request`
-with `action: edited`, and `edited` is not in the default activity types, so
-the workflow does not run then either. Stacked PRs (#1254, #1259) merged
-with CodeQL, the doc gates, the FFI signature gate and the rest of that set
-never started. The merge queue reruns on `merge_group`; that trigger is
-unchanged and is not this gate's subject.
+the PR's base is some other branch. Stacked PRs (#1254, #1259) merged with
+CodeQL, the doc gates, the FFI signature gate and the rest of that set never
+started. The merge queue reruns on `merge_group`; that trigger is unchanged
+and is not this gate's subject.
+
+The `edited` activity type is refused. #1268 added it so a retarget (the
+one `edited` whose payload carries `changes.base`) would re-run every
+workflow against the new base, with a job-level condition skipping every
+other edit. A skipped job still emits a check run with conclusion
+`skipped`, Bugbot and Copilot edit the PR body within a minute of every
+push, and the PR's rollup reports the newest check run per name. The
+result on #1264 and #1267 was a page of "skipped" over runs that were
+queued and running; a skipped check run also satisfies a required status
+check, so the newest-wins rollup would have shown a required check green
+for work not yet done. No activity-type filter distinguishes a retarget
+from a title edit, and GitHub offers no other event for it.
+
+Disposition for the retarget case (rule 21): a retargeted PR keeps the
+check runs computed against its previous base until its next push; the
+merge queue validates the actual merge result before `dev` moves
+(`06-branching.mdc`). Reopen if the repository gains a workflow identity
+that is not `GITHUB_TOKEN` (a GitHub App installation token): events that
+token raises do trigger workflows, so a one-job `edited` workflow could
+then close and reopen a retargeted PR, and `reopened` runs everything
+against the new base with no skipped check runs on the other edits.
 
 What a passing `pull_request` trigger is:
 
 * a mapping, with no `branches` or `branches-ignore`
-* `types` exactly `[opened, synchronize, reopened, edited]`
-* every job carries
-  `(github.event.action != 'edited' || contains(toJSON(github.event.changes), '"base":'))`
-  so a title edit runs nothing and a base change runs the job
-
-A job whose name interpolates `matrix.*` cannot carry it on the job `if`:
-the `if` is evaluated before the matrix expands, and a skip then emits no
-per-leg check name (`check_matrix_job_gating.py`). That job gates its
-steps. The jobs it needs keep the ordinary job `if`, so a title-only edit
-skips them and the matrix is not reported again as a success for work it
-did not do. The three matrix jobs whose per-leg names are not required
-checks are the same allowlist as `check_matrix_job_gating.py`; they keep a
-job-level `if`.
+* `types` absent (the default set) or exactly `[opened, synchronize,
+  reopened]`; naming `types` replaces the default set, so a list that
+  drops one of the three is silent and is refused too
+* no expression anywhere in the file that reads `github.event.changes`;
+  that object exists only on `edited`, so a reader of it is a leftover of
+  the condition this gate retired
 
 The eleven workflows that had the branches filter are named below. A tree
 with none of them, or with no `pull_request` workflow at all, is a missing
@@ -38,7 +50,6 @@ subject (rule 47), not a pass.
 from __future__ import annotations
 
 import os
-import re
 import sys
 
 import yaml
@@ -48,28 +59,8 @@ from check_workflows_parse import StrictLoader, is_workflow_file
 ROOT = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", ".."))
 WORKFLOWS = os.path.join(ROOT, ".github", "workflows")
 
-# The activity types, in the order every workflow writes them. `edited` is
-# the one the default set omits; the other three are the default set, and
-# naming `types` replaces that default, so dropping one of them is silent.
-TYPES = ["opened", "synchronize", "reopened", "edited"]
-
-# `github.event.changes` is absent except on `edited`. Indexing it fails the
-# `if` on a push, so every job skips. `toJSON` of an absent value stays
-# defined. The key is `"base":`, so a title that says "rebase" or
-# "database" is not a base change. Comparing the object with `!= null`
-# also did not come out true.
-CLAUSE_RE = re.compile(
-    r"""\(\s*github\.event\.action\s*!=\s*'edited'\s*\|\|\s*"""
-    r"""contains\(toJSON\(github\.event\.changes\),\s*'"base":'\)\s*\)"""
-)
-
-# Kept in step with check_matrix_job_gating.ALLOWED. A row here that is not
-# a row there would bless a job-level if the other gate forbids.
-MATRIX_IF_ALLOWED = {
-    ("randomx-v2-differential.yml", "runtime-modes"),
-    ("randomx-v2-differential.yml", "rotating"),
-    ("depends.yml", "build-cross"),
-}
+# The default activity types, in the order every workflow writes them.
+TYPES = ["opened", "synchronize", "reopened"]
 
 # The workflows whose pull_request trigger carried `branches:`. They are the
 # hole this gate was written for; each one still has to be a pull_request
@@ -94,16 +85,13 @@ NAMED = (
 MIN_PULL_REQUEST_WORKFLOWS = 22
 
 _BRANCH_KEYS = ("branches", "branches-ignore")
-
-
-def clause_in(value: object) -> bool:
-    return isinstance(value, str) and CLAUSE_RE.search(value) is not None
+_EDITED_ONLY = "github.event.changes"
 
 
 def pull_request_form(trigger: object) -> str | None:
     """How this workflow names `pull_request`, or None when it does not.
 
-    A mapping can carry `types` and the retarget condition. A bare name
+    A mapping can carry `types` and refuse a branches filter. A bare name
     (`on: pull_request`, `on: [pull_request]`) is a workflow the structural
     checker accepts and this gate would otherwise not see.
     """
@@ -116,33 +104,15 @@ def pull_request_form(trigger: object) -> str | None:
     return None
 
 
-def needs_list(job: dict) -> list[str] | None:
-    needs = job.get("needs")
-    if needs is None:
-        return []
-    if isinstance(needs, str):
-        return [needs]
-    if isinstance(needs, list) and all(isinstance(item, str) for item in needs):
-        return list(needs)
-    return None
-
-
-def _interpolated(job: dict) -> bool:
-    return "${{" in str(job.get("name") or "")
-
-
-def _steps_lack_clause(filename: str, jid: str, job: dict) -> list[str]:
-    steps = job.get("steps")
-    if not isinstance(steps, list) or not steps:
-        return [f"{filename}: job `{jid}` has no steps to carry the retarget condition"]
-    out = []
-    for index, step in enumerate(steps):
-        if not isinstance(step, dict) or not clause_in(step.get("if")):
-            out.append(
-                f"{filename}: job `{jid}` step {index} is missing the retarget "
-                "condition " + _clause()
-            )
-    return out
+def _strings(node: object):
+    if isinstance(node, str):
+        yield node
+    elif isinstance(node, dict):
+        for value in node.values():
+            yield from _strings(value)
+    elif isinstance(node, list):
+        for item in node:
+            yield from _strings(item)
 
 
 def problems_in(filename: str, doc: object) -> list[str]:
@@ -155,147 +125,74 @@ def problems_in(filename: str, doc: object) -> list[str]:
     if form == "shorthand":
         return [
             f"{filename}: `pull_request` is a bare event name, so it cannot "
-            "name `types` or the retarget condition. Write it as a mapping."
+            "refuse a branches filter or name `types`. Write it as a mapping."
         ]
     pr = trigger["pull_request"]
     problems: list[str] = []
     if not isinstance(pr, dict):
         return [
-            f"{filename}: `pull_request` has no mapping, so it cannot name "
-            "`types` or refuse a branches filter"
+            f"{filename}: `pull_request` has no mapping, so it cannot refuse "
+            "a branches filter"
         ]
     if any(key in pr for key in _BRANCH_KEYS):
         problems.append(
             f"{filename}: `pull_request` carries a branches filter, so a PR "
             "whose base is another branch never runs it"
         )
-    if pr.get("types") != TYPES:
+    types = pr.get("types")
+    if types is not None and types != TYPES:
         problems.append(
-            f"{filename}: `pull_request` types are {pr.get('types')!r}, want {TYPES}"
+            f"{filename}: `pull_request` types are {types!r}, want {TYPES} or "
+            "no `types` key; `edited` runs every job skipped on each body edit"
+        )
+    if any(_EDITED_ONLY in text for text in _strings(doc)):
+        problems.append(
+            f"{filename}: reads `{_EDITED_ONLY}`, which exists only on the "
+            "`edited` event this gate refuses"
         )
     jobs = doc.get("jobs")
     if not isinstance(jobs, dict) or not jobs:
-        return problems + [f"{filename}: no jobs"]
-    # A title or body edit must not land in the same concurrency group as a
-    # push: cancel-in-progress would abort the run the edit is not replacing.
-    # Workflows with no concurrency group have nothing to cancel.
-    group = (doc.get("concurrency") or {}).get("group") if isinstance(doc.get("concurrency"), dict) else None
-    if isinstance(group, str) and "!contains(toJSON(github.event.changes), '\"base\":')" not in group:
-        problems.append(
-            f"{filename}: concurrency group does not isolate a title or body "
-            "edit from cancel-in-progress"
-        )
-    for jid, job in jobs.items():
-        if not isinstance(job, dict):
-            problems.append(f"{filename}: job `{jid}` is not a mapping")
-            continue
-        listed = needs_list(job)
-        if listed is None:
-            problems.append(f"{filename}: job `{jid}` has a `needs` this gate cannot read")
-            listed = []
-        for dep in listed:
-            if dep not in jobs:
-                problems.append(f"{filename}: job `{jid}` needs `{dep}`, which is not a job")
-        if _interpolated(job) and (filename, jid) not in MATRIX_IF_ALLOWED:
-            if "if" in job:
-                problems.append(
-                    f"{filename}: job `{jid}` has an interpolated name and a "
-                    "job-level `if`; a skip emits no per-leg check name. Gate "
-                    "the steps (check_matrix_job_gating.py)."
-                )
-            problems.extend(_steps_lack_clause(filename, jid, job))
-        elif not clause_in(job.get("if")):
-            problems.append(
-                f"{filename}: job `{jid}` is missing the retarget condition on "
-                "its job `if`"
-            )
+        problems.append(f"{filename}: no jobs")
     return problems
 
 
-def _clause() -> str:
-    return (
-        "(github.event.action != 'edited' || contains(toJSON(github.event.changes), '\"base\":'))"
-    )
+def _job() -> dict:
+    return {"runs-on": "ubuntu-latest", "steps": [{"run": "true"}]}
 
 
-def _job(name: str = "literal", if_=None, steps=None, needs=None) -> dict:
-    job: dict = {
-        "name": name,
-        "runs-on": "ubuntu-latest",
-        "steps": steps if steps is not None else [{"run": "true", "if": _clause()}],
-    }
-    if if_ is not None:
-        job["if"] = if_
-    if needs is not None:
-        job["needs"] = needs
-    return job
-
-
-def _doc(jobs: dict, types=None, branches=None, pull_request=True) -> dict:
+def _doc(types=None, branches=None, pull_request=True, job=None) -> dict:
+    jobs = {"a": job if job is not None else _job()}
     if not pull_request:
         return {"on": {"push": {"branches": ["dev"]}}, "jobs": jobs}
-    pr: dict = {"types": list(TYPES if types is None else types)}
+    pr: dict = {}
+    if types is not None:
+        pr["types"] = list(types)
     if branches is not None:
         pr["branches"] = branches
     return {"on": {"pull_request": pr}, "jobs": jobs}
 
 
 def selftest() -> int:
-    clause = _clause()
     cases = [
-        ("branches filter", _doc({"a": _job(if_=clause)}, branches=["dev"]), True),
-        ("types omit edited", _doc({"a": _job(if_=clause)}, types=["opened"]), True),
-        ("literal job has no if", _doc({"a": _job()}), True),
-        ("good literal job", _doc({"a": _job(if_=clause)}), False),
+        ("branches filter", _doc(branches=["dev"]), True),
+        ("branches-ignore filter", {"on": {"pull_request": {"branches-ignore": ["x"]}}, "jobs": {"a": _job()}}, True),
+        ("types with edited", _doc(types=TYPES + ["edited"]), True),
+        ("types drop reopened", _doc(types=["opened", "synchronize"]), True),
+        ("types are the default set", _doc(types=TYPES), False),
+        ("types absent", _doc(), False),
+        ("push only", _doc(pull_request=False), False),
         (
-            "interpolated job-level if",
-            _doc({"m": _job(name="${{ matrix.name }}", if_=clause)}),
+            "job if reads github.event.changes",
+            _doc(job={**_job(), "if": "github.event.changes.base != null"}),
             True,
         ),
         (
-            "interpolated steps gated",
-            _doc({"m": _job(name="${{ matrix.name }}")}),
-            False,
-        ),
-        (
-            "matrix needs-job carries the job if",
-            _doc(
-                {
-                    "scope": _job(if_=clause),
-                    "m": _job(name="${{ matrix.name }}", needs="scope"),
-                }
-            ),
-            False,
-        ),
-        (
-            "matrix needs-job has no if",
-            _doc(
-                {
-                    "scope": _job(),
-                    "m": _job(name="${{ matrix.name }}", needs="scope"),
-                }
-            ),
+            "concurrency group reads github.event.changes",
+            {**_doc(), "concurrency": {"group": "x-${{ toJSON(github.event.changes) }}"}},
             True,
         ),
-        (
-            "allowlisted matrix job",
-            _doc({"build-cross": _job(name="${{ matrix.toolchain.name }}", if_=clause)}),
-            False,
-        ),
-        ("push only", _doc({"a": _job()}, pull_request=False), False),
-        (
-            "concurrency group does not isolate a title edit",
-            {
-                **_doc({"a": _job(if_=_clause())}),
-                "concurrency": {"group": "build-${{ github.ref }}", "cancel-in-progress": True},
-            },
-            True,
-        ),
-        (
-            "pull_request is null",
-            {"on": {"pull_request": None}, "jobs": {"a": _job(if_=clause)}},
-            True,
-        ),
+        ("pull_request is null", {"on": {"pull_request": None}, "jobs": {"a": _job()}}, True),
+        ("no jobs", {"on": {"pull_request": {}}, "jobs": {}}, True),
         (
             "bare pull_request",
             yaml.load(
@@ -317,39 +214,16 @@ def selftest() -> int:
     ]
     failed = 0
     for label, doc, want_problem in cases:
-        filename = "depends.yml" if label == "allowlisted matrix job" else "fixture.yml"
-        got = problems_in(filename, doc)
+        got = problems_in("fixture.yml", doc)
         if want_problem != bool(got):
             print(f"SELFTEST FAIL: {label}: want problem={want_problem}, got {got}")
             failed += 1
-    folded = yaml.load(
-        """
-on:
-  pull_request:
-    types: [opened, synchronize, reopened, edited]
-jobs:
-  archive:
-    name: source archive
-    if: >-
-      (github.event.action != 'edited' || contains(toJSON(github.event.changes), '"base":'))
-      && (
-      (github.event_name == 'push'))
-    runs-on: ubuntu-latest
-    steps:
-      - run: "true"
-""",
-        Loader=StrictLoader,
-    )
-    got = problems_in("fixture.yml", folded)
-    if got:
-        print(f"SELFTEST FAIL: folded job if was not recognised: {got}")
-        failed += 1
     if failed:
         return 1
     print(
-        "SELFTEST PASS: a branches filter, a missing edited type, and a job "
-        "if on a matrix name all fail; a gated literal job, gated steps, and "
-        "the allowlisted matrix jobs pass"
+        "SELFTEST PASS: a branches filter, an `edited` type, a short types "
+        "list, and a reader of github.event.changes all fail; the default "
+        "types, named or absent, pass"
     )
     return 0
 
@@ -371,8 +245,6 @@ def main() -> int:
         return 2
     problems: list[str] = []
     pull_request_files: list[str] = []
-    allowed_seen: set[tuple[str, str]] = set()
-    isolated_groups = 0
     for name in names:
         path = os.path.join(WORKFLOWS, name)
         try:
@@ -381,21 +253,8 @@ def main() -> int:
         except yaml.YAMLError as exc:
             problems.append(f"{name}: does not parse: {exc}")
             continue
-        trigger = doc.get("on") if isinstance(doc, dict) else None
-        if isinstance(trigger, dict) and "pull_request" in trigger:
+        if isinstance(doc, dict) and pull_request_form(doc.get("on")) is not None:
             pull_request_files.append(name)
-            group = ((doc.get("concurrency") or {}).get("group") if isinstance(doc, dict) and isinstance(doc.get("concurrency"), dict) else None)
-            if isinstance(group, str) and "!contains(toJSON(github.event.changes), '\"base\":')" in group:
-                isolated_groups += 1
-            jobs = doc.get("jobs") if isinstance(doc, dict) else None
-            if isinstance(jobs, dict):
-                for jid, job in jobs.items():
-                    if (
-                        isinstance(job, dict)
-                        and _interpolated(job)
-                        and (name, jid) in MATRIX_IF_ALLOWED
-                    ):
-                        allowed_seen.add((name, jid))
         problems.extend(problems_in(name, doc))
     for name in NAMED:
         if name not in pull_request_files:
@@ -403,25 +262,11 @@ def main() -> int:
                 f"{name}: named as one of the workflows the branches filter "
                 "used to silence, and it has no pull_request trigger"
             )
-    # Every pull_request workflow in this tree has a concurrency group. A
-    # count that falls means the isolation was deleted rather than the
-    # workflows going away (that case is the minimum above).
-    if isolated_groups < MIN_PULL_REQUEST_WORKFLOWS:
-        problems.append(
-            f"concurrency isolation: {isolated_groups} pull_request workflows, "
-            f"want at least {MIN_PULL_REQUEST_WORKFLOWS}"
-        )
     if len(pull_request_files) < MIN_PULL_REQUEST_WORKFLOWS:
         problems.append(
             f"pull_request workflows: {len(pull_request_files)}, want at least "
             f"{MIN_PULL_REQUEST_WORKFLOWS} — a trigger was deleted rather than fixed"
         )
-    for key in sorted(MATRIX_IF_ALLOWED):
-        if key not in allowed_seen:
-            problems.append(
-                "MATRIX_IF_ALLOWED has a row matching no interpolated job: "
-                f"{key[0]} / {key[1]}"
-            )
     if problems:
         print(f"FAIL: {len(problems)} pull_request trigger problem(s):")
         for problem in problems:
@@ -429,8 +274,9 @@ def main() -> int:
         return 1
     print(
         f"pr triggers: {len(pull_request_files)} pull_request workflows, no "
-        f"branches filter, edited included, retarget condition present "
-        f"({len(NAMED)} of them are the ones the branches filter used to silence)"
+        f"branches filter, default activity types only, no reader of "
+        f"github.event.changes ({len(NAMED)} of them are the ones the "
+        "branches filter used to silence)"
     )
     return 0
 
