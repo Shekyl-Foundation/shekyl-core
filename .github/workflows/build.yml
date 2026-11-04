@@ -75,7 +75,7 @@ jobs:
   # on a source change; a wrong `false` costs runner minutes. Only one of those
   # merges broken code.
   changes:
-    if: (github.event.action != 'edited' || github.event.changes.base != null)
+    if: (github.event.action != 'edited' || github.event.changes.base.ref.from)
     name: 'Change scope'
     runs-on: ubuntu-latest
     outputs:
@@ -109,7 +109,7 @@ jobs:
   lint-rust-debug-macros:
     name: 'Lint: no debug macros in production Rust'
     needs: changes
-    if: (github.event.action != 'edited' || github.event.changes.base != null) && (needs.changes.outputs.docs_only != 'true')
+    if: (github.event.action != 'edited' || github.event.changes.base.ref.from) && (needs.changes.outputs.docs_only != 'true')
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v5
@@ -207,7 +207,7 @@ jobs:
   build-macos:
     name: 'macOS (brew)'
     needs: changes
-    if: (github.event.action != 'edited' || github.event.changes.base != null) && (needs.changes.outputs.docs_only != 'true')
+    if: (github.event.action != 'edited' || github.event.changes.base.ref.from) && (needs.changes.outputs.docs_only != 'true')
     runs-on: macOS-latest
     env:
       CCACHE_TEMPDIR: /tmp/.ccache-temp
@@ -303,23 +303,23 @@ jobs:
         CCACHE_DIR: ~/.ccache
     steps:
       - name: set apt conf
-        if: (github.event.action != 'edited' || github.event.changes.base != null) && (needs.changes.outputs.docs_only != 'true')
+        if: (github.event.action != 'edited' || github.event.changes.base.ref.from) && (needs.changes.outputs.docs_only != 'true')
         run: ${{env.APT_SET_CONF}}
       - name: update apt
-        if: (github.event.action != 'edited' || github.event.changes.base != null) && (needs.changes.outputs.docs_only != 'true')
+        if: (github.event.action != 'edited' || github.event.changes.base.ref.from) && (needs.changes.outputs.docs_only != 'true')
         run: apt update
       - name: install build dependencies
-        if: (github.event.action != 'edited' || github.event.changes.base != null) && (needs.changes.outputs.docs_only != 'true')
+        if: (github.event.action != 'edited' || github.event.changes.base.ref.from) && (needs.changes.outputs.docs_only != 'true')
         run: ${{env.APT_INSTALL_LINUX}}
       - name: configure git
-        if: (github.event.action != 'edited' || github.event.changes.base != null) && (needs.changes.outputs.docs_only != 'true')
+        if: (github.event.action != 'edited' || github.event.changes.base.ref.from) && (needs.changes.outputs.docs_only != 'true')
         run: git config --global --add safe.directory '*'
       - uses: actions/checkout@v5
-        if: (github.event.action != 'edited' || github.event.changes.base != null) && (needs.changes.outputs.docs_only != 'true')
+        if: (github.event.action != 'edited' || github.event.changes.base.ref.from) && (needs.changes.outputs.docs_only != 'true')
         with:
           submodules: recursive
       - name: install Rust
-        if: (github.event.action != 'edited' || github.event.changes.base != null) && (needs.changes.outputs.docs_only != 'true')
+        if: (github.event.action != 'edited' || github.event.changes.base.ref.from) && (needs.changes.outputs.docs_only != 'true')
         # Composite action (.github/actions/install-rust): the one
         # hardened download-then-run recipe, installing the
         # rust-toolchain.toml pin + components up front so the daemon
@@ -330,15 +330,15 @@ jobs:
         # the runner until the repo is checked out.
         uses: ./.github/actions/install-rust
       - uses: actions/cache@v5
-        if: (github.event.action != 'edited' || github.event.changes.base != null) && (needs.changes.outputs.docs_only != 'true')
+        if: (github.event.action != 'edited' || github.event.changes.base.ref.from) && (needs.changes.outputs.docs_only != 'true')
         with:
           path: ~/.ccache
           key: ccache-${{ matrix.container }}-build-${{ github.sha }}
           restore-keys: ccache-${{ matrix.container }}-build-
       - uses: ./.github/actions/set-make-job-count
-        if: (github.event.action != 'edited' || github.event.changes.base != null) && (needs.changes.outputs.docs_only != 'true')
+        if: (github.event.action != 'edited' || github.event.changes.base.ref.from) && (needs.changes.outputs.docs_only != 'true')
       - name: build
-        if: (github.event.action != 'edited' || github.event.changes.base != null) && (needs.changes.outputs.docs_only != 'true')
+        if: (github.event.action != 'edited' || github.event.changes.base.ref.from) && (needs.changes.outputs.docs_only != 'true')
         env:
           CMAKE_BUILD_PARALLEL_LEVEL: ${{env.MAKE_JOB_COUNT}}
         run: |
@@ -361,7 +361,7 @@ jobs:
       # reference of the PoW test setter cannot merge on a green source
       # grep alone. nm is binutils, pulled in by build-essential.
       - name: symbol isolation on linked daemon (nm)
-        if: (github.event.action != 'edited' || github.event.changes.base != null) && (matrix.pack_ctest && needs.changes.outputs.docs_only != 'true')
+        if: (github.event.action != 'edited' || github.event.changes.base.ref.from) && (matrix.pack_ctest && needs.changes.outputs.docs_only != 'true')
         shell: bash
         run: scripts/ci/check_randomx_symbol_isolation.sh build/bin/shekyld
       # The hardening the link flags claim, read off the staged ELF binaries
@@ -370,11 +370,11 @@ jobs:
       # DC-Q21); the flags reach it through Corrosion, not CMAKE_EXE_LINKER_FLAGS,
       # so the result is what is asserted. readelf is binutils.
       - name: binary hardening on the staged binaries (readelf)
-        if: (github.event.action != 'edited' || github.event.changes.base != null) && (needs.changes.outputs.docs_only != 'true')
+        if: (github.event.action != 'edited' || github.event.changes.base.ref.from) && (needs.changes.outputs.docs_only != 'true')
         shell: bash
         run: scripts/ci/check_binary_hardening.sh build/bin/shekyld build/bin/shekyl-cli build/bin/shekyl-wallet-rpc
       - name: live-daemon gates
-        if: (github.event.action != 'edited' || github.event.changes.base != null) && (matrix.pack_ctest && needs.changes.outputs.docs_only != 'true')
+        if: (github.event.action != 'edited' || github.event.changes.base.ref.from) && (matrix.pack_ctest && needs.changes.outputs.docs_only != 'true')
         # `shell: bash` like the CTest-artifact step below, and for the same
         # reason: the job's default shell in this container is dash, which
         # rejects `set -o pipefail` outright — the script dies on line 1
@@ -394,12 +394,12 @@ jobs:
       # on both sides. tests/data/ is repo-tracked — the test job reads
       # it from checkout, not this tarball.
       - name: Pack CTest tree
-        if: (github.event.action != 'edited' || github.event.changes.base != null) && (matrix.pack_ctest && needs.changes.outputs.docs_only != 'true')
+        if: (github.event.action != 'edited' || github.event.changes.base.ref.from) && (matrix.pack_ctest && needs.changes.outputs.docs_only != 'true')
         run: |
           tar --exclude='**/CMakeFiles' --exclude='**/*.o' --exclude='**/*.a' \
             -czf ubuntu-24.04-ctest.tar.gz build/
       - name: Verify CTest artifact
-        if: (github.event.action != 'edited' || github.event.changes.base != null) && (matrix.pack_ctest && needs.changes.outputs.docs_only != 'true')
+        if: (github.event.action != 'edited' || github.event.changes.base.ref.from) && (matrix.pack_ctest && needs.changes.outputs.docs_only != 'true')
         shell: bash
         run: |
           set -euo pipefail
@@ -423,7 +423,7 @@ jobs:
           fi
           echo "OK: artifact contains CTestTestfile.cmake and excludes CMakeFiles/*.o/*.a"
       - uses: actions/upload-artifact@v4
-        if: (github.event.action != 'edited' || github.event.changes.base != null) && (matrix.pack_ctest && needs.changes.outputs.docs_only != 'true')
+        if: (github.event.action != 'edited' || github.event.changes.base.ref.from) && (matrix.pack_ctest && needs.changes.outputs.docs_only != 'true')
         with:
           name: ubuntu-24.04-ctest
           path: ubuntu-24.04-ctest.tar.gz
@@ -432,7 +432,7 @@ jobs:
   test-ubuntu:
     name: "Ubuntu 24.04 (tests)"
     needs: [changes, build-ubuntu]
-    if: (github.event.action != 'edited' || github.event.changes.base != null) && (needs.changes.outputs.docs_only != 'true')
+    if: (github.event.action != 'edited' || github.event.changes.base.ref.from) && (needs.changes.outputs.docs_only != 'true')
     runs-on: ubuntu-latest
     container:
       image: ubuntu:24.04
@@ -478,7 +478,7 @@ jobs:
   build-windows-msvc:
     name: 'Windows (MSVC, daemon)'
     needs: changes
-    if: (github.event.action != 'edited' || github.event.changes.base != null) && (needs.changes.outputs.docs_only != 'true')
+    if: (github.event.action != 'edited' || github.event.changes.base.ref.from) && (needs.changes.outputs.docs_only != 'true')
     runs-on: windows-2025-vs2026
     steps:
       - uses: actions/checkout@v5
@@ -854,7 +854,7 @@ jobs:
     # ~1 min itself but occupied a runner in the same pool as the 15-workflow
     # PR fan-out.
     if: >-
-      (github.event.action != 'edited' || github.event.changes.base != null)
+      (github.event.action != 'edited' || github.event.changes.base.ref.from)
       && (
       (github.event_name == 'push' && github.ref == 'refs/heads/main')
       || (github.event_name == 'pull_request' && github.base_ref == 'main'))

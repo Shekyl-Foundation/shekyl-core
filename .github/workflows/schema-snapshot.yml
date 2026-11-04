@@ -95,7 +95,7 @@ permissions:
 
 jobs:
   assert-snapshots:
-    if: (github.event.action != 'edited' || github.event.changes.base != null)
+    if: (github.event.action != 'edited' || github.event.changes.base.ref.from)
     name: "Assert committed schema snapshots"
     runs-on: ubuntu-latest
     steps:
@@ -155,7 +155,7 @@ jobs:
           cargo test -p shekyl-peerlist address_file::snapshot --no-fail-fast
 
   enforce-version-bump:
-    if: (github.event.action != 'edited' || github.event.changes.base != null)
+    if: (github.event.action != 'edited' || github.event.changes.base.ref.from)
     name: "Enforce paired block_version bump"
     runs-on: ubuntu-latest
     steps:

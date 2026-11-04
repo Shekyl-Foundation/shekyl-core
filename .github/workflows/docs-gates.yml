@@ -84,7 +84,7 @@ permissions:
 
 jobs:
   check-doc-links:
-    if: (github.event.action != 'edited' || github.event.changes.base != null)
+    if: (github.event.action != 'edited' || github.event.changes.base.ref.from)
     name: "Docs structural gates (links, banners, fossils, FOLLOWUPS, index)"
     runs-on: ubuntu-latest
     # Both checks are pure-Python over a checkout; a minute is generous.
