@@ -284,3 +284,37 @@ fn a_map_takes_key_value_pairs_from_its_closed_key_set() {
         Code::ValueWord
     );
 }
+
+const DURATION: Kind = Kind::Quantity {
+    dimension: Dimension::Duration,
+    min: 0,
+    keywords: &[],
+};
+
+#[test]
+fn a_duration_is_an_integer_and_an_ig6_unit() {
+    assert_eq!(
+        DURATION.parse_text("5min"),
+        Ok(Value::Duration(std::time::Duration::from_secs(5 * 60)))
+    );
+    assert_eq!(
+        DURATION.parse_text("30s"),
+        Ok(Value::Duration(std::time::Duration::from_secs(30)))
+    );
+    assert_eq!(code(DURATION.parse_text("5m")), Code::ValueUnit);
+}
+
+#[test]
+fn a_hash_is_64_hexadecimal_characters() {
+    let hex = "ab".repeat(32);
+    assert_eq!(Kind::Hash.parse_text(&hex), Ok(Value::Hash(hex.clone())));
+    assert_eq!(
+        Kind::Hash.parse_text(&hex.to_ascii_uppercase()),
+        Ok(Value::Hash(hex))
+    );
+    assert_eq!(code(Kind::Hash.parse_text("abcd")), Code::ValueSyntax);
+    assert_eq!(
+        code(Kind::Hash.parse_text(&"z".repeat(64))),
+        Code::ValueSyntax
+    );
+}

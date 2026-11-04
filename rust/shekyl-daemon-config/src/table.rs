@@ -286,8 +286,6 @@ const ROWS: &[Row] = &[
     rejected("prune-blockchain", NO_LOCAL_PRUNING),
     rejected("sync-pruned-blocks", NO_PRUNED_SYNC_FLAG),
     rejected("max-connections-per-ip", "no per-host inbound cap: a host is not an operator, and the measured inbound adversary opens one edge per victim (SHEKYL_P2P_PROTOCOL.md PWD-I7)"),
-    // Session
-    public("console", Kind::Switch, Default::Unset, Surface::Cli, "Run the interactive console."),
     // Development levers that were environment variables (IG-8)
     dev("dev-pow-seed-epoch-blocks", COUNT, Default::Unset, REGTEST, "The RandomX seed epoch length, in blocks."),
     dev("dev-pow-seed-epoch-lag", COUNT, Default::Unset, REGTEST, "The RandomX seed epoch lag, in blocks."),
@@ -409,13 +407,13 @@ mod tests {
         assert_eq!(TABLE.defects(), Vec::<String>::new());
     }
 
-    /// `INPUT_GRAMMAR.md` §5 counts 50 live names, the four environment
+    /// `INPUT_GRAMMAR.md` §5 counts 49 live names, the four environment
     /// levers among them. A row added or removed without the grammar fails
     /// here first.
     #[test]
     fn the_live_count_is_the_grammars() {
         let live = TABLE.rows.iter().filter(|r| r.is_live()).count();
-        assert_eq!(live, 50);
+        assert_eq!(live, 49);
         let levers = TABLE
             .rows
             .iter()
@@ -474,14 +472,7 @@ mod tests {
                 assert_eq!(r.surface, Surface::File, "{}", r.name);
             }
         }
-        for name in [
-            "help",
-            "version",
-            "config-verify",
-            "network",
-            "config-file",
-            "console",
-        ] {
+        for name in ["help", "version", "config-verify", "network", "config-file"] {
             assert_eq!(TABLE.row(name).unwrap().surface, Surface::Cli, "{name}");
         }
     }

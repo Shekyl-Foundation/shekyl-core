@@ -48,7 +48,7 @@ public:
   Daemon(Daemon &&);
   Daemon & operator=(Daemon &&);
 
-  bool run(bool interactive = false);
+  bool run();
 
 private:
   friend void request_stop();
@@ -71,8 +71,8 @@ void request_stop();
 // that header is the Rust exports C++ imports, and these go the other way.
 extern "C" {
 
-/// `run`: checks the snapshot and its field count, runs the client command
-/// or constructs and runs the daemon, and returns the exit status.
+/// `run`: checks the snapshot and its field count, constructs and runs the
+/// daemon, and returns the exit status.
 /// `noexcept`: every C++ exception is caught inside it.
 int shekyl_remnant_run(const ShekylDaemonSnapshot* snapshot) noexcept;
 

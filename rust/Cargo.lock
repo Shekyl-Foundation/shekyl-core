@@ -4122,23 +4122,37 @@ dependencies = [
 name = "shekyl-cli"
 version = "3.1.0"
 dependencies = [
+ "base64",
  "clap",
  "dirs",
+ "hex",
  "proptest",
  "rpassword",
  "rustyline",
  "serde",
  "serde_json",
+ "shekyl-address",
  "shekyl-crypto-pq",
+ "shekyl-daemon-config",
+ "shekyl-daemon-rpc",
+ "shekyl-economics",
+ "shekyl-engine-core",
+ "shekyl-engine-file",
+ "shekyl-engine-prefs",
  "shekyl-logging",
+ "shekyl-options",
+ "shekyl-peerlist",
+ "shekyl-rpc-client",
  "shekyl-rpc-transport",
  "shekyl-rpc-types",
  "shekyl-shard-visual",
+ "shekyl-tor-control-client",
  "shekyl-types",
  "shekyl-units",
  "shekyl-version",
  "shekyl-wallet-rpc",
  "shekyl-win-sec",
+ "shekyl-wire",
  "tempfile",
  "time",
  "tokio",
@@ -4319,16 +4333,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "shekyl-daemon-ctl"
-version = "3.1.0"
-dependencies = [
- "serde_json",
- "shekyl-rpc-client",
- "shekyl-rpc-transport",
- "tokio",
-]
-
-[[package]]
 name = "shekyl-daemon-rpc"
 version = "3.1.0"
 dependencies = [
@@ -4354,7 +4358,6 @@ dependencies = [
  "shekyl-curve-io",
  "shekyl-curve-tree",
  "shekyl-daemon-config",
- "shekyl-daemon-ctl",
  "shekyl-difficulty",
  "shekyl-economics",
  "shekyl-fcmp",
@@ -4684,7 +4687,6 @@ dependencies = [
  "shekyl-curve-primitives",
  "shekyl-curve-tree",
  "shekyl-daemon-config",
- "shekyl-daemon-ctl",
  "shekyl-dialer",
  "shekyl-difficulty",
  "shekyl-draw-rng",
@@ -5266,8 +5268,11 @@ dependencies = [
  "hyper",
  "hyper-rustls",
  "hyper-util",
+ "serde",
+ "serde_json",
  "shekyl-address",
  "shekyl-rpc-client",
+ "shekyl-rpc-types",
  "shekyl-socks",
  "tokio",
  "tower-service",
@@ -5282,6 +5287,7 @@ dependencies = [
  "serde",
  "serde_json",
  "sha2",
+ "shekyl-address",
  "shekyl-portable-storage",
  "shekyl-rpc-grants",
  "shekyl-units",

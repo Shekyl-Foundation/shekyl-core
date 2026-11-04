@@ -20,39 +20,13 @@
 
 use shekyl_rpc_types::{GetInfoResponse, RestErrorEnvelope};
 
-use super::Source;
-use crate::info::Disclosure;
+use crate::daemon::DaemonClient;
 
-/// One `get_info`, on whichever arm the console is running.
-///
-/// In-process, the method is called directly. The operator at the daemon's
-/// own console is the host's administrator, so the disclosure is
-/// [`Disclosure::FULL`]. There is no transport on that arm and so no
-/// connection count to pass; no console command reads
-/// `rpc_connections_count`, and `0` here is "not counted", not a count.
-///
-/// Remote, it is one `POST /get_info` to whichever listener the operator
-/// named, which answers with what that listener discloses.
-pub(super) fn fetch_get_info(src: &Source) -> Result<GetInfoResponse, String> {
-    let reply = match src {
-        Source::Live(_) => {
-            let chain =
-                crate::handles::live_chain().ok_or_else(|| "the node is not open".to_owned())?;
-            crate::info::get_info(chain.as_info_facts(), Disclosure::FULL, 0).map_err(|fault| {
-                match fault {
-                    // Said in full: the operator at the console is the one who
-                    // has to act on a store that contradicts itself.
-                    crate::methods::RpcFault::Store(store) => store.to_string(),
-                    other => format!("{other:?}"),
-                }
-            })?
-        }
-        Source::Remote { .. } => {
-            let raw = src.post_remote("/get_info", b"{}".to_vec())?;
-            return decode_get_info_ok(&raw);
-        }
-    };
-    ok_or_status(reply)
+/// One `POST /get_info` to the daemon the operator named. The listener
+/// answers with what that listener discloses.
+pub(super) fn fetch_get_info(daemon: &DaemonClient) -> Result<GetInfoResponse, String> {
+    let raw = super::rest_post(daemon, "/get_info", b"{}".to_vec())?;
+    decode_get_info_ok(&raw)
 }
 
 /// A `/get_info` body decoded strictly, refused unless its status is OK.

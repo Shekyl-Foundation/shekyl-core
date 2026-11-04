@@ -103,7 +103,7 @@ A row narrows its kind with a constraint stated in the row and enforced by its c
 
 **IG-11 Diagnostics.** Every refusal is a typed value: a stable code (`config.value.range`, `config.file.permissions`, …), the option, the source (`cli`, `file:path:line`, `default`, `runtime`) and named parameters. One renderer turns it into the English message, which states what was wrong, where, and what to do (rule 82). Machine output and logs carry the code. A configuration refusal exits with status 2; a runtime failure with 1.
 
-**IG-12 Runtime changes share the constructor.** A value that can also change while running (rates, log level and categories, mining) is marked runtime in its row (IG-9) and is built by the same constructor on both surfaces, with the same refusals. `option set <name> <value>` changes it: it refuses a row not marked runtime with a typed code, requires the `node` grant, and never writes the file. `option show [<name>]` reports each value with its source (`default`, `file`, `cli`, `runtime`) and returns each row whose grant (IG-9) the caller holds; a row the caller may not see is absent, never emptied, and a secret's value is shown under no grant, only whether it is set. Every runtime row's default is writable as a value (`unlimited`, `none`), so `option set` returns a row to its default without a restart; what `option show` prints is valid input to `option set` and builds the same value; and no row is both runtime and a secret, which the gate asserts (RPC_CHANNEL §6.4, RT-O25, RT-O27). Mining changes while running through `mine start` and `mine stop` instead, which build `mine-address` and `mine-threads` through their constructors, so those rows are not marked runtime. The live value is owned by its subsystem. No binary ever writes its own config file.
+**IG-12 Runtime changes share the constructor.** A value that can also change while running (rates, log level and categories, mining) is marked runtime in its row (IG-9) and is built by the same constructor on both surfaces, with the same refusals. `option set <name> <value>` changes it: it refuses a row not marked runtime with a typed code, requires the `node` grant, and never writes the file. `option show [<name>]` reports each value with its source (`default`, `file`, `cli`, `runtime`) and returns each row whose grant (IG-9) the caller holds; a row the caller may not see is absent, never emptied, and a secret's value is shown under no grant, only whether it is set. Every runtime row's default is writable as a value (`unlimited`, `none`), so `option set` returns a row to its default without a restart; what `option show` prints is valid input to `option set` and builds the same value; and no row is both runtime and a secret, which the gate asserts (RPC_CHANNEL §6.4, RT-O25, RT-O27). Mining changes while running through `mine start` and `mine stop` instead, which build `mine-threads` through its constructor, so that row is not marked runtime. `mine-address` is the config row, not an argument of `mine start`, and is not marked runtime either. The live value is owned by its subsystem. No binary ever writes its own config file.
 
 **IG-13 Inputs come from the table, and nowhere else.** No option value comes from the environment. Default paths come from the operating system's account and known-folder interfaces, never from `HOME`, `XDG_*` or `%APPDATA%`. Each binary's per-account root is the passwd entry's home plus `.shekyl` on Linux, FreeBSD and macOS, and `SHGetKnownFolderPath(FOLDERID_LocalAppData)` plus `Shekyl` on Windows, never Roaming AppData, which copies the wallet and its config to domain servers (rule 36); a run-as-user daemon's data and log defaults, the wallet directory and the wallet binaries' config files sit under it. On Windows the daemon's run mode selects its root, and every default path it derives (`config-file`, `data-dir`, `log-file`) sits under that root: run-as-user uses the per-account root and `service` (IG-Q36) uses `%ProgramData%\shekyl\`, which only the installer creates (owner and ACL: Administrators, SYSTEM and the service account); the daemon never creates the machine-wide root, and one that is missing, mis-owned or writable by others refuses with a typed code. On Linux, FreeBSD and macOS the daemon has one run mode (`service` is refused there): its config file is R2's `/etc/shekyl/`, and its data and log defaults sit under the per-account root. The only environment reads permitted are presentation-only (terminal capabilities that change rendering, never a value). Every resolved default path appears in the startup line with its source. A service account whose passwd home is unset or `/nonexistent` has no default paths: the packaging sets the account's home or the unit passes `--data-dir` and `--log-file` (the shipped unit does both, IG-F10).
 
@@ -171,7 +171,6 @@ A term listed under two parents is one term. Part B's terms are §11; a parent a
 | cors | rpc | cross-origin resource sharing | |
 | origin | cors | an allowed origin | |
 | connections | rpc, peer | concurrent connections; under `peer`, *view* — the live peer connections | peer:view |
-| console | — | the daemon's interactive console (interim; R8) | |
 | dev | — | a development lever (IG-8) | |
 | encrypt | clearnet | the pre-flip clearnet encryption switch | |
 | relay | dev, tx | transaction relay (Dandelion++); under `tx`, *verb* — relay a transaction | tx:verb |
@@ -279,7 +278,7 @@ Legend — **R** rename or fold (no trace), **K** kept as is, **X** REJECTED row
 | `reorg-notify` | `notify-reorg` | command | unset | file |  |  | R (IG-Q5); placeholders `{split-height}` (the last block both chains share), `{height}` (the new tip), `{added}` (blocks in the new chain), `{removed}` (blocks discarded) |
 | `block-rate-notify` | `notify-block-rate` | command | unset | file |  |  | R (IG-Q5); placeholders `{window}` (the window in seconds), `{observed}`, `{expected}` |
 | — | `mine` | `on` / `off` | `off` | both |  |  | R (IG-Q21, amended 2026-11-02); `on` starts the miner once the node has opened, to `mine-address`, with `mine-threads`; `on` with no `mine-address` is refused at parse naming `mine-address` (IG-11, exit 2) |
-| `start-mining` | `mine-address` | address | unset | both |  |  | R (IG-Q21, amended 2026-11-02); the address the miner pays; it starts nothing by itself; `mine start` builds it while running (IG-12); the effective-configuration line shows it shortened to its first and last eight characters, `option show` the whole value under its grant |
+| `start-mining` | `mine-address` | address | unset | both |  |  | R (IG-Q21, amended 2026-11-02); the address the miner pays; it is the config row and starts nothing by itself; the effective-configuration line shows it shortened to its first and last eight characters, `option show` the whole value under its grant |
 | `mining-threads` | `mine-threads` | integer ≥ 1, or `auto` | `auto` | both |  |  | R (IG-Q21); the node's thread count for the start-time miner and for a `start_mining` that names none; a count above the host's parallelism is refused by the configuration check (exit 2); `mine start` builds it while running (IG-12); one default for starting the miner on every surface: `shekyl-cli mine start` with no count is `auto` (`grammar.rs:539-540`); the miner's owner defines `auto` once |
 | `bg-mining-*` (5) | — | | | |  |  | X (Monero background mining) |
 
@@ -295,13 +294,6 @@ Legend — **R** rename or fold (no trace), **K** kept as is, **X** REJECTED row
 | — | `dev-rpc` | switch | off | both |  |  | N; testnet, stagenet, regtest (IG-8, IG-Q49: never mainnet); serves the armed test levers (`generateblocks`, `pop_blocks`, and on regtest only `inject_archival_serve_credit`; RT-O9.2, `RPC_CHANNEL.md` §6.1) to the host's administrator, refused outside the grant while off (`DRS_X_STORE_FLIP.md` DX-Q3, Q8) |
 | `disable-rpc-ban` | — | | | |  |  | – (R5; the scorer it switches has no caller, IG-F9) |
 | `rpc-response-soft-limit` | — | | | |  |  | – (response limits belong to the RPC resource policy, IG-Q12) |
-
-### Session (interim, until `shekyl-cli` serves the console — R8)
-
-| Today | New | Kind | Default | Surface | Runtime | Grant | Notes |
-|---|---|---|---|---|---|---|---|
-| `non-interactive` | `console` | switch | off | CLI |  |  | R (IG-Q8); deleted with the console |
-| `daemon_command` (positional) | unchanged | | | |  |  | moves to `shekyl-cli` (Part B) |
 
 ### Environment levers (regtest only, IG-8)
 
@@ -331,7 +323,7 @@ Criterion: a REJECTED row exists for a capability a user could reasonably ask fo
 
 The `removed_flags` shim, its FOLLOWUPS sunset row, and its C++ tests go with the cutover; the X rows live in the Rust table.
 
-**Count:** 83 registered options and 4 environment levers today, plus PR-3's `p2p-disclose-early`, DRS-X's `dev-rpc` and Part D's `config-verify`; 50 live names after, the four environment levers among them (`rpc-listen` arrives at RT-W10 and `rpc-admin-listen` becomes an X row at RT-W12, RT-O33; 50 between the two; `txpool-weight-max` became an X row with IG-Q11; `mine` arrived with IG-Q21's 2026-11-02 amendment).
+**Count:** 83 registered options and 4 environment levers today, plus PR-3's `p2p-disclose-early`, DRS-X's `dev-rpc` and Part D's `config-verify`; 49 live names, the four environment levers among them (`rpc-listen` arrives at RT-W10 and `rpc-admin-listen` becomes an X row at RT-W12, RT-O33; 49 between the two; `txpool-weight-max` became an X row with IG-Q11; `mine` arrived with IG-Q21's 2026-11-02 amendment; `console` left with the C++ console, 2026-11-03).
 
 ---
 
@@ -376,7 +368,7 @@ The `removed_flags` shim, its FOLLOWUPS sunset row, and its C++ tests go with th
 
 **IG-Q7 — `max-concurrency` — RULED 2026-10-13.** A cap on one C++ thread pool (`util.cpp:861`), a macOS workaround. Removed; concurrency belongs to the thread-budget work.
 
-**IG-Q8 — the interim console — RULED 2026-10-13.** Every service unit and the GUI pass `--non-interactive`. No console unless `--console` is given, until R8 deletes it.
+**IG-Q8 — the interim console — RULED 2026-10-13; deleted 2026-11-03.** The switch `console` and the bare command words are gone with the C++ console. A bare word on `shekyld` is `config.cli.syntax` and names the token. Daemon commands are `shekyl-cli` words.
 
 **IG-Q9 — absolute paths only — RULED 2026-10-13.** On both surfaces.
 
@@ -581,7 +573,7 @@ A command's last term is a verb or a view, and a command that changes state ends
 | `version`, `help [command]` | same | | | K |
 | `exit` (synonym `quit`) | `exit` | | | R (IG-Q30): `quit` goes |
 | `tx list [--in \| --out] [--unmatched]` | `tx list` | | `--direction in\|out`; `--unmatched` | R (IG-Q22) |
-| `tx show <id>` | same | hash | `--body` | K; `--body` prints the transaction's serialized bytes, kind `bytes` (RW-Q4) |
+| `tx show <id>` | same | hash | `--body` | K (Rick, 2026-11-03): one report of transaction `<id>`. An open wallet that holds the id is the report, and the daemon is not asked. Otherwise the report is the daemon's view. `--body` fetches the serialized bytes from the daemon (kind `bytes`, RW-Q4). If neither source knows the id, the refusal names both |
 | `tx note <txid> [<text...>]` | `tx note <id>`, `tx note set <id> <text>` | hash; hash, text | | R (IG-Q34): `tx note` is a view; `tx note set` with empty text clears the note |
 | `tx abandon <txid>` | same | hash | | K |
 | — | `tx decode <body>` | bytes (a transaction's serialized bytes) | | N (IG-Q26, RW-Q4): decodes with the Rust codecs; `shekyl-utils-deserialize` then goes |
@@ -622,7 +614,7 @@ A command's last term is a verb or a view, and a command that changes state ends
 
 ## 13. The daemon console
 
-The catalog the Rust console and `shekyl-cli` serve (IG-Q25). The interim C++ console (`src/daemon/command_server.cpp`) is not renamed and is deleted with R8 (DC-N2).
+The catalog `shekyl-cli` serves (IG-Q25). The C++ console is deleted (R8, DC-N2, 2026-11-03). These words are the shell's.
 
 | Today | New | Positionals / flags | Notes |
 |---|---|---|---|
@@ -636,14 +628,14 @@ The catalog the Rust console and `shekyl-cli` serve (IG-Q25). The interim C++ co
 | `is_key_image_spent <ki>` | `chain spent <key-image>` | hash | |
 | `pop_blocks <n>` | — | | –: no grammar successor; it is an armed test lever (RPC_CHANNEL RT-O9.2, §6.4) |
 | `print_block <hash\|height>` | `block show <hash\|height>` | hash or integer | |
-| `print_tx <hash> [+hex]` | `tx show <id>` | hash; `--body`; `--json` is the session's | shares the wallet's word; `+json` went with epee's rendering (IG-Q55) |
+| `print_tx <hash> [+hex]` | `tx show <id>` | hash; `--body`; `--json` is the session's | One report (Rick, 2026-11-03): the open wallet's record when it holds the id, and the daemon is not asked; otherwise the daemon's view. `--body` fetches the bytes from the daemon. If neither source knows the id, the refusal names both. `+json` went with epee's rendering (IG-Q55) |
 | `relay_tx <txid>` | `tx relay <id>` | hash | |
 | `print_pool`, `print_pool_sh`, `print_pool_stats`, `flush_txpool [txid]` | `txpool list [--short]`, `txpool stats`, `txpool flush [id]` | | |
 | `print_pl [white] [gray] [limit]`, `print_pl_stats`, `print_cn`, `print_net_stats` | `peer list [--white] [--gray] [--max N]`, `peer stats`, `peer connections`, `p2p stats` | | |
 | `limit [kB/s]`, `limit_up`, `limit_down`, `set_log <level\|categories>` | `option set <name> <value>`, `option show [<name>]` | an option name; a value of that row's kind | IG-12: `option set` takes only the rows §5 marks runtime, needs the `node` grant, and never writes the file; `option show` reports each source and returns each row whose grant the caller holds (§5's Grant column); `limit` (both rates at once) is one option per value and goes |
 | `out_peers <n>`, `in_peers <n>` | — | | – (each option is an X row, §5) |
 | `bans`, `ban <ip\|@file> [secs]`, `unban <ip>`, `banned <ip>` | `ban list`, `ban add <ip> [--duration <quantity>]`, `ban remove <ip>`, `ban show <ip>` | an IP; a file is `p2p-ban-file` | |
-| `start_mining <addr> [threads\|auto] [bg] [battery]`, `stop_mining`, `mining_status`, `show_hr`, `hide_hr` | `mine start <address> [threads\|auto]`, `mine stop`, `mine status` | address; integer or `auto` | builds `mine-address` and `mine-threads` (IG-12); the background arguments go with `bg-mining-*` (§5); the hash rate is in `mine status` |
+| `start_mining <addr> [threads\|auto] [bg] [battery]`, `stop_mining`, `mining_status`, `show_hr`, `hide_hr` | `mine start [threads\|auto]`, `mine stop`, `mine status` | integer or `auto` | builds `mine-threads` while running (IG-12); `mine-address` is the config row; the background arguments go with `bg-mining-*` (§5); the hash rate is in `mine status` |
 | `status`, `print_status`, `sync_info` | `daemon status`, `sync status` | | `print_status` is a duplicate of `status` (IG-Q33) |
 | `stop_daemon`, `exit` | `daemon stop` | | IG-Q33: no bare word in the shared shell stops the daemon |
 | `save`, `flush_cache [bad-txs] [bad-blocks]` | — | | –: LMDB and C++ cache internals |
@@ -1246,7 +1238,7 @@ Each carries its recommendation, ruled as recommended on 2026-10-22 (Rick). The 
 **IG-Q58 — the check's name — RULED 2026-10-22.** *Recommended:* `config-verify`, a command-line-only switch (IG-7, beside `help` and `version`), off by default, public. It walks `config` → `verify`: §11's `verify` already means "check a claim against its source", and here the claim is the configuration and the source is the table. When this is ruled, the same edit adds the parent `config` and extends that one sentence to cover it (Kind `config:verb`). `config-check` would widen §11's `check`, which means "check a proof".
 
 **IG-Q59 — what it does — RULED 2026-10-22.** *Recommended:* one walk, called from `shekyl-daemon`'s `run` (`verify.rs`), in start's order. `config-verify` runs the walk and exits. Start runs the same walk and, on acceptance, performs the effects the walk withheld. `--help` and `--version` still win, before the file is read. Every other flag is read as start reads it.
-- **The walk.** `load`, unchanged: the choosers, the file under the permission walk, `read_file`, `resolve` and `build`. A client invocation stops here, as start does. Otherwise, in order, stopping at the first refusal and printing that stage's whole vector, as `refuse` does: whether the account can create the data directory and open the lock file; whether the host has a network id (exit 1, the same `tell` as start); the marker read; whether the account can create the log directory and open the log file; the pure owner checks; the Tor pin read. Each pure function lives beside the effect it was split from, and the effect's function calls the pure half, so the decision is not written twice. `shekyl-daemon-config` does not gain a dependency on the owner latches.
+- **The walk.** `load`, unchanged: the choosers, the file under the permission walk, `read_file`, `resolve` and `build`. A client invocation used to stop here; that mode was deleted with the console (2026-11-03), so every start continues. Then, in order, stopping at the first refusal and printing that stage's whole vector, as `refuse` does: whether the account can create the data directory and open the lock file; whether the host has a network id (exit 1, the same `tell` as start); the marker read; whether the account can create the log directory and open the log file; the pure owner checks; the Tor pin read. Each pure function lives beside the effect it was split from, and the effect's function calls the pure half, so the decision is not written twice. `shekyl-daemon-config` does not gain a dependency on the owner latches.
 - **The splits (IG-F15).** `Lock::take` and `log_location_writable` gain a creatability half that does not create, open or lock; start calls it and then creates. `marker::check_or_write` gains a read that does not write: absent when the directory is missing, or when the directory holds no marker and no store; matched; or the refusal start already returns (`config.marker.network`, `config.marker.network-id`, `config.marker.missing`, `config.marker.unreadable`). Verify calls the read. Start takes the lock, calls the read, and writes only when the read is absent. The lock stays the proof of the write, and start rechecks under it. `record_seed_epoch` and `arm_settlement_schedule` gain a pure check of the value. The walk calls that check. The record functions call it and then latch. The walk does not observe `Latched`.
 - **Left on start.** Creating the directory, the lock file, the marker and the log file. `network::record`. Logging. Signals, the runtime, binds, the store, and anything sent. `tor::begin`'s spawn and bootstrap. The pin half is `discover_and_verify` / `discover_and_verify_at`. The walk classifies that error as the supervisor's pin does (`BundleMissing`, `Unavailable`, `PinRefused`) and warns with that cause's posture sentence; a missed discovery names the paths it searched, and the held sentence is the posture's for a link that is not up, with clearnet read from the connector. TB-2 does not turn that warning into a refusal ([`TOR_BUNDLE_DISTRIBUTION.md`](TOR_BUNDLE_DISTRIBUTION.md); the posture table in [`TOR_SUPERVISOR.md`](TOR_SUPERVISOR.md)).
 - **Outside the verdict.** A port in use, Tor's bootstrap, disk space, mandatory-access policy (SELinux, AppArmor), and a held data-directory lock. Those are contention or the running service. The check takes no lock, so it can run while the daemon is up. Exit 0 says nothing about them.

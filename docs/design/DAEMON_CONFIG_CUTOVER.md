@@ -167,19 +167,10 @@ What crosses the FFI after the cutover, and nothing else:
    binary's entry runs `lang_start`, so `args_os` agrees with the process
    argv on every target, the stack-overflow guard is installed, and
    RT-16's SCM dispatcher has its process entry.
-   **Client mode.** When positional command words are given, `shekyld` is a
-   client of a daemon that is already running, as the remnant's client branch
-   in `shekyl_remnant_run` (`src/daemon/daemon.cpp`) is
-   today: it takes no lock, checks no marker, creates no data directory,
-   writes no log file and makes no announcement. Rust logs to standard
-   error only, fills a snapshot holding the words, the network and the
-   first `rpc-admin-listen` endpoint, and calls the remnant's
-   `run(snapshot)`, which runs the C++ console client against that endpoint
-   (its transport is already Rust's: `rust/shekyl-daemon-ctl`,
-   `rust/shekyl-daemon-rpc/src/console/mod.rs`) and returns its status. A command with
-   `rpc-admin-listen = none` has no daemon to reach and is refused at parse
-   with a typed code naming the option. Steps 3 onward are for a daemon
-   start only. Client mode dies with the C++ console (R8, DC-N2).
+   **Client mode — deleted 2026-11-03 (R8, DC-N2).** A positional word used
+   to make `shekyld` a client of a running daemon. That path is gone. A
+   positional word is refused at parse, before the daemon loads. The words
+   live on `shekyl-cli` (`INPUT_GRAMMAR.md` §13).
    **The walk, and the configuration check** (`INPUT_GRAMMAR.md` IG-Q58…
    IG-Q62). Before step 3 creates anything, Rust walks every refusal steps
    3 to 6 make, with nothing created, locked or latched: whether the
@@ -494,8 +485,9 @@ supplies, with no FFI (RT-O26):
   under it. Each applied set writes one audit line: the caller, each row,
   its old and new value. A table gate holds that no row is both runtime
   and secret (RT-O27).
-- **`mine start` and `mine stop`** build `mine-address` and `mine-threads`
-  through their constructors and act on the running node; `mine = on`
+- **`mine start` and `mine stop`** build `mine-threads` through its
+  constructor and act on the running node. `mine-address` is the config
+  row, not an argument of `mine start`. `mine = on`
   (IG-Q21's 2026-11-02 amendment) is the row that starts the miner at
   open, and a restart returns to the configuration.
 
@@ -528,13 +520,10 @@ cutover replaces their callers.
 
 | Field | Reader (verified at the Rust-binary PR, DC-F25; `data_dir` deleted 2026-11-02) | From |
 | --- | --- | --- |
-| the network | core (`cryptonote_core.cpp`), the p2p server (`net_node.inl`), the remnant's `run` (the console client) | `network` |
+| the network | core (`cryptonote_core.cpp`), the p2p server (`net_node.inl`) | `network` |
 | offline, derived from both connectors being off | the p2p server (`src/p2p/net_node.inl`) | `clearnet`, `tor` (IG-Q3) |
-| console on or off | the remnant's `run` | `console` |
-| the console's command words | the remnant's `run` (the console client) | the positional words; empty for a daemon start |
-| the console's RPC endpoint | the remnant's `run` (the console client) | the first `rpc-admin-listen` endpoint when it is IPv4: four octets in network order and a port, present only in client mode. A client whose endpoint is not IPv4 is refused at parse (`config.value.range`). Absence of any admin endpoint is refused at parse (§2.2) |
 
-**Five fields** (DC-Q19's deletion list). **The gate compares the
+**Two fields** (the three console fields left with the C++ console, 2026-11-03). **The gate compares the
 structure against its readers, not against a number:**
 `scripts/ci/check_snapshot_readers.py` finds a read of every member under
 `src/` through a variable of the snapshot's type, holds the two pinned
@@ -615,7 +604,7 @@ kinds and defaults are `INPUT_GRAMMAR.md` §5's and are not restated. The
 | notify | the Rust runner (DC-Q14) | three commands, each an argument array with its named placeholders | `block-notify`, `reorg-notify`, `block-rate-notify` |
 | mine | the miner, through the snapshot | the address and the thread count | `start-mining`, `mining-threads`, the five `bg-mining-*` |
 | dev | each lever's owner | the levers of `INPUT_GRAMMAR.md` §5, each accepted only on the networks its row names, never on mainnet (IG-8) | `fixed-difficulty`, `no-sync`, `clearnet-transport-encrypt`, `carrier-development`, the four environment levers |
-| session | the C++ console, through the snapshot, until R8 | console on or off, the command words | `non-interactive`, `daemon_command` |
+| session | `shekyl-daemon` | whether this start only checks the configuration (`config-verify`) | `non-interactive`, `daemon_command` (deleted with the console, 2026-11-03) |
 
 In no section, because nothing is configured: `keep-fakechain` (no wipe),
 `max-concurrency` (IG-Q7), the three test levers, `show-time-stats`.
@@ -957,7 +946,7 @@ chain-sync lanes do not touch the option surface.
 | Carry | Target |
 | --- | --- |
 | DC-F1, the genesis-at-open check on a store's contents (no longer a blocker) | [`DAEMON_REDB_STORE.md`](DAEMON_REDB_STORE.md) |
-| DC-N2, the console moves to `shekyl-cli` | RT-15, [`RPC_CHANNEL.md`](RPC_CHANNEL.md) |
+| DC-N2, the console moves to `shekyl-cli` — LANDED 2026-11-03 (PR #1259) | [`INPUT_GRAMMAR.md`](INPUT_GRAMMAR.md) §13 |
 | the blockchain utilities' option sets | IG Part B; this brief §9 |
 | the inherited default of `rpc-connections-max` (IG-Q12) | RT-O9.4, [`RPC_CHANNEL.md`](RPC_CHANNEL.md) |
 | the `removed_flags` shim sunset | this brief §4; the row leaves with the files |
@@ -1006,7 +995,7 @@ review of that run, 2026-11-02, and fixed in it).
 | DC-F23 | The hardening flag list was a claim, not a reading. `LD_SECURITY_FLAGS` and `STATIC_FLAGS` are set in the root `CMakeLists.txt` and reached the C++ executables through `CMAKE_EXE_LINKER_FLAGS`, which a Corrosion-imported target does not read; no gate read PIE, RELRO, `BIND_NOW`, the stack flag or the PE characteristics off a built binary | absorbed by DC-Q21: the flags reach rustc through `corrosion_add_target_local_rustflags`, and `check_binary_hardening.sh` reads them off every staged binary in `build.yml` and `depends.yml` |
 | DC-F24 | `SHEKYL_PROTOCOL_VERSION` in `src/cryptonote_config.h` had one C++ reader, `main.cpp`'s banner; `SHEKYL_RELEASE_NAME` was a literal in `src/version.cpp.in`, outside `cmake/Version.cmake` | absorbed by DC-Q20 |
 | DC-F25 | Five snapshot fields had no C++ reader: `fixed_difficulty`, `txpool_weight_max`, `mine_address`, `mine_threads` (the Rust miner reads `mine-address` from the configuration itself) and `data_dir` (the chain is the Rust store; core opens no LMDB). The count gate pinned a number and could not see a reader leave. Of the grammar rows named beside them, `txpool-weight-max` is a REJECTED row (IG-Q11), `mine-threads` is read by the node's miner, and `dev-difficulty` is read by `rust/shekyl-node/src/lib.rs`'s `rules_of` into `ChainRules::new` | absorbed by DC-Q19's deletion list: the five fields are deleted and `check_snapshot_readers.py` holds the structure to its readers; the three rows stay |
-| DC-F26 | Retiring the daemon image took `shekyl_daemon_ctl_*` out of `unit_tests`' link: the C++ test reached those exports through the image, and the exports lived in `shekyl-daemon-rpc`, which `shekyl-ffi` did not link | fixed in the Rust-binary PR: the exports are their own crate, `rust/shekyl-daemon-ctl`, which `shekyl-ffi` re-exports; the server stays out of the archive (DC-F30). Accepted 2026-11-02; the crate leaves with the C++ console (R8) |
+| DC-F26 | Retiring the daemon image took `shekyl_daemon_ctl_*` out of `unit_tests`' link: the C++ test reached those exports through the image, and the exports lived in `shekyl-daemon-rpc`, which `shekyl-ffi` did not link | fixed in the Rust-binary PR: the exports are their own crate, `rust/shekyl-daemon-ctl`, which `shekyl-ffi` re-exports; the server stays out of the archive (DC-F30). Accepted 2026-11-02; the crate left with the C++ console (2026-11-03) |
 | DC-F27 | The measurement behind DC-F17: with `stack_trace.cpp` in `libcommon`, a refused RPC bind on the Rust `shekyld` printed nine `[stacktrace]` frames to standard error past the Rust log sink; the `--wrap=__cxa_throw` link flag was not the only path to the hook | fixed in the Rust-binary PR with DC-F17: the hook, its library, `enable_stack_trace`, its unit test and libunwind are deleted; `util.cpp`'s `setup_crash_dump`, dead once `on_startup` went, is deleted with them (DC-Q19's deletion list, 2026-11-02) |
 | DC-F28 | The C++ daemon's CMake target was named `daemon` (`shekyl_add_executable(daemon …)`, `OUTPUT_NAME shekyld`); `corrosion_import_crate` names the Rust binary's build target `cargo-build_shekyld` and `shekyld` is its IMPORTED target with no build step, so `cmake --build … --target daemon` (and `--target shekyld`) is refused. Six live sites still named the old target after §3's rename: the nightly full-parity job of `.github/workflows/randomx-v2-differential.yml`, three recipes in `docs/COMPILING_DEBUGGING_TESTING.md`, the `SHEKYLD_BIN` hint in `rust/shekyl-engine-core/src/engine/regtest_e2e.rs`, `check_randomx_symbol_isolation.sh`'s FATAL line, and `rust/shekyld/build.rs`'s own warning (which named `shekyld`). Found by the §4 acceptance builds (the old spelling failed on every host) | fixed in the Rust-binary PR: every live site names `cargo-build_shekyld`; `git grep -E -- '--target[ =]+(daemon\|shekyld)\b'` outside `docs/completed`, the CHANGELOG and the audit trail → 0 |
 | DC-F29 | `--undefined-glob` is lld's. `shekyl_rust_link_cxx_closure` passed `-Wl,--undefined-glob=shekyl_*` for every non-MSVC, non-Apple target; GNU ld (binutils) has no such option, and the depends x86_64 Linux leg failed linking `shekyld` with `unrecognized option`. The local x86_64 Linux build passed because rustc ≥ 1.90 links `x86_64-unknown-linux-gnu` with rust-lld by default; FreeBSD's system linker is lld; the Pi's (binutils 2.46), the depends containers' and MinGW's is GNU ld. Found by the PR's own depends run | fixed in the Rust-binary PR: `cmake/RustLinkUndefined.cmake` lists, with nm over the C++ closure's built archives, every `shekyl_*` symbol they leave undefined, writes one `--undefined=<symbol>` per line to `<build>/shekyld-undefined.rsp` (regenerated when an archive changes; FATAL on an empty list, rule 47), and `shekyl_rust_link_cxx_closure` passes `-Clink-arg=-Wl,@<rsp>`; both ld and lld read it. The nm-candidate resolution is `shekyl_nm_candidates` in `cmake/BuildRust.cmake`, shared with the dispatcher gate. Falsifier: `rg -n 'link-arg=-Wl,--undefined-glob' cmake` → 0 and the depends x86_64 Linux leg links `shekyld` |

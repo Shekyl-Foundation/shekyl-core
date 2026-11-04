@@ -7,7 +7,7 @@
 //! (`DAEMON_CONFIG_CUTOVER.md` §2.9), and the snapshot export the C++ test
 //! binaries and the blockchain importer construct their core from.
 //!
-//! **Five fields** (§2.9). [`SNAPSHOT_FIELDS`] pins the count and
+//! **Two fields** (§2.9). [`SNAPSHOT_FIELDS`] pins the count and
 //! [`shekyl_daemon_snapshot_field_count`] exports it for the C++ to assert;
 //! `scripts/ci/check_snapshot_readers.py` holds every field to a C++ reader
 //! under `src/`, with no exemption: a field whose reader moved into Rust
@@ -30,41 +30,20 @@
 //! marker and starting no logging, and [`shekyl_daemon_snapshot_free`]
 //! releases it.
 
-use std::ffi::{c_char, c_int, CString, OsString};
+use std::ffi::{c_char, c_int, OsString};
 
 use shekyl_daemon_config::exit::{refuse, EXIT_FAILED};
 use shekyl_daemon_config::sections::DaemonConfig;
 use shekyl_daemon_config::{load, Platform, TABLE};
 
-/// A list of C strings.
-#[repr(C)]
-#[derive(Clone, Copy, Debug)]
-pub struct ShekylStringList {
-    /// The strings, each NUL-terminated; valid for `len` entries.
-    pub items: *const *const c_char,
-    /// How many.
-    pub len: usize,
-}
-
-/// The admin endpoint a client command dials.
-///
-/// Four octets in network order, so a `memcpy` into a `uint32_t` is the
-/// value `inet_addr` would have returned, and the port in host order.
-/// `present` is false for a daemon start. One member of the snapshot.
-#[repr(C)]
-#[derive(Clone, Copy, Debug)]
-pub struct ShekylClientEndpoint {
-    /// The address, network order.
-    pub octets: [u8; 4],
-    /// The port.
-    pub port: u16,
-    /// Whether a client command is dialing this endpoint.
-    pub present: bool,
-}
-
 /// The values whose reader is still C++ (`DAEMON_CONFIG_CUTOVER.md` §2.9),
 /// filled once by Rust before the remnant is constructed.
-#[repr(C)]
+///
+/// Aligned to a pointer: [`shekyl_daemon_snapshot_parse`] hands C++ the
+/// address of this struct, which is the first member of the lease, and
+/// [`shekyl_daemon_snapshot_free`] casts that address back. The lease holds
+/// a `Box`, so this struct's alignment is the lease's.
+#[repr(C, align(8))]
 #[derive(Clone, Copy, Debug)]
 pub struct ShekylDaemonSnapshot {
     /// The network, as `cryptonote::network_type`: 0 mainnet, 1 testnet,
@@ -72,22 +51,14 @@ pub struct ShekylDaemonSnapshot {
     pub network: u8,
     /// Offline: both connectors off; read by the p2p server.
     pub offline: bool,
-    /// The interactive console on; read by the C++ console.
-    pub console: bool,
-    /// The console's command words; empty for a daemon start. Read by the
-    /// C++ console client.
-    pub command: ShekylStringList,
-    /// The admin endpoint a client-mode command reaches. `present` is false
-    /// for a daemon start. Read by the C++ console client.
-    pub client_endpoint: ShekylClientEndpoint,
 }
 
-const _: () = assert!(std::mem::size_of::<ShekylClientEndpoint>() == 8);
-const _: () = assert!(std::mem::align_of::<ShekylClientEndpoint>() == 2);
+const _: () = assert!(std::mem::size_of::<ShekylDaemonSnapshot>() == 8);
+const _: () = assert!(std::mem::align_of::<ShekylDaemonSnapshot>() == 8);
 
 /// The snapshot's field count. A gate asserts it against the definition
 /// above and the C++ asserts it against [`shekyl_daemon_snapshot_field_count`].
-pub const SNAPSHOT_FIELDS: u32 = 5;
+pub const SNAPSHOT_FIELDS: u32 = 2;
 
 /// The snapshot's field count, for the C++ to assert against the
 /// structure it reads. `no_mangle` is what the `unsafe_code` lint flags
@@ -103,34 +74,15 @@ pub extern "C" fn shekyl_daemon_snapshot_field_count() -> u32 {
 pub struct SnapshotData {
     network: u8,
     offline: bool,
-    console: bool,
-    command: Vec<CString>,
-    client_endpoint: ShekylClientEndpoint,
 }
 
 impl SnapshotData {
     /// The owned data for `config`'s snapshot.
     #[must_use]
     pub fn new(config: &DaemonConfig) -> Self {
-        let c = |s: &str| CString::new(s.replace('\0', "")).expect("no NUL after the filter");
-        let client_endpoint = match config.session.client_endpoint {
-            Some(endpoint) => ShekylClientEndpoint {
-                octets: endpoint.ip().octets(),
-                port: endpoint.port(),
-                present: true,
-            },
-            None => ShekylClientEndpoint {
-                octets: [0; 4],
-                port: 0,
-                present: false,
-            },
-        };
         Self {
             network: config.network.cryptonote_code(),
             offline: config.offline(),
-            console: config.session.console,
-            command: config.session.command.iter().map(|w| c(w)).collect(),
-            client_endpoint,
         }
     }
 
@@ -142,59 +94,31 @@ impl SnapshotData {
     #[must_use]
     #[allow(unsafe_code)]
     pub fn call(&self, run: unsafe extern "C" fn(*const ShekylDaemonSnapshot) -> c_int) -> c_int {
-        let command = self.command_ptrs();
-        let snapshot = self.snapshot(&command);
-        // SAFETY: `snapshot` is a complete, initialised value on this frame,
-        // and every pointer in it addresses `self`'s allocations or
-        // `command`'s buffer; all three outlive the call, which returns
-        // before any is dropped. `run` is `noexcept` on the C++ side.
+        let snapshot = self.snapshot();
+        // SAFETY: `snapshot` is a complete, initialised value on this frame
+        // and outlives the call, which returns before it is dropped. `run`
+        // is `noexcept` on the C++ side.
         unsafe { run(&raw const snapshot) }
     }
 
-    /// The console's command words, as text.
-    #[cfg(test)]
-    fn command_words(&self) -> Vec<String> {
-        self.command
-            .iter()
-            .map(|w| w.to_string_lossy().into_owned())
-            .collect()
-    }
-
-    /// Pointers to the command words. Valid while `self` is borrowed, and
-    /// while the returned vector is: the snapshot's `command.items` addresses
-    /// this vector's buffer, not `self`.
-    fn command_ptrs(&self) -> Vec<*const c_char> {
-        self.command.iter().map(|w| w.as_ptr()).collect()
-    }
-
-    /// The snapshot over this data and `command`. Both must outlive every
-    /// read of the result. `command.items` addresses `command`'s buffer.
-    fn snapshot(&self, command: &[*const c_char]) -> ShekylDaemonSnapshot {
+    /// The snapshot over this data. It must outlive every read of the result.
+    fn snapshot(&self) -> ShekylDaemonSnapshot {
         ShekylDaemonSnapshot {
             network: self.network,
             offline: self.offline,
-            console: self.console,
-            command: ShekylStringList {
-                items: command.as_ptr(),
-                len: command.len(),
-            },
-            client_endpoint: self.client_endpoint,
         }
     }
 }
 
 /// A snapshot leased to a C++ caller: the structure first, so its address
-/// is the lease's, then what it points at.
+/// is the lease's, then the data it was built from.
 ///
-/// The command pointers address `_command`'s buffer and the string
-/// pointers `_data`'s allocations; neither moves when the lease is moved
-/// into the box `shekyl_daemon_snapshot_parse` hands to C++. C++ frees the
-/// lease on the same thread or any other; the value is not sent between
-/// Rust threads.
+/// Nothing in the snapshot points at `_data`; the data stays so the lease
+/// is one allocation the free releases. C++ frees the lease on the same
+/// thread or any other; the value is not sent between Rust threads.
 #[repr(C)]
 struct Leased {
     snapshot: ShekylDaemonSnapshot,
-    _command: Vec<*const c_char>,
     _data: Box<SnapshotData>,
 }
 
@@ -209,11 +133,9 @@ fn snapshot_for(args: &[OsString], platform: &Platform) -> Result<Box<Leased>, i
     let cli = shekyl_options::read_cli(&TABLE, rest.iter().cloned()).map_err(|ds| refuse(&ds))?;
     let config = load(cli, platform).map_err(|ds| refuse(&ds))?.config;
     let data = Box::new(SnapshotData::new(&config));
-    let command = data.command_ptrs();
-    let snapshot = data.snapshot(&command);
+    let snapshot = data.snapshot();
     Ok(Box::new(Leased {
         snapshot,
-        _command: command,
         _data: data,
     }))
 }
@@ -301,15 +223,13 @@ mod tests {
     }
 
     #[test]
-    fn the_snapshot_carries_the_five_values() {
+    fn the_snapshot_carries_the_network_and_whether_the_node_is_offline() {
         let d = tempfile::tempdir().unwrap();
         let args_v: Vec<OsString> = [
             "--network",
             "regtest",
             "--data-dir",
             d.path().to_str().unwrap(),
-            "status",
-            "extra",
         ]
         .iter()
         .map(OsString::from)
@@ -321,15 +241,7 @@ mod tests {
         };
         let config = load(cli, &platform).unwrap().config;
         let data = SnapshotData::new(&config);
-        assert_eq!(
-            data.command_words(),
-            vec!["status".to_owned(), "extra".to_owned()]
-        );
-        assert!(data.client_endpoint.present);
-        assert_eq!(data.client_endpoint.octets, [127, 0, 0, 1]);
-        assert_eq!(data.client_endpoint.port, 11029);
         assert_eq!(data.network, 3);
         assert!(!data.offline, "regtest keeps the clearnet connector on");
-        assert!(!data.console);
     }
 }

@@ -630,7 +630,10 @@ jobs:
           $rc = $LASTEXITCODE
           Get-Content daemon-crates.out
           if ($rc -ne 0) { exit $rc }
-          $floors = @{ 'shekyl_options-' = 25; 'shekyl_daemon-' = 30; 'shekyl_daemon_config-' = 60; 'shekyl_daemon_rpc-' = 250; 'shekyl_ffi-' = 220 }
+          # shekyl-daemon-rpc's console tests moved to shekyl-cli (R8). This
+          # floor is the lib that remains; Windows ran it at 184. shekyl-cli
+          # is covered by the Rust workspace job, not this MSVC link step.
+          $floors = @{ 'shekyl_options-' = 25; 'shekyl_daemon-' = 30; 'shekyl_daemon_config-' = 60; 'shekyl_daemon_rpc-' = 184; 'shekyl_ffi-' = 220 }
           $lines = Get-Content daemon-crates.out
           foreach ($crate in $floors.Keys) {
             $at = ($lines | Select-String -Pattern ("Running unittests .*\\" + [regex]::Escape($crate)) | Select-Object -First 1).LineNumber

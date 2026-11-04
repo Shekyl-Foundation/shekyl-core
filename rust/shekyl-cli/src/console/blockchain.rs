@@ -8,13 +8,14 @@
 use super::info::fetch_get_info;
 use super::{
     human_readable_timestamp, native_json_rpc, require_ok, trimmed, wide_difficulty_decimal,
-    wide_difficulty_value, Source,
+    wide_difficulty_value,
 };
+use crate::daemon::DaemonClient;
 use shekyl_units::AtomicUnits;
 
 /// Fetch `get_block_headers_range` — native here, over `/json_rpc` remotely.
 fn fetch_block_headers_range(
-    src: &Source,
+    src: &DaemonClient,
     start_height: u64,
     end_height: u64,
 ) -> Result<Vec<shekyl_rpc_types::BlockHeader>, String> {
@@ -25,45 +26,23 @@ fn fetch_block_headers_range(
     };
     // In-process the console is the operator's own terminal, so the
     // restricted rule does not apply — as `print_block` says.
-    let reply = native_json_rpc(src, "get_block_headers_range", &request, |_core| {
-        let chain = super::open_chain()?;
-        crate::methods::get_block_headers_range(chain.as_chain_facts(), &request, false)
-    })?;
+    let reply: shekyl_rpc_types::GetBlockHeadersRangeResponse =
+        native_json_rpc(src, "get_block_headers_range", &request)?;
     require_ok(&reply.status)?;
     Ok(reply.headers)
 }
 
-/// `print_blockchain_info <start> [end]`, and `print_blockchain_info -<n>`.
+/// `block header list --from <height> --to <height>`, inclusive.
 ///
-/// The negative form is why this command reads `/get_info`: the C++ parser
-/// forwards `(-n, n)` and the executor resolves the window against the tip.
-/// That resolution is the only arithmetic here and it is the arithmetic that
-/// can be asked to describe a chain shorter than the window, which the C++
-/// refused by name — kept, because "start offset is larger than blockchain
-/// height" tells an operator what to type next and an empty listing does not.
+/// Both ends are heights. A start after the end is refused by the grammar
+/// before this function is called.
 #[deny(clippy::arithmetic_side_effects)]
-pub(super) fn print_blockchain_info(src: &Source, start: i64, end: u64) -> Result<String, String> {
-    let (start_height, end_height) = if start < 0 {
-        let height = fetch_get_info(src)?.health.height;
-        // `-start` as a magnitude, taken through `unsigned_abs` so
-        // `i64::MIN` has no special case.
-        let back = start.unsigned_abs();
-        if back >= height {
-            return Err("start offset is larger than blockchain height".to_owned());
-        }
-        let first = height.saturating_sub(back);
-        // The C++ wrote `start + end - 1` with `end == -start`, i.e. the
-        // window ends where the tip is. Saturating rather than wrapping: a
-        // zero-length window would otherwise underflow past the tip.
-        (first, first.saturating_add(end).saturating_sub(1))
-    } else {
-        // Non-negative: both indices are literal, and `end` defaults to 0 —
-        // so `print_blockchain_info 5` asks for [5, 0] and is refused by the
-        // method, exactly as the C++ was. RK-D8: the shape is preserved
-        // because changing it is a separate decision from moving it.
-        (start.unsigned_abs(), end)
-    };
-    let headers = fetch_block_headers_range(src, start_height, end_height)?;
+pub(super) fn print_blockchain_info(
+    src: &DaemonClient,
+    from: u64,
+    to: u64,
+) -> Result<String, String> {
+    let headers = fetch_block_headers_range(src, from, to)?;
     Ok(headers
         .iter()
         .map(render_blockchain_info_entry)
@@ -101,12 +80,12 @@ fn render_blockchain_info_entry(h: &shekyl_rpc_types::BlockHeader) -> String {
 }
 
 /// Fetch `get_fee_estimate` — native here, over `/json_rpc` remotely.
-fn fetch_fee_estimate(src: &Source) -> Result<shekyl_rpc_types::GetFeeEstimateResponse, String> {
+fn fetch_fee_estimate(
+    src: &DaemonClient,
+) -> Result<shekyl_rpc_types::GetFeeEstimateResponse, String> {
     let request = shekyl_rpc_types::GetFeeEstimateRequest::default();
-    let reply = native_json_rpc(src, "get_fee_estimate", &request, |_core| {
-        let chain = super::open_chain()?;
-        crate::methods::get_fee_estimate(chain.as_chain_facts(), &request)
-    })?;
+    let reply: shekyl_rpc_types::GetFeeEstimateResponse =
+        native_json_rpc(src, "get_fee_estimate", &request)?;
     require_ok(&reply.status)?;
     Ok(reply)
 }
@@ -142,7 +121,10 @@ pub(super) fn median(values: &mut [u64]) -> u64 {
 /// literal and the command makes two calls, `get_info` and
 /// `get_fee_estimate`, before it reads any header.
 #[deny(clippy::arithmetic_side_effects)]
-pub(super) fn print_blockchain_dynamic_stats(src: &Source, nblocks: u64) -> Result<String, String> {
+pub(super) fn print_blockchain_dynamic_stats(
+    src: &DaemonClient,
+    nblocks: u64,
+) -> Result<String, String> {
     let info = fetch_get_info(src)?;
     let height = info.health.height;
     let fees = fetch_fee_estimate(src)?;
@@ -151,7 +133,7 @@ pub(super) fn print_blockchain_dynamic_stats(src: &Source, nblocks: u64) -> Resu
     // read the scalar, so it reads tier 0.
     let dynamic_fee =
         AtomicUnits::from_raw(fees.fees.get(shekyl_rpc_types::FeeTier::Low)).to_skl_string();
-    let target = crate::consensus::DAA_TARGET_SECONDS;
+    let target = shekyl_economics::economic_params().daa_target_seconds;
     let mut out = Vec::new();
     out.push(format!(
         "Height: {}, diff {}, cum. diff {}, target {target} sec, dyn fee {dynamic_fee}/byte",

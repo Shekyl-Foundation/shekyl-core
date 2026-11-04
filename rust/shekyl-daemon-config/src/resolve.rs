@@ -20,8 +20,6 @@ pub struct Resolved {
     /// The value of each row that has one: given, or the row's default
     /// value. A row with no default and no value is absent.
     pub values: BTreeMap<&'static str, (Value, Source)>,
-    /// The words that are not options.
-    pub positional: Vec<String>,
 }
 
 impl Resolved {
@@ -116,10 +114,7 @@ pub fn resolve(
         values.insert(given.row.name, (given.value, given.source));
     }
     if faults.is_empty() {
-        Ok(Resolved {
-            values,
-            positional: cli.positional,
-        })
+        Ok(Resolved { values })
     } else {
         Err(faults)
     }

@@ -95,20 +95,11 @@ shekyl-wire = { path = "../shekyl-wire" }
 # silently dropped. See V3_WALLET_DECISION_LOG.md (single-image contract)
 # and the nm gate in src/daemon/CMakeLists.txt.
 shekyl-logging = { path = "../shekyl-logging" }
-# The same contract, for the daemon control client's exports
-# (`shekyl_daemon_ctl_*`). shekyld is a Rust binary (DAEMON_CONFIG_CUTOVER.md
-# DC-Q19) and gets the client and the RPC server as rlibs of its own graph;
-# `libshekyl_ffi.a` is the one Rust archive every C++ binary links, and
-# `unit_tests` (daemon_rpc_client.cpp) is a C++ binary that calls the
-# client through it. The 2026-06-11 ruling's rule — a crate a C++ binary
-# needs joins that binary's image — puts the client here and keeps the
-# server (`shekyl-daemon-rpc`) out: the server calls C++ functions of
+# `libshekyl_ffi.a` is the one Rust archive every C++ binary links.
+# The RPC server (`shekyl-daemon-rpc`) stays out: it calls C++ functions of
 # `rpc` that no other C++ binary links (as pointers the daemon binary hands
 # it, DC-F43), and a crate of the archive is a crate every C++ binary may
-# pull a member of (DC-F26, corrected by DC-F30). `rust/shekyl-daemon-image`, the archive that used to carry the
-# server beside this crate for the C++ shekyld, is retired with that
-# executable (DC-Q19).
-shekyl-daemon-ctl = { path = "../shekyl-daemon-ctl" }
+# pull a member of (DC-F26, corrected by DC-F30).
 # Dandelion++ embargo / propagation-timeout (`dandelionpp_ffi.rs`, RP-4).
 # Stem-map exports retired at RP-3a. The FFI owns the CSPRNG (`OsRng`); the
 # measurement crate stays deterministic.

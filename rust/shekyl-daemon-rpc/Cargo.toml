@@ -81,12 +81,6 @@ shekyl-units = { path = "../shekyl-units" }
 # (DAEMON_RPC_KV_GET_INFO.md §4.3, RK-D19); the handler calls it and does
 # nothing else with economics.
 shekyl-economics = { path = "../shekyl-economics" }
-# The `shekyld <command>` control client, which the console's identity,
-# node and status views post through and whose `emit`/`c_string` shape the
-# console's own export. Its own crate so that `libshekyl_ffi.a` can carry
-# the client for `unit_tests` without carrying this server
-# (DAEMON_CONFIG_CUTOVER.md DC-F30; the crate's doc has the mechanism).
-shekyl-daemon-ctl = { path = "../shekyl-daemon-ctl" }
 # The listener (`bind.rs`): a hostname is refused by construction.
 shekyl-rpc-transport = { path = "../shekyl-rpc-transport" }
 # The one daemon runtime constructor. Worker and blocking counts are this

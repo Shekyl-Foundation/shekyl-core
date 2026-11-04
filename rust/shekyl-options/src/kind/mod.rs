@@ -11,8 +11,8 @@
 //! relies on that). A row narrows its kind with a constraint the kind
 //! carries; the parser enforces it.
 //!
-//! Only the kinds the daemon's table uses are here. The wallet binaries add
-//! theirs (hash, amount, name, text) with their own tables.
+//! `hash` is here too (IG-Q23): 64 hexadecimal characters. Amount, name and
+//! text stay with the wallet binaries.
 
 use std::collections::BTreeMap;
 use std::fmt;
@@ -114,6 +114,9 @@ pub enum Kind {
     },
     /// An explicit web origin: `http` or `https`, a host, an optional port.
     Origin,
+    /// 64 hexadecimal characters (IG-Q23): a transaction id, a block hash
+    /// or a key image.
+    Hash,
     /// A list of a scalar kind; `none` is the empty list.
     List(&'static Kind),
     /// A map from a closed key set to a scalar kind; `none` is the empty map.
@@ -196,6 +199,8 @@ pub enum Value {
     Command(Vec<String>),
     /// A web origin, in its normal spelling.
     Origin(String),
+    /// 64 lowercase hexadecimal characters.
+    Hash(String),
     /// A list; empty is `none`.
     List(Vec<Value>),
     /// A map; empty is `none`.
@@ -217,7 +222,7 @@ impl Value {
             Self::Duration(d) => render_duration(*d),
             Self::Endpoint(addr) => addr.to_string(),
             Self::Peer(peer) => peer.to_string(),
-            Self::Address(a) | Self::Origin(a) => a.clone(),
+            Self::Address(a) | Self::Origin(a) | Self::Hash(a) => a.clone(),
             Self::Path(p) => p.display().to_string(),
             Self::Secret(_) => "set".to_owned(),
             Self::Command(args) => format!("{args:?}"),
@@ -279,6 +284,14 @@ fn render_duration(d: Duration) -> String {
         }
     }
     "0ms".to_owned()
+}
+
+fn parse_hash(text: &str) -> Result<String, Fault> {
+    if text.len() == 64 && text.bytes().all(|byte| byte.is_ascii_hexdigit()) {
+        Ok(text.to_ascii_lowercase())
+    } else {
+        Err(syntax(text, "64 hexadecimal characters"))
+    }
 }
 
 fn syntax(value: &str, expected: &str) -> Fault {
@@ -487,6 +500,7 @@ impl Kind {
                 Ok(Value::Path(p))
             }
             Self::Origin => parse_origin(text).map(Value::Origin),
+            Self::Hash => parse_hash(text).map(Value::Hash),
             Self::Secret | Self::Command { .. } => Err(Fault::new(Code::ValueSurface)
                 .param("given", "the command line")
                 .param("allowed", "in the configuration file")),
@@ -523,6 +537,7 @@ impl Kind {
             Self::Secret => "a secret",
             Self::Command { .. } => "an array of strings",
             Self::Origin => "a web origin such as `https://example.org`",
+            Self::Hash => "64 hexadecimal characters",
             Self::List(_) => "a list",
             Self::Map { .. } => "a map",
         }

@@ -11,8 +11,11 @@
 //! time, see [`crate::resolve`]); commands whose native surface is designed
 //! but not yet landed answer with a RESERVED message naming what gates them.
 
+use shekyl_wallet_rpc::Network;
+
 mod balance;
 mod chain;
+mod daemon_view;
 mod fees;
 mod lifecycle;
 pub(crate) mod mine;
@@ -24,6 +27,9 @@ mod staking;
 
 pub use staking::{accept_foundation_terms, post_foundation_stake, FOUNDATION_PHRASE};
 mod transfers;
+#[cfg(test)]
+pub(crate) use transfers::listed_tx_id;
+pub(crate) use transfers::{format_height, unspendable_reason_text};
 
 use crate::daemon::DaemonClient;
 use crate::outcome::{
@@ -89,7 +95,7 @@ pub enum CommandSource {
 pub fn run(
     rpc: RpcSession,
     daemon_client: Option<&DaemonClient>,
-    network: &str,
+    network: Network,
     presentation: Presentation,
     source: CommandSource,
 ) -> Result<(), Box<dyn std::error::Error>> {
@@ -127,7 +133,7 @@ pub fn run(
     }
 
     loop {
-        let prompt = crate::session::prompt(network, rpc.open_wallet_name().as_deref());
+        let prompt = crate::session::prompt(network.as_str(), rpc.open_wallet_name().as_deref());
         let resolved = match next_line(&mut reader, &presentation, &rpc, &prompt) {
             Line::Prompt(raw) => {
                 let line = raw.trim();
@@ -274,11 +280,11 @@ pub fn run(
                 transfers::cmd_transfers(&rpc, incoming, outgoing, unmatched),
                 transfers::show_transfers,
             ),
-            ResolvedCommand::ShowTransfer { txid } => present(
+            ResolvedCommand::ShowTransfer { txid, body } => present(
                 &presentation,
                 "tx show",
-                transfers::cmd_show_transfer(&rpc, &txid),
-                transfers::show_transfer,
+                crate::tx_show::command(&rpc, daemon_client, &txid, body),
+                crate::tx_show::show,
             ),
             ResolvedCommand::GetTxNote { txid } => present(
                 &presentation,
@@ -436,23 +442,29 @@ pub fn run(
                 chain::cmd_chain_health(daemon_client),
                 chain::show_chain,
             ),
+            ResolvedCommand::Daemon(view) => present(
+                &presentation,
+                view.label(),
+                daemon_view::command(daemon_client, &view),
+                |text| println!("{text}"),
+            ),
 
             ResolvedCommand::MineStart { threads } => present(
                 &presentation,
                 "mine start",
-                mine::cmd_mine_start(&rpc, daemon_client, network, threads),
+                mine::cmd_mine_start(daemon_client, threads),
                 mine::show_mine_start,
             ),
             ResolvedCommand::MineStop => present(
                 &presentation,
                 "mine stop",
-                mine::cmd_mine_stop(&rpc, daemon_client, network),
+                mine::cmd_mine_stop(daemon_client),
                 mine::show_mine_stop,
             ),
             ResolvedCommand::MineStatus => present(
                 &presentation,
                 "mine status",
-                mine::cmd_mine_status(&rpc, daemon_client, network),
+                mine::cmd_mine_status(daemon_client),
                 mine::show_mine_status,
             ),
 
@@ -529,7 +541,7 @@ pub fn run(
             ResolvedCommand::Version => present(
                 &presentation,
                 "version",
-                Ok(cmd_version(&rpc)),
+                Ok(cmd_version(&rpc, daemon_client)),
                 show_version,
             ),
             ResolvedCommand::Wallet => present(
@@ -649,10 +661,11 @@ fn next_line(
     }
 }
 
-/// The CLI's own version, and the wallet-RPC version when the server answers.
+/// The CLI's own version, the wallet server's when one answers, and the
+/// daemon's when one is configured.
 ///
-/// The local version does not depend on the server. A server that cannot be
-/// asked is `wallet_rpc_error` on a successful report, not a missing line.
+/// The local version does not depend on either. A server that cannot be
+/// asked is an error field on a successful report, not a missing line.
 #[derive(serde::Serialize)]
 struct VersionReport {
     cli_version: &'static str,
@@ -662,6 +675,10 @@ struct VersionReport {
     api_version: Option<i64>,
     #[serde(skip_serializing_if = "Option::is_none")]
     wallet_rpc_error: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    daemon_version: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    daemon_error: Option<String>,
 }
 
 fn version_report(
@@ -677,22 +694,33 @@ fn version_report(
                 .map(str::to_owned),
             api_version: val.get("api_version").and_then(serde_json::Value::as_i64),
             wallet_rpc_error: None,
+            daemon_version: None,
+            daemon_error: None,
         },
         Err(error) => VersionReport {
             cli_version,
             version: None,
             api_version: None,
             wallet_rpc_error: Some(error),
+            daemon_version: None,
+            daemon_error: None,
         },
     }
 }
 
-fn cmd_version(rpc: &RpcSession) -> VersionReport {
+fn cmd_version(rpc: &RpcSession, daemon: Option<&crate::daemon::DaemonClient>) -> VersionReport {
     let response = match rpc.call("get_version", serde_json::json!({})) {
         Ok(val) => Ok(val),
         Err(error) => Err(format!("wallet RPC unreachable: {error}")),
     };
-    version_report(shekyl_version::VERSION_FULL, response)
+    let mut report = version_report(shekyl_version::VERSION_FULL, response);
+    if let Some(daemon) = daemon {
+        match crate::console::daemon_software_version(daemon) {
+            Ok(version) => report.daemon_version = Some(version),
+            Err(error) => report.daemon_error = Some(error),
+        }
+    }
+    report
 }
 
 fn show_version(report: &VersionReport) {
@@ -704,6 +732,11 @@ fn show_version(report: &VersionReport) {
             let api = report.api_version.unwrap_or(0);
             println!("shekyl-wallet-rpc {server} (api v{api})");
         }
+    }
+    match (&report.daemon_version, &report.daemon_error) {
+        (Some(version), _) => println!("shekyld {version}"),
+        (None, Some(error)) => eprintln!("shekyld: {error}"),
+        (None, None) => {}
     }
 }
 

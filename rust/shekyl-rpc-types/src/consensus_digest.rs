@@ -128,6 +128,16 @@ impl fmt::Display for DaemonNetwork {
     }
 }
 
+impl From<shekyl_address::Network> for DaemonNetwork {
+    fn from(network: shekyl_address::Network) -> Self {
+        match network {
+            shekyl_address::Network::Mainnet => Self::Mainnet,
+            shekyl_address::Network::Testnet => Self::Testnet,
+            shekyl_address::Network::Stagenet => Self::Stagenet,
+        }
+    }
+}
+
 #[cfg(test)]
 #[path = "../build_support/consensus_canonical.rs"]
 mod canonical;

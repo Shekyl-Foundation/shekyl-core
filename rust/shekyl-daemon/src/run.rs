@@ -109,15 +109,6 @@ pub fn main(remnant: Remnant, args: &[OsString], host: &Host) -> i32 {
     let read_path = file_read.as_deref();
     let network = config.network;
 
-    // Client mode: no lock, no marker, no log file, no announcement. The
-    // configuration check stops here too: a client is not a start.
-    if config.is_client() {
-        if config.session.verify {
-            return verify::accept(&resolved, read_path, &config_path, &config, &[]);
-        }
-        return SnapshotData::new(&config).call(remnant.run);
-    }
-
     // The walk (IG-Q59): every refusal a start makes before it creates
     // anything, with nothing created. The check prints its verdict and
     // exits; a start goes on to the effects the walk withheld.
@@ -735,26 +726,24 @@ mod tests {
         );
     }
 
+    /// A bare word is refused before the load, the lock, or any socket.
     #[test]
-    fn client_mode_calls_run_without_a_lock_and_returns_its_status() {
+    fn a_bare_word_is_refused_before_the_daemon_starts() {
         let d = tempfile::tempdir().unwrap();
-        *RUN_RETURNS.lock().unwrap() = 7;
         let runs_before = RUNS.load(Ordering::SeqCst);
-        let status = main(
-            remnant(),
-            &args(&["--rpc-admin-listen", "127.0.0.1:4444", "status"]),
-            &host(d.path()),
+        assert_eq!(
+            main(remnant(), &args(&["status"]), &host(d.path())),
+            EXIT_REFUSED
         );
-        assert_eq!(status, 7);
-        assert_eq!(RUNS.load(Ordering::SeqCst), runs_before + 1);
-        assert!(
-            !d.path().join(".shekyl").join("shekyld.lock").exists(),
-            "a client takes no lock"
+        assert_eq!(
+            RUNS.load(Ordering::SeqCst),
+            runs_before,
+            "the remnant was not called"
         );
-        *RUN_RETURNS.lock().unwrap() = 0;
+        assert!(!d.path().join(".shekyl").exists(), "nothing was created");
     }
 
-    /// The remnant's own request — the console's `exit`, the RPC's
+    /// The remnant's own request — the RPC's
     /// `stop_daemon` — reaches the one owner, which calls the remnant's
     /// `stop` and returns `run`'s status: one stop path, whatever asked.
     #[test]

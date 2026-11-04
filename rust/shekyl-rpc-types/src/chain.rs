@@ -312,6 +312,38 @@ impl RpcStatus {
     pub fn is_offline(&self) -> bool {
         self.0 == Self::OFFLINE
     }
+
+    /// Which of the named statuses this is.
+    ///
+    /// Callers match [`StatusKind`]. The free-text arm is [`StatusKind::Other`];
+    /// its spelling stays on this value for the line that prints it, and is
+    /// not a string a caller compares.
+    #[must_use]
+    pub fn kind(&self) -> StatusKind {
+        if self.is_ok() {
+            StatusKind::Ok
+        } else if self.0 == Self::BUSY {
+            StatusKind::Busy
+        } else if self.is_offline() {
+            StatusKind::Offline
+        } else {
+            StatusKind::Other
+        }
+    }
+}
+
+/// The statuses a reply's `status` field is known to be, until RW-Q3
+/// removes the field at `CORE_RPC_VERSION` 4.0.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum StatusKind {
+    /// `"OK"`.
+    Ok,
+    /// `"BUSY"`: the core is not ready.
+    Busy,
+    /// `"offline"`: the daemon was started offline.
+    Offline,
+    /// A handler's own text. Read it from [`RpcStatus`], do not match it.
+    Other,
 }
 
 /// JSON-RPC error code for a malformed request (`CORE_RPC_ERROR_CODE_WRONG_PARAM`).

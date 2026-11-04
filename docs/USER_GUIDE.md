@@ -318,7 +318,6 @@ whether `option_set` changes it while the daemon runs.
 | `rpc-view-listen` | list of IP endpoint (`address:port`) (`none` for empty) | `none` | both | no | The plaintext view listeners, loopback only. |
 | `rpc-cors-origin` | list of web origin (`none` for empty) | `none` | both | no | Web origins allowed to call the RPC; `none` denies all. `*` is refused. |
 | `rpc-connections-max` | integer ≥ 1 | `25` | both | no | The RPC connection cap. |
-| `console` | switch | — | command line | no | Run the interactive console. |
 <!-- development rows, live on the named networks only and not in --help: dev-clearnet-encrypt (testnet, stagenet, regtest); dev-sync (regtest); dev-relay-cover (testnet, stagenet, regtest); dev-rpc (testnet, stagenet, regtest); dev-difficulty (regtest); dev-pow-seed-epoch-blocks (regtest); dev-pow-seed-epoch-lag (regtest); dev-settlement-epoch-blocks (regtest); dev-archival-reorg-depth (regtest) -->
 <!-- shekyld-options: end -->
 
@@ -377,83 +376,11 @@ process's memory, and while the daemon holds no wallet keys, it does
 hold its onion service's secret key, its peer list and its mining
 address.
 
-### Interactive console
+### Commands
 
-When `shekyld` is running in the foreground, you get an interactive console.
-Type `help` to list all commands. The most useful ones, grouped by purpose:
-
-The same commands work from a second shell against a running daemon —
-`shekyld status`, `shekyld exit` — over its local RPC port (pass
-`--network` and `--rpc-admin-listen` if the daemon is not on the defaults). The
-exit status is `0` when the daemon answered, `1` when the command is unknown
-or the request failed (daemon not running, connection refused, error reply),
-so scripts can check it without parsing the output.
-
-**Status and information**
-
-| Command | Description |
-|---------|-------------|
-| `status` | One-line summary: height, net hash, connections, sync state |
-| `print_height` | Current blockchain height |
-| `diff` | Current mining difficulty |
-| `sync_info` | Detailed sync and peer download state |
-| `version` | Daemon version string |
-
-**Mining**
-
-| Command | Description |
-|---------|-------------|
-| `start_mining <addr> [threads]` | Start the built-in CPU miner |
-| `stop_mining` | Stop mining |
-| `mining_status` | Current mining state, hash rate, address |
-| `show_hr` / `hide_hr` | Toggle real-time hash rate display |
-
-**Network and peers**
-
-| Command | Description |
-|---------|-------------|
-| `print_pl` | Full peer list |
-| `print_pl_stats` | Peer list statistics |
-| `print_cn` | Active connections with data transfer stats |
-| `print_net_stats` | Aggregate network bandwidth |
-| `bans` | List all banned peers |
-| `ban <ip> [seconds]` | Ban a peer |
-| `unban <ip>` | Remove a ban |
-
-Bandwidth limits and log settings change at runtime through the admin
-RPC's `option_set` and `option_show` (`p2p-upload-max`, `p2p-download-max`,
-`log-level`, `log-category`), with the same spellings as the command line
-and the configuration file; the console has no words for them.
-
-**Chain inspection**
-
-| Command | Description |
-|---------|-------------|
-| `print_bc <start> [end]` | Print block headers in a range |
-| `print_block <height or hash>` | Print a single block's details |
-| `print_tx <txid>` | Print transaction details |
-| `is_key_image_spent <key_image>` | Check if a key image is spent |
-| `print_pool` | Full transaction pool |
-| `print_pool_sh` | Transaction pool (short format) |
-| `print_pool_stats` | Pool statistics |
-| `alt_chain_info` | Show alternative chain branches |
-| `bc_dyn_stats <last_n>` | Dynamic block stats for recent blocks |
-| `print_coinbase_tx_sum <start> <count>` | Sum of coinbase outputs in a range |
-
-**Maintenance**
-
-| Command | Description |
-|---------|-------------|
-| `save` | Force a blockchain save |
-| `flush_txpool [txid]` | Remove transaction(s) from the pool |
-| `flush_cache [bad-txs\|bad-blocks]` | Clear internal caches |
-| `pop_blocks <n>` | Roll back the last N blocks |
-
-**Exit**
-
-| Command | Description |
-|---------|-------------|
-| `stop_daemon` / `exit` | Gracefully shut down |
+`shekyld` takes options. A bare word is refused. Daemon commands — chain
+height, a transaction, mining, stopping the daemon — are `shekyl-cli`
+words, against the daemon this wallet is using.
 
 ---
 
@@ -834,14 +761,6 @@ built for another coin (including stock Monero XMRig) will not produce
 blocks this network accepts. `shekyl-cli mine start` prints that
 reminder when the built-in miner starts.
 
-### From the daemon console
-
-```
-start_mining <address> [threads]
-stop_mining
-mining_status
-```
-
 ### From the wallet
 
 ```
@@ -851,21 +770,22 @@ mainnet> mine status         # active/idle, threads, hash rate
 mainnet> mine stop
 ```
 
-`start_mining`, `stop_mining`, and `mining_status` name the new lines and
-do not run. The daemon console, above, still uses those words.
+`start_mining`, `stop_mining`, and `mining_status` name the lines above and
+do not run. Mining on a running daemon is `mine start`, `mine stop` and
+`mine status` in `shekyl-cli`.
 
 These commands **control** mining on the connected daemon — the daemon
 still does the hashing (no RandomX runs in the wallet process), and the
 daemon owns the mining threads, so mining keeps running after you close
-the CLI. Rewards pay to the open wallet's address automatically; you never
-paste an address the way the daemon-console form requires.
+the CLI. Rewards pay the daemon's `mine-address`. The shell sends only
+the thread count; you do not pass an address.
 
-`mine` requires an open wallet, the unrestricted RPC listener, and a
-daemon on the same network as the CLI. The silent default is a daemon
-on this machine — the recommended posture. A remote `--daemon-address`
-(for example a node on your own network) is allowed: `mine start`
-reminds you that mining control is admin RPC, then continues. If the
-daemon is still syncing, `mine start` refuses — the daemon will not
+`mine` does not require an open wallet. It does require the unrestricted
+RPC listener and a daemon on the same network as the CLI. The silent
+default is a daemon on this machine. A remote `--daemon-address` is
+allowed: `mine start` reminds you that mining will run on that machine's
+CPU, then continues.
+If the daemon is still syncing, `mine start` refuses — the daemon will not
 mine until it has caught up.
 
 ### Mining from start
@@ -1435,8 +1355,8 @@ Behavior changes to be aware of when upgrading:
   [USER_GUIDE.md](https://github.com/Shekyl-Foundation/shekyl-gui-wallet/blob/main/docs/USER_GUIDE.md)
   covers the same features from the graphical interface.
 - **Source code:** [shekyl-core on GitHub](https://github.com/Shekyl-Foundation/shekyl-core)
-- **Built-in help:** Run `shekyld --help`, `shekyl-cli --help`, or
-  type `help` inside any interactive console.
+- **Built-in help:** Run `shekyld --help` or `shekyl-cli --help`. Daemon
+  commands are `shekyl-cli` words.
 
 ---
 

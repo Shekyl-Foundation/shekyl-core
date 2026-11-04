@@ -80,6 +80,7 @@ pub mod info;
 pub mod methods;
 pub mod mining;
 pub mod nullable;
+pub mod options;
 pub mod p2p;
 pub mod pool;
 pub mod transactions;
@@ -101,10 +102,11 @@ pub use chain::{
     core_rpc_version_string, BlockHeader, ConnectState, GetBlockCountResponse, GetBlockHashParams,
     GetBlockHeaderByHeightRequest, GetBlockHeaderByHeightResponse, GetBlockRequest,
     GetBlockResponse, GetHeightResponse, GetVersionResponse, RestErrorEnvelope, RpcStatus,
-    StoreInvariantRow, CORE_RPC_ERROR_CODE_ARCHIVAL_UNAVAILABLE, CORE_RPC_ERROR_CODE_CORE_BUSY,
-    CORE_RPC_ERROR_CODE_INTERNAL_ERROR, CORE_RPC_ERROR_CODE_RESTRICTED,
-    CORE_RPC_ERROR_CODE_TOO_BIG_HEIGHT, CORE_RPC_ERROR_CODE_WRONG_PARAM, CORE_RPC_VERSION,
-    CORE_RPC_VERSION_MAJOR, CORE_RPC_VERSION_MINOR,
+    StatusKind, StoreInvariantRow, CORE_RPC_ERROR_CODE_ARCHIVAL_UNAVAILABLE,
+    CORE_RPC_ERROR_CODE_CORE_BUSY, CORE_RPC_ERROR_CODE_INTERNAL_ERROR,
+    CORE_RPC_ERROR_CODE_RESTRICTED, CORE_RPC_ERROR_CODE_TOO_BIG_HEIGHT,
+    CORE_RPC_ERROR_CODE_WRONG_PARAM, CORE_RPC_VERSION, CORE_RPC_VERSION_MAJOR,
+    CORE_RPC_VERSION_MINOR,
 };
 pub use chain_reads::{
     AltChainInfo, CalcPowRequest, GetAltBlocksHashesResponse, GetAlternateChainsResponse,
