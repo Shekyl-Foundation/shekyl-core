@@ -913,6 +913,7 @@ id = "wss-spend"
 spec = [
   "rust/shekyl-curve-tree/src",
   "rust/shekyl-fcmp/src",
+  { through = "7938c51f16", note = "Test-only: one curve-tree client test renamed (rollback_to_the_fork_at_the_tip_changes_nothing). No production code changed, no cost moved. Not measured." },
 ]
 stale_through = [
   { through = "36d0bd5715", note = "collect_block_leaves returns the gindex it already assigned, one slot per output. The matcher's second walk and its scan of the new leaves are gone; the match is still skipped while the expectation map is empty. Nothing on the spend path changed. Not measured." },
