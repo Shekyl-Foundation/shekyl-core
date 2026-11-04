@@ -426,7 +426,7 @@ mod tests {
     #[test]
     fn mine_on_with_an_open_declaration_announces_that_the_miner_waits_for_a_view() {
         let address = shekyl_address::ShekylAddress::new(
-            shekyl_address::Network::Mainnet,
+            shekyl_address::Network::Regtest,
             [0xaa; 32],
             [0xbb; 32],
             [0xee; shekyl_address::MSG_SIGN_PK_LEN],

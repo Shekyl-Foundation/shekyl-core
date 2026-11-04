@@ -237,7 +237,7 @@ fn a_thread_count_past_the_hosts_parallelism_starts_nothing() {
 fn mine_on_mines_a_real_block_with_no_rpc_call() {
     let dir = tempfile::tempdir().expect("temp");
     std::fs::create_dir_all(dir.path()).expect("dir");
-    let address = mining_address(shekyl_address::Network::Mainnet);
+    let address = mining_address(shekyl_address::Network::Regtest);
     let config = config_on(
         dir.path(),
         "regtest",
