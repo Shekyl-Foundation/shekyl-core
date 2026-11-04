@@ -934,6 +934,7 @@ stale_through = [
   { through = "c28af0881e", note = "test_tamper_poison, compiled only under the test-tamper feature, sets the client's poisoned flag. No production function changed. The spend path is untouched. Not measured." },
   { through = "cbc978bfd5", note = "ServingReader and WriterRecovery are deleted, and with them the frozen-segment body read and the external resume handle. The client's fact forwards remain. Path assembly, tree build and the prover do the same work. Not measured; the rows stay stale." },
   { through = "981fc8af04", note = "is_already_open is deleted from ClientError and StoreError, and the LockedElsewhere doc says the lock is not transient. No spend-path function changed. Not measured." },
+  { through = "7938c51f16", note = "#1259: a test in client.rs's test module is renamed (rollback_to_the_fork_at_the_tip_changes_nothing). No production code changed, so nothing the capture prices moved. Not measured." },
 ]
 
 [[constant]]
