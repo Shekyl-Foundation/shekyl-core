@@ -4116,6 +4116,7 @@ dependencies = [
  "shekyl-socks",
  "shekyl-timing-engine",
  "shekyl-transport-layer",
+ "shekyl-win-sec",
  "tokio",
  "tracing",
 ]
