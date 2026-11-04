@@ -27,8 +27,8 @@ use shekyl_levin::{
     NOTIFY_NEW_COMPACT_BLOCK, NOTIFY_NEW_TRANSACTIONS,
 };
 use shekyl_p2p_harness::sync::{
-    announcement, fork_headers, frame, request_headers, substrate, Bodies, Corpus, HeaderChainPeer,
-    Node, ServingPeer, Silent, Step, SyncPeer,
+    announcement, fork_headers, frame, request_headers, substrate, Bodies, HeaderChainPeer, Node,
+    ServingPeer, Silent, Step, SyncPeer,
 };
 use shekyl_transport_layer::CloseKind;
 use shekyl_types::{BlockHash, BlockHeight};
@@ -260,13 +260,15 @@ async fn a_low_work_fork_is_never_asked_for() {
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn a_past_cap_heavier_fork_raises_the_alarm_and_the_latch_reads_back() {
     logs();
-    // The corpus longer than its reorg cap: 762 blocks under a cap of 720.
+    // The shortest corpus under a reorg cap short of its length, through
+    // regtest's reorg-depth permit (NI-R6): 82 blocks under a cap of 32.
     // The fork leaves the chain six blocks past the cap.
-    let corpus = Corpus::open("spend-depth3");
-    let steps = corpus.steps();
-    let mut node = Node::start("pastcap", corpus.rules(), &steps, 2, rng()).await;
+    const CAP: u64 = 32;
+    let (corpus, steps) = spend();
+    let rules = corpus.rules_under_reorg_depth(CAP);
+    let mut node = Node::start("pastcap", rules, &steps, 2, rng()).await;
     let (count, work, _) = node.chain.tip().expect("a chain");
-    let depth = corpus.reorg_cap() + 6;
+    let depth = CAP + 6;
     let fork_at = count - 1 - depth;
     let mut chain: Vec<(BlockHash, Vec<u8>)> = (0..=fork_at)
         .map(|height| {
