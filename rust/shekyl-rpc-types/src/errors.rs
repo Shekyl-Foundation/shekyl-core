@@ -6,8 +6,9 @@
 //! The error registry (`RPC_WIRE.md` RW-Q3).
 //!
 //! A failure is only ever the JSON-RPC error object. Its numeric code is a
-//! class a client branches on, and its `data` carries one typed diagnostic:
-//! a stable dotted code, its parameters, and one English rendering (IG-11).
+//! class a client branches on, and its `data` carries one typed diagnostic
+//! (a stable dotted code, its parameters, and one English rendering, IG-11)
+//! or, for a configuration refusal, the list of those diagnostics.
 //!
 //! The registry is closed: a code not here is not one this daemon sends.
 //! Bad params and internal faults take JSON-RPC's own reserved codes; the
@@ -64,9 +65,67 @@ impl ErrorClass {
     }
 
     /// The class a wire code names, if it names one.
+    ///
+    /// This reads the RW-Q3 codes only. The C++ codes still on the wire
+    /// until `CORE_RPC_VERSION` 4.0 are [`Self::of_legacy_code`].
     #[must_use]
     pub fn of_code(code: i64) -> Option<Self> {
         Self::ALL.into_iter().find(|class| class.code() == code)
+    }
+
+    /// The class a code still spelled `CORE_RPC_ERROR_CODE_*` names.
+    ///
+    /// One place, until the rename at 4.0 deletes it (RW-Q8). A code this
+    /// does not name is not a legacy code this build sends.
+    #[must_use]
+    pub fn of_legacy_code(code: i64) -> Option<Self> {
+        use crate::archival::{
+            CORE_RPC_ERROR_CODE_ARCHIVAL_SHARD_OPEN, CORE_RPC_ERROR_CODE_ARCHIVAL_SKELETON_ABSENT,
+            CORE_RPC_ERROR_CODE_CONFIG_REFUSED,
+        };
+        use crate::chain::{
+            CORE_RPC_ERROR_CODE_ARCHIVAL_UNAVAILABLE, CORE_RPC_ERROR_CODE_CORE_BUSY,
+            CORE_RPC_ERROR_CODE_INTERNAL_ERROR, CORE_RPC_ERROR_CODE_RESTRICTED,
+            CORE_RPC_ERROR_CODE_TOO_BIG_HEIGHT, CORE_RPC_ERROR_CODE_WRONG_PARAM,
+        };
+        use crate::chain_reads::{
+            CORE_RPC_ERROR_CODE_WRONG_BLOCKBLOB, CORE_RPC_ERROR_CODE_WRONG_BLOCKBLOB_SIZE,
+        };
+        match code {
+            CORE_RPC_ERROR_CODE_WRONG_PARAM
+            | CORE_RPC_ERROR_CODE_TOO_BIG_HEIGHT
+            | CORE_RPC_ERROR_CODE_WRONG_BLOCKBLOB
+            | CORE_RPC_ERROR_CODE_WRONG_BLOCKBLOB_SIZE => Some(Self::BadParams),
+            CORE_RPC_ERROR_CODE_RESTRICTED => Some(Self::OutsideTheGrant),
+            CORE_RPC_ERROR_CODE_CORE_BUSY => Some(Self::NotReady),
+            CORE_RPC_ERROR_CODE_INTERNAL_ERROR => Some(Self::Internal),
+            CORE_RPC_ERROR_CODE_ARCHIVAL_UNAVAILABLE
+            | CORE_RPC_ERROR_CODE_ARCHIVAL_SHARD_OPEN
+            | CORE_RPC_ERROR_CODE_ARCHIVAL_SKELETON_ABSENT
+            | CORE_RPC_ERROR_CODE_CONFIG_REFUSED => Some(Self::RefusedByMethod),
+            _ => None,
+        }
+    }
+
+    /// The class of a code on the wire today: an RW-Q3 class, or a legacy
+    /// code still served until the rename.
+    #[must_use]
+    pub fn of_wire_code(code: i64) -> Option<Self> {
+        Self::of_code(code).or_else(|| Self::of_legacy_code(code))
+    }
+
+    /// The name a person reads. This is the contract; [`Debug`] is not.
+    #[must_use]
+    pub const fn name(self) -> &'static str {
+        match self {
+            Self::BadParams => "BadParams",
+            Self::RefusedByMethod => "RefusedByMethod",
+            Self::OutsideTheGrant => "OutsideTheGrant",
+            Self::OverResourceBound => "OverResourceBound",
+            Self::NotReady => "NotReady",
+            Self::StoreFault => "StoreFault",
+            Self::Internal => "Internal",
+        }
     }
 }
 
@@ -116,6 +175,72 @@ impl RpcError {
     pub const fn new(class: ErrorClass, diagnostic: Diagnostic) -> Self {
         Self { class, diagnostic }
     }
+
+    /// The line a person reads: the class's name and the diagnostic's code.
+    ///
+    /// The English rendering stays on [`Diagnostic::message`]. It is for a
+    /// log, never for this line, and never what a caller matches.
+    #[must_use]
+    pub fn report(&self) -> String {
+        format!("{} {}", self.class.name(), self.diagnostic.code)
+    }
+}
+
+/// Read a JSON-RPC `error` object.
+///
+/// The class comes from the numeric code ([`ErrorClass::of_wire_code`]).
+/// `data`, when it is a [`Diagnostic`] or a list of configuration
+/// [`crate::options::Refusal`]s, is the diagnostic. A legacy object with no
+/// readable `data` still has a class; its diagnostic code is `legacy.<n>`
+/// and the object's `message` is carried as text, not matched.
+#[must_use]
+pub fn read_error_object(error: &serde_json::Value) -> Option<RpcError> {
+    let code = error.get("code")?.as_i64()?;
+    let class = ErrorClass::of_wire_code(code)?;
+    let diagnostic = error
+        .get("data")
+        .and_then(diagnostic_from_data)
+        .unwrap_or_else(|| {
+            let message = error
+                .get("message")
+                .and_then(serde_json::Value::as_str)
+                .unwrap_or("the daemon refused");
+            Diagnostic::new(format!("legacy.{code}"), message)
+        });
+    Some(RpcError { class, diagnostic })
+}
+
+/// One diagnostic, or the configuration-refusal list `option_set` carries
+/// in `data`. Every code in the list is kept: a reader that takes only the
+/// object's `message` loses the stable codes.
+fn diagnostic_from_data(data: &serde_json::Value) -> Option<Diagnostic> {
+    if let Ok(one) = serde_json::from_value::<Diagnostic>(data.clone()) {
+        return Some(one);
+    }
+    let refusals = serde_json::from_value::<Vec<crate::options::Refusal>>(data.clone()).ok()?;
+    if refusals.is_empty() {
+        return None;
+    }
+    let code = refusals
+        .iter()
+        .map(|refusal| refusal.code.as_str())
+        .collect::<Vec<_>>()
+        .join(", ");
+    let message = refusals
+        .iter()
+        .map(|refusal| refusal.message.as_str())
+        .collect::<Vec<_>>()
+        .join("; ");
+    let mut diagnostic = Diagnostic::new(code, message);
+    diagnostic.params.clone_from(&refusals[0].params);
+    Some(diagnostic)
+}
+
+/// The refusal in a JSON body, when the body is a JSON-RPC error object.
+#[must_use]
+pub fn read_refusal(body: &[u8]) -> Option<RpcError> {
+    let value: serde_json::Value = serde_json::from_slice(body).ok()?;
+    read_error_object(value.get("error")?)
 }
 
 #[cfg(test)]
@@ -133,6 +258,56 @@ mod tests {
             ErrorClass::of_code(-26),
             None,
             "the C++ codes are not classes"
+        );
+        assert_eq!(
+            ErrorClass::of_wire_code(-26),
+            Some(ErrorClass::RefusedByMethod)
+        );
+        assert_eq!(ErrorClass::of_wire_code(-1), Some(ErrorClass::BadParams));
+        assert_eq!(
+            ErrorClass::of_wire_code(-19),
+            Some(ErrorClass::OutsideTheGrant)
+        );
+        assert_eq!(ErrorClass::of_wire_code(-9), Some(ErrorClass::NotReady));
+    }
+
+    /// The operator line is the class name and the code. The English
+    /// rendering is not part of it, so a caller cannot match on prose.
+    #[test]
+    fn the_operator_line_is_the_class_and_the_code() {
+        let refusal = RpcError::new(
+            ErrorClass::OutsideTheGrant,
+            Diagnostic::new("rpc.grant", "english the operator must not see"),
+        );
+        assert_eq!(refusal.report(), "OutsideTheGrant rpc.grant");
+        assert_eq!(refusal.class.name(), "OutsideTheGrant");
+    }
+
+    /// `option_set` carries `data` as a list of configuration refusals.
+    /// Reading that list as one diagnostic loses every stable code.
+    #[test]
+    fn a_configuration_refusal_list_keeps_every_code() {
+        let error = serde_json::json!({
+            "code": crate::CORE_RPC_ERROR_CODE_CONFIG_REFUSED,
+            "message": "english the caller must not match",
+            "data": [{
+                "code": "config.value.range",
+                "option": "data-dir",
+                "source": "runtime",
+                "params": [["name", "data-dir"]],
+                "message": "data-dir cannot change while running"
+            }]
+        });
+        let read = read_error_object(&error).expect("a refusal list is a diagnostic");
+        assert_eq!(read.class, ErrorClass::RefusedByMethod);
+        assert_eq!(read.diagnostic.code, "config.value.range");
+        assert_eq!(
+            read.diagnostic.message,
+            "data-dir cannot change while running"
+        );
+        assert_eq!(
+            read.diagnostic.params,
+            vec![("name".to_owned(), "data-dir".to_owned())]
         );
     }
 

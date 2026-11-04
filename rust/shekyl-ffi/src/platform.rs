@@ -7,6 +7,7 @@
 //! (IG-13): the passwd entry on Unix, the local application data folder on
 //! Windows. Never `HOME`, `XDG_*` or `%APPDATA%`. The daemon's
 //! configuration takes the result as a value (`shekyl_daemon_config::Platform`).
+//! Process hardening is [`crate::harden`].
 
 use std::path::PathBuf;
 

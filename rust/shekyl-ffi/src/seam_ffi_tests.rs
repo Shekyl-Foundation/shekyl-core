@@ -40,6 +40,39 @@ fn bind() {
     );
 }
 
+/// The daemon's router is attached (CS-5 §2): the bind takes what the
+/// node's chain-sync owner left, attaches the router to the owner's
+/// sender, and sends the owner the hub it minted. The slot is taken once,
+/// so a later bind (a test's rebind after a clear) is pass-through and
+/// leaves nothing behind.
+#[test]
+fn a_bind_attaches_the_router_to_the_nodes_owner_and_sends_it_the_hub() {
+    let _seam = seam_bind_lock().lock();
+    let (router_tx, routed) = tokio::sync::mpsc::unbounded_channel();
+    let (hub_tx, mut hub_rx) = tokio::sync::oneshot::channel();
+    crate::chain_sync_ffi::install(
+        router_tx,
+        hub_tx,
+        tokio::sync::watch::channel(shekyl_chain_sync::SyncState::NoView).1,
+    );
+    bind();
+    let hub = hub_rx.try_recv().expect("the bind sent the owner its hub");
+    assert!(
+        crate::chain_sync_ffi::take().is_none(),
+        "the bind took the slot"
+    );
+    assert!(
+        !routed.is_closed(),
+        "the router holds the owner's sender: it is attached"
+    );
+    drop(hub);
+    unbind();
+    assert!(routed.is_closed(), "the attached router went with its hub");
+    bind();
+    assert!(crate::chain_sync_ffi::take().is_none());
+    unbind();
+}
+
 /// The ban path (DX-Q3, Q11) under a bound hub: a ban closes a live
 /// session and refuses the next dial; `remaining`, the listing and
 /// `lift` read and change the hub's table; a subnet ban covers a host

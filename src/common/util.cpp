@@ -67,7 +67,6 @@ using namespace epee;
 
 #include "crypto/crypto.h"
 #include "util.h"
-#include "stack_trace.h"
 #include "memwipe.h"
 #include "net/net_parse_helpers.h"                  // epee::net_utils::parse_url
 #include "string_tools.h"                           // epee::string_tools
@@ -651,41 +650,6 @@ std::string get_nix_version_display_string()
     return false;
   }
 
-#ifdef STACK_TRACE
-#ifdef _WIN32
-  // https://stackoverflow.com/questions/1992816/how-to-handle-seg-faults-under-windows
-  static LONG WINAPI windows_crash_handler(PEXCEPTION_POINTERS pExceptionInfo)
-  {
-    tools::log_stack_trace("crashing");
-    exit(1);
-    return EXCEPTION_CONTINUE_SEARCH;
-  }
-  static void setup_crash_dump()
-  {
-    SetUnhandledExceptionFilter(windows_crash_handler);
-  }
-#else
-  static void posix_crash_handler(int signal)
-  {
-    tools::log_stack_trace(("crashing with fatal signal " + std::to_string(signal)).c_str());
-#ifdef NDEBUG
-    _exit(1);
-#else
-    abort();
-#endif
-  }
-  static void setup_crash_dump()
-  {
-    signal(SIGSEGV, posix_crash_handler);
-    signal(SIGBUS, posix_crash_handler);
-    signal(SIGILL, posix_crash_handler);
-    signal(SIGFPE, posix_crash_handler);
-  }
-#endif
-#else
-  static void setup_crash_dump() {}
-#endif
-
   bool disable_core_dumps()
   {
 #ifdef __GLIBC__
@@ -737,8 +701,6 @@ std::string get_nix_version_display_string()
     // wallet missing-config MERROR, the daemon FAT32 MERROR) reach stderr
     // through shekyl_log_emit's pre-init passthrough. They do not install
     // the subscriber, so they cannot recreate the inert `--log-file` bug.
-
-    setup_crash_dump();
 
     sanitize_locale();
 

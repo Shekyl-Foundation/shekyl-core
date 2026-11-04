@@ -78,7 +78,7 @@ use shekyl_types::{
     AttestationRoot, BlockCount, BlockHash, BlockHeight, ChainCount, CurveTreeRoot, TxHash,
 };
 
-use crate::core::{ConnectionsSnapshot, CoreRpc, P2pRead, PeerEntry, SyncSpansSnapshot};
+use crate::core::{ConnectionsSnapshot, CoreRpc, P2pRead, PeerEntry};
 use crate::ffi;
 
 /// What this daemon **is**: the two identity facts a client checks at
@@ -216,6 +216,10 @@ pub enum FactsFault {
     /// reported as a size of `0` — an empty store is `0`, and a store that
     /// cannot be read is not that (RK-D23).
     StoreUnreadable,
+    /// The process has no peer lists. An online daemon whose dialer is not
+    /// up. An empty list is a different answer. A null C++ core handle is
+    /// [`Self::NullHandle`], and a missing seam hub is [`Self::HubAbsent`].
+    ListsAbsent,
     /// The p2p hub is not up in this process, so there is no board to count
     /// sessions on. Raised by [`crate::info_facts::sessions`],
     /// and never reported as zero sessions: a node whose p2p layer has not
@@ -235,6 +239,15 @@ impl FactsFault {
             ffi::SHEKYL_RPC_FACTS_ERR_INTERNAL => Self::Internal,
             ffi::SHEKYL_RPC_FACTS_ERR_INCONSISTENT => Self::Inconsistent,
             other => Self::Unknown(other),
+        }
+    }
+}
+
+impl From<crate::p2p_reads::P2pFault> for FactsFault {
+    fn from(fault: crate::p2p_reads::P2pFault) -> Self {
+        match fault {
+            crate::p2p_reads::P2pFault::NoLists => Self::ListsAbsent,
+            crate::p2p_reads::P2pFault::NoHub => Self::HubAbsent,
         }
     }
 }
@@ -336,8 +349,6 @@ pub trait P2pFacts: Send + Sync {
     fn net_stats(&self) -> Result<NetStats, FactsFault>;
     /// The live connections and the single instant they were read at.
     fn connections(&self) -> Result<ConnectionsSnapshot, FactsFault>;
-    /// The block-download queue and the stripe this node wants next.
-    fn sync_spans(&self) -> Result<SyncSpansSnapshot, FactsFault>;
     /// The peerlist, white entries then gray. `public_only` selects a
     /// different p2p call, not a filter over one result.
     /// [`P2pRead::Offline`] for a daemon started offline.
@@ -364,8 +375,9 @@ pub struct NetStats {
     pub total_bytes_out: u64,
 }
 
-/// Production [`P2pFacts`] over the C++ protocol handler. The chain reads
-/// go through [`crate::store_facts::StoreFacts`].
+/// Production [`P2pFacts`]. Connections and net stats still read the C++
+/// protocol handler. The peer list reads [`crate::p2p_reads`]. The chain
+/// reads go through [`crate::store_facts::StoreFacts`].
 pub struct FfiP2pFacts {
     core: Arc<CoreRpc>,
 }
@@ -392,18 +404,12 @@ impl P2pFacts for FfiP2pFacts {
         self.core.connections().map_err(FactsFault::from_code)
     }
 
-    fn sync_spans(&self) -> Result<SyncSpansSnapshot, FactsFault> {
-        self.core.sync_spans().map_err(FactsFault::from_code)
-    }
-
     fn peer_list(&self, public_only: bool) -> Result<P2pRead<Vec<PeerEntry>>, FactsFault> {
-        self.core
-            .peer_list(public_only)
-            .map_err(FactsFault::from_code)
+        self.core.peer_list(public_only)
     }
 
     fn p2p_state(&self) -> Result<P2pRead<()>, FactsFault> {
-        CoreRpc::p2p_state().map_err(FactsFault::from_code)
+        CoreRpc::p2p_state()
     }
 }
 

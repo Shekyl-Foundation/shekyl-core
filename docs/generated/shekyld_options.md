@@ -33,11 +33,11 @@
 | `notify-block` | command (an array of words; placeholders `{height}`, `{hash}`) | — | file | no | A command to run on a new block, with {height} and {hash}. |
 | `notify-reorg` | command (an array of words; placeholders `{split-height}`, `{height}`, `{added}`, `{removed}`) | — | file | no | A command to run on a reorganization, with {split-height}, {height}, {added} and {removed}. |
 | `notify-block-rate` | command (an array of words; placeholders `{window}`, `{observed}`, `{expected}`) | — | file | no | A command to run on a block-rate warning, with {window}, {observed} and {expected}. |
-| `mine-address` | Shekyl address | — | both | no | Mine to this address from start. |
+| `mine` | `on` / `off` | `off` | both | no | Start the miner at start, to mine-address. |
+| `mine-address` | Shekyl address | — | both | no | The address the miner pays. |
 | `mine-threads` | integer ≥ 1, or `auto` | `auto` | both | no | The mining thread count, or `auto`. |
 | `rpc-admin-listen` | list of IP endpoint (`address:port`) (`none` for empty) | 127.0.0.1 and the network's rpc port | both | no | The plaintext full-access listeners, loopback only; `none` is no admin listener. |
 | `rpc-view-listen` | list of IP endpoint (`address:port`) (`none` for empty) | `none` | both | no | The plaintext view listeners, loopback only. |
 | `rpc-cors-origin` | list of web origin (`none` for empty) | `none` | both | no | Web origins allowed to call the RPC; `none` denies all. `*` is refused. |
 | `rpc-connections-max` | integer ≥ 1 | `25` | both | no | The RPC connection cap. |
-| `console` | switch | — | command line | no | Run the interactive console. |
 <!-- development rows, live on the named networks only and not in --help: dev-clearnet-encrypt (testnet, stagenet, regtest); dev-sync (regtest); dev-relay-cover (testnet, stagenet, regtest); dev-rpc (regtest); dev-difficulty (regtest); dev-pow-seed-epoch-blocks (regtest); dev-pow-seed-epoch-lag (regtest); dev-settlement-epoch-blocks (regtest); dev-archival-reorg-depth (regtest) -->

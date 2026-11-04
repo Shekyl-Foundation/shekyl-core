@@ -154,6 +154,9 @@ pub(super) struct RegtestDaemon {
     /// asked for. `None` for the ordinary spawn, so no existing test grows a
     /// listener it did not ask for.
     restricted_url: Option<String>,
+    /// The network `shekyl-cli` is given when a test runs a §13 word.
+    /// `None` on regtest: the CLI has no name for a fakechain daemon.
+    cli_network: Option<&'static str>,
     /// The schedule levers this daemon was spawned under, if any — recorded
     /// so a captured chain's manifest states the `(SEB, cap)` its blocks
     /// were mined under (`DRS_E4_ARCHIVAL_WRITER.md` `ARW-15`: the replay
@@ -163,11 +166,11 @@ pub(super) struct RegtestDaemon {
     /// Whether this daemon was started offline (both connectors off). Its
     /// `get_info` must then report that state, not a count of zero.
     offline: bool,
-    /// Whether this daemon posts a template at open: a regtest daemon with
-    /// no peers reads `Synced` at open and posts once its follower has
-    /// looped (`shekyl-node` `sync_at_open`). Readiness then includes that
-    /// post: a `generateblocks` sent before it is honestly refused
-    /// `mine.not_synced` by a daemon whose RPC is already up.
+    /// Whether this daemon posts a template at open: an offline daemon is
+    /// synced from open on any network (`Declaration::Offline`, CS-Q2 step
+    /// 8) and posts once its follower has looped. Readiness then includes
+    /// that post: a `generateblocks` sent before it is honestly refused by
+    /// a daemon whose RPC is already up.
     posts_at_open: bool,
     /// When true, `Drop` leaves `data_dir` in place. Set only by
     /// `start_keeping_data`. Every other spawn deletes the directory.
@@ -185,22 +188,33 @@ pub(super) struct RegtestDaemon {
 /// How a spawned daemon takes part in peer-to-peer.
 #[derive(Clone, Copy, Debug)]
 enum Peering {
-    /// `--clearnet off --tor off`: no listener and no dial. The protocol
-    /// starts synchronized, so a submitted transaction finds no route and
-    /// is broadcast-recorded within milliseconds.
+    /// `--clearnet off --tor off`: no listener and no dial. Both
+    /// connectors off is the operator's declaration that the node has no
+    /// network to be behind (`Declaration::Offline`, CS-Q2 step 8), so
+    /// chain sync reads `Synced` from open on any network, and a submitted
+    /// transaction finds no route and is broadcast-recorded within
+    /// milliseconds.
     Offline,
     /// Bound on loopback and dialling exactly one peer.
     ///
     /// `--p2p-closed-peer` is what keeps the daemon off the public
     /// network: a closed list is the condition under which it dials no
-    /// seed. `--tor off` declines the managed Tor, so the node is
+    /// seed. It is also the operator naming the node's whole network
+    /// (`Declaration::Closed`, CS-Q2 step 8): with its peer down the node
+    /// reads `Synced` and mines alone, and when the peer is up its opening
+    /// runs. `--tor off` declines the managed Tor, so the node is
     /// clearnet-only and a local origin takes the stem slot, not a hidden
     /// own-edge.
     Linked {
         p2p_port: u16,
         peer_p2p_port: u16,
-        /// `--dev-sync off`: the daemon never reports itself synchronized,
-        /// so it drops every transaction a peer sends it and relays none.
+        /// `--dev-sync off`: the daemon requests nothing (`Requesting::Off`)
+        /// and follows its peer by announcements alone. It is synchronized
+        /// at the tip like any closed node (CS-Q2 step 8), but once its
+        /// peer mines ahead it cannot fetch the chain and stays `Behind`,
+        /// and a node that is behind ignores every transaction a peer sends
+        /// it. Observed 2026-11-01: synced at heights 1 and 2, then behind
+        /// while its peer mined to 70, ignoring the stem transaction.
         sink: bool,
     },
     /// Bound on loopback and dialling exactly `peers`, two simulated
@@ -235,8 +249,7 @@ pub(super) fn mine_address_from_seed(
     seed: &[u8; shekyl_crypto_pq::account::SEED_BYTES],
     network: shekyl_address::Network,
 ) -> String {
-    use shekyl_crypto_pq::account::{account_from_seed, Network};
-    account_from_seed(seed, Network::Regtest)
+    shekyl_crypto_pq::account::account_from_seed(seed, network)
         .expect("the keys")
         .1
         .to_address(network)
@@ -262,13 +275,15 @@ struct RegtestSpawn {
     network: SpawnNetwork,
     schedule: Option<RegtestSchedule>,
     restricted_listener: bool,
-    console: bool,
     peering: Peering,
     mine_address: Option<String>,
     /// Leave the data directory in place when the daemon is dropped.
     /// The DX-Q8 capture is the caller. The default deletes, except under
     /// a failing test (`Drop` keeps the directory while its thread panics).
     keep_data: bool,
+    /// Another daemon binary than `SHEKYLD_BIN`: a released version, for a
+    /// mixed-version walk.
+    binary: Option<PathBuf>,
 }
 
 impl RegtestSpawn {
@@ -279,20 +294,21 @@ impl RegtestSpawn {
             network: SpawnNetwork::Regtest,
             schedule: None,
             restricted_listener: false,
-            console: false,
             peering: Peering::Offline,
             mine_address: None,
             keep_data: false,
+            binary: None,
         }
+    }
+
+    /// Spawn `binary` instead of `SHEKYLD_BIN`.
+    fn with_binary(mut self, binary: PathBuf) -> Self {
+        self.binary = Some(binary);
+        self
     }
 
     fn with_mine_address(mut self, address: String) -> Self {
         self.mine_address = Some(address);
-        self
-    }
-
-    fn with_console(mut self) -> Self {
-        self.console = true;
         self
     }
 
@@ -433,7 +449,7 @@ impl RegtestDaemon {
         match std::env::var_os("SHEKYLD_BIN") {
             Some(p) => PathBuf::from(p),
             None => panic!(
-                "SHEKYLD_BIN not set. Build the daemon (cmake --build build --target daemon) \
+                "SHEKYLD_BIN not set. Build the daemon (cmake --build build --target cargo-build_shekyld) \
                  and run e.g. SHEKYLD_BIN=/abs/path/build/bin/shekyld cargo test ... -- --ignored"
             ),
         }
@@ -521,14 +537,6 @@ impl RegtestDaemon {
         Self::spawn(RegtestSpawn::new(Some(serial)).keeping_data()).await
     }
 
-    /// Spawn the daemon with its interactive console live (`--console`), so
-    /// a test can put commands to the **in-process** arm. Opt-in: the
-    /// console is what reads stdin; without it nothing does.
-    pub(super) async fn start_with_console() -> RegtestDaemon {
-        let serial = serial_lock().lock_owned().await;
-        Self::spawn(RegtestSpawn::new(Some(serial)).with_console()).await
-    }
-
     /// Spawn the daemon with a second, restricted listener, so one daemon serves
     /// both postures and a test can put the same request to each.
     ///
@@ -580,14 +588,14 @@ impl RegtestDaemon {
             network,
             schedule,
             restricted_listener,
-            console,
             peering,
             mine_address,
             keep_data,
+            binary,
         } = spec;
         install_wallet_tracing();
 
-        let bin = Self::binary();
+        let bin = binary.unwrap_or_else(Self::binary);
         let offline = matches!(peering, Peering::Offline);
         let p2p_ports: Vec<u16> = match &peering {
             Peering::Offline => Vec::new(),
@@ -683,12 +691,6 @@ impl RegtestDaemon {
                 }
             }
         }
-        // `--console` only when the test drives the daemon's own console:
-        // the console is what reads stdin, and it is what makes the
-        // in-process arm reachable.
-        if console {
-            cmd.arg("--console");
-        }
         let restricted_port = restricted_listener.then(|| {
             let mut taken = p2p_ports.to_vec();
             taken.push(rpc_port);
@@ -703,11 +705,7 @@ impl RegtestDaemon {
         }
         cmd.stdout(Stdio::from(log.try_clone().expect("clone log")))
             .stderr(Stdio::from(log))
-            // Piped, not null: the daemon's *own* console is a second arm of
-            // every ported console command — the one that reaches the core
-            // in-process rather than over HTTP. RK-4c shipped that arm broken
-            // because only the remote arm was ever exercised.
-            .stdin(Stdio::piped());
+            .stdin(Stdio::null());
         // The schedule rides the command line as the two regtest rows (the
         // daemon arms them at startup and refuses loudly on a bad pair).
         // The daemon reads no environment, so `None` has nothing to scrub:
@@ -742,8 +740,12 @@ impl RegtestDaemon {
             rpc,
             restricted_url: restricted_port.map(|p| format!("http://127.0.0.1:{p}")),
             schedule,
+            cli_network: match network {
+                SpawnNetwork::Regtest => None,
+                SpawnNetwork::Testnet => Some("testnet"),
+            },
             offline,
-            posts_at_open: offline && matches!(network, SpawnNetwork::Regtest),
+            posts_at_open: offline,
             keep_data,
             _serial: serial,
             recipe,
@@ -752,11 +754,11 @@ impl RegtestDaemon {
         daemon
     }
 
-    /// Poll `get_info` until the daemon answers (or time out).
-    /// A regtest daemon with no peers posts a template once its follower
-    /// has read `Synced`; until then `generateblocks` is refused
-    /// `mine.not_synced` (`no_view`), which is the daemon's honest answer
-    /// and not a test's finding. Ready is the first posted job.
+    /// Poll `get_miner_data` until the daemon has posted a job (or time
+    /// out). An offline daemon posts a template once its follower has read
+    /// `Synced`; until then `generateblocks` is refused `mine.starting`,
+    /// which is the daemon's honest answer and not a test's finding. Ready
+    /// is the first posted job.
     async fn await_posted(&self, deadline: Instant, log_path: &std::path::Path) {
         let mut last = String::new();
         while Instant::now() < deadline {
@@ -1054,35 +1056,51 @@ impl RegtestDaemon {
         &self.rpc
     }
 
-    /// Run one command in the daemon's **own** console — the in-process arm,
-    /// which reaches the core directly rather than over HTTP — and return what
-    /// it printed.
+    /// Run one §13 word through `shekyl-cli` against this daemon.
     ///
-    /// Reads the delta of the captured log rather than a pipe, because the
-    /// console writes through the daemon's message writers into the same
-    /// stdout the harness already captures.
-    pub(super) fn console(&mut self, command: &str) -> String {
-        use std::io::Write;
-        let log_path = self.data_dir.join("daemon.log");
-        let before = std::fs::metadata(&log_path).map(|m| m.len()).unwrap_or(0);
-        {
-            let stdin = self.child.stdin.as_mut().expect("daemon stdin is piped");
-            writeln!(stdin, "{command}").expect("write console command");
-            stdin.flush().expect("flush console command");
+    /// The C++ console is gone, so the harness spawns the binary. The
+    /// binary is `SHEKYL_CLI_BIN`. A regtest daemon is fakechain, which
+    /// the CLI cannot name; those words are covered by `shekyl-cli`'s
+    /// ignored regtest, which builds the renderer with `Fakechain` directly.
+    pub(super) fn console(&self, command: &str) -> String {
+        let Some(network) = self.cli_network else {
+            panic!(
+                "shekyl-cli cannot name a regtest daemon; run the word from \
+                 shekyl-cli's ignored regtest"
+            );
+        };
+        let bin = std::env::var_os("SHEKYL_CLI_BIN").unwrap_or_else(|| {
+            panic!(
+                "SHEKYL_CLI_BIN not set. Build shekyl-cli and pass the binary, \
+                 beside SHEKYLD_BIN"
+            );
+        });
+        let mut cmd = std::process::Command::new(bin);
+        cmd.args([
+            "--daemon-address",
+            &format!("http://127.0.0.1:{}", self.rpc_port),
+            "--network",
+            network,
+        ])
+        .args(command.split_whitespace())
+        .stdin(std::process::Stdio::null())
+        .stdout(std::process::Stdio::piped())
+        .stderr(std::process::Stdio::piped());
+        let child =
+            shekyl_tor_control_client::spawn_lock::spawn(&mut cmd).expect("spawn shekyl-cli");
+        let output = child.wait_with_output().expect("wait for shekyl-cli");
+        let mut text = String::from_utf8_lossy(&output.stdout).into_owned();
+        if !output.stderr.is_empty() {
+            text.push('\n');
+            text.push_str(&String::from_utf8_lossy(&output.stderr));
         }
-        let deadline = Instant::now() + Duration::from_secs(20);
-        while Instant::now() < deadline {
-            std::thread::sleep(Duration::from_millis(200));
-            let text = std::fs::read_to_string(&log_path).unwrap_or_default();
-            let start = usize::try_from(before).expect("log length fits usize");
-            if text.len() > start {
-                let fresh = &text[start..];
-                if fresh.contains("msgwriter") {
-                    return fresh.to_owned();
-                }
-            }
+        if text.trim().is_empty() {
+            panic!(
+                "shekyl-cli {command:?} exited {} with no output",
+                output.status
+            );
         }
-        panic!("console command {command:?} produced no output within 20s");
+        text
     }
 
     /// Base URL of the restricted listener, for a daemon spawned by
@@ -1248,7 +1266,7 @@ impl RegtestDaemon {
         cmd.args(&self.recipe)
             .stdout(Stdio::from(log.try_clone().expect("clone log")))
             .stderr(Stdio::from(log))
-            .stdin(Stdio::piped());
+            .stdin(Stdio::null());
         self.child = shekyl_tor_control_client::spawn_lock::spawn(&mut cmd)
             .unwrap_or_else(|e| panic!("respawn {}: {e}", bin.display()));
         self.await_ready().await;
@@ -1436,11 +1454,22 @@ async fn assert_tx_confirmed(daemon: &RegtestDaemon, txid: TxHash) -> u64 {
          connected at height {after}; that block carries {carried:?}"
     );
 
-    assert_eq!(
-        daemon.tx_pool_size().await,
-        0,
-        "the mined spend must leave the pool"
-    );
+    // `generateblocks` answers when the connector's tip reaches the
+    // target; the tip follower reconciles the pool after that commit, so
+    // the pool is read until it drains, within a bound.
+    let reconciled = Instant::now() + Duration::from_secs(30);
+    loop {
+        let size = daemon.tx_pool_size().await;
+        if size == 0 {
+            break;
+        }
+        assert!(
+            Instant::now() < reconciled,
+            "the mined spend must leave the pool: {size} transaction(s) still there 30 s \
+             after its block connected"
+        );
+        tokio::time::sleep(Duration::from_millis(100)).await;
+    }
 
     eprintln!("spend confirmed in the block that connected at height {after}");
     after
@@ -6654,23 +6683,15 @@ async fn native_handlers_apply_their_own_request_caps() {
     );
 }
 
-/// The ported console commands answer on the daemon's **own** console.
+/// `tx show` and `chain spent` answer through `shekyl-cli`.
 ///
-/// `print_tx` and `is_key_image_spent` render in Rust on two arms: over HTTP
-/// when invoked as `shekyld <command>`, and in-process when typed into the
-/// running daemon's console. Only the first was ever exercised, and RK-4c
-/// shipped the second broken — the live arm reached the methods by *route
-/// name* through `json_endpoint`, and the routes had just been deleted from
-/// the C++ dispatch table, so both commands answered "no reply".
-///
-/// The live arm now calls the facts path and the projection directly, which
-/// makes that particular breakage a compile error rather than a runtime one.
-/// This test is here for the part a compile error cannot cover: that the arm
-/// actually produces the right answer against a real core.
+/// The daemon's own console is deleted. The words run as a one-shot
+/// `shekyl-cli` against this daemon (`SHEKYL_CLI_BIN`). The daemon is
+/// testnet because the CLI cannot name a fakechain daemon.
 #[tokio::test]
-#[ignore = "Track-2 regtest: requires SHEKYLD_BIN; spawns a live daemon"]
-async fn ported_console_commands_answer_on_the_in_process_arm() {
-    let mut daemon = RegtestDaemon::start_with_console().await;
+#[ignore = "requires SHEKYLD_BIN and SHEKYL_CLI_BIN; spawns a live daemon"]
+async fn tx_show_and_chain_spent_answer_through_shekyl_cli() {
+    let daemon = RegtestDaemon::start_on_testnet().await;
 
     // The genesis coinbase is the one transaction a fresh regtest chain has,
     // and it is reachable without mining or spending.
@@ -6685,58 +6706,29 @@ async fn ported_console_commands_answer_on_the_in_process_arm() {
         .expect("genesis header carries a miner_tx_hash")
         .to_owned();
 
-    let out = daemon.console(&format!("print_tx {txid}"));
+    let out = daemon.console(&format!("tx show {txid}"));
     assert!(
         out.contains("Found in blockchain at height 0"),
-        "the in-process print_tx must locate the genesis coinbase; got:\n{out}"
-    );
-    assert!(
-        !out.contains("no reply"),
-        "the live arm must not be reaching a deleted C++ route; got:\n{out}"
+        "tx show must locate the genesis coinbase; got:\n{out}"
     );
 
-    let out = daemon.console(&format!("print_tx {txid} +meta"));
-    assert!(
-        out.contains("Size:") && out.contains("Weight:"),
-        "+meta must print size and weight, which the live arm computes from \
-         the body it fetched; got:\n{out}"
-    );
-
-    let out = daemon.console(
-        "is_key_image_spent 0000000000000000000000000000000000000000000000000000000000000003",
-    );
+    let out = daemon
+        .console("chain spent 0000000000000000000000000000000000000000000000000000000000000003");
     assert!(
         out.contains("unspent"),
-        "the in-process is_key_image_spent must answer; got:\n{out}"
+        "chain spent must answer; got:\n{out}"
     );
 }
 
-/// The five p2p console commands answer on the daemon's **own** console.
-///
-/// RK-5a's half of the gate above. Four of them read only this slice's
-/// methods and now render entirely in Rust; the fifth, `print_net_stats`,
-/// also reads `/get_limit`, which is RK-8's and is still served from the C++
-/// dispatch table.
-///
-/// **That bridged leg is why this test exists in this shape.** §2.1.1 permits
-/// a mixed command on two conditions: the leg names a route the C++ table
-/// really serves, and the command is covered here — so the slice that deletes
-/// the route turns this red instead of leaving `print_net_stats` answering a
-/// failure forever. RK-4c shipped exactly that failure, silently, because
-/// nothing exercised the in-process arm.
-///
-/// An idle regtest node has no peers, no connections and no download queue,
-/// so what these assertions pin is the part that is *not* the data: that each
-/// command reaches a live core, renders, and produces its own headings rather
-/// than a transport failure.
+/// The peer words answer through `shekyl-cli` on an offline testnet daemon.
 #[tokio::test]
-#[ignore = "Track-2 regtest: requires SHEKYLD_BIN; spawns a live daemon"]
-async fn ported_p2p_console_commands_answer_on_the_in_process_arm() {
-    let mut daemon = RegtestDaemon::start_with_console().await;
+#[ignore = "requires SHEKYLD_BIN and SHEKYL_CLI_BIN; spawns a live daemon"]
+async fn peer_words_answer_through_shekyl_cli() {
+    let daemon = RegtestDaemon::start_on_testnet().await;
 
     // This daemon runs offline, so each peer command prints the state,
     // not an empty table (Rick, 2026-10-14).
-    for command in ["sync_info", "print_cn", "print_pl", "print_pl_stats"] {
+    for command in ["sync status", "peer connections", "peer list", "peer stats"] {
         let out = daemon.console(command);
         // The log tail echoes the command and carries the log line; the
         // state is the line the console printed, and no table follows it.
@@ -6753,7 +6745,7 @@ async fn ported_p2p_console_commands_answer_on_the_in_process_arm() {
     // show. This daemon runs the default, unlimited, so each line ends in
     // the limit clause's unlimited form, and a leg that did not answer
     // would leave the clause out.
-    let out = daemon.console("print_net_stats");
+    let out = daemon.console("p2p stats");
     let limited: Vec<&str> = out
         .lines()
         .filter(|line| {
@@ -6765,7 +6757,7 @@ async fn ported_p2p_console_commands_answer_on_the_in_process_arm() {
     assert!(
         limited.iter().any(|l| l.starts_with("Received"))
             && limited.iter().any(|l| l.starts_with("Sent")),
-        "print_net_stats must render both lines with the limit clause the \
+        "p2p stats must render both lines with the limit clause the \
          link rows give; got:\n{out}"
     );
 }

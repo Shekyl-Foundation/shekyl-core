@@ -52,7 +52,8 @@ borrows mainnet constants for genesis, ports, and network id
 (`src/cryptonote_config.h:338–343`).
 
 **CLI activation.** `--network regtest` selects `FAKECHAIN`
-(`src/cryptonote_core/cryptonote_core.cpp:472–475`). The `network` row
+(`rust/shekyl-daemon-config/src/network.rs:63`, which `core::init` reads
+at `src/cryptonote_core/cryptonote_core.cpp:101`). The `network` row
 takes one word, so no second network can be named. Companion rows:
 
 - `--dev-difficulty <N>` — pin difficulty to a constant. Unset means

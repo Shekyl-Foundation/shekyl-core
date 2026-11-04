@@ -20,6 +20,8 @@ name = "shekyl-wallet-rpc"
 path = "src/main.rs"
 
 [dependencies]
+# The release version string (DC-Q20): the one crate that reads it.
+shekyl-version = { path = "../shekyl-version" }
 serde = { workspace = true }
 serde_json = { workspace = true }
 thiserror = { workspace = true }

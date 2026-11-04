@@ -43,17 +43,16 @@ shekyl-types = { path = "../shekyl-types" }
 # DRS-P0d logical-state digest v0. The hasher is safe-only; this crate
 # is the pointer boundary. DRS-E1 will grow shekyl-chain-store further.
 shekyl-chain-store = { path = "../shekyl-chain-store" }
-# The ingest service's door (`ingest_ffi`, DRS-X PR 2, DX-Q2 item 2):
-# the protocol handler's one entry, which needs the `pipeline` feature —
-# the service, its connector actor, the pool and the miner it feeds.
-# `kameo` and `tokio` were already in this crate's graph. Not the RPC
-# fetcher or clap: the default features stay off.
+# The connector's chain tip, which the dialer's handshake carries
+# (`dialer_ffi::publish_chain_tip`); its types need the `pipeline`
+# feature. Not the RPC fetcher or clap: the default features stay off.
 shekyl-chain-ingest = { path = "../shekyl-chain-ingest", default-features = false, features = ["pipeline"] }
 # The pool door (`pool_ffi`, DX-Q5). The flip is when an FFI crate names the pool.
 shekyl-mempool = { path = "../shekyl-mempool" }
 shekyl-chain-rules = { path = "../shekyl-chain-rules" }
-# The chain-sync router is the seam's post sink (`seam_ffi.rs`):
-# pass-through until the cutover attaches the sync owner.
+# The chain-sync router is the seam's post sink (`seam_ffi.rs`), attached
+# to the node's owner; `chain_sync_ffi` holds the slot and the state.
+shekyl-chain-sync = { path = "../shekyl-chain-sync" }
 shekyl-chain-sync-runtime = { path = "../shekyl-chain-sync-runtime" }
 # RandomX v2 light-cache PoW verifier. Consumed by `pow_randomx_ffi.rs`
 # (the `shekyl_pow_randomx_v2_*` exports) which is the consensus PoW
@@ -77,7 +76,7 @@ shekyl-tx-builder = { path = "../shekyl-tx-builder" }
 # Curve-tree client, exposed as a *replica* (`curve_tree_replica_ffi.rs`) so
 # the C++ test generator can fill block headers with real curve-tree roots
 # instead of a placeholder -- the retirement of CEN-B5's FAKECHAIN skip
-# (census R9). Brings `redb` into the daemon image ahead of the daemon redb
+# (census R9). Brings `redb` into the daemon's image ahead of the daemon redb
 # store (DRS), which needs it anyway; ruled by Rick 2026-09-05 over a
 # C++-LMDB generator oracle that the store rewrite would have deleted.
 shekyl-curve-tree = { path = "../shekyl-curve-tree" }
@@ -96,6 +95,11 @@ shekyl-wire = { path = "../shekyl-wire" }
 # silently dropped. See V3_WALLET_DECISION_LOG.md (single-image contract)
 # and the nm gate in src/daemon/CMakeLists.txt.
 shekyl-logging = { path = "../shekyl-logging" }
+# `libshekyl_ffi.a` is the one Rust archive every C++ binary links.
+# The RPC server (`shekyl-daemon-rpc`) stays out: it calls C++ functions of
+# `rpc` that no other C++ binary links (as pointers the daemon binary hands
+# it, DC-F43), and a crate of the archive is a crate every C++ binary may
+# pull a member of (DC-F26, corrected by DC-F30).
 # Dandelion++ embargo / propagation-timeout (`dandelionpp_ffi.rs`, RP-4).
 # Stem-map exports retired at RP-3a. The FFI owns the CSPRNG (`OsRng`); the
 # measurement crate stays deterministic.
@@ -199,6 +203,29 @@ harness = false
 # The known-folder roots for the daemon configuration (IG-13).
 shekyl-win-sec = { path = "../shekyl-win-sec" }
 # The snapshot export's narrow argv is the active code page. `windows-sys`
-# 0.61 is already in the lock through shekyl-win-sec; this names the one
-# module `argument_vector` calls (`MultiByteToWideChar`, `CP_ACP`).
-windows-sys = { version = "0.61", features = ["Win32_Globalization"] }
+# 0.61 is already in the lock through shekyl-win-sec; this names the
+# modules this crate calls: `argument_vector`'s (`MultiByteToWideChar`,
+# `CP_ACP`) and `platform::harden_process`'s (`SetErrorMode`,
+# `SetUnhandledExceptionFilter` and `EXCEPTION_POINTERS`, which the crate
+# gates behind `Win32_System_Kernel` for the `CONTEXT` they carry,
+# `TerminateProcess`, the `STATUS_*` codes; DC-Q21, DC-F38).
+windows-sys = { version = "0.61", features = [
+  "Win32_Foundation",
+  "Win32_Globalization",
+  "Win32_System_Diagnostics_Debug",
+  "Win32_System_Kernel",
+  "Win32_System_Threading",
+] }
+
+[target.'cfg(windows)'.dev-dependencies]
+# `tests/dc_q21_a_fault_ends_with_its_code.rs` sets a per-application
+# `LocalDumps` scratch policy for its own binary and removes it: the
+# registry module, and `Win32_Security` for the `SECURITY_ATTRIBUTES`
+# parameter `RegCreateKeyExW` is gated on (the `W` variant that takes the
+# 64-bit-view flag). It also clears the error mode its parent handed it
+# before hardening (`GetErrorMode`; DC-F44). Test-only: no shipped binary
+# writes the registry.
+windows-sys = { version = "0.61", features = [
+  "Win32_Security",
+  "Win32_System_Registry",
+] }

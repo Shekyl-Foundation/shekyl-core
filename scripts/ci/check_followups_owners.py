@@ -92,8 +92,11 @@ DESIGN_DIR = os.path.join(ROOT, "docs", "design")
 # compression itself (#1134), the list's length; 294 on 2026-11-01 when the
 # store's dead-table rows closed with the tables (layout 34); 288 the same
 # day when the docs sweep's closed rows (the C++ template fill, the
-# C++-anchored gates, `bi_cum_rct`) merged with it, the list's length.
-GRANDFATHER_CEILING = 286
+# C++-anchored gates, `bi_cum_rct`) merged with it, the list's length;
+# 285 on 2026-11-03 when CS-5's two rows (the 2004 continuation closed as
+# built, the bucket-length row given an owner) merged with dev's
+# unbond-journal close (#1237), the list's length.
+GRANDFATHER_CEILING = 285
 # How far the ceiling may sit above the list before the gate demands it be
 # lowered. Small enough that a burn-down is locked in within a few rows.
 GRANDFATHER_SLACK = 5

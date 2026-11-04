@@ -40,7 +40,6 @@
 use serde::{Deserialize, Serialize};
 
 use crate::chain::RpcStatus;
-use crate::nullable::Nullable;
 
 /// Response of `GET|POST /get_net_stats`. The request body is empty.
 ///
@@ -138,54 +137,70 @@ pub struct GetPeerListResponse {
     pub gray_list: Vec<Peer>,
 }
 
-/// The protocol state a connection is in, as the wire names it.
+/// What chain sync is doing with a session: its header run's mode (3.64).
 ///
-/// A **type**, not the C++ string: the daemon exports the raw enum value and
-/// this is the one place it becomes a name, so an unmapped value cannot
-/// silently render as some other state's name. [`ConnectionState::Unknown`]
-/// is the C++ `default:` arm made explicit — it exists because the enum is
-/// carried across an ABI, not because any state is expected to reach it.
+/// A session with no header run is [`SyncMode::Idle`]; it may still serve
+/// bodies. The names are the sync owner's (`shekyl_chain_sync::SessionMode`),
+/// which the node maps one to one.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
-pub enum ConnectionState {
-    BeforeHandshake,
-    Synchronizing,
-    Standby,
-    Normal,
-    Unknown,
+pub enum SyncMode {
+    /// No header run.
+    Idle,
+    /// In cap; a proved header joins the verified tree.
+    Reachable,
+    /// The long-run slot; headers stay off the tree until they beat the best chain.
+    Slot,
+    /// Verifying a prefix to compare with the slot holder.
+    Challenging,
+    /// Past the reorg cap, not hashed.
+    PastCap,
+    /// Past the cap and heavier than the local chain, waiting for the draw.
+    EvidenceCandidate,
+    /// The evidence check.
+    Evidence,
 }
 
-impl ConnectionState {
-    /// The name this state carries on the wire.
-    ///
-    /// Deliberately a second spelling of what `rename_all = "snake_case"`
-    /// produces, because the console prints the name and `Debug` would give
-    /// it `beforehandshake` where the same daemon's JSON says
-    /// `before_handshake`. The duplication is bounded by
-    /// `every_state_name_matches_its_serialization`, which asserts the two
-    /// agree for every variant — so this cannot drift from the wire without
-    /// a test going red.
+impl SyncMode {
+    /// The name this mode carries on the wire, which the console prints.
+    /// `every_mode_name_matches_its_serialization` holds the two together.
     #[must_use]
     pub const fn as_str(self) -> &'static str {
         match self {
-            Self::BeforeHandshake => "before_handshake",
-            Self::Synchronizing => "synchronizing",
-            Self::Standby => "standby",
-            Self::Normal => "normal",
-            Self::Unknown => "unknown",
+            Self::Idle => "idle",
+            Self::Reachable => "reachable",
+            Self::Slot => "slot",
+            Self::Challenging => "challenging",
+            Self::PastCap => "past_cap",
+            Self::EvidenceCandidate => "evidence_candidate",
+            Self::Evidence => "evidence",
         }
     }
 }
 
-impl From<u8> for ConnectionState {
-    /// Mirrors `get_protocol_state_string`, including its `default:` arm.
-    fn from(raw: u8) -> Self {
-        match raw {
-            0 => Self::BeforeHandshake,
-            1 => Self::Synchronizing,
-            2 => Self::Standby,
-            3 => Self::Normal,
-            _ => Self::Unknown,
+/// Chain sync's derived state, as the wire names it (3.64).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ChainSyncState {
+    /// No session has completed a handshake.
+    NoView,
+    /// The local chain has less work than the best verified chain.
+    Behind,
+    /// On the best verified chain, while the backward fill is short.
+    Following,
+    /// On the best verified chain, and the fill has reached its checkpoint.
+    Synced,
+}
+
+impl ChainSyncState {
+    /// The name this state carries on the wire, which the console prints.
+    #[must_use]
+    pub const fn as_str(self) -> &'static str {
+        match self {
+            Self::NoView => "no_view",
+            Self::Behind => "behind",
+            Self::Following => "following",
+            Self::Synced => "synced",
         }
     }
 }
@@ -217,7 +232,9 @@ pub struct ConnectionInfo {
     pub recv_idle_time: u64,
     pub send_count: u64,
     pub send_idle_time: u64,
-    pub state: ConnectionState,
+    /// What chain sync is doing with the session (3.64). JSON null for a
+    /// session chain sync does not hold, such as one before its handshake.
+    pub state: Option<SyncMode>,
     /// Seconds since the connection was established.
     pub live_time: u64,
     /// KiB/s over the connection's whole life.
@@ -228,8 +245,8 @@ pub struct ConnectionInfo {
     pub current_upload: u64,
     /// The connection uuid as 32 lowercase hex characters.
     pub connection_id: String,
-    /// The peer's claimed blockchain height. JSON null when the strand
-    /// has not reported it. Zero would read as a real claim.
+    /// The block count the peer claims, from chain sync's view (3.64).
+    /// JSON null before it has claimed. Zero would read as a real claim.
     pub height: Option<u64>,
     /// epee address type id: 1 ipv4, 2 ipv6, 4 tor, …
     pub address_type: u8,
@@ -244,51 +261,76 @@ pub struct GetConnectionsResponse {
     pub connections: Vec<ConnectionInfo>,
 }
 
-/// A `sync_info` peer: the same [`ConnectionInfo`], nested under `info`.
-///
-/// The nesting is the wire's, not a modelling choice — `sync_info` carries a
-/// one-member wrapper struct where `get_connections` carries the object
-/// directly, and `sync_info_v3.json` pins both in one capture.
+/// A header request in flight to a session.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct SyncHeaderRequest {
+    /// Milliseconds since it was sent.
+    pub age_ms: u64,
+    /// Milliseconds until its response is late; 0 once it is.
+    pub due_in_ms: u64,
+}
+
+/// A body span in flight to a session.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct SyncBodyRequest {
+    /// The height of its first block.
+    pub start_height: u64,
+    /// How many blocks it asks for.
+    pub count: u64,
+    /// The response budget its deadline is planned for, in bytes.
+    pub planned_bytes: u64,
+    /// Milliseconds since it was sent.
+    pub age_ms: u64,
+    /// Milliseconds until its response is late; 0 once it is.
+    pub due_in_ms: u64,
+}
+
+/// One session in `sync_info` (3.64): who it is and what chain sync is
+/// doing with it.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct SyncInfoPeer {
-    pub info: ConnectionInfo,
-}
-
-/// One span of the block-download queue.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(deny_unknown_fields)]
-pub struct SyncSpan {
-    pub start_block_height: u64,
-    pub nblocks: u64,
-    /// The connection uuid as 32 lowercase hex characters.
+    /// The connection uuid as 32 lowercase hex characters, as
+    /// [`ConnectionInfo::connection_id`] renders it.
     pub connection_id: String,
-    /// Bytes/s, rounded half up.
-    pub rate: u32,
-    /// A percentage: the queue's 0..1 speed times 100, rounded half up.
-    pub speed: u32,
-    /// Bytes held for this span.
-    pub size: u64,
-    pub remote_address: String,
+    /// `host:port` for ipv4, the onion for tor.
+    pub address: String,
+    /// The block count the peer claims; null before it has claimed.
+    pub claimed_height: Option<u64>,
+    /// What its header run is doing.
+    pub mode: SyncMode,
+    /// The header request in flight to it, null when none is.
+    pub header_request: Option<SyncHeaderRequest>,
+    /// The body spans in flight to it. Omitted when empty.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub body_requests: Vec<SyncBodyRequest>,
+    /// Bytes per second its last header or body response arrived at; null
+    /// until one has.
+    pub rate: Option<u64>,
 }
 
-/// Result of the `sync_info` JSON-RPC method.
+/// Result of the `sync_info` JSON-RPC method (3.64): chain sync's view.
+/// Whether the node is syncing, toward what, from whom and how fast, and
+/// whether it is stuck.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct SyncInfoResponse {
     pub status: RpcStatus,
-    /// Chain height: top block height plus one.
+    /// The local chain's block count: top block height plus one.
     pub height: u64,
-    /// The core's target count, `null` when the core reports none. A
-    /// synchronized node reports the target the core named.
-    pub target_height: Nullable<u64>,
+    /// What sync works toward: the best verified chain's block count.
+    /// Equal to `height` on the best chain.
+    pub target_height: u64,
+    /// Chain sync's derived state.
+    pub state: ChainSyncState,
+    /// Behind, with nothing moving toward the target: no session's chain
+    /// serves what the node still needs.
+    pub stalled: bool,
+    /// One row per session chain sync holds. Omitted when empty.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub peers: Vec<SyncInfoPeer>,
-    #[serde(default, skip_serializing_if = "Vec::is_empty")]
-    pub spans: Vec<SyncSpan>,
-    /// An ASCII picture of the download queue — `"[]"` when it is empty. A
-    /// *string* holding brackets, not an empty array.
-    pub overview: String,
 }
 
 /// A reply about peers or connections, from a daemon that may have been
@@ -420,20 +462,29 @@ where
 
 #[cfg(test)]
 mod tests {
-    use super::ConnectionState;
+    use super::{ChainSyncState, SyncMode};
 
-    /// `as_str` and serde must agree for every variant. The console prints
-    /// the first and the wire carries the second, and a daemon that answered
-    /// `normal` over JSON while printing something else on its own console
-    /// would be describing one connection two ways.
+    /// `as_str` and serde agree for every mode and state. The console prints
+    /// the first and the wire carries the second.
     #[test]
-    fn every_state_name_matches_its_serialization() {
+    fn every_mode_name_matches_its_serialization() {
+        for mode in [
+            SyncMode::Idle,
+            SyncMode::Reachable,
+            SyncMode::Slot,
+            SyncMode::Challenging,
+            SyncMode::PastCap,
+            SyncMode::EvidenceCandidate,
+            SyncMode::Evidence,
+        ] {
+            let serialized = serde_json::to_string(&mode).expect("serialize");
+            assert_eq!(format!("\"{}\"", mode.as_str()), serialized, "{mode:?}");
+        }
         for state in [
-            ConnectionState::BeforeHandshake,
-            ConnectionState::Synchronizing,
-            ConnectionState::Standby,
-            ConnectionState::Normal,
-            ConnectionState::Unknown,
+            ChainSyncState::NoView,
+            ChainSyncState::Behind,
+            ChainSyncState::Following,
+            ChainSyncState::Synced,
         ] {
             let serialized = serde_json::to_string(&state).expect("serialize");
             assert_eq!(format!("\"{}\"", state.as_str()), serialized, "{state:?}");

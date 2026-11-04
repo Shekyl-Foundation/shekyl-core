@@ -8,48 +8,11 @@
 // The epoch geometry (`H_open` / `H_close` / `H_slash_deadline`) has one
 // home, `shekyl_archival_retention::consensus_state`; this module marshals
 // it across the C edge and computes none of it.
-use shekyl_archival_retention::{
-    empty_attestation_root, ATTESTATION_HEADER_LEN, MAX_ATTESTATION_RECORDS,
-    MAX_ATTESTATION_WITNESS_BYTES,
-};
+use shekyl_archival_retention::empty_attestation_root;
 pub use shekyl_archival_retention::{
     settlement_epoch_last_block, settlement_epoch_open_height,
     settlement_epoch_slash_deadline_height,
 };
-
-// ── Attestation-witness cross-language constant authorities (credit-wire CW-2,
-//    gate CW-1b-iv). These expose the Rust-side authoritative values so C++ can
-//    assert its own `config::` constants agree — the real gate replacing the "must
-//    equal" doc-comment. The block-hash differential is blind to the witness (it is
-//    not in the block blob), so these + the byte-pinned witness KAT are the only
-//    checks on this surface. ──
-
-/// Genesis-frozen consensus cap on attestation records per block. C++ asserts
-/// `config::ARCHIVAL_MAX_ATTESTATION_RECORDS` equals this.
-#[no_mangle]
-pub extern "C" fn shekyl_archival_max_attestation_records() -> u64 {
-    MAX_ATTESTATION_RECORDS as u64
-}
-
-/// Canonical length of one kept attestation header (`p_id ‖ s ‖ E ‖ kind`). C++
-/// asserts `config::ARCHIVAL_ATTESTATION_HEADER_BYTES` equals this.
-#[no_mangle]
-pub extern "C" fn shekyl_archival_attestation_header_bytes() -> u64 {
-    ATTESTATION_HEADER_LEN as u64
-}
-
-/// The EXACT maximum canonical byte length of a block's attestation witness
-/// (`count ‖ MAX records × (nonce ‖ anchor_height_le ‖ HybridSignature)`, `SF-D8` v2).
-///
-/// `config::ARCHIVAL_ATTESTATION_WITNESS_MAX_BYTES` is defined as this same
-/// quantity and C++ asserts equality. Below it, C++ would reject on the wire a
-/// witness Rust admits — a consensus split; above it, every block gets that much
-/// free padding an attacker may fill. Equality is the only value with neither
-/// property, and it makes any drift in either language's operands loud.
-#[no_mangle]
-pub extern "C" fn shekyl_archival_attestation_witness_max_bytes() -> u64 {
-    MAX_ATTESTATION_WITNESS_BYTES as u64
-}
 
 /// Empty-set archival attestation root — `attestation_root(&[])`
 /// (`ARCHIVAL_CREDIT_WIRE.md` §3). The valid empty commitment a block header

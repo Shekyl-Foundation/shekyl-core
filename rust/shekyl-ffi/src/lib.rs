@@ -108,7 +108,7 @@ pub mod archival_ffi;
 pub mod ct_balance_ffi;
 
 // Production OsRng → RelayRng adapter shared by the relay FFI seams.
-mod secure_relay_rng;
+pub mod secure_relay_rng;
 
 // Dandelion++ embargo / propagation-timeout FFI — RP-4
 // (`DAEMON_RELAY_PRIVACY.md` §17). Stem-map exports retired at RP-3a; the zone
@@ -142,11 +142,6 @@ pub mod inbound_ceiling_ffi;
 /// before the remnant runs. Not a snapshot field (§2.9).
 pub mod remnant_prep;
 
-// The protocol handler's one entry into the ingest service (DRS-X PR 2,
-// DX-Q2 item 2): spans in, one reply per arrival posted to the strand.
-// Built and tested here; the store flip routes the handler's arrivals to it.
-pub mod ingest_ffi;
-
 // The protocol handler's door into the node's pool (DRS-X flip, DX-Q5).
 pub mod pool_ffi;
 
@@ -178,10 +173,6 @@ pub mod link_ffi;
 /// The notify runner: the owner of the three notify commands
 /// (`DAEMON_CONFIG_CUTOVER.md` §2.10); the C++ event sites push facts to it.
 pub mod notify_ffi;
-/// The chain-sync heuristics that read the outbound target
-/// (`DAEMON_CONFIG_CUTOVER.md` §4.2): decided here, the C++ hands over counts.
-pub mod sync_ffi;
-
 // The published board. Counts are integers. Address walks receive a
 // snapshot whose row is the id, the handshake flag, and the endpoint.
 pub mod seam_board_ffi;
@@ -212,12 +203,16 @@ pub mod peer_policy_ffi;
 /// The account's home from the operating system's account interface (IG-13).
 pub mod platform;
 
+/// Process hardening: no core, and a same-account process cannot attach
+/// (DC-Q21). The first statement of `shekyl_daemon::main`.
+pub mod harden;
+
 /// The daemon's panic hook: a panic is never silent under `panic = "abort"`.
 pub mod panic_hook;
 
 // Single-Rust-image contract: re-export shekyl-logging so its
 // `#[no_mangle]` C exports (`shekyl_log_init_*`, `shekyl_log_emit`,
-// `shekyl_log_install_tracing_forwarder`, …) are compiled into
+// `shekyl_log_set_categories`, …) are compiled into
 // `libshekyl_ffi.a`. Every wallet-side binary then links exactly one
 // Rust archive whose single `tracing-core` GLOBAL_DISPATCH is shared by
 // the C++-installed subscriber and every `tracing::*` call site in this
@@ -226,6 +221,11 @@ pub mod panic_hook;
 // silently dropped. See V3_WALLET_DECISION_LOG.md (single-image
 // contract).
 pub use shekyl_logging;
+
+// The RPC server (`shekyl-daemon-rpc`) is not re-exported: it imports C++
+// symbols from `rpc`, and a member of this archive can be pulled into any
+// C++ binary by a shared monomorphization (DAEMON_CONFIG_CUTOVER.md
+// DC-F26, corrected by DC-F30).
 
 // Legacy monofile FFI surface (split from the former body of this file).
 // Domain modules keep #[no_mangle] symbols; this root only wires and re-exports.

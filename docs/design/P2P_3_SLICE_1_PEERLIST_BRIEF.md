@@ -771,7 +771,7 @@ address is unaffected).
 | Behavior | Where | Rust |
 | --- | --- | --- |
 | Promote from a bare address and stamp now | `set_peer_just_seen`, `net_peerlist.h:334` | No such function. White is written only by `apply` under §5 |
-| Two white writes on one kept outbound dial | `set_peer_just_seen` at `src/p2p/net_node.inl:801` and `append_with_peer_white` at `:1707` | One `apply`, and only for `SessionAccepted` or `Confirmed` of the gray draw (*records-was:* or `HarvestDone` of a Foundation host, withdrawn 2026-10-11) |
+| Two white writes on one kept outbound dial | `set_peer_just_seen` at `net_node.inl:1403` and `append_with_peer_white` at `:1707` | One `apply`, and only for `SessionAccepted` or `Confirmed` of the gray draw (*records-was:* or `HarvestDone` of a Foundation host, withdrawn 2026-10-11) |
 | `trust_last_seen` | `append_with_peer_white`, `net_peerlist.h:347` | No flag. The clock moves only on contact this node initiated |
 | Gossiped `last_seen` stored on gray insert | `net_peerlist.h:239`, `net_peerlist.h:405` | Ignored. Gray has no clock |
 | Time order as a rank | `by_time` at `net_peerlist.h:184`; the dial sort at `src/p2p/net_node.inl` lines 1935 to 1938 (at the slice's tree) | Uniform draws. Load is unordered |

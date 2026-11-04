@@ -15,6 +15,12 @@ Sources:
 3. `rust/Cargo.toml`: `[profile.release]`, the recognised keys only.
 4. `rust/.cargo/config.toml`: each target's `rustflags`.
 5. `cmake/BuildRust.cmake`: cargo invocations, `-C` tokens, environment.
+   The daemon's cargo run is Corrosion's (`corrosion_import_crate`), and
+   the flags and environment this file hands it are tokens in the same
+   file, read the same way. What Corrosion adds of its own is one
+   rustflag, `-Cdefault-linker-libraries=yes` (a linker setting, no
+   codegen), and `CARGO_BUILD_RUSTC` naming the rustup proxy; both are in
+   external/corrosion, a pinned submodule, not here.
 6. `contrib/gitian/gitian-*.yml`: the toolchain each release build
    installs. A descriptor builds through make. A cargo or rustc
    command, a `RUSTUP_*` variable, or a `+` toolchain selector is
@@ -82,10 +88,14 @@ KNOWN_BUILD_ENV = frozenset({
     # Where cargo writes, pinned to the path the link reads (#1228); it
     # selects a directory, never a codegen setting.
     "CARGO_TARGET_DIR",
-    # The release version string, set only on the wallet binaries' build
-    # and read only by `shekyl-wallet-rpc`'s `option_env!` as a `&str`
-    # constant; no decapsulation crate reads it.
-    "SHEKYL_VERSION_FULL",
+    # The build identity (DC-Q20), set on the binaries' builds and read
+    # only by `shekyl-version`'s `option_env!` as `&str` and `bool`
+    # constants; no decapsulation crate reads them.
+    "SHEKYL_VERSION_FULL", "SHEKYL_RELEASE_NAME", "SHEKYL_VERSION_IS_RELEASE",
+    # Set on the daemon's Corrosion build and read by rust/shekyld/build.rs
+    # alone, which only decides whether to warn that a bare cargo build
+    # cannot link; nothing compiled reads it.
+    "SHEKYL_CMAKE_LINK",
     "CARGO_TARGET_<T>_RUSTFLAGS", "MACOSX_DEPLOYMENT_TARGET", "SDKROOT",
 })
 KNOWN_BUILD_FLAGS = frozenset({
@@ -96,7 +106,6 @@ KNOWN_BUILD_FLAGS = frozenset({
 CARGO_TAIL = frozenset({
     "${RUST_BUILD_FLAG}",
     "${RUST_TARGET_FLAG}",
-    "${_measurement_features}",
     "${_shekyl_rust_bin_pkg_args}",
 })
 CARGO_END = frozenset({

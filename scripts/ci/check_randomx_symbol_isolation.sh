@@ -67,7 +67,7 @@ fi
 BIN="$1"
 
 if [ ! -f "$BIN" ]; then
-  echo "FATAL: '$BIN' does not exist (build the 'daemon' target first)" >&2
+  echo "FATAL: '$BIN' does not exist (build the 'cargo-build_shekyld' target first)" >&2
   exit 2
 fi
 

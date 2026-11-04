@@ -171,7 +171,7 @@ class EraSelection(unittest.TestCase):
             f"### Slice\n\nReviewed at **`{UNBORN}`**.\n\n"
             "Evidence: `cryptonote_core/blockchain.cpp:1`.\n\n"
             "## Decision log\n\n"
-            "| 2026-09-05 | landed `tests/unit_tests/daemon_entry_layout.cpp` |\n"
+            "| 2026-09-05 | landed `tests/unit_tests/daemon_rpc_client.cpp` |\n"
         ) as doc:
             rc, out = run_gate(doc)
         self.assertEqual(rc, 0, out)
@@ -297,7 +297,7 @@ class SectionScopedEra(unittest.TestCase):
         with Fixture(
             f"#### R\n\nReviewed at `{UNBORN}`.\n\n"
             "| a | ok | `tests/unit_tests/curve_tree_header_root_check.cpp:1` |\n\n"
-            "## Other\n\n| b | ok | `block_queue.cpp:1` |\n"
+            "## Other\n\n| b | ok | `base2.h:1` |\n"
         ) as doc:
             rc, out = run_gate(doc)
         self.assertEqual(rc, 1)

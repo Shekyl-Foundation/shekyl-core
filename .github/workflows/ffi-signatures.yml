@@ -55,6 +55,10 @@ on:
       - "scripts/ci/cbindgen-ffi-bounds.toml"
       - "scripts/ci/ffi_layout_gate.py"
       - "scripts/ci/ffi_layout_gate.cpp"
+      # The snapshot-reader gate reads every C++ source under src/.
+      - "src/**/*.cpp"
+      - "src/**/*.inl"
+      - "scripts/ci/check_snapshot_readers.py"
       - ".github/workflows/ffi-signatures.yml"
 
 concurrency:
@@ -91,3 +95,10 @@ jobs:
         run: |
           python3 scripts/ci/check_cpp_import_signatures.py --selftest
           python3 scripts/ci/check_cpp_import_signatures.py
+      # The daemon snapshot holds only values a C++ reader still needs:
+      # every member has a read under src/, and the two pinned counts match
+      # the structure (DAEMON_CONFIG_CUTOVER.md §2.9).
+      - name: Run snapshot reader gate
+        run: |
+          python3 scripts/ci/check_snapshot_readers.py --selftest
+          python3 scripts/ci/check_snapshot_readers.py

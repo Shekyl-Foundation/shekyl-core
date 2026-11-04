@@ -4,8 +4,9 @@
 // BSD-3-Clause
 
 //! A peer's header run (CS-Q2 step 3): cheap checks, the work test, and
-//! the proof results. Body spans, the entry's outcomes, and the slot and
-//! evidence policy are the modules beside this one.
+//! the proof results. A header page is admitted in [`headers`]. Body spans,
+//! the entry's outcomes, and the slot and evidence policy are the modules
+//! beside this one.
 //!
 //! The coordinator draws the peer and the budget. The transitions here
 //! change that peer's mode.
@@ -13,21 +14,20 @@
 use std::time::Instant;
 
 use shekyl_chain_rules::{
-    seed_height, target_claim, AtHeight, CenRow, Fault, FormAttempt, FormedHeader, HeaderJudged,
-    HeaderView, OpenHeader, Retry, RuleSet, Stale, Substrate,
+    seed_height, AtHeight, CenRow, Fault, FormAttempt, FormedHeader, HeaderJudged, HeaderView,
+    Retry, RuleSet, Stale, Substrate,
 };
 use shekyl_difficulty::CumulativeDifficulty;
-use shekyl_levin::ResponseHeaders;
 use shekyl_types::{BlockCount, BlockHash, BlockHeight, PowHash, Timestamp};
-use shekyl_wire::PowBlob;
 
 use crate::branch::{BranchView, Pending};
-use crate::model::{header_deadline, CloseCause, Command, HashClass, Job, ProveItem, Proved, Sync};
-use crate::peer::{cache_for, Checked, HeaderRequest, Run};
+use crate::model::{CloseCause, Command, HashClass, Job, ProveItem, Proved, Spent, Sync};
+use crate::peer::{cache_for, HeaderRequest, Run};
 
 mod bodies;
 mod entry;
 mod evidence;
+mod headers;
 
 struct WallClock(Timestamp);
 
@@ -52,6 +52,24 @@ where
     R: Fn(BlockHeight) -> RuleSet,
 {
     pub(crate) fn on_deadline(&mut self, session: K, request: u64) {
+        // The opening's bound: fixed from its first session, so it fires
+        // whether or not that session is still open.
+        if self.opening == (crate::model::Opening::Open { id: request }) {
+            self.opening = crate::model::Opening::Resolved;
+            return;
+        }
+        // The evidence draw's wake: the step's draw follows this event.
+        if self.draw_wake == Some(request) {
+            self.draw_wake = None;
+            return;
+        }
+        // A withdrawn request's deadline: its answer is no longer owed.
+        if let Some(peer) = self.peers.get_mut(&session) {
+            if let Some(at) = peer.withdrawn.iter().position(|id| *id == request) {
+                peer.withdrawn.remove(at);
+                return;
+            }
+        }
         let header = self
             .header_request
             .as_ref()
@@ -79,367 +97,18 @@ where
         // wait even when the run remains. A body span does not.
         if header || follow {
             self.release_dispute(session);
+            // A header request past its deadline has resolved, for the
+            // opening as an answer does.
+            if let Some(peer) = self.peers.get_mut(&session) {
+                peer.reply = crate::peer::HeaderReply::Resolved;
+            }
         }
         if let Some(peer) = self.peers.get_mut(&session) {
             if peer.span.as_ref().is_some_and(|span| span.id == request) {
                 peer.span = None;
-                peer.gates.body_excluded = true;
+                peer.bodies = crate::peer::BodySource::Excluded;
             }
         }
-    }
-
-    pub(crate) fn on_headers<'id, H: HeaderView<'id>>(
-        &mut self,
-        main: &H,
-        session: K,
-        bytes: &[u8],
-        now: Instant,
-        out: &mut Vec<Command<K>>,
-    ) -> Result<(), H::Fault> {
-        if !self.peers.contains_key(&session) {
-            return Ok(());
-        }
-        let Ok(response) = ResponseHeaders::decode(bytes) else {
-            self.close(session, CloseCause::HeadersUndecodable, out);
-            return Ok(());
-        };
-        if let Some(state) = self.peers.get_mut(&session) {
-            if let Some(claim) = state.claim.as_mut() {
-                claim.work = CumulativeDifficulty::from_raw(response.tip_work);
-            }
-        }
-        if response.blobs.is_empty() {
-            if response.more {
-                self.close(session, CloseCause::HeadersForm, out);
-            } else {
-                self.finish_run(session, false, now, out);
-            }
-            return Ok(());
-        }
-        // Each blob with its identity, hashed once.
-        let mut blobs = Vec::new();
-        for bytes in &response.blobs {
-            let Ok(pow) = PowBlob::read(bytes) else {
-                self.close(session, CloseCause::HeadersForm, out);
-                return Ok(());
-            };
-            blobs.push((pow.identity(), pow));
-        }
-        let parent = blobs[0].1.header.previous;
-        let frontier = self
-            .header_request
-            .as_ref()
-            .filter(|req| {
-                req.session == session && req.points.iter().any(|(_, hash)| *hash == parent)
-            })
-            .map(|req| req.points.clone());
-        let continuation = self
-            .peers
-            .get(&session)
-            .and_then(|state| state.follow_up.as_ref())
-            .filter(|req| req.points.iter().any(|(_, hash)| *hash == parent))
-            .map(|req| req.points.clone());
-        let from_continuation = continuation.is_some();
-        let Some(points) = continuation.or(frontier) else {
-            self.close(session, CloseCause::HeadersForm, out);
-            return Ok(());
-        };
-        if from_continuation {
-            if let Some(state) = self.peers.get_mut(&session) {
-                state.follow_up = None;
-            }
-        } else if self
-            .header_request
-            .as_ref()
-            .is_some_and(|req| req.session == session)
-        {
-            self.header_request = None;
-        }
-        if self.tree.remembers(parent) {
-            self.close(session, CloseCause::InvalidAncestor, out);
-            return Ok(());
-        }
-        let mut previous = parent;
-        for (index, (hash, pow)) in blobs.iter().enumerate() {
-            if index > 0 && pow.header.previous != previous {
-                self.close(session, CloseCause::HeadersForm, out);
-                return Ok(());
-            }
-            previous = *hash;
-        }
-        let parent_height = points
-            .iter()
-            .find(|(_, hash)| *hash == parent)
-            .map(|(height, _)| *height)
-            .or_else(|| self.tree.placement(parent).map(|placed| placed.height));
-        let Some(parent_height) = parent_height else {
-            self.close(session, CloseCause::HeadersForm, out);
-            return Ok(());
-        };
-        if let Some(state) = self.peers.get_mut(&session) {
-            let higher = state
-                .frontier
-                .is_none_or(|(height, _)| parent_height.to_raw() >= height.to_raw());
-            if higher {
-                state.frontier = Some((parent_height, parent));
-            }
-        }
-        let mut fresh = Vec::new();
-        for (hash, pow) in blobs {
-            if self.tree.contains(hash) {
-                // The session supplied a header already in `T`. Its
-                // frontier is that header, which is what it can serve.
-                if let Some(height) = self.tree.connecting(hash) {
-                    if let Some(state) = self.peers.get_mut(&session) {
-                        let higher = state
-                            .frontier
-                            .is_none_or(|(have, _)| height.to_raw() >= have.to_raw());
-                        if higher {
-                            state.frontier = Some((height, hash));
-                        }
-                    }
-                }
-                continue;
-            }
-            if points.iter().any(|(_, known)| *known == hash) {
-                continue;
-            }
-            fresh.push((hash, pow));
-        }
-        if fresh.is_empty() {
-            self.finish_run(session, response.more, now, out);
-            return Ok(());
-        }
-        // The first new header hangs off `parent`, or off the last header
-        // skipped above, which `T` or the locator places.
-        let (base, base_height) = {
-            let previous = fresh[0].1.header.previous;
-            if previous == parent {
-                (parent, parent_height)
-            } else {
-                let placed = self.tree.connecting(previous).or_else(|| {
-                    points
-                        .iter()
-                        .find(|(_, hash)| *hash == previous)
-                        .map(|(height, _)| *height)
-                });
-                let Some(height) = placed else {
-                    self.close(session, CloseCause::HeadersForm, out);
-                    return Ok(());
-                };
-                (previous, height)
-            }
-        };
-        // A run is one chain. A response that does not continue the
-        // session's run starts a new run from its own base.
-        let continues = self
-            .peers
-            .get(&session)
-            .and_then(|s| s.run.as_ref())
-            .map(|run| {
-                run.chain
-                    .checked
-                    .last()
-                    .map_or(run.chain.parent, |c| c.hash)
-                    == base
-            });
-        if continues == Some(false) {
-            self.drop_run(session);
-        }
-        // Pending headers are judged above the run's own parent, in `T` or
-        // on main, so a height below the run is read where it lives.
-        let (anchor, anchor_height) = self
-            .peers
-            .get(&session)
-            .and_then(|s| s.run.as_ref())
-            .map_or((base, base_height), |run| {
-                (run.chain.parent, run.chain.parent_height)
-            });
-        let cap = self.cap();
-        let local_height = self.local.and_then(|local| local.height);
-        let depth = fork_depth(local_height, parent_height);
-        let past_cap = depth > cap
-            || self
-                .peers
-                .get(&session)
-                .and_then(|state| state.run.as_ref())
-                .is_some_and(Run::past_cap);
-        // The latch, or a past-cap run that already ended. A run still
-        // in progress keeps its headers; "followed once" starts when it ends.
-        // The evidence check's refetch from the fork is its run continuing,
-        // not a second following of that branch.
-        if past_cap && self.alarm {
-            return Ok(());
-        }
-        let evidence_run = self
-            .peers
-            .get(&session)
-            .and_then(|state| state.run.as_ref())
-            .is_some_and(Run::is_evidence);
-        if past_cap
-            && !evidence_run
-            && self
-                .peers
-                .get(&session)
-                .is_some_and(|peer| peer.gates.past_cap_followed)
-        {
-            return Ok(());
-        }
-        let mut accepted: Vec<Checked> = Vec::new();
-        for (hash, pow) in fresh {
-            let earlier = self
-                .peers
-                .get(&session)
-                .and_then(|s| s.run.as_ref())
-                .map_or(&[][..], |run| run.chain.checked.as_slice());
-            let view = self.view_for(
-                main,
-                anchor,
-                anchor_height,
-                Pending::new(earlier, &accepted),
-            );
-            let connecting = view
-                .tip()?
-                .map(|tip| tip.height + BlockCount::ONE)
-                .unwrap_or(BlockHeight::ZERO);
-            let seed = Self::seed_of(&view, connecting)?;
-            let target = match target_claim(&view, connecting, &(self.rules)(connecting)) {
-                Ok(Ok(target)) => target,
-                Ok(Err(refused)) => {
-                    self.close(session, CloseCause::HeaderRefused(refused.rule), out);
-                    return Ok(());
-                }
-                Err(Fault::View(fault)) => return Err(fault),
-                Err(Fault::Stale(_) | Fault::Corrupt(_)) => {
-                    self.drop_run(session);
-                    return Ok(());
-                }
-            };
-            let open = OpenHeader::from_pow(&pow, seed, target, FormAttempt::FIRST);
-            let prospect = match shekyl_chain_rules::judge_header_cheap(
-                &open,
-                &view,
-                &(self.rules)(connecting),
-                &self.trust,
-                &WallClock(self.wall),
-            ) {
-                Ok(Ok(prospect)) => prospect,
-                Ok(Err(refused)) => {
-                    self.close(session, CloseCause::HeaderRefused(refused.rule), out);
-                    return Ok(());
-                }
-                Err(fault) => match fault {
-                    shekyl_chain_rules::ProspectFault::Chain(Fault::View(fault)) => {
-                        return Err(fault);
-                    }
-                    _ => {
-                        self.drop_run(session);
-                        return Ok(());
-                    }
-                },
-            };
-            let checked = Checked {
-                hash,
-                height: prospect.connecting,
-                work: prospect.cumulative_difficulty,
-                seed,
-                target,
-                rule: (self.rules)(connecting),
-                header: pow.header.clone(),
-                pow,
-            };
-            accepted.push(checked);
-        }
-        let claim = self
-            .peers
-            .get(&session)
-            .and_then(|s| s.claim)
-            .map(|c| c.work);
-        let run = self.peers.get_mut(&session).and_then(|s| s.run.as_mut());
-        let run = if let Some(run) = run {
-            run.chain.checked.extend(accepted);
-            run.adopt_geometry(past_cap);
-            run
-        } else if let Some(state) = self.peers.get_mut(&session) {
-            state.run = Some(Run::open(base, base_height, accepted, past_cap));
-            state.run.as_mut().expect("just inserted")
-        } else {
-            return Ok(());
-        };
-        let work = run
-            .chain
-            .checked
-            .last()
-            .map(|c| c.work)
-            .unwrap_or(CumulativeDifficulty::ZERO);
-        let budget_full =
-            run.chain.checked.len() >= usize::try_from(cap.to_raw()).unwrap_or(usize::MAX);
-        let beats = work > self.star.work;
-        let in_slot = run.is_slot();
-        if past_cap {
-            let evidence = self
-                .peers
-                .get(&session)
-                .and_then(|peer| peer.run.as_ref())
-                .is_some_and(Run::is_evidence);
-            if evidence {
-                // The check pays for every header from the fork, in order.
-                // A window that no longer starts there is fetched again.
-                if self
-                    .peers
-                    .get(&session)
-                    .and_then(|peer| peer.run.as_ref())
-                    .is_some_and(Run::omits_fork)
-                {
-                    self.refetch_evidence(session, now, out);
-                    return Ok(());
-                }
-                self.plan_proof(session, HashClass::Evidence, out);
-                self.finish_run(session, response.more, now, out);
-                return Ok(());
-            }
-            let over = self.past_bound(session, cap);
-            self.trim_window(session);
-            self.note_evidence(session);
-            let candidate = self
-                .peers
-                .get(&session)
-                .and_then(|s| s.run.as_ref())
-                .is_some_and(|run| run.is_candidate() || run.is_evidence());
-            if over || !response.more {
-                if let Some(state) = self.peers.get_mut(&session) {
-                    state.gates.past_cap_followed = true;
-                }
-                if !candidate {
-                    self.drop_run(session);
-                }
-                return Ok(());
-            }
-            self.finish_run(session, true, now, out);
-            return Ok(());
-        }
-        if !response.more {
-            if claim.is_some_and(|claim| work < claim) && !beats {
-                self.close(session, CloseCause::ClaimUnmet, out);
-                return Ok(());
-            }
-            if !beats {
-                self.drop_run(session);
-                return Ok(());
-            }
-        }
-        if budget_full && !beats && !in_slot {
-            self.consider_slot(session, out);
-            // The peer said the chain continues. The next response is
-            // hashed because the run is in the slot or challenging it.
-            self.finish_run(session, response.more, now, out);
-            return Ok(());
-        }
-        if beats || in_slot {
-            self.plan_proof(session, HashClass::HeaderPow, out);
-        }
-        self.finish_run(session, response.more, now, out);
-        Ok(())
     }
 
     pub(crate) fn on_proven<'id, H: HeaderView<'id>>(
@@ -455,6 +124,11 @@ where
         let Some(session) = self.session_for_job(job.raw()) else {
             return Ok(());
         };
+        // A proof answered for this session's headers: its request has
+        // resolved for the opening (CS-Q2 step 8), whatever the results.
+        if let Some(peer) = self.peers.get_mut(&session) {
+            peer.reply = crate::peer::HeaderReply::Resolved;
+        }
         for result in results {
             match result {
                 Proved::Refused(refused) => {
@@ -462,7 +136,7 @@ where
                     return Ok(());
                 }
                 Proved::NotHeld => {
-                    self.drop_run(session);
+                    self.seed_not_held(session, out);
                     return Ok(());
                 }
                 Proved::Formed(formed) => {
@@ -496,12 +170,12 @@ where
                                 }
                                 self.plan_proof(session, HashClass::HeaderPow, out);
                             } else {
-                                self.drop_run(session);
+                                self.spend(session, Spent::Stale, out);
                             }
                             return Ok(());
                         }
                         Judged::Gone => {
-                            self.drop_run(session);
+                            self.spend(session, Spent::Gone, out);
                             return Ok(());
                         }
                         Judged::Ok(header) => {
@@ -640,26 +314,36 @@ where
         let Some((height, hash)) = tip else {
             return;
         };
+        self.follow_up(session, (height, hash), now, out);
+    }
+
+    /// This session's own header follow-up from one point: the run's next
+    /// locator, a relocate, or the ancestors of an announcement. It does
+    /// not take the extending slot.
+    pub(crate) fn follow_up(
+        &mut self,
+        session: K,
+        point: (BlockHeight, BlockHash),
+        now: Instant,
+        out: &mut Vec<Command<K>>,
+    ) {
+        if !self.requests() {
+            return;
+        }
+        let Some(state) = self.peers.get_mut(&session) else {
+            return;
+        };
         let id = self.next_id;
         self.next_id = self.next_id.saturating_add(1);
-        if let Some(state) = self.peers.get_mut(&session) {
-            state.follow_up = Some(HeaderRequest {
-                session,
-                id,
-                points: vec![(height, hash)],
-            });
-        }
-        let transit = self
-            .peers
-            .get(&session)
-            .map(|s| s.transit)
-            .unwrap_or_default();
+        let request = HeaderRequest::new(session, id, vec![point], now, state.transit);
+        let deadline = request.deadline;
+        state.follow_up = Some(request);
         out.push(Command::RequestHeaders {
             session,
             id,
-            deadline: header_deadline(now, transit),
+            deadline,
             request: shekyl_levin::RequestHeaders {
-                block_ids: vec![*hash.as_bytes()],
+                block_ids: vec![*point.1.as_bytes()],
             },
         });
     }
@@ -667,6 +351,9 @@ where
     pub(crate) fn release_session(&mut self, session: K) {
         self.release_dispute(session);
         self.peers.remove(&session);
+        if self.peers.is_empty() {
+            self.opening = crate::model::Opening::Idle;
+        }
         self.pending.remove(&session);
         if self
             .header_request
@@ -688,6 +375,75 @@ where
     fn drop_run(&mut self, session: K) {
         if let Some(state) = self.peers.get_mut(&session) {
             state.run = None;
+        }
+    }
+
+    /// Whether the session's claim states more work than `work`.
+    fn claim_exceeds(&self, session: K, work: CumulativeDifficulty) -> bool {
+        self.peers
+            .get(&session)
+            .and_then(|state| state.claim)
+            .is_some_and(|claim| claim.work > work)
+    }
+
+    /// The work through a header this node holds, in `T` or on `main` at
+    /// `height`. `H*`'s work when neither answers: a held header that
+    /// outweighs `H*` is in `T`, so nothing outside it does.
+    fn end_work<'id, H: HeaderView<'id>>(
+        &self,
+        main: &H,
+        hash: BlockHash,
+        height: BlockHeight,
+    ) -> Result<CumulativeDifficulty, H::Fault> {
+        if let Some(record) = self.tree.record(hash) {
+            return Ok(record.cumulative_difficulty);
+        }
+        Ok(match main.header_at(height)? {
+            AtHeight::Recorded(record) if record.hash == hash => record.cumulative_difficulty,
+            AtHeight::Recorded(_) | AtHeight::AboveTip => self.star.work,
+        })
+    }
+
+    /// The session's headers from `H*` yielded nothing: its run, if any,
+    /// is dropped, and it is not drawn to extend `H*` again until its
+    /// claim or `H*` changes ([`crate::peer::HeaderDraw::spend`]).
+    /// Without that hold, `plan` runs after every event and the extending
+    /// slot is free once a response arrives, so the same request would go
+    /// out again as soon as this one was answered.
+    fn spend(&mut self, session: K, cause: Spent, out: &mut Vec<Command<K>>) {
+        if let Some(state) = self.peers.get_mut(&session) {
+            state.run = None;
+            state.draw.spend();
+        }
+        out.push(Command::HeadersSpent { session, cause });
+    }
+
+    /// The run's next header could not be proven because the slots did
+    /// not hold its seed: the run is dropped and the session is closed to
+    /// header draws until the slots change (`Event::Seeds`). Not a spend:
+    /// the same request would be answered once the window holds the seed,
+    /// with the claim and `H*` unchanged.
+    fn seed_not_held(&mut self, session: K, out: &mut Vec<Command<K>>) {
+        let Some(state) = self.peers.get_mut(&session) else {
+            return;
+        };
+        let Some(run) = state.run.take() else {
+            return;
+        };
+        state.draw.miss_seed();
+        let seed = run
+            .chain
+            .checked
+            .get(run.chain.proven)
+            .map_or(BlockHash::NULL, |checked| checked.seed);
+        out.push(Command::SeedNotHeld { session, seed });
+    }
+
+    /// The ingest window's slots changed: every session closed for a seed
+    /// they did not hold is open to header draws again.
+    pub(crate) fn seeds_changed(&mut self) {
+        for peer in self.peers.values_mut() {
+            peer.draw.on_seeds();
         }
     }
 
@@ -787,28 +543,7 @@ where
                     .and_then(|local| local.height)
             })
             .unwrap_or(BlockHeight::ZERO);
-        let id = self.next_id;
-        self.next_id = self.next_id.saturating_add(1);
-        if let Some(state) = self.peers.get_mut(&session) {
-            state.follow_up = Some(HeaderRequest {
-                session,
-                id,
-                points: vec![(height, at)],
-            });
-        }
-        let transit = self
-            .peers
-            .get(&session)
-            .map(|s| s.transit)
-            .unwrap_or_default();
-        out.push(Command::RequestHeaders {
-            session,
-            id,
-            deadline: header_deadline(now, transit),
-            request: shekyl_levin::RequestHeaders {
-                block_ids: vec![*at.as_bytes()],
-            },
-        });
+        self.follow_up(session, (height, at), now, out);
     }
 }
 

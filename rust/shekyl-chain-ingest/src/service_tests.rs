@@ -2372,7 +2372,6 @@ async fn a_bound_arrival_connects_through_form_judged_without_a_hash() {
     let bound = super::BoundArrival {
         tag: ArrivalTag(99),
         session: SessionId(1),
-        solicited: true,
         judged,
         block: mined.template.block.serialize(),
         bodies: mined
@@ -2426,20 +2425,24 @@ async fn a_bound_arrival_connects_through_form_judged_without_a_hash() {
     cleanup(&path);
 }
 
-/// A bound announcement spends the session's unsolicited bucket
-/// ([`crate::admission::TOKENS_PER_INTERVAL`]). The next one is
-/// `Throttled` before it is formed. A body this node asked for, offered
-/// the same way, still takes a seat after that bucket is dry: the door
-/// reads `solicited` off the bound arrival.
+/// A bound span is judged as a solicited span, whatever brought each body
+/// (`Door::offer_bound`'s contract). The sync owner proved every header in
+/// it and offers only what [`Door::room`] reported, so the room it reads
+/// is the room it gets: a span of the whole reported room is seated, and
+/// a session's bound announcements take no bucket token. Until 2026-11-02
+/// the door seated a bound announcement as unsolicited: a span of more
+/// announced bodies than the unsolicited share was `NoRoom` however empty
+/// the window, the model froze its seats at zero for a seat report the
+/// unchanged room never sent, and a node that had learned its peers' chain
+/// from announcements sat `behind` for good (#1237, the three-miner
+/// rehearsal).
 #[tokio::test(flavor = "multi_thread")]
-async fn a_bound_announcement_spends_the_unsolicited_bucket_and_a_solicited_body_does_not() {
-    use crate::admission::TOKENS_PER_INTERVAL;
-
-    let mut y = Scenario::open("service-bound-bucket-y");
+async fn a_bound_span_is_seated_as_the_room_the_door_reported() {
+    let mut y = Scenario::open("service-bound-room-y");
     let blocks = y.mine(2).await;
     let gate = Arc::new(Gated::new());
     let (service, path) = service(
-        "service-bound-bucket",
+        "service-bound-room",
         Arc::clone(&gate),
         ServiceConfig::default(),
     );
@@ -2448,10 +2451,9 @@ async fn a_bound_announcement_spends_the_unsolicited_bucket_and_a_solicited_body
     offer_all(&door, 1, prefix).await;
     let mined = &last[0];
     let judged = judged_header(&service.shared.store, gate.as_ref(), mined);
-    let bound = |tag: u64, solicited: bool| super::BoundArrival {
+    let bound = |tag: u64| super::BoundArrival {
         tag: ArrivalTag(tag),
         session: SessionId(9),
-        solicited,
         judged: judged.clone(),
         block: mined.template.block.serialize(),
         bodies: mined
@@ -2462,22 +2464,29 @@ async fn a_bound_announcement_spends_the_unsolicited_bucket_and_a_solicited_body
             .collect(),
         attestation_witness: Vec::new(),
     };
-    let mut accepted = Vec::new();
-    for token in 0..TOKENS_PER_INTERVAL {
-        let tickets = door
-            .offer_bound(vec![bound(u64::from(token), false)])
-            .expect("a token");
-        accepted.extend(tickets);
-    }
-    assert_eq!(
-        door.offer_bound(vec![bound(u64::from(TOKENS_PER_INTERVAL), false)])
-            .err(),
-        Some(Refusal::Throttled)
+    let room = door.room();
+    assert!(
+        room > crate::room::unsolicited_cap_for(door.window()),
+        "the room is more than the unsolicited share, or the span below proves nothing"
     );
-    let solicited = door
-        .offer_bound(vec![bound(u64::from(TOKENS_PER_INTERVAL) + 1, true)])
-        .expect("a requested body takes no token");
-    for ticket in accepted.into_iter().chain(solicited) {
+    let span: Vec<_> = (0..room).map(|tag| bound(tag as u64)).collect();
+    let tickets = door
+        .offer_bound(span)
+        .expect("a bound span of the reported room is seated whole");
+    assert_eq!(tickets.len(), room);
+    for ticket in tickets {
+        let _reply = ticket.reply().await;
+    }
+    // Every seat is back, and one session's announcements took no token:
+    // the same session offers again, more times than any bucket holds.
+    let mut again = Vec::new();
+    for tag in 0..8u64 {
+        let tickets = door
+            .offer_bound(vec![bound(1_000 + tag)])
+            .expect("a bound announcement takes no token");
+        again.extend(tickets);
+    }
+    for ticket in again {
         let _reply = ticket.reply().await;
     }
     service.stop().await.expect("stops");

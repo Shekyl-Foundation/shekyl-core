@@ -33,7 +33,10 @@ Set-Location -LiteralPath $RepoRoot
 $Shekyld = 'build\bin\Release\shekyld.exe'
 $MsvcLinkSubjects = @($Shekyld)
 
-$MsvcBuildTargets = @('daemon')
+# Corrosion's build target for the daemon. `shekyld` itself is an IMPORTED
+# target with no build steps; the crate is built by `cargo-build_shekyld`,
+# which stages the binary into `build\bin\Release\` (DC-Q23).
+$MsvcBuildTargets = @('cargo-build_shekyld')
 # The runner's parallelism for this one build. A name, so the cmake line
 # is not where the number lives.
 $MsvcBuildParallelism = 2

@@ -138,6 +138,11 @@ impl HeaderTree {
         if self.invalid.contains(&hash) {
             return;
         }
+        // A header already in `T` is not inserted again: a second insert
+        // would make it a tip above the children it already has.
+        if self.nodes.contains_key(&hash) {
+            return;
+        }
         let parent = judged.previous();
         let height = judged.connecting().to_raw();
         let parent_in_tree = self.nodes.contains_key(&parent);
@@ -178,6 +183,22 @@ impl HeaderTree {
         if parent_in_tree {
             self.tips.remove(&parent);
         }
+        // A header enters `T` with its parent in `T` or on main, and a
+        // branch leaves `T` with its anchor (`drop_orphans`), so no child
+        // of this header is in `T` before it: it is a tip. Until
+        // 2026-11-03 a branch outlived its popped anchor, and a parent
+        // served again adopted the children waiting above it.
+        debug_assert!(
+            !self
+                .by_height
+                .get(&height.saturating_add(1))
+                .is_some_and(|above| {
+                    above
+                        .iter()
+                        .any(|kid| self.nodes.get(kid).is_some_and(|node| node.parent == hash))
+                }),
+            "a header entered T below a child already held"
+        );
         self.tips.insert(hash, work);
         if excluded {
             self.mark_invalid(hash);
@@ -245,7 +266,89 @@ impl HeaderTree {
         // height at or below it is below its branch's base: main answers
         // those, and `ancestor_at` returns `None` for them on reaching the
         // missing header, as it would after any rebuild.
+        self.drop_orphans(main)
+    }
+
+    /// A branch whose anchor has left main. Main switched chains and
+    /// demoted the anchor: the headers above it were judged against a
+    /// chain this node no longer holds, and the demoted blocks below them
+    /// are on main nowhere and in `T` never. The branch cannot be selected
+    /// ([`Self::within_cap`] wants the anchor on main) and cannot be
+    /// reached again: a page that walks the demoted chain meets its base as
+    /// a header held after new ones, which no peer can be serving. It
+    /// leaves `T`. The peers on that chain serve its headers again, above a
+    /// parent this node then holds. One `header_at` per branch.
+    ///
+    /// Until 2026-11-03 the branch stayed. In the three-miner rehearsal
+    /// (#1237) a node that switched once closed every later session at the
+    /// orphan and mined alone for the rest of the window.
+    fn drop_orphans<'id, H: HeaderView<'id>>(&mut self, main: &H) -> Result<(), H::Fault> {
+        let mut orphans = Vec::new();
+        for (id, branch) in &self.branches {
+            // A branch from genesis anchors at null, below everything.
+            let Some(fork) = branch.base.checked_sub_count(ONE) else {
+                continue;
+            };
+            let on_main = matches!(
+                main.header_at(fork)?,
+                AtHeight::Recorded(record) if record.hash == branch.anchor
+            );
+            if !on_main {
+                orphans.push((*id, branch.base));
+            }
+        }
+        for (id, base) in orphans {
+            self.drop_branch(id, base);
+        }
         Ok(())
+    }
+
+    /// Every header of branch `id`, from its roots at `base` down the
+    /// children index, and the record itself.
+    fn drop_branch(&mut self, id: u64, base: BlockHeight) {
+        let Some(anchor) = self.branches.remove(&id).map(|branch| branch.anchor) else {
+            return;
+        };
+        let roots: Vec<BlockHash> = self
+            .by_height
+            .get(&base.to_raw())
+            .map(|at_base| {
+                at_base
+                    .iter()
+                    .copied()
+                    .filter(|hash| self.nodes.get(hash).is_some_and(|node| node.branch == id))
+                    .collect()
+            })
+            .unwrap_or_default();
+        // Another branch may fork from the same anchor: only these roots
+        // leave its children entry.
+        let bare = self.children.get_mut(&anchor).is_some_and(|kids| {
+            for root in &roots {
+                kids.remove(root);
+            }
+            kids.is_empty()
+        });
+        if bare {
+            self.children.remove(&anchor);
+        }
+        let mut stack = roots;
+        while let Some(hash) = stack.pop() {
+            let Some(node) = self.nodes.remove(&hash) else {
+                continue;
+            };
+            self.tips.remove(&hash);
+            if let Some(kids) = self.children.remove(&hash) {
+                stack.extend(kids);
+            }
+            let at = node.judged.connecting().to_raw();
+            let empty = self.by_height.get_mut(&at).is_some_and(|hashes| {
+                hashes.remove(&hash);
+                hashes.is_empty()
+            });
+            if empty {
+                self.by_height.remove(&at);
+            }
+        }
     }
 
     /// The connected header leaves. One child keeps the branch record,

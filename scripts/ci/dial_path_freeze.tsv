@@ -25,7 +25,12 @@
 # function inside a shrink file takes a second line naming the file. The
 # cutover removes the body and calls rows; the gate then reports the function
 # freeze discharged. A shrink row is retired only when its file is deleted,
-# not renamed or split: net_node.inl outlives the dial path.
+# not renamed or split: net_node.inl outlives the dial path. The PR that
+# deletes a file removes its row in the same change, since the gate reads
+# the list at the base revision and a row whose file the base no longer has
+# fails every later PR (rule 47): chain sync's cutover (CS-5) deleted
+# `cryptonote_protocol_handler-base.cpp` and `block_queue.{h,cpp}` and
+# took their three rows with it.
 #
 # Columns, tab-separated:
 #   kind    body   the function from its anchor to its closing brace
@@ -42,8 +47,5 @@ shrink	src/p2p/net_node.h
 shrink	src/cryptonote_protocol/levin_notify.cpp
 shrink	src/cryptonote_protocol/cryptonote_protocol_handler.inl
 shrink	src/cryptonote_protocol/cryptonote_protocol_handler.h
-shrink	src/cryptonote_protocol/cryptonote_protocol_handler-base.cpp
 shrink	src/cryptonote_protocol/cryptonote_protocol_handler_common.h
-shrink	src/cryptonote_protocol/block_queue.h
-shrink	src/cryptonote_protocol/block_queue.cpp
 shrink	src/cryptonote_protocol/cryptonote_protocol_defs.h

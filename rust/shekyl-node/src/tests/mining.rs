@@ -229,6 +229,119 @@ fn a_thread_count_past_the_hosts_parallelism_starts_nothing() {
     assert_eq!(refused.diagnostic.code, codes::TOO_MANY_THREADS);
     assert!(!running, "no miner started");
 }
+/// `mine = on` on regtest at difficulty one: open does not start the
+/// miner. `start(None)` does, once, with the `mine-threads` row and no
+/// RPC call, and the chain grows past genesis (Rick, 2026-11-02). Red
+/// edit: leave the start to `start_mining`, or start it inside open.
+#[test]
+fn mine_on_mines_a_real_block_with_no_rpc_call() {
+    let dir = tempfile::tempdir().expect("temp");
+    std::fs::create_dir_all(dir.path()).expect("dir");
+    let address = mining_address(shekyl_address::Network::Mainnet);
+    let config = config_on(
+        dir.path(),
+        "regtest",
+        &[
+            "--mine",
+            "on",
+            "--mine-address",
+            &address,
+            "--mine-threads",
+            "1",
+            "--dev-difficulty",
+            "1",
+        ],
+    );
+    assert!(config.mine.start);
+    let node = Node::open(OpenArgs {
+        config: &config,
+        version: "test".to_owned(),
+        protocol_version: 1,
+        release_build: false,
+        request_stop: Arc::new(|| {}),
+        relay_local: crate::no_relay(),
+    })
+    .unwrap_or_else(|error| panic!("the node did not open: {error}"));
+    assert!(!node.mining().running(), "open does not start the miner");
+    match node.mining().start(None) {
+        Ok(()) => {}
+        Err(MiningRefused::Start(shekyl_miner::MinerStartRefused::OnePermit)) => return,
+        Err(other) => panic!("the miner did not start: {other}"),
+    }
+    assert!(
+        node.mining().running(),
+        "the configured row started the miner"
+    );
+    let handles = node.handles();
+    let started = std::time::Instant::now();
+    loop {
+        let count = handles
+            .chain
+            .chain_tip()
+            .map(|tip| tip.chain_height.to_raw())
+            .unwrap_or(0);
+        if count >= 2 {
+            break;
+        }
+        assert!(
+            started.elapsed() < Duration::from_secs(120),
+            "nothing mined: count {count}, posting {:?}",
+            *node.posting().borrow()
+        );
+        std::thread::sleep(Duration::from_millis(20));
+    }
+    node.stop();
+    assert!(!node.mining().running());
+}
+/// `mine = off` with an address: the template is posted and nothing is
+/// mined until `start_mining`; a `start_mining` that names no count uses
+/// the `mine-threads` row's (Rick, 2026-11-02). Red edit: start the miner
+/// whenever an address is set.
+#[test]
+fn mine_off_with_an_address_mines_nothing_until_start_mining() {
+    use shekyl_daemon_rpc::mining_methods::{codes, mining_status, start_mining};
+    let dir = tempfile::tempdir().expect("temp");
+    let node = open_posted(dir.path(), &["--mine", "off", "--mine-threads", "1"]);
+    assert!(!node.mining().running(), "an address alone starts nothing");
+    std::thread::sleep(Duration::from_millis(300));
+    let handles = node.handles();
+    let count = handles
+        .chain
+        .chain_tip()
+        .map(|tip| tip.chain_height.to_raw())
+        .expect("tip");
+    assert_eq!(count, 1, "genesis only: {count}");
+    assert!(!node.mining().running());
+    let auto = shekyl_rpc_types::mining::StartMiningRequest {
+        threads: shekyl_rpc_types::mining::MinerThreads::Auto,
+    };
+    match a_runtime().block_on(start_mining(&handles.mining, auto)) {
+        Ok(_) => {}
+        Err(refused) if refused.diagnostic.code == codes::ONE_PERMIT => {
+            node.stop();
+            return;
+        }
+        Err(other) => panic!("the miner did not start: {other:?}"),
+    }
+    let status = mining_status(&*handles.mining).expect("status");
+    assert!(status.active);
+    assert_eq!(status.threads_count, 1, "`auto` is the mine-threads row's");
+    let started = std::time::Instant::now();
+    while handles
+        .chain
+        .chain_tip()
+        .map(|tip| tip.chain_height.to_raw())
+        .unwrap_or(0)
+        < 2
+    {
+        assert!(
+            started.elapsed() < Duration::from_secs(120),
+            "nothing mined after start_mining"
+        );
+        std::thread::sleep(Duration::from_millis(20));
+    }
+    node.stop();
+}
 /// After `Node::stop`, mining control starts no miner (the review of
 /// #1165). Red edit: start without reading the latch.
 #[test]
@@ -255,7 +368,7 @@ fn generateblocks_on_a_node_that_is_not_synced_is_refused_at_once() {
     use shekyl_daemon_rpc::mining_methods::{codes, generateblocks};
     use shekyl_rpc_types::errors::ErrorClass;
     let dir = tempfile::tempdir().expect("temp");
-    let node = open_mining(dir.path(), "testnet", shekyl_address::Network::Testnet);
+    let node = open_mining_open(dir.path(), "testnet", shekyl_address::Network::Testnet);
     let mut posting = node.posting();
     wait_for_posting(
         &mut posting,
@@ -497,14 +610,15 @@ fn a_regtest_node_with_an_address_posts_its_template_with_no_sessions() {
         .is_ok_and(|tip| tip.synchronized));
     node.stop();
 }
-/// Off regtest, nothing says the node is synced before chain sync's
-/// cutover: it posts nothing and says why, and publishing `Synced` on
-/// the node's watch posts (DX-Q3, Q13). Red edit: post without reading
-/// the watch.
+/// On an open network the node opens `NoView` (its declaration's state at
+/// open), and no owner publishes here: no seam is bound, so the sync
+/// owner never receives its hub. The node posts nothing and says why, and
+/// publishing `Synced` on the node's watch posts (DX-Q3, Q13). Red edit:
+/// post without reading the watch.
 #[test]
-fn a_testnet_node_posts_nothing_until_chain_sync_says_synced() {
+fn a_node_on_an_open_network_posts_nothing_until_chain_sync_says_synced() {
     let dir = tempfile::tempdir().expect("temp");
-    let node = open_mining(dir.path(), "testnet", shekyl_address::Network::Testnet);
+    let node = open_mining_open(dir.path(), "testnet", shekyl_address::Network::Testnet);
     let mut posting = node.posting();
     wait_for_posting(
         &mut posting,
@@ -514,7 +628,7 @@ fn a_testnet_node_posts_nothing_until_chain_sync_says_synced() {
     let reason = node.mining().status().no_job.expect("a reason");
     assert_eq!(
         reason.to_string(),
-        "no template: not synced (no sync owner before chain sync's cutover)"
+        "no template: not synced (no view of the network yet)"
     );
     assert!(node
         .handles()

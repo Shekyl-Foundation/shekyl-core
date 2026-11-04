@@ -53,6 +53,7 @@ use crate::info_facts::{
     store_file_size, InfoChainFacts, InfoFacts, InfoStatusFacts, PeerFacts, PoolCounts, PoolScope,
     PoolState, SessionCounts,
 };
+use crate::sync_facts::{SyncViewFacts, SyncViewRead};
 
 /// The node's state that the chain store does not hold, read per call.
 ///
@@ -62,6 +63,8 @@ use crate::info_facts::{
 pub trait NodeFacts: Send + Sync {
     /// The sync owner's view (DRS-X PR 2's `TipChanged` consumer).
     fn sync(&self) -> Result<SyncFacts, FactsFault>;
+    /// Chain sync's whole view (CS-5 §7): what `sync_info` renders.
+    fn sync_view(&self) -> Result<SyncViewFacts, FactsFault>;
     /// The pool's population (PR-b's Rust pool), or
     /// [`PoolState::Retired`].
     fn pool_counts(&self, scope: PoolScope) -> Result<PoolState<PoolCounts>, FactsFault>;
@@ -556,6 +559,12 @@ impl ChainFacts for StoreFacts {
             block,
             chain_height: count_at(tip),
         })
+    }
+}
+
+impl SyncViewRead for StoreFacts {
+    fn sync_view(&self) -> Result<SyncViewFacts, FactsFault> {
+        self.node.sync_view()
     }
 }
 

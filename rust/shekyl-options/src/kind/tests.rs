@@ -186,34 +186,46 @@ fn curve25519_basepoint() -> [u8; 32] {
     b
 }
 
+/// A fixture path that is absolute on the host running the test: `unix`
+/// as written on Unix, `C:` and backslashes on Windows, where `/bin/x` is
+/// not absolute and the path kinds refuse it for that before anything else
+/// (DC-F40).
+fn abs(unix: &str) -> String {
+    if cfg!(windows) {
+        format!("C:{}", unix.replace('/', "\\"))
+    } else {
+        unix.to_owned()
+    }
+}
+
 #[test]
 fn commands_are_file_only_arrays_with_named_placeholders() {
     const NOTIFY: Kind = Kind::Command {
         placeholders: &["height", "hash"],
     };
     let ok = toml::Value::Array(vec![
-        toml::Value::String("/usr/bin/logger".into()),
+        toml::Value::String(abs("/usr/bin/logger")),
         toml::Value::String("block {height} {hash} 100%".into()),
     ]);
     assert!(matches!(NOTIFY.parse_file(&ok), Ok(Value::Command(ref a)) if a.len() == 2));
     let unknown = toml::Value::Array(vec![
-        toml::Value::String("/bin/x".into()),
+        toml::Value::String(abs("/bin/x")),
         toml::Value::String("{height} {txid}".into()),
     ]);
     assert_eq!(code(NOTIFY.parse_file(&unknown)), Code::ValuePlaceholder);
     let unmatched = toml::Value::Array(vec![
-        toml::Value::String("/bin/x".into()),
+        toml::Value::String(abs("/bin/x")),
         toml::Value::String("{height".into()),
     ]);
     assert_eq!(code(NOTIFY.parse_file(&unmatched)), Code::ValueSyntax);
     let relative = toml::Value::Array(vec![toml::Value::String("logger".into())]);
     assert_eq!(code(NOTIFY.parse_file(&relative)), Code::ValueSyntax);
+    assert_eq!(code(NOTIFY.parse_cli(&[abs("/bin/x")])), Code::ValueSurface);
     assert_eq!(
-        code(NOTIFY.parse_cli(&["/bin/x".into()])),
-        Code::ValueSurface
-    );
-    assert_eq!(
-        code(NOTIFY.parse_file(&toml::Value::String("/bin/x {height}".into()))),
+        code(NOTIFY.parse_file(&toml::Value::String(format!(
+            "{} {{height}}",
+            abs("/bin/x")
+        )))),
         Code::ValueSyntax
     );
 }
@@ -221,7 +233,7 @@ fn commands_are_file_only_arrays_with_named_placeholders() {
 #[test]
 fn a_path_is_absolute_only() {
     assert!(matches!(
-        Kind::Path.parse_text("/etc/shekyl"),
+        Kind::Path.parse_text(&abs("/etc/shekyl")),
         Ok(Value::Path(_))
     ));
     assert_eq!(code(Kind::Path.parse_text("etc/shekyl")), Code::ValueSyntax);
@@ -270,5 +282,39 @@ fn a_map_takes_key_value_pairs_from_its_closed_key_set() {
     assert_eq!(
         code(CATEGORIES.parse_cli(&["net=loud".into()])),
         Code::ValueWord
+    );
+}
+
+const DURATION: Kind = Kind::Quantity {
+    dimension: Dimension::Duration,
+    min: 0,
+    keywords: &[],
+};
+
+#[test]
+fn a_duration_is_an_integer_and_an_ig6_unit() {
+    assert_eq!(
+        DURATION.parse_text("5min"),
+        Ok(Value::Duration(std::time::Duration::from_secs(5 * 60)))
+    );
+    assert_eq!(
+        DURATION.parse_text("30s"),
+        Ok(Value::Duration(std::time::Duration::from_secs(30)))
+    );
+    assert_eq!(code(DURATION.parse_text("5m")), Code::ValueUnit);
+}
+
+#[test]
+fn a_hash_is_64_hexadecimal_characters() {
+    let hex = "ab".repeat(32);
+    assert_eq!(Kind::Hash.parse_text(&hex), Ok(Value::Hash(hex.clone())));
+    assert_eq!(
+        Kind::Hash.parse_text(&hex.to_ascii_uppercase()),
+        Ok(Value::Hash(hex))
+    );
+    assert_eq!(code(Kind::Hash.parse_text("abcd")), Code::ValueSyntax);
+    assert_eq!(
+        code(Kind::Hash.parse_text(&"z".repeat(64))),
+        Code::ValueSyntax
     );
 }

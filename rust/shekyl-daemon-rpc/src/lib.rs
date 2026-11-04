@@ -33,11 +33,10 @@
 //! owns HTTP, dispatch, restricted-mode, and every method the KV cutover has
 //! moved.
 
-// This crate's `tracing::*` events reach the C++-installed subscriber
-// because the daemon links exactly one Rust image
-// (`rust/shekyl-daemon-image`, which combines this crate with
-// `shekyl-ffi`'s logging surface into one archive with one
-// `tracing-core` dispatcher). See V3_WALLET_DECISION_LOG.md
+// This crate's `tracing::*` events reach the installed subscriber
+// because the daemon is exactly one Rust image: the `shekyld` binary
+// crate links this crate through `shekyl-ffi`, beside `shekyl-ffi`'s
+// logging surface, with one `tracing-core` dispatcher. See V3_WALLET_DECISION_LOG.md
 // (single-image contract, 2026-06-11 amendment).
 
 pub mod authority;
@@ -85,9 +84,7 @@ pub mod consensus {
 }
 
 pub mod conn_limit;
-pub mod console;
 pub mod core;
-pub mod ctl_client;
 pub mod ffi;
 pub mod ffi_exports;
 pub mod handlers;
@@ -102,11 +99,14 @@ pub mod mining_facts;
 pub mod mining_methods;
 pub mod node_methods;
 pub mod options;
+pub mod p2p_reads;
 pub mod pool_methods;
 pub mod read_facts;
 pub mod read_methods;
+pub mod seam;
 pub mod server;
 pub mod shard_view;
 pub mod store_facts;
 pub mod submit;
+pub mod sync_facts;
 pub mod types;

@@ -48,6 +48,25 @@ use tokio::io::{AsyncRead, AsyncWrite, ReadBuf};
 use tokio::net::TcpStream;
 use tower_service::Service;
 
+/// How many `source()` hops a fault walk will follow. A longer chain is a
+/// bug in a wrapper, not a cause the operator can act on.
+const FAULT_SOURCE_HOPS: u8 = 16;
+
+/// A SOCKS handshake that failed. The connector stores this inside the
+/// `io::Error` it returns, so a later walk classifies the fault by type.
+#[derive(Debug)]
+pub(crate) struct SocksTunnel {
+    detail: String,
+}
+
+impl std::fmt::Display for SocksTunnel {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "socks: {}", self.detail)
+    }
+}
+
+impl std::error::Error for SocksTunnel {}
+
 /// Errors constructing or using the client.
 #[derive(Debug)]
 pub(crate) enum HttpError {
@@ -55,16 +74,36 @@ pub(crate) enum HttpError {
     InvalidProxy(String),
     /// The TLS connector could not be built (no roots available).
     Tls(String),
-    /// A request failed at the hyper layer.
+    /// The SOCKS tunnel refused the dial. The string is the cause chain.
+    ProxyTunnel(String),
+    /// A request failed at the hyper layer, and it was not a tunnel fault.
     Request(String),
+}
+
+impl HttpError {
+    /// The connection fault this error is, named where it is raised.
+    pub(crate) fn fault(self) -> crate::TransportFault {
+        match self {
+            Self::InvalidProxy(detail) => crate::TransportFault::Proxy(format!(
+                "invalid --proxy for the daemon transport: {detail}"
+            )),
+            Self::Tls(detail) => {
+                crate::TransportFault::Tls(format!("TLS connector unavailable: {detail}"))
+            }
+            Self::ProxyTunnel(detail) => crate::TransportFault::Proxy(detail),
+            Self::Request(detail) => crate::TransportFault::Unreachable(detail),
+        }
+    }
 }
 
 impl std::fmt::Display for HttpError {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
-            Self::InvalidProxy(d) => write!(f, "invalid --proxy for the daemon transport: {d}"),
-            Self::Tls(d) => write!(f, "TLS connector unavailable: {d}"),
-            Self::Request(d) => write!(f, "{d}"),
+            Self::InvalidProxy(detail) => {
+                write!(f, "invalid --proxy for the daemon transport: {detail}")
+            }
+            Self::Tls(detail) => write!(f, "TLS connector unavailable: {detail}"),
+            Self::ProxyTunnel(detail) | Self::Request(detail) => write!(f, "{detail}"),
         }
     }
 }
@@ -209,7 +248,11 @@ impl Service<Uri> for SocksConnector {
                 },
             )
             .await
-            .map_err(|err| io::Error::other(format!("socks: {err}")))?;
+            .map_err(|err| {
+                io::Error::other(SocksTunnel {
+                    detail: err.to_string(),
+                })
+            })?;
             Ok(TokioIo::new(SocksStream(stream)))
         })
     }
@@ -356,8 +399,46 @@ impl HttpClient {
             Self::PlainDirect(c) => c.request(request).await,
             Self::PlainSocks(c) => c.request(request).await,
         };
-        res.map_err(|e| HttpError::Request(error_chain(&e)))
+        res.map_err(|e| fault_from_hyper(&e))
     }
+}
+
+/// A hyper failure is a proxy fault when the cause chain holds a
+/// [`SocksTunnel`], and an unreachable daemon otherwise. The prose is the
+/// chain either way; the variant is what a caller matches.
+fn fault_from_hyper(err: &(dyn std::error::Error + 'static)) -> HttpError {
+    let chain = error_chain(err);
+    if chain_holds_socks(err) {
+        HttpError::ProxyTunnel(chain)
+    } else {
+        HttpError::Request(chain)
+    }
+}
+
+/// Whether `err` or one of its causes is a [`SocksTunnel`].
+///
+/// `io::Error::source` returns the payload's source and skips the payload.
+/// A tunnel stored with `Error::other` is that payload, and a payload that
+/// is itself an `io::Error` hides the tunnel from a walk that only calls
+/// `source`. Entering `get_ref` is how the type stays visible.
+fn chain_holds_socks(err: &(dyn std::error::Error + 'static)) -> bool {
+    let mut current = Some(err);
+    for _ in 0..FAULT_SOURCE_HOPS {
+        let Some(cause) = current else {
+            return false;
+        };
+        if cause.downcast_ref::<SocksTunnel>().is_some() {
+            return true;
+        }
+        if let Some(io_err) = cause.downcast_ref::<io::Error>() {
+            if let Some(payload) = io_err.get_ref() {
+                current = Some(payload);
+                continue;
+            }
+        }
+        current = cause.source();
+    }
+    false
 }
 
 /// Render an error with its full `source()` chain (`kind: cause: root`).
@@ -605,5 +686,37 @@ mod tests {
         assert_eq!(atyp, 3, "ATYP must be DOMAIN (0x03), got {atyp:#04x}");
         assert_eq!(name, b"node.invalid");
         assert_eq!(port, 11029);
+    }
+
+    /// A tunnel failure is a proxy fault because the error is a
+    /// [`SocksTunnel`]. The same words inside an ordinary I/O error are
+    /// not: the classifier does not read the prose.
+    #[test]
+    fn a_socks_tunnel_is_a_proxy_fault_and_the_prose_is_not() {
+        let tunnel = io::Error::other(SocksTunnel {
+            detail: "refused".to_owned(),
+        });
+        let wrapped = io::Error::other(tunnel);
+        assert!(
+            matches!(
+                fault_from_hyper(&wrapped).fault(),
+                crate::TransportFault::Proxy(_)
+            ),
+            "a SocksTunnel in the cause chain is a proxy fault"
+        );
+
+        let prose = io::Error::other("socks: this string is not a tunnel");
+        assert!(
+            matches!(
+                fault_from_hyper(&prose).fault(),
+                crate::TransportFault::Unreachable(_)
+            ),
+            "the word socks in an ordinary error is not a proxy fault"
+        );
+
+        let proxy = HttpError::InvalidProxy("missing port".to_owned()).fault();
+        assert!(matches!(proxy, crate::TransportFault::Proxy(_)));
+        let tls = HttpError::Tls("no roots".to_owned()).fault();
+        assert!(matches!(tls, crate::TransportFault::Tls(_)));
     }
 }

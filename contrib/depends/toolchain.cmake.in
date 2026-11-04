@@ -21,10 +21,6 @@ SET(Readline_INCLUDE_DIR @prefix@/include)
 SET(Readline_LIBRARY @prefix@/lib/libreadline.a)
 SET(Terminfo_LIBRARY @prefix@/lib/libtinfo.a)
 
-SET(LIBUNWIND_INCLUDE_DIR @prefix@/include)
-SET(LIBUNWIND_LIBRARIES @prefix@/lib/libunwind.a)
-SET(LIBUNWIND_LIBRARY_DIRS @prefix@/lib)
-
 SET(Boost_IGNORE_SYSTEM_PATH ON)
 SET(BOOST_ROOT @prefix@)
 SET(BOOST_INCLUDEDIR @prefix@/include)

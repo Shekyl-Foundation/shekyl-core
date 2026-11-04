@@ -49,9 +49,6 @@ GROUPS = [
         "pairs": {
             # The configuration snapshot the C++ remnant reads, and the
             # importer's and core_tests' (daemon_snapshot_ffi.rs, §2.9).
-            "ShekylStringList": "ShekylStringList",
-            "ShekylClientEndpoint": "ShekylClientEndpoint",
-            "ShekylMineAddress": "ShekylMineAddress",
             "ShekylDaemonSnapshot": "ShekylDaemonSnapshot",
             "ShekylBuffer": "ShekylBuffer",
             "ShekylPqcKeypair": "ShekylPqcKeypair",
@@ -72,18 +69,16 @@ GROUPS = [
             "ShekylSeamObserved": "shekyl_seam_observed",
             "ShekylSeamOpenResult": "shekyl_seam_open_result",
             "ShekylSeamBoardRow": "shekyl_seam_board_row",
-            "ShekylSeamSessionCounts": "shekyl_seam_session_counts_t",
             "ShekylSeamHandshakeResult": "shekyl_seam_handshake_result",
             "ShekylRpcPeerFacts": "shekyl_rpc_peer_facts",
             "ShekylBanView": "shekyl_ban_view",
-            "ShekylIngestBlob": "shekyl_ingest_blob",
-            "ShekylIngestArrival": "shekyl_ingest_arrival",
-            "ShekylIngestReply": "shekyl_ingest_reply",
+            "ShekylSyncPayload": "shekyl_sync_payload",
         },
     },
     {
-        # The daemon RPC reads C++ facts through its own twins, some of them
-        # of structs shekyl-ffi also defines.
+        # The daemon RPC's twins of the C++ facts it still reads. The peer
+        # list is an owned Rust row, so it is not paired here; `shekyl-ffi`
+        # pairs that C export. Session counts have no C export.
         "crate": "rust/shekyl-daemon-rpc/src/lib.rs",
         "namespace": "rust_daemon_rpc",
         "headers": [
@@ -102,28 +97,10 @@ GROUPS = [
             "BlockEntryFfi": "shekyl_rpc_block_entry",
             "NetStatsFactsFfi": "shekyl_rpc_net_stats_facts",
             "ConnectionFactsFfi": "shekyl_rpc_connection_facts",
-            "SyncSpanFactsFfi": "shekyl_rpc_sync_span_facts",
             "FeeEstimateFactsFfi": "shekyl_rpc_fee_estimate_facts",
             "InfoChainFactsFfi": "shekyl_rpc_info_chain_facts",
             "InfoStatusFactsFfi": "shekyl_rpc_info_status_facts",
             "InfoPeersFactsFfi": "shekyl_rpc_info_peers_facts",
-            "PeerFactsFfi": "shekyl_rpc_peer_facts",
-            "SeamSessionCountsFfi": "shekyl_seam_session_counts_t",
-        },
-    },
-    {
-        # The daemon's Rust main() hands the C++ remnant its entry. The
-        # configuration snapshot the remnant reads is shekyl-ffi's
-        # (daemon_snapshot_ffi.rs), paired in the entry above.
-        "crate": "rust/shekyl-daemon/src/lib.rs",
-        "namespace": "rust_daemon",
-        # `run` and `stop` are `Option<RunFn>` and `Option<StopFn>`.
-        "item_types": ["structs", "enums", "typedefs"],
-        "headers": ["src/shekyl/shekyl_ffi.h"],
-        "bounds": [],
-        "exclude": [],
-        "pairs": {
-            "ShekylDaemonEntry": "ShekylDaemonEntry",
         },
     },
 ]
@@ -147,7 +124,10 @@ EXEMPT = {
 CONFIG = "scripts/ci/cbindgen-ffi-layouts.toml"
 BOUNDS_CONFIG = "scripts/ci/cbindgen-ffi-bounds.toml"
 DEFINITION = re.compile(
-    r"^\s*(?:typedef\s+)?struct\s+((?:Shekyl|shekyl_)\w*)\s*(?:\{.*)?$", re.M)
+    r"^\s*(?:typedef\s+)?struct\s+(?:alignas\s*\(\s*\d+\s*\)\s+)?"
+    r"((?:Shekyl|shekyl_)\w*)\s*(?:\{.*)?$",
+    re.M,
+)
 
 
 def fail(message):
@@ -161,7 +141,10 @@ def strip_comments(text):
 
 def body_of(text, name):
     """The member text of struct `name`'s definition, or None."""
-    match = re.search(r"\bstruct\s+" + re.escape(name) + r"\s*\{", text)
+    match = re.search(
+        r"\bstruct\s+(?:alignas\s*\(\s*\d+\s*\)\s+)?" + re.escape(name) + r"\s*\{",
+        text,
+    )
     if match is None:
         return None
     depth, start = 1, match.end()

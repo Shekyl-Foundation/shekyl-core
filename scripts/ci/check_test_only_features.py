@@ -484,9 +484,10 @@ MET_TRIGGER_UNGOVERNED_AT_REGISTRATION: dict[str, tuple[str, frozenset[Hit]]] = 
         }),
     ),
     "shekyl-rpc-client": (
-        "categorization only",
+        "categorization only. The console client's `std` hit left with "
+        "shekyl-daemon-ctl (R8); the remaining hits are the ones that crate's "
+        "deletion did not own.",
         frozenset({
-            ("std", "shekyl-daemon-rpc", "normal"),
             ("std", "shekyl-engine-core", "normal"),
             ("std", "shekyl-rpc-transport", "normal"),
             ("std", "shekyl-scanner", "normal"),
