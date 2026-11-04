@@ -235,13 +235,15 @@ and one without, so `pqc_auth_hash` appears exactly once) and
 slot) are cases no predecessor could express, pinned as the 3.64
 encoder's own; `_response_empty_v1.bin` is unchanged.
 
-**3.66 — `sync_info` is chain sync's view (CS-5 §7).** `sync_info_v4` and
+**3.68 — `sync_info` is chain sync's view (CS-5 §7).** `sync_info_v4` and
 `sync_info_empty_v4` carry the sync owner's view under its own names
 (`height`, `target_height`, `state`, `stalled`, and `peers[]` with
 `connection_id`, `address`, `claimed_height`, `mode`, `header_request`,
 `body_requests` and `rate`); `spans` and `overview`, which rendered the
 deleted block queue, are gone, so neither is its `_v3` reshaped and the
 `_v3` vectors rest on their parity tests. `get_connections_v4` takes each
-row's `height` and `state` from the same view. `get_version_synced_v43` is
-the chain's 3.66 link; 3.65 (`mining_status.speed`, `_v42`) added no other
-fixture.
+row's `height` and `state` from the same view. `get_version_synced_v45` is
+the chain's 3.68 link. 3.66 and 3.67 are the bounded-caller minors
+(`get_version_synced_v43` and `_v44`): an over-cap request is
+`OverResourceBound`, then `calc_pow` and `get_coinbase_tx_sum` are served.
+Neither minor changes `sync_info`.
