@@ -273,7 +273,8 @@ pub enum Command<K> {
     /// and nothing is sent. The owner also reads the window it holds: a
     /// pair that holds `seed` by the time this command is handled was
     /// published between the lookup and now, and its change event may
-    /// already have passed, so the owner raises [`Event::Seeds`] itself.
+    /// already have passed, so the owner raises [`Event::Seeds`] at the
+    /// end of the batch.
     SeedNotHeld {
         /// The session.
         session: K,

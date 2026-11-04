@@ -114,14 +114,30 @@ def _resolved_sync_line(log_path, since=0):
 PROFILE_MARK = "sync reached the best chain; the phases so far"
 
 
-def _sync_profile(log_path):
+def _profile_chain_count(text):
+    """The chain count a profile line covers, or None.
+
+    The log's `target_height` is the tip, `Some(N)`. The chain count is that
+    tip plus one, which is what `get_info` reports as `height`. A line with
+    no tip covers no count.
+    """
+    match = re.search(r"target_height=Some\((\d+)\)", text)
+    if match is None:
+        return None
+    return int(match.group(1)) + 1
+
+
+def _sync_profile(log_path, min_chain_count=None):
     """The subject's per-block profile, as the last profile line logged, or None.
 
     The owner logs the node's measurement sink (`MetricsArtifact`, one line of
     JSON in its `profile` field, the line's last) each time a sync reaches the
-    best chain; the last such line covers the whole sync. A daemon that logs
-    none (one built before chain sync's cutover) yields None, and so does a
-    line whose JSON does not parse: the profile is recorded, never guessed.
+    best chain; the last such line covers the whole sync. When
+    `min_chain_count` is set, that line's target chain count must reach it.
+    An earlier, shorter catch-up is not a fallback, and a line with no target
+    does not cover a positive count. A daemon that logs none (one built before
+    chain sync's cutover) yields None, and so does a line whose JSON does not
+    parse: the profile is recorded, never guessed.
     """
     last = None
     try:
@@ -141,7 +157,14 @@ def _sync_profile(log_path):
         profile = json.loads(raw)
     except json.JSONDecodeError:
         return None
-    return profile if isinstance(profile, dict) else None
+    if not isinstance(profile, dict):
+        return None
+    if min_chain_count is None:
+        return profile
+    covered = _profile_chain_count(text)
+    if covered is None or covered < min_chain_count:
+        return None
+    return profile
 
 
 def _readback_line(daemon_log, console_log, daemon_since=0, console_since=0):
@@ -664,7 +687,7 @@ def _measure_with_probe(args, work, seed_dir, daemon, seed_daemon, addr, subj_di
             if synced:
                 profile_until = time.time() + 15
                 while profile is None and time.time() < profile_until:
-                    profile = _sync_profile(subject_daemon_log)
+                    profile = _sync_profile(subject_daemon_log, min_chain_count=reached)
                     if profile is None:
                         time.sleep(0.5)
         # Store size AFTER close: a live LMDB env reported 40.7 MB for a

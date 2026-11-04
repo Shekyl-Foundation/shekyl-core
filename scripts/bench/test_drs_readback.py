@@ -310,5 +310,22 @@ class SyncProfileLine(unittest.TestCase):
         broken = R.PROFILE_MARK + ' target_height=None profile={"transit_blocks":'
         self.assertIsNone(R._sync_profile(self._log([broken])))
 
+    def test_an_earlier_profile_does_not_cover_the_measured_height(self):
+        """A shorter catch-up logged first is not the sync that was measured.
+
+        `get_info` height is a chain count. The log's target is the tip, so
+        the line covers the measurement when the tip plus one reaches that
+        count. A line with no target covers nothing.
+        """
+        early = (R.PROFILE_MARK + ' target_height=Some(10) '
+                 'profile={"transit_blocks":9}')
+        self.assertIsNone(R._sync_profile(self._log([early]), min_chain_count=100))
+        bare = R.PROFILE_MARK + ' target_height=None profile={"transit_blocks":9}'
+        self.assertIsNone(R._sync_profile(self._log([bare]), min_chain_count=100))
+        later = (R.PROFILE_MARK + ' target_height=Some(99) '
+                 'profile={"transit_blocks":99}')
+        profile = R._sync_profile(self._log([early, later]), min_chain_count=100)
+        self.assertEqual(profile, {"transit_blocks": 99})
+
 if __name__ == "__main__":
     unittest.main(verbosity=2)

@@ -13,7 +13,8 @@ use shekyl_chain_rules::{CenRow, InvalidBlock, Locus};
 use shekyl_levin::{RequestBodies, RequestHeaders};
 use shekyl_types::{BlockCount, BlockHash, BlockHeight};
 
-use super::{outcome_of, outcome_of_refusal, ServeRequest, Serving};
+use super::{ServeRequest, Serving};
+use crate::outcome::{of_refusal, of_reply};
 use shekyl_chain_sync::{Outcome, SyncState};
 
 /// A refused offer reaches the model as the outcome its refusal names. A
@@ -55,7 +56,7 @@ fn every_door_refusal_has_an_outcome() {
     ];
     for (refusal, solicited, bytes, max, expected) in cases {
         assert_eq!(
-            outcome_of_refusal(refusal, solicited, bytes, max),
+            of_refusal(refusal, solicited, bytes, max),
             expected,
             "{refusal:?} solicited={solicited} bytes={bytes} max={max:?}"
         );
@@ -143,7 +144,7 @@ fn every_entry_reply_has_an_outcome() {
     ];
     for (reply, expected) in cases {
         assert_eq!(
-            outcome_of(reply.clone(), true, Some(hash)),
+            of_reply(reply.clone(), true, Some(hash)),
             expected,
             "{reply:?}"
         );
@@ -160,7 +161,7 @@ fn a_connect_carries_its_height_however_the_body_arrived() {
         hash: BlockHash::from_bytes([3; 32]),
     };
     assert_eq!(
-        outcome_of(
+        of_reply(
             connected.clone(),
             false,
             Some(BlockHash::from_bytes([3; 32]))
@@ -168,7 +169,7 @@ fn a_connect_carries_its_height_however_the_body_arrived() {
         Outcome::Connected { height }
     );
     assert_eq!(
-        outcome_of(connected, true, None),
+        of_reply(connected, true, None),
         Outcome::Connected { height }
     );
 }
@@ -188,24 +189,24 @@ fn a_switch_is_a_connect_only_when_the_arrival_is_the_new_tip() {
         ],
     };
     assert_eq!(
-        outcome_of(switched(arrival), true, Some(arrival)),
+        of_reply(switched(arrival), true, Some(arrival)),
         Outcome::Connected { height }
     );
     assert_eq!(
-        outcome_of(switched(arrival), false, Some(arrival)),
+        of_reply(switched(arrival), false, Some(arrival)),
         Outcome::Connected { height }
     );
     assert_eq!(
-        outcome_of(
+        of_reply(
             switched(BlockHash::from_bytes([9; 32])),
             true,
             Some(arrival)
         ),
         Outcome::Noted
     );
-    assert_eq!(outcome_of(switched(arrival), true, None), Outcome::Noted);
+    assert_eq!(of_reply(switched(arrival), true, None), Outcome::Noted);
     assert_eq!(
-        outcome_of(
+        of_reply(
             Reply::Switched {
                 demoted: Vec::new(),
                 promoted: Vec::new(),

@@ -65,9 +65,12 @@
 mod facts;
 mod genesis;
 mod mining;
+mod producer;
+mod sync_owner;
 
 pub use facts::free_bytes;
 pub use mining::{MiningControl, MiningRefused, MiningStatus, PostedJob};
+pub use producer::descriptors as producer_descriptors;
 pub use shekyl_chain_sync::Declaration;
 
 use std::num::NonZeroUsize;
@@ -86,17 +89,14 @@ use shekyl_chain_store::pool::PoolOpen;
 use shekyl_chain_store::store::{ChainStore, CutShort, Horizons, SnapshotView};
 use shekyl_chain_sync::{Requesting, SyncState};
 use shekyl_chain_sync_runtime::executor::Executor;
-use shekyl_chain_sync_runtime::owner::OwnerParts;
 use shekyl_daemon_config::sections::{DaemonConfig, Dev};
 use shekyl_daemon_rpc::handles::Handles;
 use shekyl_daemon_rpc::store_facts::{NodeIdentity, RulesAt, StoreFacts};
-use shekyl_ffi::secure_relay_rng::SecureRelayRng;
 use shekyl_hash_budget::Budget;
 use shekyl_mempool::Pool;
 use shekyl_miner::{JobBoard, MiningAddress};
 use shekyl_pow_randomx::CacheStore;
 use shekyl_runtime::{RuntimeBudget, ThreadName};
-use shekyl_timing_engine::OwnerClass;
 use shekyl_transport_layer::Sockets;
 use shekyl_types::{BlockHeight, UnixSeconds};
 use tokio::sync::Notify;
@@ -320,7 +320,7 @@ impl Node {
         // Every template draws its `0x0C` commitment from this ring, and the
         // bundle producer files from it (`SO-D12` increment 4c).
         let witness = Arc::new(shekyl_bundle_producer::WitnessRing::new());
-        let producer = producer_seat(args.config, &store, &witness);
+        let producer = producer::seat(args.config, &store, &witness);
         let follow = Follow {
             job: Some(JobSeat {
                 board: Arc::clone(&board),
@@ -373,8 +373,7 @@ impl Node {
         let service = match started {
             Ok(service) => service,
             Err(error) => {
-                uninstall_process_doors();
-                runtime.shutdown(RUNTIME_SHUTDOWN);
+                abandon_open(runtime, OpenUnwind::ServiceStopped);
                 return Err(error);
             }
         };
@@ -386,17 +385,17 @@ impl Node {
         let (tips, latch) = match subscribed {
             Ok(pair) => pair,
             Err(error) => {
-                uninstall_process_doors();
-                if let Err(stop) = runtime.block_on(service.stop()) {
-                    tracing::error!(
-                        "a connector watch did not open, and the service stopped on {stop}"
-                    );
-                }
-                runtime.shutdown(RUNTIME_SHUTDOWN);
+                abandon_open(
+                    runtime,
+                    OpenUnwind::StillRunning {
+                        service,
+                        why: "a connector watch did not open",
+                    },
+                );
                 return Err(OpenError::Service(error.to_string()));
             }
         };
-        let sync_owner = match spawn_sync_owner(SyncOwnerParts {
+        let sync_owner = match sync_owner::spawn(sync_owner::Parts {
             store: Arc::clone(&store),
             door: service.door(),
             alarm: service.alarm(),
@@ -415,11 +414,13 @@ impl Node {
         }) {
             Ok(owner) => owner,
             Err(error) => {
-                uninstall_process_doors();
-                if let Err(stop) = runtime.block_on(service.stop()) {
-                    tracing::error!("chain sync did not start, and the service stopped on {stop}");
-                }
-                runtime.shutdown(RUNTIME_SHUTDOWN);
+                abandon_open(
+                    runtime,
+                    OpenUnwind::StillRunning {
+                        service,
+                        why: "chain sync did not start",
+                    },
+                );
                 return Err(error);
             }
         };
@@ -721,97 +722,6 @@ impl RulesAt for RulesOf {
     }
 }
 
-/// The bundle producer, for a node that mines and has a Tor (`SO-D12`
-/// increment 4c).
-///
-/// Only a mining daemon is a witness. The producer reads each drawn pair's
-/// shard through the daemon's fetch scheduler over the store's facts, and
-/// the scheduler dials through this node's Tor: an operator's at its
-/// `tor-socks` endpoint, or the managed one at the route its supervisor
-/// publishes, read at each fetch (`TOR_SUPERVISOR.md` §4.5, `TSR-F10`). The
-/// managed route appears after the node opens and moves when Tor respawns;
-/// a read while there is none is a stall that retries, and nothing is sent.
-/// A node with Tor off runs no producer: the templates still draw from the
-/// ring, which keeps its bound, and the node says once why it files nothing.
-///
-/// Only the endpoint of the operator's SOCKS row is used. The fetch client
-/// presents credentials derived from each read's nonce (`SF-D3`: a fresh
-/// circuit per read through `IsolateSOCKSAuth`), so a configured
-/// `tor-socks-username`/`password` pair is not sent, and a proxy that
-/// authenticates refuses every read.
-fn producer_seat(
-    config: &DaemonConfig,
-    store: &Arc<ChainStore>,
-    witness: &Arc<shekyl_bundle_producer::WitnessRing>,
-) -> Option<shekyl_chain_ingest::bundle_producer::ProducerSeat> {
-    use shekyl_archival_fetch_sched::{FetchScheduler, PFetchClient};
-    use shekyl_chain_ingest::shard_facts::{StoreHolderSource, StoreShardFacts};
-    let Some(tor) = producer_tor(config) else {
-        if config.mine.address.is_some() {
-            tracing::info!(
-                "the bundle producer is off: it reads through this node's Tor, and Tor is off"
-            );
-        }
-        return None;
-    };
-    let timeouts = shekyl_bundle_producer::read::CHALLENGE_TIMEOUTS;
-    let client = match tor {
-        ProducerTor::Operator(endpoint) => PFetchClient::with_timeouts(endpoint, timeouts),
-        ProducerTor::Managed => {
-            PFetchClient::with_route(Arc::new(shekyl_ffi::zone_ffi::managed_socks), timeouts)
-        }
-    };
-    let scheduler = Arc::new(FetchScheduler::new(
-        Arc::new(StoreShardFacts::new(Arc::clone(store))),
-        Arc::new(StoreHolderSource::new(Arc::clone(store))),
-        client,
-    ));
-    Some(shekyl_chain_ingest::bundle_producer::ProducerSeat {
-        witness: Arc::clone(witness),
-        read: shekyl_chain_ingest::bundle_producer::read_through(scheduler),
-        start_spread: shekyl_bundle_producer::READ_START_SPREAD,
-    })
-}
-
-/// The Tor the bundle producer reads through.
-enum ProducerTor {
-    /// The operator's, at its `tor-socks` endpoint.
-    Operator(std::net::SocketAddr),
-    /// The managed one, at the route its supervisor publishes.
-    Managed,
-}
-
-/// The Tor the bundle producer reads through, when this configuration runs
-/// it: the node mines and has a Tor. `None` runs no producer. The one
-/// decision [`producer_seat`] and [`producer_descriptors`] both read.
-fn producer_tor(config: &DaemonConfig) -> Option<ProducerTor> {
-    use shekyl_daemon_config::sections::Tor;
-    config.mine.address.as_ref()?;
-    match &config.tor {
-        Tor::Operator { socks, .. } => Some(ProducerTor::Operator(socks.endpoint)),
-        Tor::Managed { .. } => Some(ProducerTor::Managed),
-        Tor::Off => None,
-    }
-}
-
-/// The descriptors the bundle producer can hold, for the daemon's inbound
-/// ceiling: each started read holds one SOCKS stream for as long as it
-/// holds a slot of the fetch client, and the producer starts at most
-/// [`READS_AT_ONCE`](shekyl_bundle_producer::read::READS_AT_ONCE), the
-/// client's slots. Zero when this configuration runs no producer, under
-/// either Tor.
-#[must_use]
-pub fn producer_descriptors(config: &DaemonConfig) -> u64 {
-    if producer_tor(config).is_none() {
-        return 0;
-    }
-    // One stream per fetch slot. `READS_AT_ONCE` is the client's slot count,
-    // and that count fits a descriptor count on every platform this node
-    // builds for.
-    u64::try_from(shekyl_bundle_producer::read::READS_AT_ONCE.get())
-        .expect("READS_AT_ONCE fits a descriptor count")
-}
-
 fn wall_now() -> UnixSeconds {
     UnixSeconds::from_raw(facts::unix_now())
 }
@@ -867,63 +777,29 @@ fn uninstall_process_doors() {
     shekyl_daemon_rpc::submit::clear_production();
 }
 
-/// What [`spawn_sync_owner`] builds chain sync's owner from, beside the
-/// router and the hub it makes and leaves for the seam's bind.
-struct SyncOwnerParts {
-    store: Arc<ChainStore>,
-    door: shekyl_chain_ingest::service::Door,
-    alarm: shekyl_chain_ingest::service::Alarm,
-    tips: tokio::sync::watch::Receiver<shekyl_chain_ingest::TipChanged>,
-    latch: tokio::sync::watch::Receiver<Option<shekyl_chain_store::codec::FollowingDegraded>>,
-    executor: Arc<Executor>,
-    rules: ChainRules,
-    requesting: Requesting,
-    declaration: Declaration,
-    pool: Arc<Mutex<Pool>>,
-    state: tokio::sync::watch::Sender<SyncState>,
+/// How far [`Node::open`] got when it fails, so the service is stopped
+/// once. Genesis connect stops the service itself before it returns.
+enum OpenUnwind {
+    /// The service already stopped.
+    ServiceStopped,
+    /// The service is still running.
+    StillRunning {
+        service: Service<ProductionSubstrate>,
+        /// Named when that stop itself fails.
+        why: &'static str,
+    },
 }
 
-/// Start chain sync's owner (CS-5 §2) and leave its router sender and hub
-/// one-shot for the seam's bind (`shekyl_ffi::chain_sync_ffi::install`).
-/// The owner registers on the process's timing engine, class `Sync`, and
-/// draws from the production CSPRNG.
-fn spawn_sync_owner(
-    parts: SyncOwnerParts,
-) -> Result<shekyl_chain_sync_runtime::owner::Running, OpenError> {
-    let timer = shekyl_ffi::zone_ffi::process_engine()
-        .register(OwnerClass::Sync)
-        .map_err(|error| OpenError::Sync(format!("the timing engine: {error:?}")))?;
-    let (router_tx, routed) = tokio::sync::mpsc::unbounded_channel();
-    let (hub_tx, hub) = tokio::sync::oneshot::channel();
-    let state = parts.state.subscribe();
-    let pool = parts.pool;
-    let pool_hashes: Arc<dyn Fn() -> Vec<[u8; 32]> + Send + Sync> = Arc::new(move || {
-        pool.lock()
-            .unwrap_or_else(PoisonError::into_inner)
-            .peer_sync()
-            .map(|(txid, _)| *txid.as_bytes())
-            .collect()
-    });
-    let running = shekyl_chain_sync_runtime::owner::spawn(OwnerParts {
-        store: parts.store,
-        door: parts.door,
-        alarm: parts.alarm,
-        tips: parts.tips,
-        latch: parts.latch,
-        hub,
-        executor: parts.executor,
-        timer,
-        rules: parts.rules,
-        requesting: parts.requesting,
-        declaration: parts.declaration,
-        rng: SecureRelayRng,
-        pool_hashes,
-        routed,
-        state: parts.state,
-    })
-    .map_err(OpenError::Runtime)?;
-    shekyl_ffi::chain_sync_ffi::install(router_tx, hub_tx, state);
-    Ok(running)
+/// Uninstall the process doors, stop a service that is still running, and
+/// shut the runtime down. The log line keeps the step that failed.
+fn abandon_open(runtime: shekyl_runtime::Pool, unwind: OpenUnwind) {
+    uninstall_process_doors();
+    if let OpenUnwind::StillRunning { service, why } = unwind {
+        if let Err(stop) = runtime.block_on(service.stop()) {
+            tracing::error!("{why}, and the service stopped on {stop}");
+        }
+    }
+    runtime.shutdown(RUNTIME_SHUTDOWN);
 }
 
 fn open_chain(

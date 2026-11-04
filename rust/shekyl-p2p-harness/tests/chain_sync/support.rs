@@ -6,10 +6,11 @@
 //! Shared by the chain-sync loopback tests.
 //!
 //! `chain_sync_loopback.rs` drives the scripted peers and the serving
-//! queue. `chain_sync_claim_relay.rs` drives the inbound claim and the
-//! relay fan-out. Both read the owner's close lines through one
-//! subscriber, and both start a node from the spend corpus. A file under
-//! `tests/chain_sync/` is not its own test crate.
+//! queue. `chain_sync_cutover.rs` drives the cutover scenarios.
+//! `chain_sync_claim_relay.rs` drives the inbound claim and the relay
+//! fan-out. Each is its own integration binary, and each includes this
+//! file. They share the owner's close subscriber and the spend corpus.
+//! A file under `tests/chain_sync/` is not its own test crate.
 
 use std::num::NonZeroUsize;
 use std::sync::{Arc, Mutex};

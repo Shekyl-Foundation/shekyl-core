@@ -11,9 +11,12 @@
 
 use std::time::{Duration, Instant};
 
+use shekyl_chain_rules::RuleSet;
+use shekyl_levin::BODIES_RESPONSE_BYTES;
 use shekyl_types::{BlockCount, BlockHeight, ChainCount};
 
 use crate::claim::PeerClaim;
+use crate::model::Sync;
 use crate::state::SyncState;
 
 /// The whole view.
@@ -143,6 +146,67 @@ impl SessionMode {
             Self::PastCap => "past_cap",
             Self::EvidenceCandidate => "evidence_candidate",
             Self::Evidence => "evidence",
+        }
+    }
+}
+
+impl<K, R> Sync<K, R>
+where
+    K: Copy + Ord + std::hash::Hash + std::fmt::Debug,
+    R: Fn(BlockHeight) -> RuleSet,
+{
+    /// The view (CS-5 §7): the state, the stall, the target and one row
+    /// per open session.
+    #[must_use]
+    pub fn view(&self) -> SyncView<K> {
+        let sessions = self
+            .peers
+            .iter()
+            .map(|(session, peer)| {
+                let header_request = self
+                    .header_request
+                    .as_ref()
+                    .filter(|request| request.session == *session)
+                    .or(peer.follow_up.as_ref())
+                    .map(|request| HeaderInFlight {
+                        sent: request.sent,
+                        deadline: request.deadline,
+                    });
+                let body_requests = peer
+                    .span
+                    .iter()
+                    .filter_map(|span| {
+                        let first = self.tree.connecting(*span.hashes.first()?)?;
+                        Some(BodiesInFlight {
+                            first,
+                            count: BlockCount::from_raw(
+                                u64::try_from(span.hashes.len()).unwrap_or(u64::MAX),
+                            ),
+                            planned_bytes: BODIES_RESPONSE_BYTES,
+                            sent: span.sent,
+                            deadline: span.deadline,
+                        })
+                    })
+                    .collect();
+                SessionView {
+                    session: *session,
+                    claim: peer.claim,
+                    mode: peer
+                        .run
+                        .as_ref()
+                        .map_or(SessionMode::Idle, crate::peer::Run::view_mode),
+                    header_request,
+                    body_requests,
+                    transit: peer.transit,
+                    rate: peer.rate,
+                }
+            })
+            .collect();
+        SyncView {
+            state: self.state(),
+            stalled: self.stalled(),
+            target: self.star_count(),
+            sessions,
         }
     }
 }
