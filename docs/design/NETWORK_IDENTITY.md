@@ -2,7 +2,7 @@
 
 **Families (registered in `IMPLEMENTATION_INDEX.md` §2, rule 94):** **`NI-R`** (rulings), **`NI-Q`** (questions) and **`NI-F`** (findings). `NI-` is free at `8f2b68dbbf`.
 **Ground:** `feat/drs-s1-no-checkpoints` at `8f2b68dbbf` (#1263, 2026-11-03), read from the tree. The design review's first draft read `dev` at `b8f1b76c0`; the two places this ground differs from that draft are NI-F1 and NI-F2.
-**Status:** OPEN — Round 0. NI-R1…NI-R12 RULED by Rick 2026-11-03 (NI-R6 rules NI-Q11, NI-R7 NI-Q12, NI-R8 and NI-R9 NI-F7, NI-R10 NI-F9, NI-R11 NI-F10, NI-R12 amends NI-R10); NI-Q10's shape RULED the same day (§3). PR 1 (NI-Q1, Q2, Q3, Q8, Q11, Q12) is built on #1264, every census row of §6 disposed (two carried by #1237); NI-Q4…Q7, Q9 and Q10 follow in §8's order. Mainnet's row is PROVISIONAL until the genesis ceremony (NI-R11). Each row of §5 carries its own status.
+**Status:** OPEN — Round 0. NI-R1…NI-R12 RULED by Rick 2026-11-03 (NI-R6 rules NI-Q11, NI-R7 NI-Q12, NI-R8 and NI-R9 NI-F7, NI-R10 NI-F9, NI-R11 NI-F10, NI-R12 amends NI-R10); NI-Q10's shape RULED the same day (§3). PR 1 (NI-Q1, Q2, Q3, Q8, Q11, Q12) is built on #1264, every census row of §6 disposed (two carried by #1237); PR 2 (NI-Q4, Q9 and NI-F2) is built on #1266; NI-Q5…Q7 and Q10 follow in §8's order. Mainnet's row is PROVISIONAL until the genesis ceremony (NI-R11). Each row of §5 carries its own status.
 **Related:** [`FCMP_SPEND_SIGNING_PREIMAGE.md`](FCMP_SPEND_SIGNING_PREIMAGE.md) (NI-Q4), [`CRYPTO_DOMAIN_REGISTRY.tsv`](CRYPTO_DOMAIN_REGISTRY.tsv) (NI-Q9), [`GENESIS_TX_WIRE_FORMAT.md`](GENESIS_TX_WIRE_FORMAT.md) (the genesis content), rule [`71-network-uniformity`](../../.cursor/rules/71-network-uniformity.mdc).
 
 ---
@@ -67,7 +67,7 @@ One crate holds one table: `network → { name, genesis block bytes, genesis has
 - **Marker file (NI-Q7).** A derived label for humans and tooling; nothing trusts it for identity, because every holder of chain data checks the genesis-derived id itself.
 - **Every other domain (NI-Q9).** Audit [`CRYPTO_DOMAIN_REGISTRY.tsv`](CRYPTO_DOMAIN_REGISTRY.tsv): every signature or commitment that could be replayed across networks binds the network id, or is shown unable to replay.
 
-### 2.4.1 PR 2's shape (NI-Q4, NI-Q9; BUILDING on `feat/ni-signing-domain`)
+### 2.4.1 PR 2's shape (NI-Q4, NI-Q9, NI-F2; built on `feat/ni-signing-domain`, #1266)
 
 **The spend signature (NI-Q4).** The payload bytes do not change; the hash over them does:
 
@@ -81,9 +81,9 @@ signed_hash(i) = cSHAKE256-32(S = "shekyl/fcmp-spend-signing-v1", X = network_id
 - **The signers**: `shekyl-tx-builder` takes the network it already builds for and passes its id; the daemon's verifier takes the node's; multisig and the engine follow the builder. The FFI export `shekyl_tx_pqc_signing_payload_hashes` has no C++ caller and is deleted, not given an id nobody passes.
 - **The KAT** keeps the eight captured payloads as its subject (they still pin the preimage's composition) and pins each `signed_hash` per network against an independent Python oracle for the hash.
 
-**Message signing (NI-F2, NI-Q9).** The preimage's network field moves from the network's one-byte code to the 16-byte id; message signing is post-genesis, so there is no circularity (the reason key derivation stays on the name, NI-R10). The field's width changes, so the signature format version moves with it, and the KAT is re-recorded.
+**Message signing (NI-F2, NI-Q9).** The preimage's network field is the 16-byte id, where it was the network's one-byte code. Message signing is post-genesis, so there is no circularity (the reason key derivation stays on the name, NI-R10). The field's width changes what a signature attests, so the payload layout version is 2 and a layout-1 signature is refused by name; the envelope prefix and the canonical length do not change, as the id is hashed and never carried (`WALLET_MESSAGE_SIGNING.md` SM-R-3, amended 2026-11-04). There was no pinned preimage vector before; `docs/test_vectors/MSG_SIGN_PREIMAGE_V2.json` pins four cases on every network, rebuilt by `scripts/kat/msg_sign_preimage_oracle.py` on the same stdlib sponge as the spend oracle (`scripts/kat/stdlib_cshake.py`).
 
-**The audit (NI-Q9).** Every production row of [`CRYPTO_DOMAIN_REGISTRY.tsv`](CRYPTO_DOMAIN_REGISTRY.tsv) is classed: it binds the network (its input carries the id, the name, or something only one chain produces: a genesis-chained header, a block hash, a txid, a tree root, a key derived under the name); it cannot cross networks (local, or bound to a chain object checked elsewhere); or it is replayable. A replayable row beyond the two above is a finding raised for a ruling, not fixed silently here. The table lands in this section.
+**The audit (NI-Q9).** Every production row of [`CRYPTO_DOMAIN_REGISTRY.tsv`](CRYPTO_DOMAIN_REGISTRY.tsv) is classed: it binds the network (its input carries the id, the name, or something only one chain produces: a genesis-chained header, a block hash, a txid, a tree root, a key derived under the name); it cannot cross networks (local, or bound to a chain object checked elsewhere); or it is replayable. The table is [Appendix A](#appendix-a-the-domain-registry-audit-ni-q9): of 131 rows, 52 bind the network, 79 cannot cross, and none is replayable. Three groups hold their class only through a one-byte code or through their neighbours' proofs; they are raised for a ruling in §A.8 and are not changed here.
 
 ### 2.5 Regtest is a network, not an exception (NI-Q8)
 
@@ -139,12 +139,12 @@ Regtest is a row in the table: its own genesis, address prefixes, ports, difficu
 | NI-Q1 | The genesis header nonce. | BUILDING (PR 1): `0` on every network; identity from content (§1). |
 | NI-Q2 | What the genesis content carries. | BUILDING (PR 1): recipients and a transaction key derived from the row's name (NI-R12), the same shape on every network; no coinbase field; regtest's recipient and key committed and marked test-only (§2.2). |
 | NI-Q3 | The one Rust table: fields, readers, the network type; the C++ genesis constants. | BUILDING (PR 1): §2.3; the C++ genesis constants deleted outright (NI-F4); one network type with one code (NI-F5); tests (a)–(c) over all four networks. |
-| NI-Q4 | The signing domain. | BUILDING (PR 2, §2.4.1): `cSHAKE256-32(shekyl/fcmp-spend-signing-v1, network_id ‖ payload(i))`; signer, verifier (CEN-I17, the id from `Trust`) and KAT in one PR; `FCMP_SPEND_SIGNING_PREIMAGE.md` §1.1. |
+| NI-Q4 | The signing domain. | BUILT (PR 2, #1266, §2.4.1): `cSHAKE256-32(shekyl/fcmp-spend-signing-v1, network_id ‖ payload(i))`; signer, verifier (CEN-I17, the id from `Trust`) and KAT in one PR; `FCMP_SPEND_SIGNING_PREIMAGE.md` §1.1. |
 | NI-Q5 | The Noise prologue. | OPEN (PR 3): `network id ‖ wire-protocol version`; the network id is already the prologue (NI-F1), so the change is the wire version and a handshake KAT re-record; lands at a testnet alpha cut. |
 | NI-Q6 | The pool seal. | OPEN (PR 4): records the network id; the chain store needs no field. |
 | NI-Q7 | The marker file. | OPEN (PR 4): daemon-config's call (DC-Q15, IG-Q17); recommendation: a label, trusted for nothing. |
 | NI-Q8 | Regtest as an ordinary network. | BUILDING (PR 1): §2.5; corpus re-captured through #1244's path. The address byte is persisted in wallet files and multisig addresses (NI-F5), so the wallet-file codec takes rule 42's version bump; an older file is refused with a reason, never reinterpreted. |
-| NI-Q9 | The domain-registry audit. | BUILDING (PR 2, §2.4.1): an audit table over `CRYPTO_DOMAIN_REGISTRY.tsv`; each row bound to the network or shown unable to replay. NI-F2: message signing's code moves to the genesis-derived id, with a KAT re-record; key derivation's label is the network's name, ruled by NI-R10 (genesis pays keys derived before the id exists). |
+| NI-Q9 | The domain-registry audit. | BUILT (PR 2, #1266, Appendix A): 131 rows, 52 bound to the network, 79 unable to cross, none replayable; three groups raised for a ruling (§A.8). NI-F2: message signing binds the genesis-derived id at layout version 2, with a new preimage vector and its oracle; key derivation's label is the network's name, ruled by NI-R10 (genesis pays keys derived before the id exists). |
 | NI-Q10 | Compatibility at the handshake, replacing genesis rotation. | SHAPE RULED 2026-11-03 (§3); OPEN (PR 3): what the rules digest covers per step, and the frozen-tuple gate shrinks or goes. |
 | NI-Q11 | Regtest's levers. | RULED 2026-11-03 (NI-R6, NI-R8); BUILDING (PR 1). |
 | NI-Q12 | Seed format. | RULED 2026-11-03 (NI-R7, NI-R10); BUILDING (PR 1): BIP39, 24 words, on every network; one derivation from the 32 entropy bytes (NI-F8), salted by the network's name. |
@@ -204,3 +204,175 @@ Guards that compare a configured network with a recorded one (the marker, the mi
 **Closes:** the mainnet-store-opened-as-regtest hole; the regtest node handshaking with mainnet (FOLLOWUPS "Fakechain derives mainnet's handshake id"); cross-network transaction replay, by construction; the marker as an authority; the C++ genesis constants; FOLLOWUPS row 7 (RD-Q7); every fakechain special case; genesis rotation as a release mechanism.
 
 **Costs:** one regenesis of every network, in PR 1 (mainnet's genesis isn't final; testnet and stagenet restart once); a signing-preimage change with a KAT re-record, wallet and daemon in one PR, which is a pre-genesis-only change; a handshake change that every node of a network takes at one cut; one new crate, and the deletion of four network enums and the C++ genesis constants.
+
+## Appendix A. The domain-registry audit (NI-Q9)
+
+**Ground:** `feat/ni-signing-domain`, with NI-Q4 and NI-F2 built. Every production row of [`CRYPTO_DOMAIN_REGISTRY.tsv`](CRYPTO_DOMAIN_REGISTRY.tsv) (status `shekyl-live` or `frozen-inherited`, 131 rows) is classed:
+
+- **A, binds the network:** its input carries the network id or name, or something only one chain produces (a genesis-chained header, a block hash, a txid, a tree root, a key derived under the name).
+- **B, cannot cross networks:** it is local to one process, file or group, or it is bound to a chain object that a check elsewhere holds to this network.
+- **C, replayable:** none.
+
+**Counts:** A = 52, B = 79, C = 0. Three A rows bind only the one-byte `Network::code()` (decision 3). Four B rows (decision 1) and four more (decision 2) are B only through other checks on the same transaction. These are raised for a ruling in §A.8 and are not changed in this PR.
+
+| Mechanism | Rows | A | B |
+|---|---|---|---|
+| 1 cSHAKE256 | 56 | 28 | 28 |
+| 2 HKDF | 44 | 15 | 29 |
+| 3 FROST | 4 | 0 | 4 |
+| 4 Blake2b | 8 | 0 | 8 |
+| 5 Keccak / Schnorr | 14 | 6 | 8 |
+| 6 SHA3-256 | 1 | 1 | 0 |
+| 7 Noise BLAKE2s | 4 | 2 | 2 |
+
+### A.1 Mechanism 1: cSHAKE256
+
+| Domain | Where | What it hashes | Class | Why |
+|---|---|---|---|---|
+| shekyl/genesis-txkey-v2 | `rust/shekyl-genesis-tool/src/txkey.rs` | genesis tx secret from the network name and the recipients | A | the preimage starts with `net.name()` |
+| shekyl/multisig-address-v1 | `rust/shekyl-address/src/multisig_address.rs` | multisig group fingerprint over the canonical payload | A, code only (decision 3) | the payload carries `Network::code()` |
+| shekyl/ek-bind-v1 | `rust/shekyl-address/src/address.rs` | an address's tag over its ML-KEM key | B | lives inside the address; the HRP carries the network and decode checks it |
+| shekyl/archival-serve-challenge-leaf-v2 | `rust/shekyl-archival-retention/src/challenge.rs` | challenge leaf index | A | the input includes `prev_block_hash` |
+| shekyl/archival-serve-challenge-fire-v1 | `rust/shekyl-archival-retention/src/challenge.rs` | beacon fire height | A | the input includes `block_hash_at_seal` |
+| shekyl/pqc-leaf-key-v1 | `rust/shekyl-crypto-pq/src/leaf_commitment.rs` | per-output PQC key scalar k = H(pk) | B | a public pk→scalar map that becomes part of a leaf in that chain's tree |
+| shekyl/pqc-leaf-record-v1 | `rust/shekyl-crypto-pq/src/leaf_commitment.rs` | the PQC record over pk and r_h, in tx_extra 0x07 | B | carried inside one tx, so the txid binds it |
+| shekyl/archival-serve-credit-response-v1 | `rust/shekyl-archival-retention/src/wire.rs` | the serve-credit signature preimage | A | includes the curve-tree segment subroot and the chain's leaf bytes |
+| shekyl/archival-p-id-v1 | `rust/shekyl-archival-retention/src/id.rs` | P_canonical_id over the persona's hybrid pubkey | A | the persona key is derived under `salt_for(net)` |
+| shekyl/archival-attestation-root-v1 | `rust/shekyl-archival-retention/src/attestation_wire.rs` | a block's root over its pass records | B | recomputed from the block's own records; the header chains to genesis |
+| shekyl/archival-pass-delivery-digest-v1 | `rust/shekyl-archival-retention/src/pass_anchor.rs` | digest of the delivered body, salted by the nonce | B | only signed inside a transcript that carries `anchor_hash` |
+| shekyl/archival-shard-view-hash-v1 | `rust/shekyl-archival-retention/src/shard_view_hash.rs` | visualization seed over a shard's txs | A | folds in each txid |
+| shekyl/archival-settlement-select-v1 | `rust/shekyl-archival-retention/src/settlement_select.rs` | which issued draws count at settlement | A | the beacon is a block hash |
+| shekyl/archival-issued-index-v1 | `rust/shekyl-archival-retention/src/settlement_select.rs` | an issued draw's term in the epoch digest | B | the node's own store-drift check |
+| shekyl/archival-draw-v1 | `rust/shekyl-archival-retention/src/secret_draw.rs` | the selection stream | A | input includes `block_hash` |
+| shekyl/archival-support-draw-v1 | `rust/shekyl-archival-retention/src/support_draw.rs` | a support draw's shard | A | input includes `block_hash` |
+| shekyl/archival-support-challenge-nonce-v1 | `rust/shekyl-archival-retention/src/support_draw.rs` | a support challenge nonce | A | input includes `block_hash` |
+| shekyl/archival-draw-commit-v1 | `rust/shekyl-archival-retention/src/secret_draw.rs` | the coinbase 0x0C commitment over witness_pk and seed | B | checked against the 0x0C of block h on the verifier's own chain |
+| shekyl/archival-challenge-nonce-v1 | `rust/shekyl-archival-retention/src/secret_draw.rs` | a challenge read's nonce | A | input includes `block_hash` |
+| shekyl/archival-serve-credit-batch-v1 | `rust/shekyl-archival-retention/src/secret_draw.rs` | superseded carrier set commitment | B | nothing signs it and no consensus path computes it |
+| shekyl/archival-serve-credit-bundle-v1 | `rust/shekyl-archival-retention/src/bundle.rs` | the bundle commitment the witness signs | B | its seed and key are bound to block h's 0x0C |
+| shekyl/archival-bundle-prunable-v1 | `rust/shekyl-archival-retention/src/bundle.rs` | content hash of a bundle's prunable bytes | B | a content address carried in a header reference |
+| shekyl/archival-bundle-root-v1 | `rust/shekyl-archival-retention/src/bundle.rs` | header root over bundle references | B | recomputed from the references; the header chains to genesis |
+| shekyl/archival-drawable-epoch-v2 | `rust/shekyl-archival-retention/src/drawable_epoch.rs` | digest of an epoch snapshot | B | a local store check; no consensus rule reads it |
+| shekyl/p-store-aead-v1 | `rust/shekyl-p-store/src/store.rs` | P's body-store file key from file_kek | B | local file |
+| shekyl/p-store-slot-v1 | `rust/shekyl-p-store/src/store.rs` | P's per-shard table slot | B | local |
+| shekyl/archival-emission-auth-backing-v2 | `rust/shekyl-archival-retention/src/emission_wire.rs` | 64-byte emission auth message (persona, holdings, epochs, work, reward commits, `signable_tx_hash`) | B (decision 1) | the message carries no network id and no chain object; bound only through the same transaction's proofs |
+| shekyl/archival-emission-auth-claim-v2 | `rust/shekyl-archival-retention/src/emission_wire.rs` | the same message under the claim role | B (decision 1) | the message carries no network id and no chain object; bound only through the same transaction's proofs |
+| shekyl/p-socks-user-v1 | `rust/shekyl-p-transport/src/lib.rs` | Tor SOCKS isolation username from the persona id | B | local to the process |
+| shekyl/output-handle-v1 | `rust/shekyl-crypto-pq/src/handle.rs` | wallet handle for an output position | A | input is view_secret (name-salted) plus tx_hash |
+| shekyl/receive-label-hash-v1 | `rust/shekyl-crypto-pq/src/label.rs` | wallet display fingerprint of a label | B | wallet-local display only |
+| shekyl/msg-sign-v1 | `rust/shekyl-crypto-pq/src/message_signing.rs` | the message-signing preimage | A | the preimage carries the network id (NI-F2, layout version 2) |
+| shekyl/msg-hash-v1 | `rust/shekyl-crypto-pq/src/message_signing.rs` | pre-hash of the message | B | only used inside the msg-sign preimage |
+| shekyl/msg-sig-ck-v1 | `rust/shekyl-crypto-pq/src/message_signing.rs` | 4-byte armor checksum | B | not a security check |
+| shekyl/pqc-auth-tx-v1 | `rust/shekyl-crypto-pq/src/signature.rs` | hybrid spend auth over `signed_hash` | A | signs `signed_hash`, whose input starts with the network id (NI-Q4) |
+| shekyl/pqc-auth-tx-multisig-v1 | `rust/shekyl-crypto-pq/src/signature.rs` | multisig participant auth over the same payload | A | signs the same `signed_hash` |
+| shekyl/fcmp-spend-signing-v1 | `rust/shekyl-wire/src/transaction/signing_preimage.rs` | the hash every hybrid spend signature is over | A | X starts with the network id (NI-Q4) |
+| shekyl/archival-emission-claim-scheme-v1 | `rust/shekyl-crypto-pq/src/signature.rs` | hybrid signature over the emission claim message | B (decision 1) | the message carries no network id and no chain object; bound only through the same transaction's proofs |
+| shekyl/archival-emission-backing-scheme-v1 | `rust/shekyl-crypto-pq/src/signature.rs` | hybrid signature over the emission backing message | B (decision 1) | the message carries no network id and no chain object; bound only through the same transaction's proofs |
+| shekyl/archival-attestation-scheme-v3 | `rust/shekyl-crypto-pq/src/signature.rs` | pass countersignature transcript | A | the transcript includes `anchor_hash` |
+| shekyl/archival-serve-credit-scheme-v1 | `rust/shekyl-crypto-pq/src/signature.rs` | serve-credit response signature | A | message includes the tree subroot |
+| shekyl/archival-receipt-scheme-v1 | `rust/shekyl-crypto-pq/src/signature.rs` | serve receipt over the same transcript | A | includes `block_hash(anchor_height)` |
+| shekyl/archival-witness-carrier-scheme-v1 | `rust/shekyl-crypto-pq/src/signature.rs` | superseded | B | callers only inside `#[cfg(test)]` |
+| shekyl/archival-witness-bundle-scheme-v1 | `rust/shekyl-crypto-pq/src/signature.rs` | witness signature over the bundle commitment | B | the key is fresh per block and committed in h's 0x0C |
+| shekyl/snapshot-id-v1 | `rust/shekyl-engine-core/src/engine/refresh/types.rs` | wallet reservation-staleness digest | A | includes block hashes |
+| shekyl/chain-digest/v0 | `rust/shekyl-chain-store/src/digest_v0.rs` | outer logical-state digest | A | includes the chain component and the curve root |
+| shekyl/chain-digest/v0/chain | `rust/shekyl-chain-store/src/digest_v0.rs` | height-ordered block hashes | A | digest_v0.rs |
+| shekyl/chain-digest/v0/spent-elem | `rust/shekyl-chain-store/src/digest_v0.rs` | per-key-image XOR leaf | B | local oracle, nested in the outer digest |
+| shekyl/chain-store/undo-log/post-image-v1 | `rust/shekyl-chain-store/src/codec/undo.rs` | post-image of a journaled write | B | local store |
+| shekyl/p2p-wire-prefix-v1 | `rust/shekyl-network/src/lib.rs` | clearnet framing prefix | A | X = network_id |
+| shekyl/p2p-network-id-v1 | `rust/shekyl-network/src/lib.rs` | the network id | A | X = genesis hash |
+| shekyl/rpc-rendezvous-name-v1 | `rust/shekyl-rpc-channel/src/lib.rs` | local rendezvous name | A | input starts with network_id |
+| shekyl/rpc-static-fingerprint-v1 | `rust/shekyl-rpc-channel/src/lib.rs` | enrolment id of a client key bundle | B | not a credential; the handshake prologue binds the id |
+| shekyl/bp-plus-batch-weights-v1 | `rust/shekyl-bulletproofs/src/derived.rs` | verifier's batch-weight seed | B | randomness inside the verifier; never shown to anyone |
+| shekyl/fcmp-pp-batch-weights-v1 | `rust/shekyl-fcmp/src/batch_weights.rs` | FCMP++ batch-weight seed | A | includes `tree_root` |
+| shekyl/fcmp-membership-only-batch-weights-v1 | `rust/shekyl-fcmp/src/batch_weights.rs` | membership-only batch-weight seed | A | includes `tree_root` |
+
+### A.2 Mechanism 2: HKDF salt and info
+
+| Domain | Where | What it hashes | Class | Why |
+|---|---|---|---|---|
+| shekyl-kem-v1 (salt) | `rust/shekyl-crypto-pq/src/kem.rs` | combines the X25519 and ML-KEM shared secrets | B | per-output secret |
+| shekyl-seed-normalize-v1 (salt) | `rust/shekyl-crypto-pq/src/account.rs` | seed → 64-byte master seed | B | local intermediate; every consumer then expands under `salt_for` |
+| shekyl-master-derive-v2- (salt prefix) | `rust/shekyl-crypto-pq/src/account.rs` | the wallet-key HKDF salt | A | prefix plus `net.tag()` |
+| shekyl-output-derive-v1 (salt) | `rust/shekyl-crypto-pq/src/derivation.rs` | per-output secrets from combined_ss | B | per-output secret that ends up in one tx |
+| shekyl-view-tag-prefilter-v1 (salt) | `rust/shekyl-crypto-pq/src/derivation.rs` | wire view-tag byte | B | per-output |
+| shekyl-output-kem-v1 (salt) | `rust/shekyl-crypto-pq/src/derivation.rs` | sender's KEM seed from tx_key | B | sender-local |
+| shekyl-view-tag-x25519-v1 (salt) | `rust/shekyl-crypto-pq/src/derivation.rs` | counterfactual view tag | B | only `examples/fa6_decap_prefilter_gate.rs` calls it |
+| shekyl-ed25519-spend | `rust/shekyl-crypto-pq/src/account.rs` | spend scalar | A | salt = `salt_for(net)` |
+| shekyl-ed25519-view | `rust/shekyl-crypto-pq/src/account.rs` | view scalar | A | same |
+| shekyl-ml-kem-768 | `rust/shekyl-crypto-pq/src/account.rs` | ML-KEM d_z | A | same |
+| shekyl-output-x / -y / -mask / -amount-key / -view-tag-combined / -amount-tag / -label-key / -label-tag / shekyl-pqc-output / shekyl-pqc-ed25519 (10 rows) | `rust/shekyl-crypto-pq/src/derivation.rs` | per-output secrets (key offsets, mask, amount, tags, label, PQC keypair seed) | B ×10 | expanded from combined_ss; land in one tx |
+| shekyl-pqc-leaf-blind | `rust/shekyl-crypto-pq/src/leaf_commitment.rs` | leaf blind r | B | per-output |
+| shekyl-pqc-leaf-record-blind | `rust/shekyl-crypto-pq/src/leaf_commitment.rs` | record blind r_h | B | per-output |
+| shekyl-view-tag-prefilter (info) | `rust/shekyl-crypto-pq/src/derivation.rs` | view-tag byte | B | per-output |
+| shekyl-view-tag-x25519 (info) | `rust/shekyl-crypto-pq/src/derivation.rs` | counterfactual tag | B | example-only |
+| shekyl-archival-p-{ed25519-spend, ed25519-view, ml-kem-768, ed25519-account-sign, ml-dsa-65, bond-spend-ed25519, bond-spend-ml-dsa-65, hs-id-ed25519, receipt-ed25519, receipt-fn-dsa-1024}-v1 (10 rows) | `rust/shekyl-crypto-pq/src/archival_p.rs` | persona P's key seeds per slot | A ×10 | salt = `salt_for(net)` |
+| shekyl-v31-{hybrid-sign, classical-spend, view-tag, kem-seed, multisig-kem} (5 rows) | `rust/shekyl-crypto-pq/src/multisig_receiving.rs` | per-output multisig material from KEM secrets | B ×5 | per-output secrets |
+| shekyl/msg-sign-seed-slh-dsa-192s-v1 | `rust/shekyl-crypto-pq/src/message_signing.rs` | message-signing identity seed | A | salt = `salt_for(network)` |
+| shekyl-prefs-hmac-v1 | `rust/shekyl-engine-prefs/src/hmac_key.rs` | prefs HMAC key from file_kek | B | local file |
+| shekyl-region1-aead-v2 | `rust/shekyl-crypto-pq/src/wallet_envelope.rs` | wallet-file region 1 key | B | local |
+| shekyl-region2-aead-v2 | `rust/shekyl-crypto-pq/src/wallet_envelope.rs` | wallet-file region 2 key | B | local |
+| nonce | `rust/shekyl-multisig/src/encryption.rs` | AEAD nonce for multisig group messages | B | secret shared only within the group |
+
+### A.3 Mechanism 3: FROST transcript
+
+| Domain | Where | What it hashes | Class | Why |
+|---|---|---|---|---|
+| Shekyl FROST SAL v1 | `rust/shekyl-fcmp/src/frost_sal.rs` | root of the multisig SAL transcript over `signable_tx_hash` | B (decision 2) | `signable_tx_hash` is the prefix hash, with no chain data; bound by the tx's membership proof and `reference_block` |
+| SpendAuthAndLinkability Multisig | `rust/shekyl-fcmp-proofs/src/sal/multisig.rs` | inherited sub-domain | B (decision 2) | same; frozen |
+| FROST-ED25519-FCMP++-v1 | `rust/shekyl-fcmp-proofs/src/sal/multisig.rs` | ciphersuite CONTEXT | B | constant, used only inside the signing group |
+| Ed25519 Monero T | `rust/shekyl-fcmp-proofs/src/sal/multisig.rs` | ciphersuite ID | B | same |
+
+### A.4 Mechanism 4: Blake2b
+
+| Domain | Where | What it hashes | Class | Why |
+|---|---|---|---|---|
+| Shekyl FCMP++ SAL full v1 | `rust/shekyl-fcmp-proofs/src/sal/mod.rs` | SAL challenge: `signable_tx_hash`, input, L, … | B (decision 2) | prefix hash only; tied to the chain through the FCMP++ proof against the tree at `reference_block` |
+| Shekyl FCMP++ SAL membership-only v1 | `rust/shekyl-fcmp-proofs/src/sal/mod.rs` | membership-only challenge | B (decision 2) | same |
+| Shekyl FCMP++ MO nonce {r_o, r_i, r_r_i, r_c, alpha, r_y} v1 (6 rows) | `rust/shekyl-fcmp-proofs/src/sal/membership_only.rs` | hedged prover nonces | B ×6 | prover-internal secrets |
+
+### A.5 Mechanism 5: Keccak and Schnorr
+
+| Domain | Where | What it hashes | Class | Why |
+|---|---|---|---|---|
+| shekyl-outbound-tx-proof-v1 | `rust/shekyl-proofs/src/tx_proof.rs` | Schnorr over txid, address bytes, message, per-output data | A | txid |
+| shekyl-inbound-tx-proof-v1 | `rust/shekyl-proofs/src/tx_proof.rs` | same | A | txid |
+| shekyl-reserve-proof-v1 | `rust/shekyl-proofs/src/reserve_proof.rs` | Schnorr over address bytes, message, per-output data | A, code only (decision 3) | `canonical_address_bytes` carries `Network::code()` (`rust/shekyl-engine-core/src/engine/proofs.rs`); no txid or height |
+| shekyl-reserve-proof-dleq-v1 | `rust/shekyl-proofs/src/dleq.rs` | DLEQ over address bytes, message, output_key | A, code only (decision 3) | the same address bytes |
+| shekyl/msg-sign-outer-v1 | `rust/shekyl-crypto-pq/src/message_signing.rs` | classical Schnorr over the preimage and σ_pq | A | signs the preimage, which carries the id |
+| `shekyl-subaddr-v1\0` | `rust/shekyl-crypto-pq/src/output_claim.rs` | m_i from view_scalar and index | A | the view scalar is name-salted |
+| Monero Generator T / FCMP++ Generator U / V / Helios / Selene initializers (5 rows) | `rust/shekyl-curve-generators/src/lib.rs` | fixed public generators | B ×5 | public parameters with no message; frozen, so they could never take the id anyway |
+| bulletproof / bulletproof_plus | `rust/shekyl-bulletproofs/build.rs` | BP generators | B ×2 | public parameters |
+| bulletproof_plus_transcript | `rust/shekyl-bulletproofs/src/plus/transcript.rs` | BP+ transcript initializer | B | constant; the proofs sit inside a tx |
+
+### A.6 Mechanism 6: SHA3-256
+
+| Domain | Where | What it hashes | Class | Why |
+|---|---|---|---|---|
+| shekyl-mlkem-chacha-seed | `rust/shekyl-crypto-pq/src/account.rs` | ChaCha seed from d_z | A | d_z is derived under `salt_for` |
+
+### A.7 Mechanism 7: Noise BLAKE2s
+
+| Domain | Where | What it hashes | Class | Why |
+|---|---|---|---|---|
+| shekyl/rpc-channel-v1 | `rust/shekyl-rpc-channel/src/lib.rs` | RPC handshake prologue | A | label followed by the network id |
+| shekyl/rpc-busy-v1 | `rust/shekyl-rpc-channel/src/lib.rs` | busy reply MAC | B | keyed by the daemon bundle and answers one message 1 |
+| shekyl/rpc-mac1-v1 | `rust/shekyl-rpc-channel/src/lib.rs` | mac1 key over the daemon bundle | B | DoS cookie; the handshake behind it binds the id |
+| shekyl/noise-record-header-v1 | `rust/shekyl-noise/src/classed.rs` | header-protection key from the record key | A | the record key comes from a handshake whose prologue is the id |
+
+### A.8 Raised for a ruling
+
+1. **The emission auths (`archival-emission-auth-{backing,claim}-v2`, `archival-emission-{claim,backing}-scheme-v1`; B).** The signed message holds the persona id and key, holdings, epochs, work claim, reward commitments and `signable_tx_hash`. That hash is the prefix hash with the emission input removed, and the prefix carries no `reference_block`, so the message names no network and no chain object. A replay of a testnet emission on mainnet needs the same persona key bonded on both, which takes an operator who reuses keys on purpose, and fee inputs whose spend signatures verify on mainnet, which NI-Q4 now refuses. The rewards would go to the same destinations. *Recommended:* put the network id at the head of the auth message's input, with a label bump, so the message binds on its own rather than through its neighbours.
+2. **The SAL and FROST transcripts (`Shekyl FROST SAL v1`, `SpendAuthAndLinkability Multisig`, `Shekyl FCMP++ SAL full v1`, `Shekyl FCMP++ SAL membership-only v1`; B).** They hash the same prefix hash. Their chain binding is the FCMP++ membership proof against the tree at `reference_block` and, since NI-Q4, the hybrid signature over the network-bound `signed_hash` on the same input. Two are inherited and frozen. *Recommended:* B, ruled explicitly.
+3. **The rows bound by `Network::code()` (`shekyl/multisig-address-v1`, `shekyl-reserve-proof-v1`, `shekyl-reserve-proof-dleq-v1`).** The code separates the four networks, but it is the enum code NI-F2 moved message signing off, and a reserve proof carries no txid or height. *Recommended:* the reserve proof and its DLEQ bind the network id; the multisig fingerprint binds the network's name tag, since a group's address is fixed before any chain is read.
+
+Also for the ruling: NI-Q4's row read "a cSHAKE customization carrying the network id", and §2.4.1 puts the id in the input instead (`X = network_id ‖ payload`). The same placement is used for message signing.
+
+### A.9 Registry rows with no production caller
+
+These are `shekyl-live`, but nothing in a shipped path calls them. Each is classed above as its code reads; whether its status should change is not this round's question:
+
+- `shekyl/archival-serve-credit-batch-v1`: nothing consumes it.
+- `shekyl/archival-witness-carrier-scheme-v1`: called only from `#[cfg(test)]` code in `fn_dsa_hybrid.rs`.
+- `shekyl-subaddr-v1\0`: its module says it has no V3.0 production caller.
+- The `shekyl-view-tag-x25519-v1` salt and its info label: called only from an `examples/` binary.
+- `shekyl/pqc-auth-tx-multisig-v1` and the five `shekyl-v31-*` rows: their production signer and constructor are not built yet.
