@@ -148,3 +148,32 @@ fn the_seed_lists_are_the_rows() {
     assert!(Network::Stagenet.seeds().is_empty());
     assert!(Network::Regtest.seeds().is_empty());
 }
+
+/// `name_id` is the tag's cSHAKE256 under `shekyl/network-name-v1`, first
+/// 16 bytes, on every network (the signing envelope §2.6); the four
+/// constants are distinct. The values are the stdlib oracle's
+/// (`scripts/kat/stdlib_cshake.py`, anchored on NIST SP 800-185's samples).
+#[test]
+fn the_name_id_is_the_tags_cshake() {
+    let pinned = [
+        (Network::Mainnet, "5e6f51beafca4a33dbc98267574fc1c8"),
+        (Network::Testnet, "866a986774ba359c8950f938e8deb30a"),
+        (Network::Stagenet, "fd3a11446a2937826860949474456312"),
+        (Network::Regtest, "4b22be743ef0c275c6f9b05bb44ff33f"),
+    ];
+    for (net, hex) in pinned {
+        let derived = shekyl_crypto_hash::cshake256_32(NETWORK_NAME_DST, net.tag().as_bytes());
+        assert_eq!(
+            net.name_id(),
+            derived[..16],
+            "{net}: the constant is the derivation"
+        );
+        let shown: String = net.name_id().iter().map(|b| format!("{b:02x}")).collect();
+        assert_eq!(shown, hex, "{net}: the oracle's value");
+    }
+    for (i, a) in Network::ALL.iter().enumerate() {
+        for b in &Network::ALL[i + 1..] {
+            assert_ne!(a.name_id(), b.name_id(), "{a} and {b}");
+        }
+    }
+}

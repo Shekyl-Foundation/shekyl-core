@@ -5,9 +5,9 @@
 
 //! Tier-1/Tier-2 vectors for the frozen ADDRESS_DERIVATION_V3 pipeline: a
 //! wallet's one 32-byte secret, `normalize_seed`, then HKDF-SHA-512 under
-//! `salt_for(net)` = `shekyl-master-derive-v2-` ‖ `shekyl/<network>`
+//! `salt_for(net)` = `name_id(net)` ‖ `shekyl-master-derive-v3`
 //! (`NETWORK_IDENTITY.md` NI-R7, NI-R10; `V3_WALLET_DECISION_LOG.md`,
-//! 2026-11-03).
+//! 2026-11-03 and 2026-11-04).
 //!
 //! Corpus: `docs/test_vectors/ADDRESS_DERIVATION_V3/{manifest.json,vectors.json}`.
 //!
@@ -55,7 +55,7 @@ const VECTORS_JSON: &str =
 
 /// The manifest's `derivation_version`: the corpus version and the salt it
 /// was derived under.
-const DERIVATION_VERSION: &str = "v3 (salt shekyl-master-derive-v2-shekyl/<network>)";
+const DERIVATION_VERSION: &str = "v3 (salt name_id(net) || shekyl-master-derive-v3)";
 
 #[derive(Debug, Deserialize)]
 struct ManifestFile {
@@ -567,7 +567,7 @@ fn kat_regenerate_address_derivation_v3() {
         "_comment": [
             "Tier-1/Tier-2 vectors for ADDRESS_DERIVATION_V3: seed (32 bytes, every",
             "network) -> normalize_seed -> HKDF-SHA-512 under salt_for(net) =",
-            "'shekyl-master-derive-v2-' || 'shekyl/<network>' (NETWORK_IDENTITY.md",
+            "name_id(net) || 'shekyl-master-derive-v3' (NETWORK_IDENTITY.md",
             "NI-R7, NI-R10). Tier-1 pins the intermediate steps on all four",
             "networks; Tier-2 pins whole accounts from account_from_seed, and from",
             "account_from_words where mnemonic_words is present (words and bytes",

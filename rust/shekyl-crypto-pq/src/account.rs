@@ -164,20 +164,23 @@ pub use shekyl_address::Network;
 
 // --- salt construction -------------------------------------------------------
 
-/// The HKDF salt's prefix. Registered in `CRYPTO_DOMAIN_REGISTRY.tsv`.
-pub const MASTER_DERIVE_SALT_PREFIX: &[u8] = b"shekyl-master-derive-v2-";
+/// The HKDF salt's purpose label, after the network's `name_id`.
+/// Registered in `CRYPTO_DOMAIN_REGISTRY.tsv`; the label is the salt
+/// layout's only version (the signing envelope §2.6: a layout change is a
+/// new label, here `-v3` for `name_id ‖ purpose`).
+pub const MASTER_DERIVE_PURPOSE: &[u8] = b"shekyl-master-derive-v3";
 
-/// Build the HKDF salt bound to a network's name (NI-R10): the value is
-/// [`MASTER_DERIVE_SALT_PREFIX`] followed by the network's tag, all ASCII,
-/// bounded, with no internal NUL.
-///
-/// Example: `b"shekyl-master-derive-v2-shekyl/mainnet"`.
+/// Build the HKDF salt bound to a network's name (NI-R10, Rick's ruling of
+/// 2026-11-04 on the signing envelope): the network's 16-byte `name_id` at
+/// position 0, then [`MASTER_DERIVE_PURPOSE`], unframed. Keys and addresses
+/// exist before any genesis, so derivation binds the name, never the
+/// genesis-derived id.
 #[must_use]
 pub fn salt_for(net: Network) -> Vec<u8> {
-    let tag = net.tag().as_bytes();
-    let mut out = Vec::with_capacity(MASTER_DERIVE_SALT_PREFIX.len() + tag.len());
-    out.extend_from_slice(MASTER_DERIVE_SALT_PREFIX);
-    out.extend_from_slice(tag);
+    let name_id = net.name_id();
+    let mut out = Vec::with_capacity(name_id.len() + MASTER_DERIVE_PURPOSE.len());
+    out.extend_from_slice(&name_id);
+    out.extend_from_slice(MASTER_DERIVE_PURPOSE);
     out
 }
 
@@ -595,23 +598,22 @@ mod tests {
     use super::*;
 
     #[test]
-    fn salt_for_is_the_prefix_and_the_networks_tag() {
-        assert_eq!(
-            salt_for(Network::Mainnet),
-            b"shekyl-master-derive-v2-shekyl/mainnet"
-        );
-        assert_eq!(
-            salt_for(Network::Testnet),
-            b"shekyl-master-derive-v2-shekyl/testnet"
-        );
-        assert_eq!(
-            salt_for(Network::Stagenet),
-            b"shekyl-master-derive-v2-shekyl/stagenet"
-        );
-        assert_eq!(
-            salt_for(Network::Regtest),
-            b"shekyl-master-derive-v2-shekyl/regtest"
-        );
+    fn salt_for_is_the_name_id_then_the_purpose() {
+        for net in [
+            Network::Mainnet,
+            Network::Testnet,
+            Network::Stagenet,
+            Network::Regtest,
+        ] {
+            let salt = salt_for(net);
+            assert_eq!(salt[..16], net.name_id(), "{net}: name_id at position 0");
+            assert_eq!(
+                &salt[16..],
+                b"shekyl-master-derive-v3",
+                "{net}: the purpose"
+            );
+        }
+        assert_ne!(salt_for(Network::Mainnet), salt_for(Network::Regtest));
     }
 
     #[test]

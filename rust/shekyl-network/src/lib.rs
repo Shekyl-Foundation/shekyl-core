@@ -109,6 +109,14 @@ impl Network {
         self.row().tag
     }
 
+    /// The name's 16-byte binding, `name_id`: what anything derived from
+    /// keys or addresses binds, since those exist before any genesis
+    /// (NI-R10, NI-R15). Key derivation's HKDF salt starts with it.
+    #[must_use]
+    pub const fn name_id(self) -> [u8; 16] {
+        self.row().name_id
+    }
+
     /// The network's address prefixes.
     #[must_use]
     pub const fn prefixes(self) -> &'static Prefixes {
@@ -219,6 +227,10 @@ pub struct Row {
     pub name: &'static str,
     /// `shekyl/<name>`.
     pub tag: &'static str,
+    /// `name_id`: `cSHAKE256(S = NETWORK_NAME_DST, X = tag)[..16]`, the
+    /// name's 16-byte binding (`NETWORK_IDENTITY.md` NI-R10, the signing
+    /// envelope §2.6). Held as a constant; a test recomputes it.
+    pub name_id: [u8; 16],
     /// The address prefixes.
     pub prefixes: Prefixes,
     /// The daemon's default ports.
@@ -485,6 +497,10 @@ const ROWS: [Row; 4] = [
         network: Network::Mainnet,
         name: "mainnet",
         tag: "shekyl/mainnet",
+        name_id: [
+            0x5e, 0x6f, 0x51, 0xbe, 0xaf, 0xca, 0x4a, 0x33, 0xdb, 0xc9, 0x82, 0x67, 0x57, 0x4f,
+            0xc1, 0xc8,
+        ],
         prefixes: Prefixes {
             classical: "shekyl",
             pqc_a: "skpq",
@@ -505,6 +521,10 @@ const ROWS: [Row; 4] = [
         network: Network::Testnet,
         name: "testnet",
         tag: "shekyl/testnet",
+        name_id: [
+            0x86, 0x6a, 0x98, 0x67, 0x74, 0xba, 0x35, 0x9c, 0x89, 0x50, 0xf9, 0x38, 0xe8, 0xde,
+            0xb3, 0x0a,
+        ],
         prefixes: Prefixes {
             classical: "tshekyl",
             pqc_a: "tskpq",
@@ -525,6 +545,10 @@ const ROWS: [Row; 4] = [
         network: Network::Stagenet,
         name: "stagenet",
         tag: "shekyl/stagenet",
+        name_id: [
+            0xfd, 0x3a, 0x11, 0x44, 0x6a, 0x29, 0x37, 0x82, 0x68, 0x60, 0x94, 0x94, 0x74, 0x45,
+            0x63, 0x12,
+        ],
         prefixes: Prefixes {
             classical: "sshekyl",
             pqc_a: "sskpq",
@@ -545,6 +569,10 @@ const ROWS: [Row; 4] = [
         network: Network::Regtest,
         name: "regtest",
         tag: "shekyl/regtest",
+        name_id: [
+            0x4b, 0x22, 0xbe, 0x74, 0x3e, 0xf0, 0xc2, 0x75, 0xc6, 0xf9, 0xb0, 0x5b, 0xb4, 0x4f,
+            0xf3, 0x3f,
+        ],
         prefixes: Prefixes {
             classical: "rshekyl",
             pqc_a: "rskpq",
@@ -566,6 +594,10 @@ const ROWS: [Row; 4] = [
 /// Customization for the network id.
 /// Registered in `CRYPTO_DOMAIN_REGISTRY.tsv` beside [`WIRE_PREFIX_DST`].
 pub const NETWORK_ID_DST: &[u8] = b"shekyl/p2p-network-id-v1";
+
+/// The customization `name_id` is derived under: `cSHAKE256(S = this,
+/// X = the network's tag)[..16]` (the signing envelope §2.6).
+pub const NETWORK_NAME_DST: &[u8] = b"shekyl/network-name-v1";
 
 /// Customization for the clearnet framing prefix.
 /// Registered in `CRYPTO_DOMAIN_REGISTRY.tsv`.
