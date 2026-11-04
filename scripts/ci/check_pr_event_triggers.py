@@ -37,10 +37,13 @@ What a passing `pull_request` trigger is:
 * a mapping, with no `branches` or `branches-ignore`
 * `types` absent (the default set) or exactly `[opened, synchronize,
   reopened]`; naming `types` replaces the default set, so a list that
-  drops one of the three is silent and is refused too
-* no expression anywhere in the file that reads `github.event.changes`;
-  that object exists only on `edited`, so a reader of it is a leftover of
-  the condition this gate retired
+  drops one of the three is silent and is refused too, as is a `types`
+  key with no list under it
+* no expression in the file that reads `github.event.changes`; that
+  object exists only on `edited`, so a reader of it is a leftover of the
+  condition this gate retired. An expression is an `if` value at any
+  depth, `concurrency.group`, or any string carrying `${{`; a `run:`
+  script or a `name:` that mentions the words is prose, not a read
 
 The eleven workflows that had the branches filter are named below. A tree
 with none of them, or with no `pull_request` workflow at all, is a missing
@@ -104,15 +107,28 @@ def pull_request_form(trigger: object) -> str | None:
     return None
 
 
-def _strings(node: object):
+def _expressions(node: object, under_if: bool = False):
+    """The strings GitHub evaluates as expressions, and nothing else.
+
+    An `if` value is an expression whether or not it is wrapped in `${{`;
+    `concurrency.group` is the same. Any other string is an expression only
+    where it carries `${{`. A `run:` script or a `name:` that mentions
+    `github.event.changes` in words is prose, and is not reported.
+    """
     if isinstance(node, str):
-        yield node
+        if under_if or "${{" in node:
+            yield node
     elif isinstance(node, dict):
-        for value in node.values():
-            yield from _strings(value)
+        for key, value in node.items():
+            yield from _expressions(value, under_if=(key == "if"))
     elif isinstance(node, list):
         for item in node:
-            yield from _strings(item)
+            yield from _expressions(item)
+
+
+def _concurrency_group(doc: dict) -> object:
+    concurrency = doc.get("concurrency")
+    return concurrency.get("group") if isinstance(concurrency, dict) else None
 
 
 def problems_in(filename: str, doc: object) -> list[str]:
@@ -139,16 +155,19 @@ def problems_in(filename: str, doc: object) -> list[str]:
             f"{filename}: `pull_request` carries a branches filter, so a PR "
             "whose base is another branch never runs it"
         )
-    types = pr.get("types")
-    if types is not None and types != TYPES:
+    if "types" in pr and pr["types"] != TYPES:
         problems.append(
-            f"{filename}: `pull_request` types are {types!r}, want {TYPES} or "
-            "no `types` key; `edited` runs every job skipped on each body edit"
+            f"{filename}: `pull_request` types are {pr['types']!r}, want {TYPES} "
+            "or no `types` key; `edited` runs every job skipped on each body edit"
         )
-    if any(_EDITED_ONLY in text for text in _strings(doc)):
+    group = _concurrency_group(doc)
+    expressions = list(_expressions(doc))
+    if isinstance(group, str):
+        expressions.append(group)
+    if any(_EDITED_ONLY in text for text in expressions):
         problems.append(
-            f"{filename}: reads `{_EDITED_ONLY}`, which exists only on the "
-            "`edited` event this gate refuses"
+            f"{filename}: an expression reads `{_EDITED_ONLY}`, which exists "
+            "only on the `edited` event this gate refuses"
         )
     jobs = doc.get("jobs")
     if not isinstance(jobs, dict) or not jobs:
@@ -180,6 +199,11 @@ def selftest() -> int:
         ("types drop reopened", _doc(types=["opened", "synchronize"]), True),
         ("types are the default set", _doc(types=TYPES), False),
         ("types absent", _doc(), False),
+        (
+            "types present with nothing under it",
+            {"on": {"pull_request": {"types": None}}, "jobs": {"a": _job()}},
+            True,
+        ),
         ("push only", _doc(pull_request=False), False),
         (
             "job if reads github.event.changes",
@@ -187,9 +211,35 @@ def selftest() -> int:
             True,
         ),
         (
+            "step if reads github.event.changes",
+            _doc(
+                job={
+                    **_job(),
+                    "steps": [{"run": "true", "if": "contains(toJSON(github.event.changes), 'x')"}],
+                }
+            ),
+            True,
+        ),
+        (
+            "interpolated string reads github.event.changes",
+            _doc(job={**_job(), "name": "${{ toJSON(github.event.changes) }}"}),
+            True,
+        ),
+        (
             "concurrency group reads github.event.changes",
             {**_doc(), "concurrency": {"group": "x-${{ toJSON(github.event.changes) }}"}},
             True,
+        ),
+        (
+            "run script and name mention the words in prose",
+            _doc(
+                job={
+                    **_job(),
+                    "name": "no reader of github.event.changes",
+                    "steps": [{"run": "echo github.event.changes is absent here"}],
+                }
+            ),
+            False,
         ),
         ("pull_request is null", {"on": {"pull_request": None}, "jobs": {"a": _job()}}, True),
         ("no jobs", {"on": {"pull_request": {}}, "jobs": {}}, True),
@@ -221,9 +271,9 @@ def selftest() -> int:
     if failed:
         return 1
     print(
-        "SELFTEST PASS: a branches filter, an `edited` type, a short types "
-        "list, and a reader of github.event.changes all fail; the default "
-        "types, named or absent, pass"
+        "SELFTEST PASS: a branches filter, an `edited` type, a short or empty "
+        "types list, and an expression reading github.event.changes all "
+        "fail; the default types, named or absent, and a prose mention pass"
     )
     return 0
 
