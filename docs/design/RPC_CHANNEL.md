@@ -1823,15 +1823,15 @@ router (`:413-432`) and the path list (`:664-688`); the forwarding handlers
 ([`json.rs:293`](../../rust/shekyl-daemon-rpc/src/handlers/json.rs),
 `:389-394`, through the dispatch at `:75-91`). Callers: the Rust console's
 `print_net_stats`, which reads `/get_limit`
-([`console/mod.rs:1126-1169`](../../rust/shekyl-daemon-rpc/src/console/mod.rs))
+(`console/mod.rs:1126-1169`)
 with its tests (`console/tests.rs:1130-1170`); the Python framework
 ([`daemon.py:360-455`](../../utils/python-rpc/framework/daemon.py)); the
 C++ client test
-([`daemon_rpc_client.cpp:107-155`](../../tests/unit_tests/daemon_rpc_client.cpp));
+(`daemon_rpc_client.cpp:107-155`);
 the regtest check of `print_net_stats`
 ([`regtest_e2e.rs:5817-5876`](../../rust/shekyl-engine-core/src/engine/regtest_e2e.rs));
 and the C++ console
-([`rpc_command_executor.cpp`](../../src/daemon/rpc_command_executor.cpp)),
+(`rpc_command_executor.cpp`),
 which dies with R8 (`INPUT_GRAMMAR.md` IG-Q25). **`/get_limit` is replaced,
 not ported:** it leaves RK-8 (`DAEMON_RPC_KV_CUTOVER.md` §2), and the
 comments at `regtest_e2e.rs:5866` and `console/mod.rs:1128` that say RK-8
@@ -1856,7 +1856,7 @@ the start switch set
 router test `pop_blocks_needs_the_armed_switch` holds that gate. The
 in-process `pop_blocks` console command admits through the same function
 before the C++ handler runs
-([`console/pop_blocks.rs`](../../rust/shekyl-daemon-rpc/src/console/pop_blocks.rs)):
+(`console/pop_blocks.rs`):
 the live arm reads the switch `configure` stored, and the remote arm posts
 `/pop_blocks` so that daemon's stamp admits it. The
 daemon-configuration cutover recorded the gap as DC-F14 (PR #1066). **Reopen (rule 21):**
