@@ -32,7 +32,7 @@ on:
     types: [checks_requested]
     branches: [dev]
   pull_request:
-    branches: [dev]
+    types: [opened, synchronize, reopened, edited]
     paths:
       - "docs/**"
       # The gate resolves file:line citations against the tree, so a source
@@ -63,7 +63,7 @@ on:
       - ".github/workflows/doc-claims.yml"
 
 concurrency:
-  group: doc-claims-${{ github.ref }}
+  group: doc-claims-${{ github.ref }}${{ github.event.action == 'edited' && !contains(toJSON(github.event.changes), '"base":') && '-edited' || '' }}
   cancel-in-progress: true
 
 permissions:
@@ -71,6 +71,7 @@ permissions:
 
 jobs:
   doc-claims:
+    if: (github.event.action != 'edited' || contains(toJSON(github.event.changes), '"base":'))
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
