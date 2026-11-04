@@ -27,6 +27,13 @@ cpp_compat = true
 usize_is_size_t = true
 no_includes = true
 
+
+# A #[repr(C, align(N))] struct is generated only when the config spells
+# the alignment; cbindgen skips it otherwise, with no warning. C++ spells
+# it alignas(N), as the hand-written header does (ShekylDaemonSnapshot,
+# pointer-aligned for the lease it is the first member of).
+[layout]
+aligned_n = "alignas"
 [parse]
 parse_deps = false
 
