@@ -653,14 +653,15 @@ hash32! {
 }
 
 hash32! {
-    /// `keccak256(payload(i))` — the **message one input's hybrid PQC
-    /// signature is over**: `payload(i) = pruned ‖ prunable_hash ‖ header(i)
-    /// ‖ key_hashes` (`FCMP_SPEND_SIGNING_PREIMAGE.md` §1.1; derived by
-    /// `shekyl_wire::PqcSigningPreimage`). The wallet signs it
-    /// (`shekyl-tx-builder`), the daemon verifies against it
-    /// (`shekyl_tx_pqc_signing_payload_hashes`, daemon-rpc K13), and the
-    /// validator records its derivation as CEN-I17 and verifies over it as
-    /// CEN-I18.
+    /// `cSHAKE256-32(S = "shekyl/fcmp-spend-signing-v1", X = network_id ‖
+    /// payload(i))` — the **message one input's hybrid PQC signature is
+    /// over**: `payload(i) = pruned ‖ prunable_hash ‖ header(i) ‖ key_hashes`
+    /// (`FCMP_SPEND_SIGNING_PREIMAGE.md` §1.1; derived by
+    /// `shekyl_wire::PqcSigningPreimage`), bound to one network
+    /// (`NETWORK_IDENTITY.md` NI-Q4). The wallet signs it
+    /// (`shekyl-tx-builder`), the daemon's submit verifier checks against it
+    /// (daemon-rpc K13), and the validator records its derivation as
+    /// CEN-I17 and verifies over it as CEN-I18.
     ///
     /// A component of **no** txid, so not a member of the component-hash
     /// family: **not** [`PqcAuthHash`] (the txid's third component, over the

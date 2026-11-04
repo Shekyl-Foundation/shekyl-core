@@ -9,7 +9,7 @@
 //!
 //! ```text
 //! payload(i)     = pruned_segment ‖ prunable_hash ‖ pqc_header(i) ‖ key_hashes
-//! signed_hash(i) = keccak256(payload(i))
+//! signed_hash(i) = cSHAKE256-32(S = "shekyl/fcmp-spend-signing-v1", X = network_id ‖ payload(i))
 //! ```
 //!
 //! `tests/fixtures/pqc_signing_preimage_v1.json` holds, for each of eight
