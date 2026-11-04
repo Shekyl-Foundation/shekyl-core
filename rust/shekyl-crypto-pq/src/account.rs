@@ -368,9 +368,7 @@ pub struct AllKeysBlob {
     ///
     /// Wrapped in [`SpendPublicKey`] for
     /// type-system protection at sites that distinguish "spend half"
-    /// from "view half" of the account identity. `#[repr(transparent)]`
-    /// preserves the bit-for-bit FFI layout invariant with
-    /// `shekyl_ffi::ShekylAllKeysBlob.spend_pk: [u8; 32]`. Read the
+    /// from "view half" of the account identity. Read the
     /// canonical bytes via `spend_pk.as_canonical_bytes()`.
     pub spend_pk: SpendPublicKey,
     /// Ed25519 view public key.
@@ -397,17 +395,13 @@ pub struct AllKeysBlob {
     ///
     /// Wrapped in [`SpendSecret`] for
     /// type-system protection and structural wipe-on-drop.
-    /// `#[repr(transparent)]` preserves the bit-for-bit FFI layout
-    /// invariant with `shekyl_ffi::ShekylAllKeysBlob.spend_sk: [u8; 32]`.
     /// Read the canonical bytes via `spend_sk.as_canonical_bytes()`.
     pub spend_sk: SpendSecret,
     /// Ed25519 view secret scalar, in canonical 32-byte little-endian form.
     /// Also used (unclamped) as the Montgomery scalar at ECDH sites.
     ///
     /// Wrapped in [`ViewSecret`] for type-system
-    /// protection and structural wipe-on-drop. `#[repr(transparent)]`
-    /// on `ViewSecret` preserves the bit-for-bit FFI layout invariant
-    /// with `shekyl_ffi::ShekylAllKeysBlob.view_sk: [u8; 32]`. Read
+    /// protection and structural wipe-on-drop. Read
     /// the canonical bytes via `view_sk.as_canonical_bytes()`.
     pub view_sk: ViewSecret,
     /// ML-KEM-768 decap (secret) key, 2400 bytes. Rederived on every wallet
@@ -416,10 +410,7 @@ pub struct AllKeysBlob {
     /// Wrapped in [`MlKem768DecapKey`] for
     /// type-system protection and structural wipe-on-drop, per the
     /// `35-secure-memory.mdc:21-22` "wrap secret scalars and key bytes"
-    /// mandate. `#[repr(transparent)]` preserves the bit-for-bit FFI
-    /// layout invariant with
-    /// `shekyl_ffi::ShekylAllKeysBlob.ml_kem_dk: [u8; ML_KEM_768_DK_LEN]`.
-    /// Read the canonical 2400-byte FIPS 203 representation via
+    /// mandate. Read the canonical 2400-byte FIPS 203 representation via
     /// `ml_kem_dk.as_canonical_bytes()`.
     pub ml_kem_dk: MlKem768DecapKey,
 }
