@@ -67,6 +67,24 @@ One crate holds one table: `network → { name, genesis block bytes, genesis has
 - **Marker file (NI-Q7).** A derived label for humans and tooling; nothing trusts it for identity, because every holder of chain data checks the genesis-derived id itself.
 - **Every other domain (NI-Q9).** Audit [`CRYPTO_DOMAIN_REGISTRY.tsv`](CRYPTO_DOMAIN_REGISTRY.tsv): every signature or commitment that could be replayed across networks binds the network id, or is shown unable to replay.
 
+### 2.4.1 PR 2's shape (NI-Q4, NI-Q9; BUILDING on `feat/ni-signing-domain`)
+
+**The spend signature (NI-Q4).** The payload bytes do not change; the hash over them does:
+
+```text
+signed_hash(i) = cSHAKE256-32(S = "shekyl/fcmp-spend-signing-v1", X = network_id ‖ payload(i))
+```
+
+`network_id` is the 16-byte genesis-derived id (NI-R10), a fixed-width prefix of the input. The customization is one domain string, as every cSHAKE domain in the registry is (SA-R-2: one string separates one context), so the registry gate pins one row; the id is data, and its width is fixed, so the input stays unambiguous. This replaces `keccak256(payload(i))`, which is not a registry row, so nothing retires. *Not taken:* the id inside the customization (`S = domain ‖ id`), which makes four customization strings per domain that the registry cannot pin and departs from how `shekyl/p2p-network-id-v1` and `shekyl/genesis-txkey-v2` use cSHAKE. NI-Q4's row read "a cSHAKE customization carrying the network id"; this places the id in the input of that customization's hash, and the choice is Rick's to confirm.
+
+- **The validator** learns the id from `Trust`, which already carries the genesis pin: `Trust::full(pin)` derives the id once, and CEN-I17 hands `trust.network_id()` to the wire. The rules crate still holds no network (rule 71), and a validator under regtest's pin binds regtest's id with nothing else to set. A harness chain that mines its own block 0 runs under `Trust::UNPINNED`, which carries one named harness id (`HARNESS_NETWORK_ID`, test and harness builds only), and every harness signer signs under that same constant.
+- **The signers**: `shekyl-tx-builder` takes the network it already builds for and passes its id; the daemon's verifier takes the node's; multisig and the engine follow the builder. The FFI export `shekyl_tx_pqc_signing_payload_hashes` has no C++ caller and is deleted, not given an id nobody passes.
+- **The KAT** keeps the eight captured payloads as its subject (they still pin the preimage's composition) and pins each `signed_hash` per network against an independent Python oracle for the hash.
+
+**Message signing (NI-F2, NI-Q9).** The preimage's network field moves from the network's one-byte code to the 16-byte id; message signing is post-genesis, so there is no circularity (the reason key derivation stays on the name, NI-R10). The field's width changes, so the signature format version moves with it, and the KAT is re-recorded.
+
+**The audit (NI-Q9).** Every production row of [`CRYPTO_DOMAIN_REGISTRY.tsv`](CRYPTO_DOMAIN_REGISTRY.tsv) is classed: it binds the network (its input carries the id, the name, or something only one chain produces: a genesis-chained header, a block hash, a txid, a tree root, a key derived under the name); it cannot cross networks (local, or bound to a chain object checked elsewhere); or it is replayable. A replayable row beyond the two above is a finding raised for a ruling, not fixed silently here. The table lands in this section.
+
 ### 2.5 Regtest is a network, not an exception (NI-Q8)
 
 Regtest is a row in the table: its own genesis, address prefixes, ports, difficulty parameters and permitted levers (NI-Q11). It has one name, `regtest`, everywhere: the operator grammar, the RPC wire's `nettype`, the C++ `network_type`, the derivation salt and the corpus tag; `fakechain` goes (rule 83: no aliases). The `accept_fakechain` carve-outs, `GenesisPin::FAKECHAIN`, the `Fakechain → Mainnet` address and port mappings, and every "fakechain shares mainnet's" comment go. The E2 corpus's regtest chains re-capture under the new genesis through #1244's capture path.
@@ -121,12 +139,12 @@ Regtest is a row in the table: its own genesis, address prefixes, ports, difficu
 | NI-Q1 | The genesis header nonce. | BUILDING (PR 1): `0` on every network; identity from content (§1). |
 | NI-Q2 | What the genesis content carries. | BUILDING (PR 1): recipients and a transaction key derived from the row's name (NI-R12), the same shape on every network; no coinbase field; regtest's recipient and key committed and marked test-only (§2.2). |
 | NI-Q3 | The one Rust table: fields, readers, the network type; the C++ genesis constants. | BUILDING (PR 1): §2.3; the C++ genesis constants deleted outright (NI-F4); one network type with one code (NI-F5); tests (a)–(c) over all four networks. |
-| NI-Q4 | The signing domain. | OPEN (PR 2): a cSHAKE customization carrying the network id; signer, verifier (CEN-I17) and KAT in one PR; `FCMP_SPEND_SIGNING_PREIMAGE.md` §1.1. |
+| NI-Q4 | The signing domain. | BUILDING (PR 2, §2.4.1): `cSHAKE256-32(shekyl/fcmp-spend-signing-v1, network_id ‖ payload(i))`; signer, verifier (CEN-I17, the id from `Trust`) and KAT in one PR; `FCMP_SPEND_SIGNING_PREIMAGE.md` §1.1. |
 | NI-Q5 | The Noise prologue. | OPEN (PR 3): `network id ‖ wire-protocol version`; the network id is already the prologue (NI-F1), so the change is the wire version and a handshake KAT re-record; lands at a testnet alpha cut. |
 | NI-Q6 | The pool seal. | OPEN (PR 4): records the network id; the chain store needs no field. |
 | NI-Q7 | The marker file. | OPEN (PR 4): daemon-config's call (DC-Q15, IG-Q17); recommendation: a label, trusted for nothing. |
 | NI-Q8 | Regtest as an ordinary network. | BUILDING (PR 1): §2.5; corpus re-captured through #1244's path. The address byte is persisted in wallet files and multisig addresses (NI-F5), so the wallet-file codec takes rule 42's version bump; an older file is refused with a reason, never reinterpreted. |
-| NI-Q9 | The domain-registry audit. | OPEN (PR 2): an audit table over `CRYPTO_DOMAIN_REGISTRY.tsv`; each row bound to the network id or shown unable to replay. NI-F2's two bindings, message signing's enum code and key derivation's name label, move to the genesis-derived network id, with a KAT re-record. |
+| NI-Q9 | The domain-registry audit. | BUILDING (PR 2, §2.4.1): an audit table over `CRYPTO_DOMAIN_REGISTRY.tsv`; each row bound to the network or shown unable to replay. NI-F2: message signing's code moves to the genesis-derived id, with a KAT re-record; key derivation's label is the network's name, ruled by NI-R10 (genesis pays keys derived before the id exists). |
 | NI-Q10 | Compatibility at the handshake, replacing genesis rotation. | SHAPE RULED 2026-11-03 (§3); OPEN (PR 3): what the rules digest covers per step, and the frozen-tuple gate shrinks or goes. |
 | NI-Q11 | Regtest's levers. | RULED 2026-11-03 (NI-R6, NI-R8); BUILDING (PR 1). |
 | NI-Q12 | Seed format. | RULED 2026-11-03 (NI-R7, NI-R10); BUILDING (PR 1): BIP39, 24 words, on every network; one derivation from the 32 entropy bytes (NI-F8), salted by the network's name. |
