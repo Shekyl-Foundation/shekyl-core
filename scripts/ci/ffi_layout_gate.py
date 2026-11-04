@@ -68,6 +68,7 @@ GROUPS = [
             "ShekylSeamAddress": "shekyl_seam_address",
             "ShekylSeamObserved": "shekyl_seam_observed",
             "ShekylSeamBoardRow": "shekyl_seam_board_row",
+            "ShekylSeamHandshakeResult": "shekyl_seam_handshake_result",
             "ShekylRpcPeerFacts": "shekyl_rpc_peer_facts",
             "ShekylBanView": "shekyl_ban_view",
             "ShekylSyncPayload": "shekyl_sync_payload",

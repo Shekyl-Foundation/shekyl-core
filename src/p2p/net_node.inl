@@ -618,10 +618,10 @@ namespace nodetool
   }
   //-----------------------------------------------------------------------------------
   template<class t_payload_net_handler>
-  void node_server<t_payload_net_handler>::on_outbound_handshake(p2p_connection_context& context)
+  void node_server<t_payload_net_handler>::on_outbound_handshake(p2p_connection_context& context, const shekyl_seam_handshake_result& /*result*/)
   {
-    // The peer's sync payload is chain sync's (CS-5): the router hands it
-    // to the owner, and it does not cross to C++.
+    // The peer's sync payload reaches chain sync's owner as the hub's
+    // HandshakeResult (CS-5); nothing here reads it.
     m_notifier.on_session_established(context.m_connection_id, context.m_is_income, context.m_connector);
   }
   //-----------------------------------------------------------------------------------
