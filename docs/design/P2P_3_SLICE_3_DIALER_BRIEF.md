@@ -72,6 +72,8 @@ until slice 4".*
 
 **UNFREEZE (Rick, 2026-11-01):** src/p2p/net_node.h — chain sync's cutover (CS-5 F3): `p2p_connection_context_t::session_established` reads the seam's handshake flag, where the base context's read the sync half's state; timed sync, the double-handshake refusal and epee's post-handshake packet limit read it.
 
+**UNFREEZE (Rick, 2026-11-04):** src/p2p/net_node.inl — network identity PR 1: the network id is the genesis-derived value from Rust (`network_id_for`); one line edited, none added. The line goes with the remnant's deletion.
+
 **UPDATE 2026-10-09 (Rick):** `COMMAND_HANDSHAKE` carries no address
 field on any connector (the handshake-address ruling below, which
 replaces "The address we announce"); `disclose_count` is the protocol
