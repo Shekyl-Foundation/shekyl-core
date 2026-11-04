@@ -1633,8 +1633,13 @@ mod emission_claim_assembly {
         // wrong (un-erased) operand. Without this, the accepts below
         // could go vacuously green if the two hashes ever coincided.
         assert_ne!(signable, full_prefix_hash, "the erase must change the hash");
-        emission_vin_verify_auth(&vin, &reward_commits, full_prefix_hash.as_bytes())
-            .expect_err("auths must refuse a signable hash that was not erase-derived");
+        emission_vin_verify_auth(
+            &vin,
+            &reward_commits,
+            full_prefix_hash.as_bytes(),
+            &shekyl_network::HARNESS_NETWORK_ID,
+        )
+        .expect_err("auths must refuse a signable hash that was not erase-derived");
 
         // The three landed-verifier legs over the PARSED vin and the
         // recomputed operands: membership proof + leaf gate, both role
@@ -1643,8 +1648,13 @@ mod emission_claim_assembly {
         // auth key refuses here.
         emission_vin_verify_backing(&vin, tree_root.as_bytes(), depth, signable.to_bytes())
             .expect("backing leg verifies against the erase-rule hash");
-        emission_vin_verify_auth(&vin, &reward_commits, signable.as_bytes())
-            .expect("both auth legs verify against the erase-rule hash");
+        emission_vin_verify_auth(
+            &vin,
+            &reward_commits,
+            signable.as_bytes(),
+            &shekyl_network::HARNESS_NETWORK_ID,
+        )
+        .expect("both auth legs verify against the erase-rule hash");
         self_check_claims(source, &vin, vout_reward_sum)
             .expect("claims leg verifies against the paired source");
     }
@@ -1815,6 +1825,7 @@ mod emission_claim_assembly {
             &drivers.vin,
             &drivers.reward_commits,
             drivers.signable.as_bytes(),
+            &shekyl_network::HARNESS_NETWORK_ID,
         )
         .expect("the driver's dual auth verifies");
         self_check_claims(

@@ -77,6 +77,7 @@ use shekyl_archival_retention::{
     emission_vin_verify_claims_under, p_canonical_id_from_hybrid_pubkey, ArchivalRewardEmissionVin,
     ClaimantBondRecord, EmissionEpochSource, EmissionVerifyContext, EpochCloseInputs,
 };
+use shekyl_network::NetworkId;
 use shekyl_types::archival::CompleteTreeSet;
 use shekyl_types::{BlockHeight, PCanonicalId, SettlementEpoch, ShardId};
 
@@ -528,6 +529,7 @@ impl J25 {
         reference: &ReferenceContext,
         gathered: &[GatheredEpoch<'_>],
         connecting: BlockHeight,
+        network: &NetworkId,
     ) -> Result<Verdict<()>, ViewRead<V::Fault>> {
         let refuse = || Err(InvalidBlock::new(Self::ROW, cx.locus()));
         let schedule = rule_set.settlement_schedule();
@@ -598,7 +600,7 @@ impl J25 {
         else {
             return Ok(refuse());
         };
-        let Ok(auth) = emission_vin_verify_auth(vin, &commits, &signable) else {
+        let Ok(auth) = emission_vin_verify_auth(vin, &commits, &signable, network) else {
             return Ok(refuse());
         };
         // The join is the verdict. Its yield (`epochs_to_commit`,
@@ -656,6 +658,7 @@ pub(crate) fn judge_emission_claim<'id, V: ChainView<'id>>(
     cx: &TxContext<'_>,
     view: &V,
     rule_set: &RuleSet,
+    network: &NetworkId,
     reference: Option<&ReferenceContext>,
     coverage: &mut RuleCoverage,
 ) -> Result<Verdict<()>, ViewRead<V::Fault>> {
@@ -679,7 +682,7 @@ pub(crate) fn judge_emission_claim<'id, V: ChainView<'id>>(
             return Ok(Err(InvalidBlock::new(J25::ROW, cx.locus())));
         };
         match J25::verify(
-            cx, view, rule_set, &vin, &persona, reference, &gathered, connecting,
+            cx, view, rule_set, &vin, &persona, reference, &gathered, connecting, network,
         )? {
             Ok(()) => {}
             Err(refused) => return Ok(Err(refused)),

@@ -342,6 +342,7 @@ fn tx_entry_points_record_the_landed_rows() {
             TxSlot::Miner,
             &view,
             &RuleSet::GENESIS,
+            &shekyl_network::HARNESS_NETWORK_ID,
             None,
             FormAttempt::FIRST,
         ))

@@ -253,7 +253,10 @@ fn list(
         }
         pool.shown_bodies()
     };
-    let selected = select_shown(&shown, &view, rule_set, bound, |weight, fee| {
+    // The id an emission's auths sign (CEN-J25, NI-F11): the chain's own,
+    // from the trust its rules pin.
+    let network = producer.rules.trust().network_id();
+    let selected = select_shown(&shown, &view, rule_set, &network, bound, |weight, fee| {
         fill.admit(weight, fee)
     })
     .map_err(NoTemplate::Selection)?;

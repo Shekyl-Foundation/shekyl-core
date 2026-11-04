@@ -50,6 +50,7 @@ use shekyl_crypto_pq::signature::{
 };
 use shekyl_fcmp::proof::{verify_membership_only, ShekylFcmpProof};
 use shekyl_fcmp::PqcKeyScalar;
+use shekyl_network::NetworkId;
 use thiserror::Error;
 
 /// Rejection reasons for the §7.1 verify body. Every variant is a consensus
@@ -739,13 +740,17 @@ pub fn emission_vin_verify_backing(
 ///
 /// `reward_commits` and `signable_tx_hash` are the same tx-level context the
 /// wallet builder signed over; a destination swap or cross-tx replay changes
-/// the recomputed message and both signatures reject.
+/// the recomputed message and both signatures reject. `network_id` is the
+/// verifying node's (its trust's, `NETWORK_IDENTITY.md` NI-F11): an emission
+/// signed for another network recomputes to another message and is refused
+/// here, whatever proofs the transaction carries.
 pub fn emission_vin_verify_auth(
     vin: &ArchivalRewardEmissionVin,
     reward_commits: &[RewardCommit],
     signable_tx_hash: &[u8; 32],
+    network_id: &NetworkId,
 ) -> Result<AuthVerified, EmissionVerifyError> {
-    let msgs = vin.auth_msgs(reward_commits, signable_tx_hash)?;
+    let msgs = vin.auth_msgs(network_id, reward_commits, signable_tx_hash)?;
 
     // Auth-B: the key's leaf binding is step 6's in-circuit opening (PL-D3).
     verify_hybrid_auth(

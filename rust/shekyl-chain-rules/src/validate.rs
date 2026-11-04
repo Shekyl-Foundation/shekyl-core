@@ -567,6 +567,9 @@ pub fn validate_with_memo<'id, V: ChainView<'id>>(
         .iter()
         .enumerate()
         .map(|(n, tx)| (TxSlot::Listed(n), tx));
+    // The emission auths (CEN-J25) bind the network id (NI-F11); the
+    // validator's is its trust's, as `form`'s signatures are.
+    let network = trust.network_id();
     for (slot, tx) in core::iter::once(miner).chain(listed) {
         // `form` judged each transaction on its own (`tx_form`); what is
         // left is what reads the chain. The slot is the transaction's
@@ -576,6 +579,7 @@ pub fn validate_with_memo<'id, V: ChainView<'id>>(
             slot,
             view,
             rule_set,
+            &network,
             formed.verified_reference(slot),
             formed.attempt(),
         )? {
@@ -797,6 +801,9 @@ pub fn tx_form(tx: &Transaction, slot: TxSlot, _rule_set: &RuleSet) -> Verdict<R
 /// caller treats the second as `validate` does: the writer halt, never a
 /// verdict.
 ///
+/// `network` is the caller's network id, from its trust as `form` takes it:
+/// an emission's two auths sign it (CEN-J25, `NETWORK_IDENTITY.md` NI-F11).
+///
 /// # Errors
 ///
 /// The view's fault, or [`ViewRead::Corrupt`] as above.
@@ -805,6 +812,7 @@ pub fn tx_against<'id, V: ChainView<'id>>(
     slot: TxSlot,
     view: &V,
     rule_set: &RuleSet,
+    network: &NetworkId,
     verified: Option<VerifiedReference>,
     attempt: FormAttempt,
 ) -> Result<Verdict<RuleCoverage>, Fault<V::Fault>> {
@@ -873,7 +881,14 @@ pub fn tx_against<'id, V: ChainView<'id>>(
     // context and the statics' operands (J25), then the fee inputs' FCMP++
     // proof as I15's over the `ToKey` subset (J26). Before the signatures,
     // as the C++ verifies the claim before `verify_transaction_pqc_auth`.
-    match judge_emission_claim(&cx, view, rule_set, reference.as_ref(), &mut coverage)? {
+    match judge_emission_claim(
+        &cx,
+        view,
+        rule_set,
+        network,
+        reference.as_ref(),
+        &mut coverage,
+    )? {
         Ok(()) => {}
         Err(refused) => return Ok(Err(refused)),
     }

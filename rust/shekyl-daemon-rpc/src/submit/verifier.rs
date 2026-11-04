@@ -638,7 +638,7 @@ fn verify_emission(
         })
         .collect::<Option<Vec<_>>>()
         .ok_or_else(|| VerifyReject::malformed("emission: loud vout without a commitment"))?;
-    let auth = emission_vin_verify_auth(vin, &reward_commits, signable_tx_hash.as_bytes())
+    let auth = emission_vin_verify_auth(vin, &reward_commits, signable_tx_hash.as_bytes(), network)
         .map_err(|e| emission_reject(&e))?;
     // The witness assembly is infallible once the three minters passed —
     // mirroring the deleted C++ oracle's single verify FFI (`DEL-008`)

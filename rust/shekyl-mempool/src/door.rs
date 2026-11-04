@@ -176,6 +176,7 @@ pub fn judge<'id, V: ChainView<'id>>(
         TxSlot::Lone,
         &view,
         rule_set,
+        network,
         pass.proven(),
         FormAttempt::FIRST,
     )

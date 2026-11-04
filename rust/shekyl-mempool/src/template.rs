@@ -43,6 +43,7 @@ use shekyl_chain_rules::{
     StatelessPass, TxSlot, VerifiedReference,
 };
 use shekyl_chain_store::pool::ReceivedHour;
+use shekyl_network::NetworkId;
 use shekyl_types::TxHash;
 use shekyl_units::AtomicUnits;
 use shekyl_wire::Transaction;
@@ -134,7 +135,8 @@ struct Candidate<'a> {
 }
 
 /// Select from `pool` the bodies a block on `parent` lists under
-/// `rule_set`, within `budget` weight (module docs). A candidate too heavy
+/// `rule_set` on `network` (the id an emission's auths sign, CEN-J25),
+/// within `budget` weight (module docs). A candidate too heavy
 /// for what is left is skipped, and a lighter one after it may still fit.
 ///
 /// # Errors
@@ -145,9 +147,10 @@ pub fn select<'id, V: ChainView<'id>>(
     pool: &Pool,
     parent: &V,
     rule_set: &RuleSet,
+    network: &NetworkId,
     budget: u64,
 ) -> Result<Selected, Fault<V::Fault>> {
-    select_admitting(pool, parent, rule_set, budget, |_, _| true)
+    select_admitting(pool, parent, rule_set, network, budget, |_, _| true)
 }
 
 /// [`select`], with the producer's admission asked of each candidate the
@@ -164,6 +167,7 @@ pub fn select_admitting<'id, V: ChainView<'id>>(
     pool: &Pool,
     parent: &V,
     rule_set: &RuleSet,
+    network: &NetworkId,
     budget: u64,
     admit: impl FnMut(u64, u64) -> bool,
 ) -> Result<Selected, Fault<V::Fault>> {
@@ -180,7 +184,7 @@ pub fn select_admitting<'id, V: ChainView<'id>>(
             anchor: held.pass.and_then(|pass| pass.proven()),
         })
         .collect();
-    choose(candidates, parent, rule_set, budget, admit)
+    choose(candidates, parent, rule_set, network, budget, admit)
 }
 
 /// [`select_admitting`] over a [`Pool::shown_bodies`] snapshot. The pool
@@ -193,6 +197,7 @@ pub fn select_shown<'id, V: ChainView<'id>>(
     shown_bodies: &[ShownBody],
     parent: &V,
     rule_set: &RuleSet,
+    network: &NetworkId,
     budget: u64,
     admit: impl FnMut(u64, u64) -> bool,
 ) -> Result<Selected, Fault<V::Fault>> {
@@ -211,7 +216,7 @@ pub fn select_shown<'id, V: ChainView<'id>>(
             anchor: body.pass.and_then(|pass| pass.proven()),
         })
         .collect();
-    choose(candidates, parent, rule_set, budget, admit)
+    choose(candidates, parent, rule_set, network, budget, admit)
 }
 
 /// The one scan both entry points run.
@@ -219,6 +224,7 @@ fn choose<'id, V: ChainView<'id>>(
     mut candidates: Vec<Candidate<'_>>,
     parent: &V,
     rule_set: &RuleSet,
+    network: &NetworkId,
     budget: u64,
     mut admit: impl FnMut(u64, u64) -> bool,
 ) -> Result<Selected, Fault<V::Fault>> {
@@ -240,6 +246,7 @@ fn choose<'id, V: ChainView<'id>>(
             TxSlot::Lone,
             &view,
             rule_set,
+            network,
             candidate.anchor,
             FormAttempt::FIRST,
         ) {

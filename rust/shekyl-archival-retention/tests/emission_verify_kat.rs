@@ -696,7 +696,9 @@ fn authed_vin(
     // (a signature cannot cover itself); the canonical-length placeholders
     // from `honest_vin` keep `validate()` satisfied while the messages are
     // computed, exactly as the wallet builder sequences it.
-    let msgs = vin.auth_msgs(commits, tx_hash).expect("role messages");
+    let msgs = vin
+        .auth_msgs(&testnet(), commits, tx_hash)
+        .expect("role messages");
     vin.auth_backing = scheme
         .sign(
             &b_sk,
@@ -718,6 +720,11 @@ fn authed_vin(
     (vin, p_sk, b_sk)
 }
 
+/// The network the fixture's auths are signed for.
+fn testnet() -> shekyl_network::NetworkId {
+    shekyl_network::Network::Testnet.network_id()
+}
+
 /// Positive path: both hybrid auths verify and the minter yields the sealed
 /// witness — the only production `AuthVerified` constructor.
 #[test]
@@ -726,7 +733,33 @@ fn auth_accepts_honest_dual_signatures() {
     let (commits, tx_hash) = auth_tx_context();
     let (vin, _, _) = authed_vin(&fx, &commits, &tx_hash);
 
-    emission_vin_verify_auth(&vin, &commits, &tx_hash).expect("honest auths accept");
+    emission_vin_verify_auth(&vin, &commits, &tx_hash, &testnet()).expect("honest auths accept");
+}
+
+/// Network binding (`NETWORK_IDENTITY.md` NI-F11): genuine auths signed for
+/// testnet are refused by a verifier on any other network. The message
+/// carries the id itself, so this holds for an emission with no fee input.
+#[test]
+fn auth_rejects_another_networks_signatures() {
+    let fx = Fixture::new(E);
+    let (commits, tx_hash) = auth_tx_context();
+    let (vin, _, _) = authed_vin(&fx, &commits, &tx_hash);
+    for net in shekyl_network::Network::ALL {
+        let verdict = emission_vin_verify_auth(&vin, &commits, &tx_hash, &net.network_id());
+        if net == shekyl_network::Network::Testnet {
+            verdict.expect("the network it was signed for accepts");
+        } else {
+            assert!(
+                matches!(
+                    verdict.unwrap_err(),
+                    EmissionVerifyError::AuthRejected {
+                        role: EmissionAuthRole::Backing
+                    }
+                ),
+                "{net}: a testnet emission must not verify"
+            );
+        }
+    }
 }
 
 /// Role separation: each signature only verifies under its own Q1
@@ -739,7 +772,7 @@ fn auth_rejects_swapped_role_signatures() {
     std::mem::swap(&mut vin.auth_backing, &mut vin.auth_claim);
 
     assert!(matches!(
-        emission_vin_verify_auth(&vin, &commits, &tx_hash).unwrap_err(),
+        emission_vin_verify_auth(&vin, &commits, &tx_hash, &testnet()).unwrap_err(),
         EmissionVerifyError::AuthRejected {
             role: EmissionAuthRole::Backing
         }
@@ -755,7 +788,9 @@ fn auth_rejects_claim_signed_by_wrong_key() {
     let (commits, tx_hash) = auth_tx_context();
     let (mut vin, _p_sk, b_sk) = authed_vin(&fx, &commits, &tx_hash);
 
-    let msgs = vin.auth_msgs(&commits, &tx_hash).expect("role messages");
+    let msgs = vin
+        .auth_msgs(&testnet(), &commits, &tx_hash)
+        .expect("role messages");
     vin.auth_claim = HybridEd25519MlDsa
         .sign(
             &b_sk,
@@ -767,7 +802,7 @@ fn auth_rejects_claim_signed_by_wrong_key() {
         .expect("canonical sig");
 
     assert!(matches!(
-        emission_vin_verify_auth(&vin, &commits, &tx_hash).unwrap_err(),
+        emission_vin_verify_auth(&vin, &commits, &tx_hash, &testnet()).unwrap_err(),
         EmissionVerifyError::AuthRejected {
             role: EmissionAuthRole::Claim
         }
@@ -786,7 +821,7 @@ fn auth_rejects_tampered_tx_context() {
     let mut swapped_dest = commits.clone();
     swapped_dest[0].one_time_key = [0x73; 32];
     assert!(matches!(
-        emission_vin_verify_auth(&vin, &swapped_dest, &tx_hash).unwrap_err(),
+        emission_vin_verify_auth(&vin, &swapped_dest, &tx_hash, &testnet()).unwrap_err(),
         EmissionVerifyError::AuthRejected {
             role: EmissionAuthRole::Backing
         }
@@ -794,7 +829,7 @@ fn auth_rejects_tampered_tx_context() {
 
     let other_tx_hash = [0x60; 32];
     assert!(matches!(
-        emission_vin_verify_auth(&vin, &commits, &other_tx_hash).unwrap_err(),
+        emission_vin_verify_auth(&vin, &commits, &other_tx_hash, &testnet()).unwrap_err(),
         EmissionVerifyError::AuthRejected {
             role: EmissionAuthRole::Backing
         }
@@ -813,7 +848,7 @@ fn auth_rejects_malformed_hybrid_encodings() {
     let (mut vin, _, _) = authed_vin(&fx, &commits, &tx_hash);
     vin.auth_backing = vec![0x55; SINGLE_SIG_CANONICAL_LEN];
     assert!(matches!(
-        emission_vin_verify_auth(&vin, &commits, &tx_hash).unwrap_err(),
+        emission_vin_verify_auth(&vin, &commits, &tx_hash, &testnet()).unwrap_err(),
         EmissionVerifyError::AuthMalformed {
             role: EmissionAuthRole::Backing
         }
@@ -824,7 +859,9 @@ fn auth_rejects_malformed_hybrid_encodings() {
     // the failure isolates to the encoding, not the message.
     let (mut vin, p_sk, b_sk) = authed_vin(&fx, &commits, &tx_hash);
     vin.p_pubkey = vec![0x11; SINGLE_KEY_CANONICAL_LEN];
-    let msgs = vin.auth_msgs(&commits, &tx_hash).expect("role messages");
+    let msgs = vin
+        .auth_msgs(&testnet(), &commits, &tx_hash)
+        .expect("role messages");
     let scheme = HybridEd25519MlDsa;
     vin.auth_backing = scheme
         .sign(
@@ -845,7 +882,7 @@ fn auth_rejects_malformed_hybrid_encodings() {
         .to_canonical_bytes()
         .expect("canonical sig");
     assert!(matches!(
-        emission_vin_verify_auth(&vin, &commits, &tx_hash).unwrap_err(),
+        emission_vin_verify_auth(&vin, &commits, &tx_hash, &testnet()).unwrap_err(),
         EmissionVerifyError::AuthMalformed {
             role: EmissionAuthRole::Claim
         }

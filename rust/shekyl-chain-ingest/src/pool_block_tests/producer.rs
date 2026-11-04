@@ -45,12 +45,18 @@ async fn a_body_the_admission_declines_is_passed_over_and_the_next_is_listed() {
             }
             let dear_fee = fee_of(&dear);
             let mut offered = 0;
-            let selected =
-                shekyl_mempool::select_admitting(&pool, view, rule_set, u64::MAX, |_, fee| {
+            let selected = shekyl_mempool::select_admitting(
+                &pool,
+                view,
+                rule_set,
+                &shekyl_network::HARNESS_NETWORK_ID,
+                u64::MAX,
+                |_, fee| {
                     offered += 1;
                     fee != dear_fee
-                })
-                .expect("template");
+                },
+            )
+            .expect("template");
             (selected, offered)
         })
         .await;
@@ -444,14 +450,28 @@ async fn the_template_rejudges_against_its_parent_and_m10_evicts_what_it_refuses
                 );
                 assert!(pool.fluffed(&txid).expect("publish"));
             }
-            let all = shekyl_mempool::select(&pool, view, rule_set, u64::MAX).expect("template");
+            let all = shekyl_mempool::select(
+                &pool,
+                view,
+                rule_set,
+                &shekyl_network::HARNESS_NETWORK_ID,
+                u64::MAX,
+            )
+            .expect("template");
             let weight = pool
                 .listing()
                 .find(|(txid, _)| *txid == id3)
                 .expect("shown")
                 .1
                 .weight;
-            let one = shekyl_mempool::select(&pool, view, rule_set, weight).expect("template");
+            let one = shekyl_mempool::select(
+                &pool,
+                view,
+                rule_set,
+                &shekyl_network::HARNESS_NETWORK_ID,
+                weight,
+            )
+            .expect("template");
             (all, one)
         })
         .await;
@@ -483,7 +503,14 @@ async fn the_template_rejudges_against_its_parent_and_m10_evicts_what_it_refuses
         .unwrap_or_else(|o| panic!("the twin connects: {o}"));
     let template = scenario
         .read_chain(|view, rule_set| {
-            shekyl_mempool::select(&pool, view, rule_set, u64::MAX).expect("template")
+            shekyl_mempool::select(
+                &pool,
+                view,
+                rule_set,
+                &shekyl_network::HARNESS_NETWORK_ID,
+                u64::MAX,
+            )
+            .expect("template")
         })
         .await;
     assert_eq!(

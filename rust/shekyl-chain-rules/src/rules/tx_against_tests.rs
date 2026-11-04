@@ -103,6 +103,7 @@ fn i7_a_spent_key_image_is_refused_and_a_fresh_one_records() {
                 TxSlot::Lone,
                 &view,
                 &RuleSet::GENESIS,
+                &shekyl_network::HARNESS_NETWORK_ID,
                 None,
                 FormAttempt::FIRST,
             )),
@@ -195,6 +196,7 @@ fn i7_looks_up_an_archival_shapes_funding_spend_too() {
                 TxSlot::Lone,
                 &view,
                 &RuleSet::GENESIS,
+                &shekyl_network::HARNESS_NETWORK_ID,
                 None,
                 FormAttempt::FIRST,
             )),
@@ -239,6 +241,7 @@ fn i7_propagates_a_view_fault() {
             TxSlot::Lone,
             &view,
             &RuleSet::GENESIS,
+            &shekyl_network::HARNESS_NETWORK_ID,
             None,
             FormAttempt::FIRST
         )
@@ -354,6 +357,7 @@ fn i10_refuses_an_unrecorded_reference() {
                 TxSlot::Lone,
                 &view,
                 &RuleSet::GENESIS,
+                &shekyl_network::HARNESS_NETWORK_ID,
                 None,
                 FormAttempt::FIRST,
             )),
@@ -416,6 +420,7 @@ fn i12_a_missing_root_at_the_reference_height_is_corrupt_not_a_verdict() {
                 TxSlot::Lone,
                 &view,
                 &RuleSet::GENESIS,
+                &shekyl_network::HARNESS_NETWORK_ID,
                 None,
                 FormAttempt::FIRST
             ),
@@ -478,6 +483,7 @@ fn j21_refuses_an_unrecorded_reference_and_one_the_window_refuses() {
                     TxSlot::Lone,
                     &view,
                     &RuleSet::GENESIS,
+                    &shekyl_network::HARNESS_NETWORK_ID,
                     None,
                     FormAttempt::FIRST,
                 )),
@@ -560,6 +566,7 @@ fn j21_a_missing_root_or_leaf_count_at_the_reference_is_corrupt_not_a_verdict() 
                     TxSlot::Lone,
                     &view,
                     &RuleSet::GENESIS,
+                    &shekyl_network::HARNESS_NETWORK_ID,
                     None,
                     FormAttempt::FIRST
                 ),
@@ -1320,6 +1327,7 @@ fn the_doors_no_anchor_exits_each_end_in_a_refusal() {
                 TxSlot::Lone,
                 &view,
                 &RuleSet::GENESIS,
+                &shekyl_network::HARNESS_NETWORK_ID,
                 proven,
                 FormAttempt::FIRST,
             ) {

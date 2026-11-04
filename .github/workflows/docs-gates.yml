@@ -788,6 +788,17 @@ jobs:
         if: '!cancelled()'
         run: python3 -I scripts/kat/msg_sign_preimage_oracle.py
 
+      - name: Run the emission auth oracle
+        # NETWORK_IDENTITY.md NI-F11: an emission's two auths sign
+        # cSHAKE256-64 of the network id (byte 0, 16 bytes) and the framed
+        # field inventory. This recomputes every pinned per-network digest of
+        # docs/test_vectors/EMISSION_AUTH_MSG_V1 from the pinned framed bytes,
+        # after anchoring those bytes on the digests pinned before the id
+        # entered; exit 1 on a mismatch, 2 when the file has no framed bytes
+        # (rule 47).
+        if: '!cancelled()'
+        run: python3 -I scripts/kat/emission_auth_msg_oracle.py
+
       - name: Run clatter production-graph gate
         # clatter is an independent implementation of the RPC channel's
         # handshake pattern, in the workspace as a test-only cross-check

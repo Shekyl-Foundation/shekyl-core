@@ -337,7 +337,11 @@ fn assemble(
         auth_claim: vec![0u8; SINGLE_SIG_CANONICAL_LEN],
     };
     let auth_msgs = vin
-        .auth_msgs(&reward_commits, signable.as_bytes())
+        .auth_msgs(
+            &shekyl_network::HARNESS_NETWORK_ID,
+            &reward_commits,
+            signable.as_bytes(),
+        )
         .expect("the auth binding messages derive");
     let auth_b = sign_pqc_auth_for_output(
         &backing_combined,

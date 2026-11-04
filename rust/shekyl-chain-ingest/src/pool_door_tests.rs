@@ -424,8 +424,14 @@ async fn an_unfluffed_transaction_is_shown_nowhere_until_the_relay_fluffs_it() {
                 "fixture: the spend is held"
             );
             let seen = |pool: &Pool| {
-                let template = shekyl_mempool::select(pool, view, rule_set, u64::MAX)
-                    .expect("the template reads the chain");
+                let template = shekyl_mempool::select(
+                    pool,
+                    view,
+                    rule_set,
+                    &shekyl_network::HARNESS_NETWORK_ID,
+                    u64::MAX,
+                )
+                .expect("the template reads the chain");
                 (
                     pool.listing().any(|(id, _)| id == txid),
                     pool.peer_sync().any(|(id, _)| id == txid),

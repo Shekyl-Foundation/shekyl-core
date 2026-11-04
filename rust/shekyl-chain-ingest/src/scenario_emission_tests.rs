@@ -537,6 +537,7 @@ async fn the_drivers_emission_claim_connects_and_pays_the_persona() {
         &claim.vin,
         &claim.reward_commits,
         &claim.signable.to_bytes(),
+        &shekyl_network::HARNESS_NETWORK_ID,
     )
     .expect("both auth legs verify over the Q1 messages");
     let fee_verified = proof::verify(

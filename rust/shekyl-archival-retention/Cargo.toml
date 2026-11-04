@@ -20,6 +20,9 @@ sha3 = { version = "0.10", default-features = false }
 shekyl-fcmp = { path = "../shekyl-fcmp" }
 shekyl-curve-io = { path = "../shekyl-curve-io" }
 shekyl-crypto-pq = { path = "../shekyl-crypto-pq" }
+# The network id the emission auth message starts with (NETWORK_IDENTITY.md
+# NI-F11).
+shekyl-network = { path = "../shekyl-network" }
 curve25519-dalek = "4"
 shekyl-curve-generators = { path = "../shekyl-curve-generators" }
 # Single-sourced CT balance equation + typed-side terms (bond_ct_balance wraps

@@ -29,6 +29,7 @@ use std::io::{self, Read, Write};
 
 use shekyl_crypto_pq::multisig::{SINGLE_KEY_CANONICAL_LEN, SINGLE_SIG_CANONICAL_LEN};
 use shekyl_curve_io::{read_byte, read_bytes, read_varint, write_varint};
+use shekyl_network::NetworkId;
 
 use crate::bond_wire::{
     encode_holdings_descriptor, read_holdings_descriptor, write_holdings_descriptor,
@@ -80,12 +81,16 @@ pub const MAX_BACKING_PROOF_BYTES: usize = 65_536;
 /// already rejects milli-valued entries under micro rules, so no ambiguity
 /// *attack* exists; the separator bump makes "same bytes, different meaning"
 /// non-colliding *structurally* rather than by a reconstructed argument.
-pub const EMISSION_AUTH_BACKING_CUSTOMIZATION: &[u8] = b"shekyl/archival-emission-auth-backing-v2";
+///
+/// **`-v3` (`NETWORK_IDENTITY.md` NI-F11):** the input starts with the
+/// network's 16-byte id, so the message binds one network on its own.
+pub const EMISSION_AUTH_BACKING_CUSTOMIZATION: &[u8] = b"shekyl/archival-emission-auth-backing-v3";
 
 /// cSHAKE256 customization for the **claim-side** auth (`auth_claim`) binding
-/// message. See [`ArchivalRewardEmissionVin::auth_msg`]. Bumped to `-v2`
-/// alongside the backing separator for the D1 micro change (see there).
-pub const EMISSION_AUTH_CLAIM_CUSTOMIZATION: &[u8] = b"shekyl/archival-emission-auth-claim-v2";
+/// message. See [`ArchivalRewardEmissionVin::auth_msg`]. Bumped alongside
+/// the backing separator, to `-v2` for the D1 micro change and to `-v3` for
+/// the network id (see there).
+pub const EMISSION_AUTH_CLAIM_CUSTOMIZATION: &[u8] = b"shekyl/archival-emission-auth-claim-v3";
 
 /// Public per-shard work entry (`REWARD_EMISSION_LEG.md` §5.4) — the verifier
 /// recomputes `work_P(E)` from archival state and demands equality with the
@@ -692,8 +697,14 @@ impl ArchivalRewardEmissionVin {
     /// stand in the claim slot (or vice versa) even under the same key, while
     /// both auths inherit every R1.A anti-replay binding.
     ///
-    /// Field inventory (TupleHash-style: each field prefixed with its u64-LE
-    /// byte length, in this order):
+    /// The input is the network id, then the framed field inventory:
+    /// `network_id ‖ framed(1) ‖ … ‖ framed(8)`. The id is the network's
+    /// 16-byte genesis-derived id (`NETWORK_IDENTITY.md` NI-F11), unframed at
+    /// a fixed position (byte 0) and a fixed width, so the message is valid
+    /// on one network whatever the transaction around it carries.
+    ///
+    /// Field inventory ([`Self::auth_msg_framed`]; TupleHash-style: each
+    /// field prefixed with its u64-LE byte length, in this order):
     /// 1. `P_canonical_id` (§6.1 derivation from `p_pubkey`)
     /// 2. `p_pubkey` canonical bytes (no key substitution)
     /// 3. holdings canonical encoding (§3.4.1 bytes, shared with the bond wire)
@@ -713,11 +724,12 @@ impl ArchivalRewardEmissionVin {
     /// struct that `write()` would reject.
     pub fn auth_msg(
         &self,
+        network_id: &NetworkId,
         reward_commits: &[RewardCommit],
         signable_tx_hash: &[u8; 32],
         role: EmissionAuthRole,
     ) -> Result<[u8; 64], WireError> {
-        let input = self.auth_msg_input(reward_commits, signable_tx_hash)?;
+        let input = self.auth_msg_input(network_id, reward_commits, signable_tx_hash)?;
         Ok(cshake256_64(role.customization(), &input))
     }
 
@@ -729,18 +741,41 @@ impl ArchivalRewardEmissionVin {
     /// sign/verify paths, which always need both.
     pub fn auth_msgs(
         &self,
+        network_id: &NetworkId,
         reward_commits: &[RewardCommit],
         signable_tx_hash: &[u8; 32],
     ) -> Result<EmissionAuthMsgs, WireError> {
-        let input = self.auth_msg_input(reward_commits, signable_tx_hash)?;
+        let input = self.auth_msg_input(network_id, reward_commits, signable_tx_hash)?;
         Ok(EmissionAuthMsgs {
             backing: cshake256_64(EMISSION_AUTH_BACKING_CUSTOMIZATION, &input),
             claim: cshake256_64(EMISSION_AUTH_CLAIM_CUSTOMIZATION, &input),
         })
     }
 
-    /// The role-independent framed field inventory (auth_msg doc fields 1–8).
+    /// The role-independent input both digests hash: the network id at byte
+    /// 0, then [`Self::auth_msg_framed`].
     fn auth_msg_input(
+        &self,
+        network_id: &NetworkId,
+        reward_commits: &[RewardCommit],
+        signable_tx_hash: &[u8; 32],
+    ) -> Result<Vec<u8>, WireError> {
+        let framed = self.auth_msg_framed(reward_commits, signable_tx_hash)?;
+        let mut input = Vec::with_capacity(network_id.len() + framed.len());
+        input.extend_from_slice(network_id);
+        input.extend_from_slice(&framed);
+        Ok(input)
+    }
+
+    /// The framed field inventory ([`Self::auth_msg`] doc fields 1–8), the
+    /// part of the auth input after the network id. Public so the
+    /// `EMISSION_AUTH_MSG_V1` vectors can pin it and an independent oracle can
+    /// recompute each digest from it.
+    ///
+    /// # Errors
+    ///
+    /// As [`Self::validate`].
+    pub fn auth_msg_framed(
         &self,
         reward_commits: &[RewardCommit],
         signable_tx_hash: &[u8; 32],
@@ -793,6 +828,9 @@ pub struct EmissionAuthMsgs {
 mod tests {
     use super::*;
     use crate::bond_wire::ShardSet;
+
+    /// The network id the unit tests sign under; any fixed value serves.
+    const NET: NetworkId = [0x4E; 16];
 
     fn sample_vin() -> ArchivalRewardEmissionVin {
         ArchivalRewardEmissionVin {
@@ -1042,13 +1080,13 @@ mod tests {
         let txh = [0x42u8; 32];
 
         let backing_1 = vin
-            .auth_msg(&commits, &txh, EmissionAuthRole::Backing)
+            .auth_msg(&NET, &commits, &txh, EmissionAuthRole::Backing)
             .unwrap();
         let backing_2 = vin
-            .auth_msg(&commits, &txh, EmissionAuthRole::Backing)
+            .auth_msg(&NET, &commits, &txh, EmissionAuthRole::Backing)
             .unwrap();
         let claim = vin
-            .auth_msg(&commits, &txh, EmissionAuthRole::Claim)
+            .auth_msg(&NET, &commits, &txh, EmissionAuthRole::Claim)
             .unwrap();
         assert_eq!(backing_1, backing_2, "digest must be deterministic");
         assert_ne!(
@@ -1061,31 +1099,51 @@ mod tests {
         v.settlement_epochs[2] = 16;
         v.work_claim[2].epoch = 16;
         assert_ne!(
-            v.auth_msg(&commits, &txh, EmissionAuthRole::Claim).unwrap(),
+            v.auth_msg(&NET, &commits, &txh, EmissionAuthRole::Claim)
+                .unwrap(),
             claim,
             "epoch set must be bound"
         );
         let mut v = sample_vin();
         v.reward_amount_plain[0] += 1;
         assert_ne!(
-            v.auth_msg(&commits, &txh, EmissionAuthRole::Claim).unwrap(),
+            v.auth_msg(&NET, &commits, &txh, EmissionAuthRole::Claim)
+                .unwrap(),
             claim,
             "per-epoch amounts must be bound (§8.0.3)"
         );
         let mut swapped = sample_commits();
         swapped[0].one_time_key = [0x77; 32];
         assert_ne!(
-            vin.auth_msg(&swapped, &txh, EmissionAuthRole::Claim)
+            vin.auth_msg(&NET, &swapped, &txh, EmissionAuthRole::Claim)
                 .unwrap(),
             claim,
             "reward destination must be bound (mint-destination swap)"
         );
         let other_txh = [0x43u8; 32];
         assert_ne!(
-            vin.auth_msg(&commits, &other_txh, EmissionAuthRole::Claim)
+            vin.auth_msg(&NET, &commits, &other_txh, EmissionAuthRole::Claim)
                 .unwrap(),
             claim,
             "signable_tx_hash must be bound (cross-tx replay)"
+        );
+        let other_network: NetworkId = [0x4F; 16];
+        for role in [EmissionAuthRole::Backing, EmissionAuthRole::Claim] {
+            assert_ne!(
+                vin.auth_msg(&other_network, &commits, &txh, role).unwrap(),
+                vin.auth_msg(&NET, &commits, &txh, role).unwrap(),
+                "the network id must be bound (cross-network replay, NI-F11)"
+            );
+        }
+        // The id is the input's first 16 bytes, unframed: the input is
+        // exactly `network_id ‖ framed inventory`.
+        let framed = vin.auth_msg_framed(&commits, &txh).unwrap();
+        let mut input = NET.to_vec();
+        input.extend_from_slice(&framed);
+        assert_eq!(
+            cshake256_64(EMISSION_AUTH_CLAIM_CUSTOMIZATION, &input),
+            claim,
+            "the id sits at byte 0, ahead of the framed fields"
         );
     }
 
@@ -1208,15 +1266,15 @@ mod tests {
         let commits = sample_commits();
         let txh = [0x42u8; 32];
 
-        let pair = vin.auth_msgs(&commits, &txh).unwrap();
+        let pair = vin.auth_msgs(&NET, &commits, &txh).unwrap();
         assert_eq!(
             pair.backing,
-            vin.auth_msg(&commits, &txh, EmissionAuthRole::Backing)
+            vin.auth_msg(&NET, &commits, &txh, EmissionAuthRole::Backing)
                 .unwrap()
         );
         assert_eq!(
             pair.claim,
-            vin.auth_msg(&commits, &txh, EmissionAuthRole::Claim)
+            vin.auth_msg(&NET, &commits, &txh, EmissionAuthRole::Claim)
                 .unwrap()
         );
 
@@ -1225,11 +1283,11 @@ mod tests {
         let mut bad = sample_vin();
         bad.reward_amount_plain.pop();
         assert!(matches!(
-            bad.auth_msg(&commits, &txh, EmissionAuthRole::Claim),
+            bad.auth_msg(&NET, &commits, &txh, EmissionAuthRole::Claim),
             Err(WireError::RewardAmountsMisaligned { .. })
         ));
         assert!(matches!(
-            bad.auth_msgs(&commits, &txh),
+            bad.auth_msgs(&NET, &commits, &txh),
             Err(WireError::RewardAmountsMisaligned { .. })
         ));
     }

@@ -440,7 +440,14 @@ async fn two_posts_by_one_persona_are_held_and_the_template_selects_one() {
                 );
                 assert!(pool.fluffed(&tx.txid_parts().hash).expect("published"));
             }
-            select(&pool, view, rule_set, u64::MAX).expect("no fault")
+            select(
+                &pool,
+                view,
+                rule_set,
+                &shekyl_network::HARNESS_NETWORK_ID,
+                u64::MAX,
+            )
+            .expect("no fault")
         })
         .await;
     assert!(selected.refused.is_empty(), "{:?}", selected.refused);

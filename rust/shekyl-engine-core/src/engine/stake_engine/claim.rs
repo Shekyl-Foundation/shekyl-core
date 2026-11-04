@@ -344,11 +344,12 @@ impl Message<AssembleEmissionClaim> for StakeEngine {
         // (the proof opens the backing leaf to that key's point, verified at
         // emission_verify.rs — NOT P's identity key); Auth-P
         // signs with P's identity hybrid key (the daemon derives the vin's
-        // p_canonical_id from it, blockchain.cpp:3783 id-equality).
+        // p_canonical_id from it, blockchain.cpp:3783 id-equality). Both
+        // messages start with the engine's network id (NI-F11).
         let auth_msgs = vin
             // `shekyl-archival-retention` takes the signable hash as bytes
             // (RTN-7 §3.2 boundary).
-            .auth_msgs(&reward_commits, signable_tx_hash.as_bytes())
+            .auth_msgs(&self.network, &reward_commits, signable_tx_hash.as_bytes())
             .map_err(|e| BondAssemblyError::build("auth binding message", e))?;
         let auth_b = sign_pqc_auth_for_output(
             &backing_combined,
@@ -490,8 +491,12 @@ impl Message<AssembleEmissionClaim> for StakeEngine {
         // source. Auth leg: both role signatures over the recomputed
         // binding messages (cause-blind on refusal, CB-5).
         self_check_claims(&ops.source, &vin, total_reward)?;
-        if let Err(e) = emission_vin_verify_auth(&vin, &reward_commits, signable_tx_hash.as_bytes())
-        {
+        if let Err(e) = emission_vin_verify_auth(
+            &vin,
+            &reward_commits,
+            signable_tx_hash.as_bytes(),
+            &self.network,
+        ) {
             tracing::error!(error = %e, "emission self-check: auth verification failed");
             return Err(EmissionClaimError::SelfCheckFailed.into());
         }
