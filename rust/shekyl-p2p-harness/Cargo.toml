@@ -15,6 +15,8 @@ publish = false
 
 [dependencies]
 shekyl-clearnet = { path = "../shekyl-clearnet" }
+# The Tor connector's stream-end table: the scripted dialer stamps as each connector does.
+shekyl-tor = { path = "../shekyl-tor" }
 shekyl-levin = { path = "../shekyl-levin" }
 shekyl-peer-policy = { path = "../shekyl-peer-policy" }
 shekyl-runtime = { path = "../shekyl-runtime" }

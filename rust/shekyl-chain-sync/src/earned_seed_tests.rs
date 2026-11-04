@@ -43,7 +43,7 @@ fn every_header_under_an_earned_seed_is_proven_in_one_job() {
     let rules = fixed(1, 64);
     let main = chain_of(8);
     let mut block = candidate_on(&main, Vec::new()).block;
-    let mut sync = Sync::new(Trust::UNANCHORED, move |_| rules);
+    let mut sync = Sync::new(Trust::UNPINNED, move |_| rules);
     let wall = Timestamp::from_raw(u64::MAX / 4);
     sync.set_wall(wall);
     let substrate = MockSubstrate {

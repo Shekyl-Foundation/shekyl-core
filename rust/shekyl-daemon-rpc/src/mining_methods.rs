@@ -363,8 +363,12 @@ pub async fn submit_block(
 }
 
 /// Stops, on drop, a miner `generateblocks` started: a caller that goes
-/// away mid-wait leaves no miner running. The stop joins the workers, so
-/// on a runtime it runs on a blocking thread.
+/// away mid-wait leaves no miner running. It is built inside the blocking
+/// start, so a caller that goes away while that start is still joining
+/// drops this when the start finishes, and the miner the start goes on to
+/// spawn is stopped. The stop can wait out one earlier hash on the join
+/// gate, so on a runtime it runs on a blocking thread, and the wait is
+/// detached: the gate, not this caller, joins.
 struct StartedMiner(Option<MiningHandle>);
 
 impl StartedMiner {
@@ -439,10 +443,24 @@ pub async fn generateblocks(
                 .param("chain_height", start.to_raw().to_string()),
         ));
     };
-    let started = match on_a_blocking_thread(mining, |mining| mining.start(None)).await? {
-        Ok(()) => StartedMiner(Some(std::sync::Arc::clone(mining))),
-        Err(running) if running.code == codes::RUNNING => StartedMiner(None),
-        Err(refused) => return Err(RpcError::new(ErrorClass::RefusedByMethod, refused)),
+    // The guard is the blocking task's value. Dropping this call while
+    // `start` is still joining detaches that task; when it then spawns a
+    // miner, dropping the value stops it. A guard built after this await
+    // would never exist.
+    let started = {
+        let guard_mining = std::sync::Arc::clone(mining);
+        match on_a_blocking_thread(mining, move |facts| {
+            Ok(match facts.start(None)? {
+                Ok(()) => Ok(StartedMiner(Some(guard_mining))),
+                Err(running) if running.code == codes::RUNNING => Ok(StartedMiner(None)),
+                Err(refused) => Err(refused),
+            })
+        })
+        .await?
+        {
+            Ok(guard) => guard,
+            Err(refused) => return Err(RpcError::new(ErrorClass::RefusedByMethod, refused)),
+        }
     };
     let reached = tokio::select! {
         reached = door.tip_at_least(target) => reached.map_err(RpcError::from),
@@ -686,6 +704,113 @@ mod tests {
         .await
         .expect("waited out, not refused");
         assert_eq!(generated.height, 1);
+    }
+
+    /// `start` blocks until released. Dropping `generateblocks` while it is
+    /// there detaches the blocking task; the guard has to be that task's
+    /// value, or the miner it goes on to start is never stopped.
+    struct HoldStart {
+        entered: std::sync::Arc<(std::sync::Mutex<bool>, std::sync::Condvar)>,
+        release: std::sync::Arc<(std::sync::Mutex<bool>, std::sync::Condvar)>,
+        stops: std::sync::Arc<std::sync::atomic::AtomicUsize>,
+    }
+
+    impl MiningFacts for HoldStart {
+        fn running(&self) -> Result<bool, FactsFault> {
+            Ok(false)
+        }
+        fn template(
+            &self,
+        ) -> Result<Result<crate::mining_facts::PostedTemplate, Diagnostic>, FactsFault> {
+            unreachable!("generateblocks reads no template before it starts")
+        }
+        fn start(
+            &self,
+            _threads: Option<NonZeroUsize>,
+        ) -> Result<Result<(), Diagnostic>, FactsFault> {
+            let (lock, cv) = &*self.entered;
+            *lock.lock().expect("entered") = true;
+            cv.notify_all();
+            let (lock, cv) = &*self.release;
+            let mut released = lock.lock().expect("release");
+            while !*released {
+                released = cv.wait(released).expect("release");
+            }
+            Ok(Ok(()))
+        }
+        fn stop(&self) -> Result<bool, FactsFault> {
+            self.stops
+                .fetch_add(1, std::sync::atomic::Ordering::Release);
+            Ok(true)
+        }
+        fn status(&self) -> Result<crate::mining_facts::MiningState, FactsFault> {
+            unreachable!("generateblocks reads no status")
+        }
+        fn refusal(&self) -> Result<Option<Diagnostic>, FactsFault> {
+            Ok(None)
+        }
+        fn withdrawn(&self) -> crate::mining_facts::Pending<'_, Diagnostic> {
+            Box::pin(std::future::pending())
+        }
+    }
+
+    /// Dropping `generateblocks` while its start is still blocked stops the
+    /// miner that start goes on to spawn. Red edit: build `StartedMiner`
+    /// after `on_a_blocking_thread` returns.
+    #[tokio::test]
+    async fn dropping_generateblocks_while_start_is_blocked_stops_the_miner() {
+        let entered =
+            std::sync::Arc::new((std::sync::Mutex::new(false), std::sync::Condvar::new()));
+        let release =
+            std::sync::Arc::new((std::sync::Mutex::new(false), std::sync::Condvar::new()));
+        let stops = std::sync::Arc::new(std::sync::atomic::AtomicUsize::new(0));
+        let mining: MiningHandle = std::sync::Arc::new(HoldStart {
+            entered: std::sync::Arc::clone(&entered),
+            release: std::sync::Arc::clone(&release),
+            stops: std::sync::Arc::clone(&stops),
+        });
+        let row = shekyl_rpc_types::methods::json_rpc("generateblocks").expect("a row");
+        let call = tokio::spawn({
+            let mining = std::sync::Arc::clone(&mining);
+            async move {
+                generateblocks(
+                    &mining,
+                    &Reached,
+                    &Genesis,
+                    shekyl_rpc_types::methods::admit_armed(row, true).expect("armed"),
+                    GenerateBlocksRequest { count: 1 },
+                )
+                .await
+            }
+        });
+        let entered_wait = std::sync::Arc::clone(&entered);
+        tokio::task::spawn_blocking(move || {
+            let (lock, cv) = &*entered_wait;
+            let mut guard = lock.lock().expect("entered");
+            while !*guard {
+                guard = cv.wait(guard).expect("entered");
+            }
+        })
+        .await
+        .expect("the wait");
+        call.abort();
+        assert!(
+            call.await.is_err(),
+            "the call was dropped while start was blocked"
+        );
+        {
+            let (lock, cv) = &*release;
+            *lock.lock().expect("release") = true;
+            cv.notify_all();
+        }
+        let started = std::time::Instant::now();
+        while stops.load(std::sync::atomic::Ordering::Acquire) == 0 {
+            assert!(
+                started.elapsed() < std::time::Duration::from_secs(5),
+                "the detached start was not stopped"
+            );
+            tokio::time::sleep(std::time::Duration::from_millis(10)).await;
+        }
     }
 
     /// A miner's speed, or none when the miner is stopped.

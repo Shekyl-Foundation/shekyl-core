@@ -73,7 +73,7 @@ fn a_second_proof_of_a_connected_block_is_dropped_and_the_next_block_enters() {
     let rules = fixed(1, 64);
     let fixture = chain_of(8);
     let mut block = candidate_on(&fixture, Vec::new()).block;
-    let mut sync = Sync::new(Trust::UNANCHORED, move |_| rules);
+    let mut sync = Sync::new(Trust::UNPINNED, move |_| rules);
     let wall = Timestamp::from_raw(u64::MAX / 4);
     sync.set_wall(wall);
     let substrate = MockSubstrate {
@@ -260,7 +260,7 @@ fn an_announcement_of_a_block_already_in_t_is_not_proved_again() {
     let rules = fixed(1, 64);
     let fixture = chain_of(8);
     let mut block = candidate_on(&fixture, Vec::new()).block;
-    let mut sync = Sync::new(Trust::UNANCHORED, move |_| rules);
+    let mut sync = Sync::new(Trust::UNPINNED, move |_| rules);
     let wall = Timestamp::from_raw(u64::MAX / 4);
     sync.set_wall(wall);
     let substrate = MockSubstrate {

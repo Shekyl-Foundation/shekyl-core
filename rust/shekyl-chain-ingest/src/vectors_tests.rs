@@ -54,7 +54,7 @@ use std::sync::Arc;
 
 use serde::Deserialize;
 use shekyl_chain_rules::harness::MockSubstrate;
-use shekyl_chain_rules::{InvalidBlock, ReleaseAnchors, Substrate};
+use shekyl_chain_rules::{GenesisPin, InvalidBlock, Substrate};
 use shekyl_types::{BlockCount, BlockHeight};
 
 use crate::corpus::CorpusReader;
@@ -707,11 +707,11 @@ fn hold(dir: &Path, manifest: &Manifest, report: &RunReport) {
 /// that reads as a validator bug. So the manifest carries the genesis the
 /// chain was built from, and this holds it — before any block is judged —
 /// to the genesis the **current build** pins: Fakechain shares mainnet's
-/// config, so the pin is `ReleaseAnchors::MAINNET`'s. A regeneration fails
+/// config, so the pin is `GenesisPin::MAINNET`'s. A regeneration fails
 /// HERE with
 /// "these vectors predate the current genesis", not at block 1.
 fn genesis_is_the_current_builds(manifest: &Manifest) {
-    let pinned = ReleaseAnchors::for_network(shekyl_address::Network::Mainnet)
+    let pinned = GenesisPin::for_network(shekyl_address::Network::Mainnet)
         .expected_at(BlockHeight::from_raw(0))
         .expect("the release pins mainnet's genesis, which Fakechain shares");
     assert_eq!(

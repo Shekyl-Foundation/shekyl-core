@@ -59,7 +59,9 @@ serde_json = "1"
 [features]
 # Compiles `LeafStore::test_tamper_clear_prune_disabled`, the tampering
 # fixture behind the `Staleness::PostureLost` / posture-loss KATs in
-# `shekyl-p-host` (enabled there via dev-dependencies only). Default-off
+# `shekyl-p-host`, and `CurveTreeClient::test_tamper_poison`, behind the
+# curve-tree actor's in-place recovery tests in `shekyl-engine-core` (each
+# enabled via dev-dependencies only). Default-off
 # and never enabled by a production dependency edge: the prune-disabled
 # posture is one-way by ruling (rule 21), so the clear path must not
 # EXIST in shipped code — a `#[doc(hidden)]` method would still be

@@ -478,7 +478,7 @@ async fn a_staker_with_nothing_bonded_is_not_collapsed_to_not_staker() {
     engine
         .persist_bond_record(PSlot::from_raw(3))
         .expect("persist bond record");
-    engine.close(&creds).expect("close");
+    engine.close(&creds).await.expect("close");
     let opened = Engine::<SoloSigner>::open_full(
         &base_path,
         &creds,

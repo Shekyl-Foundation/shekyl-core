@@ -272,7 +272,7 @@ fn a_stale_proof_is_planned_again_with_its_attempt() {
     let rules = fixed(1, 64);
     let main = chain_of(8);
     let mut block = candidate_on(&main, Vec::new()).block;
-    let mut sync = Sync::new(Trust::UNANCHORED, move |_| rules);
+    let mut sync = Sync::new(Trust::UNPINNED, move |_| rules);
     main.with_view(|view| {
         let tip = view.tip().unwrap().unwrap();
         drive(&mut sync, &view, Event::Tip { tip });
@@ -342,7 +342,7 @@ fn an_invalid_proof_closes_the_session() {
     let rules = fixed(2, 64);
     let main = chain_of(8);
     let mut block = candidate_on(&main, Vec::new()).block;
-    let mut sync = Sync::new(Trust::UNANCHORED, move |_| rules);
+    let mut sync = Sync::new(Trust::UNPINNED, move |_| rules);
     let started = Instant::now();
     main.with_view(|view| {
         let tip = view.tip().unwrap().unwrap();
@@ -404,7 +404,7 @@ fn a_reply_is_the_arrival_it_was_tagged_with() {
     let rules = fixed(1, 64);
     let main = chain_of(8);
     let mut block = candidate_on(&main, Vec::new()).block;
-    let mut sync = Sync::new(Trust::UNANCHORED, move |_| rules);
+    let mut sync = Sync::new(Trust::UNPINNED, move |_| rules);
     main.with_view(|view| {
         let tip = view.tip().unwrap().unwrap();
         drive(&mut sync, &view, Event::Tip { tip });

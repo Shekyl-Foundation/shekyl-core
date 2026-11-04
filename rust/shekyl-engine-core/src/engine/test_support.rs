@@ -1117,7 +1117,7 @@ pub(crate) fn non_staker_engine(seed_multiplier: u8) -> (TempDir, Engine<SoloSig
 /// `staking_enabled`, then reopens so the `StakeEngine` spawns). Idle — the
 /// caller activates a persona if it needs one
 /// ([`activate_persona`]).
-pub(crate) fn staker_engine(slot: u32, seed_multiplier: u8) -> (TempDir, Engine<SoloSigner>) {
+pub(crate) async fn staker_engine(slot: u32, seed_multiplier: u8) -> (TempDir, Engine<SoloSigner>) {
     let tmp = tempfile::tempdir().expect("tempdir");
     let base = tmp.path().join("wallet");
     let (creds, seed) = (test_creds(), fixed_seed(seed_multiplier));
@@ -1127,7 +1127,7 @@ pub(crate) fn staker_engine(slot: u32, seed_multiplier: u8) -> (TempDir, Engine<
     engine
         .persist_bond_record(PSlot::from_raw(slot))
         .expect("persist bond record → staking_enabled");
-    engine.close(&creds).expect("close created wallet");
+    engine.close(&creds).await.expect("close created wallet");
     let opened = Engine::<SoloSigner>::open_full(
         &base,
         &creds,

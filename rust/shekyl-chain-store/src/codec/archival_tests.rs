@@ -25,7 +25,7 @@ use shekyl_units::AtomicUnits;
 
 use super::archival::{
     AttestationWitnessBytes, BondRecord, CompleteTreeSet, FirstPayingHeight, HeldShard, Holdings,
-    HoldingsError, RMarket, SigmaWorkMilli, MAX_BOND_KEY_BYTES,
+    HoldingsError, RMarket, SigmaWorkMilli, SupportSeats, MAX_BOND_KEY_BYTES,
 };
 
 fn invalid(reason: &'static str) -> CodecError {
@@ -378,6 +378,54 @@ fn the_complete_tree_set_refuses_an_order_the_type_cannot_hold() {
     assert_eq!(
         CompleteTreeSet::decode(&long),
         Err(invalid("trailing bytes after the complete-tree set"))
+    );
+}
+
+/// A block's support seats (`SO-D12` S1): the empty row is a count of zero
+/// and reads back as a value, and the decode refuses each shape the type
+/// cannot hold — a repeat, a descent, a count past the bytes, a trailing
+/// byte. Seat `j` is bit `j` of the support bitmap, so an order the type
+/// sorted away would renumber the draws. Red edit: decode through
+/// `FromIterator`, which sorts — the descent then round-trips into a
+/// different encoding.
+#[test]
+fn the_support_seats_refuse_an_order_the_type_cannot_hold() {
+    let id = |b: u8| shekyl_types::PCanonicalId::from_bytes([b; 32]);
+    let invalid = |reason: &'static str| CodecError::Invalid {
+        codec: SupportSeats::NAME,
+        reason,
+    };
+    assert_eq!(SupportSeats::EMPTY.encode(), [0, 0, 0, 0]);
+    assert_eq!(SupportSeats::decode(&[0, 0, 0, 0]), Ok(SupportSeats::EMPTY));
+    let two = SupportSeats::new(vec![id(1), id(2)]).expect("ascending");
+    assert_eq!(SupportSeats::decode(&two.encode()), Ok(two.clone()));
+
+    let raw = |ids: &[u8]| {
+        let mut out = u32::try_from(ids.len())
+            .expect("fits")
+            .to_le_bytes()
+            .to_vec();
+        for &b in ids {
+            out.extend_from_slice(&[b; 32]);
+        }
+        out
+    };
+    let unordered = invalid("personas are not strictly increasing");
+    assert_eq!(SupportSeats::decode(&raw(&[1, 1])), Err(unordered));
+    assert_eq!(SupportSeats::decode(&raw(&[2, 1])), Err(unordered));
+    let mut short = raw(&[1, 2]);
+    short.truncate(4 + 32);
+    assert_eq!(
+        SupportSeats::decode(&short),
+        Err(invalid(
+            "element count exceeds what the row's bytes can hold"
+        ))
+    );
+    let mut long = two.encode();
+    long.push(0);
+    assert_eq!(
+        SupportSeats::decode(&long),
+        Err(invalid("trailing bytes after the support seats"))
     );
 }
 

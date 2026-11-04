@@ -128,6 +128,7 @@ fn record_draw_row(batch: &WriteBatch<'_, '_>, height: BlockHeight) -> Result<()
 fn record_empty_digest(batch: &WriteBatch<'_, '_>) -> Result<(), StoreError> {
     let digest = shekyl_chain_rules::DrawableEpoch::new(
         shekyl_types::SettlementEpoch::from_raw(0),
+        None,
         Vec::<(
             shekyl_types::PCanonicalId,
             shekyl_types::archival::ReceiptSignPk,
@@ -440,7 +441,7 @@ fn a_second_block_in_one_batch_validates_against_the_chain_the_first_left() {
             formed(&view, b1)?,
             &view,
             &RuleSet::GENESIS,
-            &Trust::UNANCHORED,
+            &Trust::UNPINNED,
         )
         .map_err(view_fault)?
         .expect("block 1 built on block 0 satisfies every landed rule");
@@ -455,7 +456,7 @@ fn a_second_block_in_one_batch_validates_against_the_chain_the_first_left() {
             formed(&view, Candidate::new(orphan, Vec::new()))?,
             &view,
             &RuleSet::GENESIS,
-            &Trust::UNANCHORED,
+            &Trust::UNPINNED,
         )
         .map_err(view_fault)?
         else {

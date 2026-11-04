@@ -176,14 +176,9 @@ fn cen_b4_empty_set_against_the_empty_root_is_a_judged_pass() {
     assert_eq!(check_alone_on(&chain, &candidate), Ok(()));
     let formed = formed_on(&chain, candidate);
     let valid = chain.with_view(|view| {
-        *judged(validate(
-            formed,
-            &view,
-            &RuleSet::GENESIS,
-            &Trust::UNANCHORED,
-        ))
-        .expect("the fixture candidate is valid")
-        .coverage()
+        *judged(validate(formed, &view, &RuleSet::GENESIS, &Trust::UNPINNED))
+            .expect("the fixture candidate is valid")
+            .coverage()
     });
     assert!(
         valid.contains(CenRow::B4),

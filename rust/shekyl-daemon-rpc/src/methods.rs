@@ -21,8 +21,7 @@ use shekyl_rpc_types::{
     BlockHeader, GetBlockCountResponse, GetBlockHashParams, GetBlockHeaderByHeightRequest,
     GetBlockHeaderByHeightResponse, GetBlockRequest, GetBlockResponse, GetHeightResponse,
     GetVersionResponse, HashHex, RpcStatus, CORE_RPC_ERROR_CODE_INTERNAL_ERROR,
-    CORE_RPC_ERROR_CODE_RESTRICTED, CORE_RPC_ERROR_CODE_TOO_BIG_HEIGHT,
-    CORE_RPC_ERROR_CODE_WRONG_PARAM,
+    CORE_RPC_ERROR_CODE_TOO_BIG_HEIGHT, CORE_RPC_ERROR_CODE_WRONG_PARAM,
 };
 use shekyl_rpc_types::{
     ConnectionInfo, GetConnectionsResponse, GetNetStatsResponse, GetPeerListRequest,
@@ -133,6 +132,63 @@ impl RpcRefusal {
             data: None,
         }
     }
+
+    /// The JSON-RPC refusal for [`shekyl_rpc_types::errors::RpcError`]: the
+    /// class is the code, and `data` is the typed diagnostic.
+    #[must_use]
+    pub fn of_error(error: &shekyl_rpc_types::errors::RpcError) -> Self {
+        Self {
+            code: error.class.code(),
+            message: error.diagnostic.message.clone(),
+            data: serde_json::to_value(&error.diagnostic).ok(),
+        }
+    }
+
+    /// The JSON-RPC error object every surface serializes (RW-Q3). `id`
+    /// is the request's on `/json_rpc` and null on the other surfaces.
+    #[must_use]
+    pub fn to_json_rpc(&self, id: serde_json::Value) -> crate::types::JsonRpcResponse {
+        crate::types::JsonRpcResponse::error_with_data(
+            id,
+            self.code,
+            self.message.clone(),
+            self.data.clone(),
+        )
+    }
+}
+
+/// A bounded connection asked for more than one request may
+/// (`RPC_CHANNEL.md` §6.3, RT-W10 step 2). The class is
+/// [`ErrorClass::OverResourceBound`]. The message names the bound.
+///
+/// [`ErrorClass::OverResourceBound`]: shekyl_rpc_types::errors::ErrorClass::OverResourceBound
+#[must_use]
+pub fn bound_exceeded(
+    method: &str,
+    unit: &str,
+    bound: u64,
+    asked: u64,
+) -> shekyl_rpc_types::errors::RpcError {
+    use shekyl_rpc_types::errors::{Diagnostic, ErrorClass, RpcError};
+    let message = format!(
+        "{method} accepts at most {bound} {unit} from a bounded connection; \
+         this request asked for {asked}"
+    );
+    RpcError::new(
+        ErrorClass::OverResourceBound,
+        Diagnostic::new("rpc.bound.exceeded", message)
+            .param("method", method)
+            .param("bound", bound.to_string())
+            .param("asked", asked.to_string()),
+    )
+}
+
+/// [`RpcFault::Refused`] for [`bound_exceeded`].
+#[must_use]
+pub fn bound_fault(method: &str, unit: &str, bound: u64, asked: u64) -> RpcFault {
+    RpcFault::Refused(RpcRefusal::of_error(&bound_exceeded(
+        method, unit, bound, asked,
+    )))
 }
 
 /// A failure on the transport's side of a native method — never a fact
@@ -483,9 +539,8 @@ fn too_big_height(height: BlockHeight, chain: ChainCount) -> RpcFault {
 /// `INTERNAL_ERROR` and its wording (the shim has already logged the
 /// inconsistency, so the fault is not silent).
 ///
-/// `fill_pow_hash` arrives already ANDed with the listener's entitlement:
-/// the restricted listener never sets it, as the C++ handler enforced with
-/// `req.fill_pow_hash && !restricted`.
+/// `fill_pow_hash` is the caller's request. It reads the hash recorded at
+/// validation; this function includes it whenever it is passed `true`.
 pub fn get_block_header_by_height(
     facts: &dyn ChainFacts,
     height: u64,
@@ -564,21 +619,23 @@ fn block_header(facts: &crate::chain_facts::BlockHeaderFacts) -> BlockHeader {
 
 // ─── RK-4c: the transaction read set ─────────────────────────────────────────
 
-/// `RESTRICTED_BLOCK_COUNT` — the cap a restricted listener applies to
-/// `get_block_header_by_hash`'s hash list (`core_rpc_server.cpp`).
+/// `RESTRICTED_BLOCK_COUNT` — how many hashes `get_block_header_by_hash`
+/// accepts from a bounded connection, and how many heights
+/// `/get_blocks_by_height.bin` accepts. The number is the inherited cap
+/// (`RPC_CHANNEL.md` §6.3). A bounded connection over it is
+/// `OverResourceBound`.
 pub const RESTRICTED_BLOCK_COUNT: usize = 1000;
 
 /// `RESTRICTED_BLOCK_HEADER_RANGE` — the span cap on
-/// `get_block_headers_range`.
+/// `get_block_headers_range` for a bounded connection. Inherited (§6.3).
 pub const RESTRICTED_BLOCK_HEADER_RANGE: u64 = 1000;
 
-/// `RESTRICTED_TRANSACTIONS_COUNT` — the cap a restricted listener applies to
-/// `/get_transactions`. It fires for the first time in this tree: the C++
-/// gated it on `m_restricted && ctx` while the bridge passed a null `ctx`
-/// (#570 fixed the bridge; this carries the constant to the native handler).
+/// `RESTRICTED_TRANSACTIONS_COUNT` — how many transactions `/get_transactions`
+/// accepts from a bounded connection. Inherited (§6.3).
 pub const RESTRICTED_TRANSACTIONS_COUNT: usize = 100;
 
-/// `RESTRICTED_SPENT_KEY_IMAGES_COUNT` — the same, for `/is_key_image_spent`.
+/// `RESTRICTED_SPENT_KEY_IMAGES_COUNT` — how many key images
+/// `/is_key_image_spent` accepts from a bounded connection. Inherited (§6.3).
 pub const RESTRICTED_SPENT_KEY_IMAGES_COUNT: usize = 5000;
 
 /// The two parse refusals the C++ handler distinguished, kept distinct because
@@ -731,25 +788,6 @@ pub fn project_transactions(
 
 // ── RK-5b: the header remainder ─────────────────────────────────────────────
 
-/// Whether a caller may have the long hash computed for it.
-///
-/// **Refusal, not a blank field.** The C++ wrote `fill_pow_hash && !restricted`
-/// throughout: a restricted caller that asked for a privileged field got an
-/// empty one back with status OK, which reports success about a question it
-/// declined to answer. `5b0c32f51` ruled the other way on the staking-read
-/// path — loud, never the degrade arm — and the one production caller of these
-/// methods passes `false`, so refusing costs nothing.
-fn pow_hash_or_refuse(requested: bool, bounded: bool) -> Result<bool, RpcFault> {
-    if requested && bounded {
-        return Err(RpcFault::Refused(RpcRefusal {
-            code: CORE_RPC_ERROR_CODE_RESTRICTED,
-            message: "fill_pow_hash is not available on the restricted listener".to_owned(),
-            data: None,
-        }));
-    }
-    Ok(requested)
-}
-
 /// The request parsers for the four RK-5b methods.
 ///
 /// Each names **its own** fields, because a caller that sent the wrong shape
@@ -851,9 +889,7 @@ const TIP_READ_ATTEMPTS: usize = 4;
 pub fn get_last_block_header(
     facts: &dyn ChainFacts,
     fill_pow_hash: bool,
-    bounded: bool,
 ) -> Result<GetLastBlockHeaderResponse, RpcFault> {
-    let pow = pow_hash_or_refuse(fill_pow_hash, bounded)?;
     let tip = facts.chain_tip()?;
     // **The readiness check the C++ had, and only here.** `CHECK_CORE_READY()`
     // guarded `on_get_last_block_header` alone among this slice's methods —
@@ -882,7 +918,7 @@ pub fn get_last_block_header(
     // block 0); `newest_block` keeps the empty case total.
     let mut top = newest_block(tip.chain_height);
     for _ in 0..TIP_READ_ATTEMPTS {
-        let at = facts.block_header_at(BlockLookup::Height(top), pow)?;
+        let at = facts.block_header_at(BlockLookup::Height(top), fill_pow_hash)?;
         let Some(header) = at.header else {
             // The height came from a chain height, so it was below the tip
             // when it was chosen. Absent now means either the store cannot
@@ -924,17 +960,18 @@ pub fn get_block_header_by_hash(
     request: &GetBlockHeaderByHashRequest,
     bounded: bool,
 ) -> Result<GetBlockHeaderByHashResponse, RpcFault> {
-    let pow = pow_hash_or_refuse(request.fill_pow_hash, bounded)?;
     if bounded && request.hashes.len() > RESTRICTED_BLOCK_COUNT {
-        return Err(RpcFault::Refused(RpcRefusal {
-            code: CORE_RPC_ERROR_CODE_RESTRICTED,
-            message: "Too many block headers requested in restricted mode".to_owned(),
-            data: None,
-        }));
+        return Err(bound_fault(
+            "get_block_header_by_hash",
+            "hashes",
+            RESTRICTED_BLOCK_COUNT as u64,
+            request.hashes.len() as u64,
+        ));
     }
     let mut block_headers = Vec::with_capacity(request.hashes.len());
     for hash in &request.hashes {
-        let at = facts.block_header_at(BlockLookup::Hash(hash.to_bytes()), pow)?;
+        let at =
+            facts.block_header_at(BlockLookup::Hash(hash.to_bytes()), request.fill_pow_hash)?;
         block_headers.push(BlockHeaderSlot {
             hash: *hash,
             block_header: at.header.as_ref().map(block_header),
@@ -952,7 +989,6 @@ pub fn get_block_headers_range(
     request: &GetBlockHeadersRangeRequest,
     bounded: bool,
 ) -> Result<GetBlockHeadersRangeResponse, RpcFault> {
-    let pow = pow_hash_or_refuse(request.fill_pow_hash, bounded)?;
     // **Both endpoints are bounded against the tip before any per-height
     // work.** The C++ refused `start > end` *and* either endpoint at or past
     // the chain height in one O(1) test; the first port kept only the
@@ -988,16 +1024,17 @@ pub fn get_block_headers_range(
     // deleted singular `hash` produced on `get_block_header_by_hash`, in the
     // second of the two methods that carry this cap. Found by porting both.
     if bounded && span > RESTRICTED_BLOCK_HEADER_RANGE {
-        return Err(RpcFault::Refused(RpcRefusal {
-            code: CORE_RPC_ERROR_CODE_RESTRICTED,
-            message: "Too many block headers requested.".to_owned(),
-            data: None,
-        }));
+        return Err(bound_fault(
+            "get_block_headers_range",
+            "headers",
+            RESTRICTED_BLOCK_HEADER_RANGE,
+            span,
+        ));
     }
     let mut headers = Vec::new();
     for raw in request.start_height..=request.end_height {
         let height = BlockHeight::from_raw(raw);
-        let at = facts.block_header_at(BlockLookup::Height(height), pow)?;
+        let at = facts.block_header_at(BlockLookup::Height(height), request.fill_pow_hash)?;
         let Some(header) = at.header else {
             // **A missing header here can only mean the chain shortened.**
             // On the height path the shim returns `found == 0` for exactly
@@ -1875,10 +1912,10 @@ pub(crate) mod tests {
         );
 
         let mut ours: serde_json::Value = serde_json::to_value(&out).unwrap();
-        // Head of the `get_version` chain (`_v43` = 3.66). A bump that
+        // Head of the `get_version` chain (`_v44` = 3.67). A bump that
         // forgets this include fails on `version` below.
         let mut oracle: serde_json::Value = serde_json::from_str(include_str!(
-            "../../shekyl-rpc-types/tests/vectors/rpc/get_version_synced_v43.json"
+            "../../shekyl-rpc-types/tests/vectors/rpc/get_version_synced_v44.json"
         ))
         .unwrap();
         for moving in ["consensus_constants_digest", "genesis_hash"] {
@@ -2408,26 +2445,34 @@ pub(crate) mod tests {
 
     // ── RK-5b: the header remainder ────────────────────────────────────────
 
-    /// Every method in this slice refuses `fill_pow_hash` under restriction
-    /// rather than answering with an empty field and status OK.
+    /// `fill_pow_hash` is the hash recorded at validation. Asking includes
+    /// it. Not asking leaves the field empty.
     #[test]
-    fn a_restricted_caller_asking_for_the_pow_hash_is_refused_not_blanked() {
-        // Synchronized, because `get_last_block_header` refuses an
-        // unsynchronised node outright — see the test below.
+    fn fill_pow_hash_is_the_recorded_hash() {
         let f = facts(true, 0);
-        for restricted in [true, false] {
-            let out = get_last_block_header(&f, true, restricted);
-            if restricted {
-                assert!(
-                    matches!(out, Err(RpcFault::Refused(_))),
-                    "a privileged field must be refused, not emptied"
-                );
-            } else {
-                assert!(out.is_ok());
-            }
-        }
-        // And not asking for it is fine on either listener.
-        assert!(get_last_block_header(&f, false, true).is_ok());
+        let filled = get_last_block_header(&f, true).expect("the recorded hash");
+        assert!(filled.block_header.pow_hash.is_some());
+        let bare = get_last_block_header(&f, false).expect("no hash asked");
+        assert!(bare.block_header.pow_hash.is_none());
+    }
+
+    /// A bounded range within the header cap, asking for the recorded hash
+    /// on every header, is served. The hash is a store read.
+    #[test]
+    fn a_bounded_header_range_serves_the_recorded_hash() {
+        let f = facts(false, 0);
+        let out = get_block_headers_range(
+            &f,
+            &GetBlockHeadersRangeRequest {
+                start_height: 0,
+                end_height: 2,
+                fill_pow_hash: true,
+            },
+            true,
+        )
+        .expect("three headers are inside the 1,000-header cap");
+        assert_eq!(out.headers.len(), 3);
+        assert!(out.headers.iter().all(|header| header.pow_hash.is_some()));
     }
 
     /// A block arriving between choosing the tip and projecting it does not
@@ -2448,7 +2493,7 @@ pub(crate) mod tests {
         let before = f.tip.as_ref().expect("a tip").chain_height;
         f.tip_growth_remaining.store(1, Ordering::Relaxed);
 
-        let out = get_last_block_header(&f, false, false).expect("the tip, after one retry");
+        let out = get_last_block_header(&f, false).expect("the tip, after one retry");
         // The header returned is the *new* tip, not the height chosen from
         // the pre-growth snapshot. One growth makes the old exclusive end
         // (`next_height`) the new tip ordinal.
@@ -2468,7 +2513,7 @@ pub(crate) mod tests {
     fn a_chain_that_never_settles_is_refused_rather_than_spun_on() {
         let f = facts(true, 0);
         f.tip_growth_remaining.store(u64::MAX, Ordering::Relaxed);
-        let out = get_last_block_header(&f, false, false);
+        let out = get_last_block_header(&f, false);
         assert!(
             matches!(&out, Err(RpcFault::Refused(r)) if r.code == CORE_RPC_ERROR_CODE_CORE_BUSY),
             "{out:?}"
@@ -2498,7 +2543,7 @@ pub(crate) mod tests {
     #[test]
     fn an_unsynchronized_node_refuses_to_report_a_tip() {
         let unsynced = facts(false, 900_000);
-        let out = get_last_block_header(&unsynced, false, false);
+        let out = get_last_block_header(&unsynced, false);
         assert!(
             matches!(&out, Err(RpcFault::Refused(r)) if r.code == CORE_RPC_ERROR_CODE_CORE_BUSY),
             "{out:?}"
@@ -2523,7 +2568,7 @@ pub(crate) mod tests {
                 hashes: vec![],
                 fill_pow_hash: false,
             },
-            false
+            false,
         )
         .is_ok());
     }

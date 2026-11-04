@@ -19,8 +19,9 @@
 //!
 //! A runtime whose threads must do something as they start and as they
 //! exit calls [`runtime_with_thread_hooks`] instead. The ordinary
-//! constructor does not take a hook. The one caller is the serving
-//! runtime (`SH-3`).
+//! constructor does not take a hook. The callers are the serving runtime
+//! (`SH-3`) and the persona body-store owner (`CURVE_TREE_CLIENT.md`
+//! §11.1). Both lower their threads. The engine's shared pool does not.
 
 #![deny(unsafe_code)]
 
@@ -111,9 +112,10 @@ impl Deref for Pool {
 /// value: a start that records a thread has the exit that releases it.
 /// [`Self::none`] is what [`runtime`] installs.
 ///
-/// This crate does not know what the hooks do. The one caller is the
-/// serving runtime, whose threads lower their own CPU priority and whose
-/// failure count is the threads still in that state (`SH-3`).
+/// This crate does not know what the hooks do. The callers are the
+/// serving runtime and the persona body-store owner. Both lower their
+/// threads at start (`SH-3`, `CURVE_TREE_CLIENT.md` §11.1). The serving
+/// runtime's failure count is the threads still in that state.
 #[derive(Clone, Default)]
 pub struct ThreadHooks {
     on_start: Option<Arc<dyn Fn() + Send + Sync>>,

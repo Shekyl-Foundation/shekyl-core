@@ -33,8 +33,21 @@ import armed_lever  # noqa: E402
 # the cap is a complete read on either door.
 HEADER_RANGE = 1000
 # Chain identity only. The schedule pair is the tool's production default.
-REPLAY_CHAIN = ("--chain", "regtest", "--fixed-difficulty", "1")
+# `fetch` names the chain alone (the corpus header's tag); the commands that
+# validate (`baseline`, `replay`, `digest`) also fix the regtest difficulty.
+FETCH_CHAIN = ("--chain", "regtest")
+REPLAY_CHAIN = FETCH_CHAIN + ("--fixed-difficulty", "1")
 HEIGHT_DIGESTS_SCHEMA = "shekyl_height_digests_v1"
+
+
+def run_tool(argv):
+    """Run the replay tool and return its stdout. A refusal fails the run
+    with the tool's own words, not a bare exit status."""
+    proc = subprocess.run(argv, check=False, capture_output=True, text=True)
+    if proc.returncode != 0:
+        B._fail(f"`{os.path.basename(argv[0])} {argv[1]}` exited {proc.returncode}: "
+                f"{(proc.stderr or proc.stdout).strip()[-2000:]}")
+    return proc.stdout
 # The crash and power-loss harnesses each run a seed, a fork and a subject.
 PORTS = 6
 _GEN_TIMEOUT_S = 86400
@@ -191,9 +204,7 @@ class Session:
 
     def store_digest(self, store):
         """The replay tool's read of `store`: tip, hash and logical-state digest."""
-        out = subprocess.run([self.replay, "digest", "--store", store, *REPLAY_CHAIN],
-                             check=True, capture_output=True, text=True).stdout
-        return json.loads(out)
+        return json.loads(run_tool([self.replay, "digest", "--store", store, *REPLAY_CHAIN]))
 
     def digest_chain(self, seed_rpc, chain_key, tip):
         """One fetch and one baseline of `chain_key` through `tip`.
@@ -212,13 +223,11 @@ class Session:
             os.makedirs(store_dir)
             store = os.path.join(store_dir, "chain.db")
             table_path = os.path.join(directory, "digests.json")
-            subprocess.run([self.replay, "fetch", "--daemon", f"http://127.0.0.1:{seed_rpc}",
-                            *REPLAY_CHAIN, "--from", "0", "--to", str(tip + 1),
-                            "--out", corpus], check=True, capture_output=True)
-            subprocess.run([self.replay, "baseline", "--corpus", corpus, "--store", store,
-                            *REPLAY_CHAIN, "--out", os.path.join(directory, "trace.e2"),
-                            "--digests-out", table_path],
-                           check=True, capture_output=True)
+            run_tool([self.replay, "fetch", "--daemon", f"http://127.0.0.1:{seed_rpc}",
+                      *FETCH_CHAIN, "--from", "0", "--to", str(tip + 1), "--out", corpus])
+            run_tool([self.replay, "baseline", "--corpus", corpus, "--store", store,
+                      *REPLAY_CHAIN, "--out", os.path.join(directory, "trace.e2"),
+                      "--digests-out", table_path])
             with open(table_path, encoding="utf-8") as fh:
                 table = json.load(fh)
             if table.get("schema") != HEIGHT_DIGESTS_SCHEMA:

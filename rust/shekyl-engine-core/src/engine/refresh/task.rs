@@ -423,7 +423,7 @@ pub(crate) async fn run_refresh_task<S, D: DaemonEngine, E, R, P>(
                 return;
             }
         };
-        if let Err(e) = crate::engine::merge::curve_tree_ingest_scan_result_with_respawn(
+        if let Err(e) = crate::engine::merge::curve_tree_ingest_scan_result_with_recovery(
             &curve_tree,
             &daemon,
             &result,

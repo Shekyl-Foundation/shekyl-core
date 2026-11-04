@@ -454,13 +454,21 @@ impl Dial for AnsweringLoopback {
         endpoint: &shekyl_seam::Endpoint,
         ceiling: shekyl_peer_policy::InboundCeiling,
         now: Tick,
-    ) -> Result<Channel, CloseCause> {
+    ) -> Result<Channel, shekyl_transport_layer::DialEnd> {
         let channel = self.inner.connect(endpoint, ceiling, now)?;
         assert!(
             self.inner.inject(channel.open.id(), self.frame.clone()),
             "a channel the loopback just opened takes its answer"
         );
         Ok(channel)
+    }
+
+    fn stamp_stream_end(
+        &self,
+        connector: shekyl_transport_layer::ConnectorId,
+        end: shekyl_transport_layer::StreamEnd,
+    ) -> shekyl_transport_layer::DialFailure {
+        self.inner.stamp_stream_end(connector, end)
     }
 
     fn inject(&self, id: SocketId, frame: Vec<u8>) -> bool {
@@ -483,7 +491,11 @@ impl Dial for AnsweringLoopback {
 /// Install [`AnsweringLoopback`] on the bound hub.
 fn install_answering_loopback(hub: &Hub) {
     hub.install_dial(Arc::new(AnsweringLoopback {
-        inner: Loopback::new(crate::seam_ffi::process_sockets(), 64 * 1024),
+        inner: Loopback::new(
+            crate::seam_ffi::process_sockets(),
+            64 * 1024,
+            crate::zone_ffi::connector_tables,
+        ),
         frame: handshake_frame(),
     }));
 }

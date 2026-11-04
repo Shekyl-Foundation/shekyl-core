@@ -66,7 +66,7 @@ use shekyl_fcmp::tree::layer_count_for_leaves;
 use shekyl_types::archival::{
     BlockDraws, BondRecord, CompleteTreeSet, DrawableDigest, IndexedDraw, IssuedDigest,
     LoggedSlash, PassCount, RMarket, ReleasedRecord, ServedShard, SettlementRow, SigmaWorkMilli,
-    SlashLogEntry, SupportCount,
+    SlashLogEntry, SupportSeats,
 };
 use shekyl_types::{
     ArchivalLength, BlockCount, BlockHash, BlockHeight, BlockWeight, CurveTreeRoot,
@@ -753,18 +753,19 @@ pub trait ChainView<'id>: HeaderView<'id> {
         floor: crate::BlockDrawsFloor,
     ) -> Result<Option<BlockDraws>, Self::Fault>;
 
-    /// **A23.** How many support draws the block at `height` issued
-    /// (`ARCHIVAL_SUPPORT_DRAW.md` §5). `None` for a block no row was
-    /// written for. [`SupportCount::NONE`] is a block that issued none:
-    /// absence is not that zero.
+    /// **A23.** The complete trees the block at `height` seated on the
+    /// support stream, in persona order (`ARCHIVAL_SUPPORT_DRAW.md` §5;
+    /// `SO-D12` S1). `None` for a block no row was written for.
+    /// [`SupportSeats::EMPTY`] is a block that seated nobody: absence is
+    /// not that empty row.
     ///
     /// `floor`: the draw rows' ([`BlockDrawsFloor`]; SI-34), the same
     /// window as [`Self::block_draws`]. A read below it is refused.
-    fn support_block_count(
+    fn support_block_seats(
         &self,
         height: BlockHeight,
         floor: crate::BlockDrawsFloor,
-    ) -> Result<Option<SupportCount>, Self::Fault>;
+    ) -> Result<Option<SupportSeats>, Self::Fault>;
 
     /// **A19.** The digest of `epoch`'s drawable set, as written when the
     /// epoch opened (`SO-D10g`). `None` for an epoch whose set was never

@@ -42,9 +42,9 @@ fn drawing_height() -> BlockHeight {
     BlockHeight::from_raw(h_open(2) + 10)
 }
 
-struct Linked {
-    draws: BlockDraws,
-    hash: BlockHash,
+pub(super) struct Linked {
+    pub(super) draws: BlockDraws,
+    pub(super) hash: BlockHash,
 }
 
 struct Prepared {
@@ -93,7 +93,7 @@ fn prepare(label: &str) -> Prepared {
     }
 }
 
-fn connect_plain(chain: &mut SlashedChain, memo: Option<&mut DrawableMemo>) -> Linked {
+pub(super) fn connect_plain(chain: &mut SlashedChain, memo: Option<&mut DrawableMemo>) -> Linked {
     let txs = chain.grown.realise(&[]);
     let mut linked = None;
     let out: Result<(), TestErr> = chain.store.write(|batch| {
@@ -112,7 +112,7 @@ fn connect_plain(chain: &mut SlashedChain, memo: Option<&mut DrawableMemo>) -> L
     linked.expect("the verdict")
 }
 
-fn connect_committed(
+pub(super) fn connect_committed(
     chain: &mut SlashedChain,
     memo: &mut DrawableMemo,
     commitment: DrawCommitment,

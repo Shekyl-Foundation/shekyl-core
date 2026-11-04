@@ -4,9 +4,10 @@
 // BSD-3-Clause
 
 //! The pinner's report: the obligation, the evidence that retains it, and
-//! the store both landed in.
+//! the store both landed in; and the store's own readings, which the
+//! witness checks a report's claims against.
 
-use shekyl_curve_tree::{BlockHeight, PostureDeclaration, SegmentPin, ServingReader};
+use shekyl_curve_tree::{BlockHeight, PostureDeclaration, SegmentPin};
 
 /// Why a serve-set could not be pinned.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -25,7 +26,8 @@ pub enum PinError {
         shard_ids: Vec<u64>,
     },
     /// The pinner failed (store I/O, a dead actor, a poisoned client), or
-    /// the store could not be read for the witness's own staleness baseline.
+    /// the store could not be read for a check or the witness's staleness
+    /// reading.
     /// Either way the serve-set's state is unknown, so the host does not
     /// start; pinning is idempotent, so a retry re-covers whatever was
     /// already applied.
@@ -89,16 +91,15 @@ pub enum PinError {
         /// The store's `next_freeze_seg` at the check.
         cursor: u64,
     },
-    /// A refresh's pins landed in a different open store than the one this
-    /// witness is serving.
+    /// A refresh's pins, or a reading of the store, came from a different
+    /// open store than the one this witness is serving.
     ///
     /// Distinct from [`Self::PinnerCoverageMismatch`] because the two
     /// halves of the report can agree with each other and still describe
     /// the wrong database. Retrying only repeats it. The production
-    /// pinner cannot produce this: it pins through the wallet's
-    /// curve-tree handle, which resumes over the same store Arc across
-    /// fail-stop, so the reader it returns is the store the host already
-    /// serves. A report that trips this is an implementor defect.
+    /// pinner cannot produce this: it reaches one curve-tree actor for its
+    /// whole life, which owns one store, and an in-place recovery keeps
+    /// both. A report or reading that trips this is an implementor defect.
     PinnerStoreMismatch,
 }
 
@@ -123,8 +124,9 @@ impl std::fmt::Display for PinError {
             ),
             Self::PinnerStoreMismatch => write!(
                 f,
-                "the pin report's reader is not the store this host is serving; \
-                 the pins cannot be witnessed for a store nobody is reading, so \
+                "the pin report or store reading names a different store than the \
+                 one this host is serving; the pins cannot be witnessed for a store \
+                 nobody is reading, so \
                  this persona keeps its previous pins. This is an implementor \
                  defect, not a transient fault — retrying will repeat it"
             ),
@@ -151,9 +153,50 @@ impl std::fmt::Display for PinError {
 
 impl std::error::Error for PinError {}
 
+/// Which open store a report or a reading is about: an opaque value, equal
+/// for the whole life of one open store and different for any other.
+///
+/// The production value is the id of the wallet's curve-tree actor, the
+/// store's one owner (`CURVE_TREE_CLIENT.md` §11): an in-place recovery
+/// keeps the actor and the store, and a chain replay builds a new store
+/// under a new actor. *Records-was (until 2026-11-02):* identity was
+/// `Arc` pointer equality between two `ServingReader`s, shared handles on
+/// the store.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub struct StoreIdentity(u64);
+
+impl StoreIdentity {
+    /// The identity a pinner's store answers to. The pinner mints it; the
+    /// witness only compares it.
+    #[must_use]
+    pub const fn new(value: u64) -> Self {
+        Self(value)
+    }
+}
+
+/// The store's own answers to what a witness checks, read in one call.
+///
+/// A report's claims are checked against these, never against the report
+/// itself: a claim about the store is checked against the store. The
+/// pinner reads them from the store it pinned in, as a separate call from
+/// the pin, and names that store, so the witness can refuse a reading from
+/// any other.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct StoreFacts {
+    /// The store the readings came from.
+    pub store: StoreIdentity,
+    /// The store's ingest tip: the staleness baseline and reading.
+    pub sync_tip_height: BlockHeight,
+    /// Whether the prune-disabled posture is declared.
+    pub prune_disabled: bool,
+    /// The burial-gated freeze cursor (`LeafStore::next_freeze_seg`).
+    pub next_freeze_seg: u64,
+    /// The members of the asked-for set whose pin row is gone.
+    pub members_missing_pins: Vec<u64>,
+}
+
 /// What a [`ServeSetPinner`] returns: the obligation it derived, the
-/// evidence that retains it, and a read-only handle on the store both
-/// landed in.
+/// evidence that retains it, and the identity of the store both landed in.
 ///
 /// The two travel together so they cannot be paired wrongly — see the trait
 /// doc for why that is a soundness property and not a convenience.
@@ -167,15 +210,14 @@ pub struct PinReport {
     /// **provenance** stamp.
     ///
     /// Not an operand of the staleness reading — that is
-    /// [`ServingReader::sync_tip_height`] read twice, so no remote height
+    /// [`StoreFacts::sync_tip_height`] read twice, so no remote height
     /// is ever subtracted from a local one. A [`BlockHeight`] rather than a
     /// raw chain count all the same: the value answers "at what height was
     /// this obligation true", and a count is one more than the height it
     /// describes.
     pub as_of_height: BlockHeight,
-    /// A reader on the store the pins (or the posture declaration) were
-    /// applied in.
-    pub reader: ServingReader,
+    /// The store the pins (or the posture declaration) were applied in.
+    pub store: StoreIdentity,
 }
 
 /// The two obligation shapes a pinner can report, each with the evidence
@@ -244,7 +286,7 @@ pub enum ReportedSet {
         /// before any poll could observe it —
         /// [`PostureDeclaration::NewlyDeclared`] at a refresh is the one
         /// evidence the loss happened, and the witness responds by
-        /// running the corpus integrity scan over the reader rather than
+        /// running the corpus integrity scan on the store rather than
         /// trusting the gap was harmless. Same trust level as the list
         /// arm's outcomes: the implementor reports what the store told
         /// it, and the residual (an implementor that lies) is the one the
@@ -253,8 +295,8 @@ pub enum ReportedSet {
     },
 }
 
-/// Pins a serve-set, and hands back the store those pins (or the posture
-/// declaration) are in.
+/// Pins a serve-set, names the store those pins (or the posture
+/// declaration) are in, and reads that store for the witness's checks.
 ///
 /// A trait rather than a concrete store handle because pinning is a **store
 /// write**, and the store's single writer is the wallet's curve-tree actor —
@@ -281,30 +323,41 @@ pub enum ReportedSet {
 /// opportunity, not to validate it afterwards.
 ///
 /// **The residual, stated rather than left implicit:** an implementor can
-/// report a set it did not derive from the record, or a reader for a store it
-/// did not pin. That is one engine-side implementor, reviewable by reading
+/// report a set it did not derive from the record, or name a store it did
+/// not pin. That is one engine-side implementor, reviewable by reading
 /// it, and it is strictly narrower than a public constructor any caller could
 /// reach. The corresponding "second construction site" therefore never comes
 /// into existence rather than being permitted.
 ///
-/// # Why the reader comes back from the pin
+/// # Why the store comes back from the pin
 ///
-/// The pin and the serving read must land on **the same store**, and the
-/// only way to make that unconditional is to derive one from the other.
-/// Taking a [`ServingReader`] as a separate argument anywhere — on this
-/// method, on [`super::PinnedServeSet::acquire`], or on
+/// The pin and the readings must be about **the same store**, and the only
+/// way to make that unconditional is to derive one from the other. Taking a
+/// store as a separate argument anywhere — on this method, on
+/// [`super::PinnedServeSet::acquire`], or on
 /// [`crate::PersonaServingHost::start`] — recreates a call site holding two
-/// opaque handles that a caller can pair wrongly, which is not a fix but a
+/// handles that a caller can pair wrongly, which is not a fix but a
 /// relocation of the same defect: pins applied to store A while store B is
 /// served leaves the served store unpinned, and `prune_frozen` is then free
 /// to remove the bytes a challenge will ask for. Silent to the slash, like
 /// everything else on this path.
 ///
-/// So [`PinReport`] carries both. The caller never chooses a reader, because
-/// there is no argument through which to choose one. What remains is an
-/// *implementor* returning a reader for some other store — a much narrower
-/// surface, and the same trust level this trait already extends to the
-/// reported obligation itself.
+/// So [`PinReport`] names its store, every [`StoreFacts`] names the store it
+/// was read from, and the witness refuses any mismatch. The caller never
+/// chooses a store, because there is no argument through which to choose
+/// one. What remains is an *implementor* naming some other store — a much
+/// narrower surface, and the same trust level this trait already extends to
+/// the reported obligation itself.
+///
+/// # Reads are messages, not a held store
+///
+/// The host holds no handle on the store: the wallet's curve-tree actor
+/// owns it outright and others reach it by message (`CURVE_TREE_CLIENT.md`
+/// §11, the wallet's actor rule). So the witness's reads are calls on this
+/// trait, [`Self::store_facts`] and [`Self::pruned_frozen_segments`], made
+/// when a check or a staleness reading needs them. *Records-was (until
+/// 2026-11-02):* the report carried a `ServingReader`, a shared handle on
+/// the store that kept its file open past the wallet's close.
 ///
 /// Generic rather than `dyn`: the production implementor round-trips an
 /// actor message, so the method is `async`, and there is exactly one
@@ -347,14 +400,37 @@ pub trait ServeSetPinner {
     ///   — on `NewlyDeclared` at a refresh — that the corpus survived the
     ///   unretained gap (the integrity scan).
     ///
-    /// [`PinReport::reader`] must be a handle on **the store the retention
-    /// landed in** — the production implementor takes both from the one
-    /// `CurveTreeClient` it owns, so they cannot diverge.
+    /// [`PinReport::store`] must name **the store the retention landed
+    /// in** — the production implementor pins through the one curve-tree
+    /// actor that owns that store, so they cannot diverge.
     ///
     /// # Errors
     ///
     /// Implementor-defined; surfaced as [`PinError::Pinner`].
     fn pin_serve_set(&self) -> impl std::future::Future<Output = Result<PinReport, String>> + Send;
+
+    /// Read the store this pinner pins in: its tip, posture, freeze cursor,
+    /// and which members of `claimed` have lost their pin rows. One call, so
+    /// the readings describe one moment of one store.
+    ///
+    /// # Errors
+    ///
+    /// Implementor-defined; surfaced as [`PinError::Pinner`].
+    fn store_facts(
+        &self,
+        claimed: Vec<u64>,
+    ) -> impl std::future::Future<Output = Result<StoreFacts, String>> + Send;
+
+    /// The corpus integrity scan: the frozen segments the store has already
+    /// pruned, with the store they were read from. O(D), so asked for only
+    /// where the witness's policy runs it.
+    ///
+    /// # Errors
+    ///
+    /// Implementor-defined; surfaced as [`PinError::Pinner`].
+    fn pruned_frozen_segments(
+        &self,
+    ) -> impl std::future::Future<Output = Result<(StoreIdentity, Vec<u64>), String>> + Send;
 }
 
 /// A shared reference pins exactly as the value does.
@@ -367,5 +443,18 @@ pub trait ServeSetPinner {
 impl<T: ServeSetPinner + Sync> ServeSetPinner for &T {
     fn pin_serve_set(&self) -> impl std::future::Future<Output = Result<PinReport, String>> + Send {
         (**self).pin_serve_set()
+    }
+
+    fn store_facts(
+        &self,
+        claimed: Vec<u64>,
+    ) -> impl std::future::Future<Output = Result<StoreFacts, String>> + Send {
+        (**self).store_facts(claimed)
+    }
+
+    fn pruned_frozen_segments(
+        &self,
+    ) -> impl std::future::Future<Output = Result<(StoreIdentity, Vec<u64>), String>> + Send {
+        (**self).pruned_frozen_segments()
     }
 }

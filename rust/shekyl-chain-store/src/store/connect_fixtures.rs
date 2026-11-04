@@ -290,7 +290,7 @@ pub(super) fn judge_or_corrupt<'b, 'id>(
         formed_under(view, candidate, rules)?,
         view,
         rules,
-        &Trust::UNANCHORED,
+        &Trust::UNPINNED,
     ) {
         Ok(verdict) => Ok(Ok(verdict.expect("the fixtures satisfy every landed rule"))),
         Err(Fault::View(fault)) => Err(fault),
@@ -312,7 +312,7 @@ pub(super) fn judge_with_memo<'b, 'id>(
         formed_under(view, candidate, rules)?,
         view,
         rules,
-        &Trust::UNANCHORED,
+        &Trust::UNPINNED,
         memo,
     ) {
         Ok(verdict) => Ok(verdict.expect("the fixtures satisfy every landed rule")),

@@ -53,8 +53,9 @@ use super::{connecting, count_at, derivation_fault, store_fault, tip_of, StoreFa
 use crate::chain_facts::FactsFault;
 use crate::info_facts::{PoolScope, PoolState};
 use crate::read_facts::{
-    AltChainFacts, BlockRead, BlocksAt, ChainReadFacts, ClaimSource, ClaimantBond, CoinbaseRange,
-    CoinbaseSum, CurveTreeFacts, ListedTx, PowAt, PowSeed, ShardCoverage, SpentAt, TransactionsAt,
+    AdmittedPow, AltChainFacts, BlockRead, BlocksAt, ChainReadFacts, ClaimSource, ClaimantBond,
+    CoinbaseRange, CoinbaseSum, CurveTreeFacts, ListedTx, PowAdmission, PowDecline, PowSeed,
+    ShardCoverage, SpentAt, TransactionsAt,
 };
 
 /// The tree after the block at `after`: the store's state at `after + 1`.
@@ -538,7 +539,7 @@ impl ChainReadFacts for StoreFacts {
         Ok(CoinbaseRange::Summed(CoinbaseSum { emission, fees }))
     }
 
-    fn pow_hash(&self, pow_blob: &[u8], seed: PowSeed) -> Result<PowAt, FactsFault> {
+    fn admit_pow(&self, seed: PowSeed) -> Result<PowAdmission, FactsFault> {
         let seed = match seed {
             PowSeed::Given(seed) => seed,
             PowSeed::AtHeight(height) => match seed_height(height) {
@@ -549,24 +550,39 @@ impl ChainReadFacts for StoreFacts {
                     let (tip, _) = tip_of(&snap)?;
                     match snap.block_info(seed_height).map_err(store_fault)? {
                         AtHeight::Recorded(info) => info.hash,
-                        AtHeight::AboveTip => return Ok(PowAt::SeedAboveTip { seed_height, tip }),
+                        AtHeight::AboveTip => {
+                            return Ok(PowAdmission::Declined(PowDecline::SeedAboveTip {
+                                seed_height,
+                                tip,
+                            }))
+                        }
                     }
                 }
             },
         };
         // A held cache or nothing: `lookup`, never `lookup_or_derive`. The
         // seed may be the chain's own and still not held (the store keeps
-        // two, the validator's current and spare).
+        // two, the validator's current and spare). The `Arc` is what the
+        // later hash runs on, so a cache evicted after this admission is
+        // still the one that was held.
         let Some(cache) = self.caches.lookup(&Seedhash::from_bytes(*seed.as_bytes())) else {
-            return Ok(PowAt::SeedNotHeld { seed });
+            return Ok(PowAdmission::Declined(PowDecline::SeedNotHeld { seed }));
         };
+        Ok(PowAdmission::Admitted(AdmittedPow { cache }))
+    }
+
+    fn hash_admitted(
+        &self,
+        pow_blob: &[u8],
+        admitted: &AdmittedPow,
+    ) -> Result<PowHash, FactsFault> {
         // Under a permit in calc_pow's class: below the chain's forms and
         // chain sync's, above the miner's. The facts run on a blocking
-        // thread, so the wait is one.
+        // thread, so the wait is one. The permit is the hasher's, not the
+        // RPC hash budget: that spend happens before this call, and only
+        // for a bounded caller whose seed was admitted.
         let _permit = self.budget.acquire(shekyl_hash_budget::Class::CalcPow);
-        Ok(PowAt::Hashed(PowHash::from_bytes(compute_hash(
-            &cache, pow_blob,
-        ))))
+        Ok(PowHash::from_bytes(compute_hash(&admitted.cache, pow_blob)))
     }
 
     fn emission_claim_source(&self, persona: &PCanonicalId) -> Result<ClaimSource, FactsFault> {

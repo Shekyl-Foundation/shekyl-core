@@ -11,13 +11,18 @@
 # each flush and FUA boundary, and at points between them, and holds each
 # rebuilt store to PB-S1's condition.
 #
-# The acknowledgement is the latest flush or FUA already in the log when
-# get_info published a tip. Under D9 that flush is the commit of the tip:
-# the commit is durable before get_info answers. A mark written afterwards
-# is not the oracle. A tip is never attributed to a flush that has not
-# moved, and never to a flush inside the mkfs image: the first would judge
-# a new tip against an older prefix, and the second would judge genesis
-# against an empty filesystem.
+# The oracle is the daemon's promise: once get_info has reported a tip, a
+# crash after that report recovers the tip or a heavier chain it had seen
+# (design review, 2026-11-03). The capture writes a mark right after each
+# new tip get_info reports, so the mark sits at the report. Every point
+# from the mark onward must hold that tip or a known heavier chain. A point
+# before it may hold the tip or the one before, since nothing about the tip
+# had been reported. Every point is also held to the checks that need no
+# report: its tip is on a known chain, and its digest is a clean replay's.
+# Early publication still fails: a tip reported before its fsync finished
+# leaves points after the mark and before the flush on the older tip.
+# Where redb's own flush falls is redb's property, not the daemon's
+# promise, and nothing here infers it.
 #
 # Capture (`capture`, needs root for the device mapper) and replay
 # (`replay`, needs root) both take xfstests' `replay-log`. While each seed
@@ -46,13 +51,15 @@ import drs_bench as B  # noqa: E402
 import drs_crash as C  # noqa: E402
 import drs_regtest as R  # noqa: E402
 
-SCHEMA = "shekyl_drs_powerloss_v1"
+SCHEMA = "shekyl_drs_powerloss_v2"
 CAPTURE = "capture.json"
 DM_NAME = "drs-pbs2"
 DATA_BYTES = 4 << 30
 LOG_BYTES = 16 << 30
 SECTOR = 512
 _FLUSH_FLAGS = ("--next-flush", "--next-fua")
+# The mark after mkfs. Points before it judge an empty filesystem.
+MKFS_MARK = "mkfs"
 
 
 def sh(*argv, check=True, capture=False):
@@ -72,6 +79,32 @@ def loop_attach(path):
     return sh("losetup", "--find", "--show", path, capture=True).strip()
 
 
+class LoopDevices:
+    """The loop devices one run attached, released on every exit.
+
+    A device is recorded the moment it is attached and forgotten only once
+    its detach succeeds, so a failure at any step, including the second of
+    two attaches or a detach itself, leaves the cleanup holding exactly
+    what is still attached.
+    """
+
+    def __init__(self):
+        self.held = []
+
+    def attach(self, path):
+        dev = loop_attach(path)
+        self.held.append(dev)
+        return dev
+
+    def detach_all(self, check=True):
+        """Detach in reverse order. Checked, a failed detach stops the run
+        with that device still held; unchecked (the cleanup after a
+        failure), each is tried once and forgotten."""
+        while self.held:
+            sh("losetup", "-d", self.held[-1], check=check)
+            self.held.pop()
+
+
 def parse_found(out):
     """replay-log's find answer, `entry@position`, as the entry index."""
     head = out.strip().split("@", 1)[0]
@@ -87,63 +120,30 @@ def find_entry(replay_log, log_dev, flag, start):
     return parse_found(proc.stdout) if proc.returncode == 0 else None
 
 
-class LogCursor:
-    """The latest flush or FUA already in the log, read while the device is attached.
-
-    The walk remembers where each flag left off, so a poll does not rescan
-    the image it has already passed.
-    """
-
-    def __init__(self, replay_log, log_dev):
-        self.replay_log = replay_log
-        self.log_dev = log_dev
-        self.starts = {flag: 0 for flag in _FLUSH_FLAGS}
-        self.latest = None
-
-    def num_entries(self):
-        text = sh(self.replay_log, "--log", self.log_dev, "--num-entries", capture=True).strip()
-        return int(text)
-
-    def advance(self):
-        total = self.num_entries()
-        for flag in _FLUSH_FLAGS:
-            at = self.starts[flag]
-            while at < total:
-                entry = find_entry(self.replay_log, self.log_dev, flag, at)
-                if entry is None or entry < at:
-                    break
-                if self.latest is None or entry > self.latest:
-                    self.latest = entry
-                at = entry + 1
-            self.starts[flag] = at
-        return self.latest
+def mark_name(seq):
+    """The mark written after the `seq`-th report."""
+    return f"ack-{seq}"
 
 
-def attribute_tip(acks, chain, height, latest, mkfs_entries):
-    """Record `(chain, height)` against `latest` when that flush is past mkfs
-    and newer than every ack already held.
+def reported_new(last, chain, tip):
+    """Whether `(chain, tip)` is a report the capture has not marked yet."""
+    return last != (chain, tip)
 
-    Returns whether an ack now covers this tip. An older flush is left
-    alone: raising its tip would fail a clean prefix of the previous tip,
-    and writing the ack after the flush would let that prefix pass. A flush
-    still inside the mkfs image is not an acknowledgement of a chain tip.
-    """
-    if latest is None or latest < mkfs_entries:
-        return False
-    newest = max(acks) if acks else None
-    if newest is not None and latest <= newest:
-        held = acks.get(latest)
-        return held is not None and held["chain"] == chain and held["height"] >= height
-    acks[latest] = {"entry": latest, "chain": chain, "height": height}
-    return True
+
+def find_mark(replay_log, log_path, name):
+    """The entry index of the mark `name` in a complete log, or None."""
+    proc = subprocess.run(
+        ["sudo", "-n", replay_log, "--log", log_path, "--find", "--end-mark", name],
+        check=False, capture_output=True, text=True)
+    return parse_found(proc.stdout) if proc.returncode == 0 else None
 
 
 def acked_at(acks, point):
-    """The last acknowledgement whose flush entry is strictly below `point`.
+    """The last acknowledgement whose mark entry is strictly below `point`.
 
-    A replay point is `flush_entry + 1` (the first entries through that
-    flush). Sorting is by entry, then height: mark names do not order
-    `ack-main-10` before `ack-main-9`.
+    A replay point is the count of entries replayed, so the point after a
+    mark's entry is the first to include it. Sorting is by entry, then
+    height.
     """
     last = None
     rows = acks.values() if isinstance(acks, dict) else acks
@@ -234,12 +234,13 @@ class Powerloss:
     def __init__(self, args):
         self.args = args
         self.session = R.Session(args)
-        self.acks = {}
+        self.acks = []
+        self.last_report = None
         self.mnt = os.path.join(self.session.work, "mnt")
 
-    def follow(self, chain, until, deadline_s, cursor, mkfs_entries):
-        """Poll the subject's tip until a post-mkfs flush is attributed a
-        tip at or above `until` on `chain`."""
+    def follow(self, chain, until, deadline_s):
+        """Poll the subject's tip, marking the log after each new report,
+        until a report on `chain` is at or above `until`."""
         session = self.session
         deadline = time.time() + deadline_s
         while time.time() < deadline:
@@ -256,17 +257,18 @@ class Powerloss:
                 continue
             on = session.chain_of(tip, header)
             # An unidentified tip is not the chain this follow is waiting
-            # for. Attributing it there would acknowledge a height no
-            # served chain has published.
+            # for. Marking it would acknowledge a height no served chain
+            # has published.
             if on is None:
                 time.sleep(0.02)
                 continue
-            latest = cursor.advance()
-            attribute_tip(self.acks, on, tip, latest, mkfs_entries)
-            reached = [ack for ack in self.acks.values()
-                       if ack["chain"] == chain and ack["height"] >= until]
-            if reached:
-                return max(ack["height"] for ack in reached)
+            if reported_new(self.last_report, on, tip):
+                name = mark_name(len(self.acks))
+                sh("dmsetup", "message", DM_NAME, "0", "mark", name)
+                self.acks.append({"mark": name, "chain": on, "height": tip})
+                self.last_report = (on, tip)
+            if on == chain and tip >= until:
+                return tip
             time.sleep(0.02)
         B._fail(f"the subject did not reach {until} on {chain} within {deadline_s}s")
 
@@ -280,49 +282,81 @@ class Powerloss:
         data, log = (os.path.join(session.work, name) for name in ("data.img", "log.img"))
         sparse_file(data, DATA_BYTES)
         sparse_file(log, LOG_BYTES)
-        data_dev, log_dev = loop_attach(data), loop_attach(log)
-        sectors = DATA_BYTES // SECTOR
-        sh("dmsetup", "create", DM_NAME, "--table",
-           f"0 {sectors} log-writes {data_dev} {log_dev}")
-        dm = f"/dev/mapper/{DM_NAME}"
-        sh("mkfs.ext4", "-q", "-F", dm)
-        cursor = LogCursor(args.replay_log, log_dev)
-        mkfs_entries = cursor.num_entries()
-        os.makedirs(self.mnt, exist_ok=True)
-        sh("mount", dm, self.mnt)
-        sh("chown", f"{os.getuid()}:{os.getgid()}", self.mnt)
-        subject = os.path.join(self.mnt, "subject")
-        os.makedirs(subject)
+        loops = LoopDevices()
+        held = {"subject": None, "mounted": False, "dm": False}
+        try:
+            data_dev, log_dev = loops.attach(data), loops.attach(log)
+            sectors = DATA_BYTES // SECTOR
+            sh("dmsetup", "create", DM_NAME, "--table",
+               f"0 {sectors} log-writes {data_dev} {log_dev}")
+            held["dm"] = True
+            dm = f"/dev/mapper/{DM_NAME}"
+            sh("mkfs.ext4", "-q", "-F", dm)
+            # Every entry before this mark is mkfs's.
+            sh("dmsetup", "message", DM_NAME, "0", "mark", MKFS_MARK)
+            os.makedirs(self.mnt, exist_ok=True)
+            sh("mount", dm, self.mnt)
+            held["mounted"] = True
+            sh("chown", f"{os.getuid()}:{os.getgid()}", self.mnt)
+            subject = os.path.join(self.mnt, "subject")
+            os.makedirs(subject)
 
-        seed = session.spawn("seed", seed_dir, [], session.sp2p, session.srpc)
-        with session.running(seed, session.srpc) as ready:
-            if not ready.ready:
-                B._fail("the main chain's seed never came up")
-            session.record_hashes("main", session.srpc, main_tip)
-            session.digest_chain(session.srpc, "main", main_tip)
-            proc = session.spawn("subject", subject,
-                                 ["--p2p-closed-peer", f"127.0.0.1:{session.sp2p}"],
-                                 session.bp2p, session.brpc)
-            self.follow("main", main_tip, args.startup_timeout, cursor, mkfs_entries)
-            proc.terminate()
-            proc.wait(args.shutdown_timeout)
-        fork = session.spawn("fork", fork_dir, [], session.fp2p, session.frpc)
-        with session.running(fork, session.frpc) as ready:
-            if not ready.ready:
-                B._fail("the fork's daemon never came up")
-            session.record_hashes("fork", session.frpc, fork_tip)
-            session.digest_chain(session.frpc, "fork", fork_tip)
-            proc = session.spawn("subject", subject,
-                                 ["--p2p-closed-peer", f"127.0.0.1:{session.fp2p}"],
-                                 session.bp2p, session.brpc)
-            self.follow("fork", fork_tip, args.startup_timeout, cursor, mkfs_entries)
-            proc.kill()
-            proc.wait()
-        sh("umount", self.mnt)
-        sh("dmsetup", "remove", DM_NAME)
-        sh("losetup", "-d", data_dev)
-        sh("losetup", "-d", log_dev)
+            seed = session.spawn("seed", seed_dir, [], session.sp2p, session.srpc)
+            with session.running(seed, session.srpc) as ready:
+                if not ready.ready:
+                    B._fail("the main chain's seed never came up")
+                session.record_hashes("main", session.srpc, main_tip)
+                session.digest_chain(session.srpc, "main", main_tip)
+                proc = held["subject"] = session.spawn(
+                    "subject", subject, ["--p2p-closed-peer", f"127.0.0.1:{session.sp2p}"],
+                    session.bp2p, session.brpc)
+                self.follow("main", main_tip, args.startup_timeout)
+                proc.terminate()
+                proc.wait(args.shutdown_timeout)
+            fork = session.spawn("fork", fork_dir, [], session.fp2p, session.frpc)
+            with session.running(fork, session.frpc) as ready:
+                if not ready.ready:
+                    B._fail("the fork's daemon never came up")
+                session.record_hashes("fork", session.frpc, fork_tip)
+                session.digest_chain(session.frpc, "fork", fork_tip)
+                proc = held["subject"] = session.spawn(
+                    "subject", subject, ["--p2p-closed-peer", f"127.0.0.1:{session.fp2p}"],
+                    session.bp2p, session.brpc)
+                self.follow("fork", fork_tip, args.startup_timeout)
+                proc.kill()
+                proc.wait()
+            # A complete capture is released with every step checked: the
+            # target's removal writes the log's last super block.
+            sh("umount", self.mnt)
+            held["mounted"] = False
+            sh("dmsetup", "remove", DM_NAME)
+            held["dm"] = False
+            loops.detach_all()
+        finally:
+            # A failed capture releases whatever it still holds, so the next
+            # run does not meet a busy device name. Its own error is the one
+            # reported; these steps do not replace it.
+            subject_proc = held["subject"]
+            if subject_proc is not None and subject_proc.poll() is None:
+                subject_proc.kill()
+                subject_proc.wait()
+            if held["mounted"]:
+                sh("umount", self.mnt, check=False)
+            if held["dm"]:
+                sh("dmsetup", "remove", DM_NAME, check=False)
+            loops.detach_all(check=False)
         os.remove(data)
+        # The log is complete once the target is removed: every mark is in
+        # it, and each must be found (rule 47: an acknowledgement the log
+        # does not hold is not one this capture can judge).
+        mkfs_mark = find_mark(args.replay_log, log, MKFS_MARK)
+        if mkfs_mark is None:
+            B._fail(f"the log at {log} holds no `{MKFS_MARK}` mark")
+        for ack in self.acks:
+            ack["entry"] = find_mark(args.replay_log, log, ack["mark"])
+            if ack["entry"] is None:
+                B._fail(f"the log at {log} holds no `{ack['mark']}` mark")
+        mkfs_entries = mkfs_mark + 1
         record = {
             "schema_version": SCHEMA,
             "git_rev": args.git_rev,
@@ -331,7 +365,7 @@ class Powerloss:
             "hashes": session.hashes,
             "digests": {chain: {str(height): digest for height, digest in table.items()}
                         for chain, table in session.digests.items()},
-            "acks": [self.acks[entry] for entry in sorted(self.acks)],
+            "acks": sorted(self.acks, key=lambda ack: ack["entry"]),
             "mkfs_entries": mkfs_entries,
             "data_bytes": DATA_BYTES,
         }
@@ -373,6 +407,9 @@ class Powerloss:
         session = self.session
         with open(os.path.join(session.work, CAPTURE), encoding="utf-8") as fh:
             cap = json.load(fh)
+        if cap.get("schema_version") != SCHEMA:
+            B._fail(f"{CAPTURE} is {cap.get('schema_version')!r}, not {SCHEMA!r}: its "
+                    "acknowledgements were recorded under another oracle")
         session.hashes = {key: {int(height): value for height, value in table.items()}
                           for key, table in cap["hashes"].items()}
         session.prefix = cap["chain"]["prefix"]
@@ -380,12 +417,13 @@ class Powerloss:
                            for chain, table in cap["digests"].items()}
         acks = cap["acks"]
         mkfs_entries = cap["mkfs_entries"]
-        log_dev = loop_attach(os.path.join(session.work, "log.img"))
         target = os.path.join(session.work, "replay.img")
         sparse_file(target, cap["data_bytes"])
-        target_dev = loop_attach(target)
         os.makedirs(self.mnt, exist_ok=True)
+        loops = LoopDevices()
         try:
+            log_dev = loops.attach(os.path.join(session.work, "log.img"))
+            target_dev = loops.attach(target)
             total = int(sh(args.replay_log, "--log", log_dev, "--num-entries",
                            capture=True).strip())
             bounds = boundaries_of(args.replay_log, log_dev, total)
@@ -415,8 +453,7 @@ class Powerloss:
                 print(f"entry {point_at}/{total} ({point['kind']}): acked {point['acked']} "
                       f"reopened {tip} -> {point['verdict']}", flush=True)
         finally:
-            sh("losetup", "-d", target_dev, check=False)
-            sh("losetup", "-d", log_dev, check=False)
+            loops.detach_all(check=False)
         artifact = dict(
             {key: cap[key] for key in ("schema_version", "git_rev", "subject_binary_sha256",
                                        "chain")},
@@ -451,26 +488,65 @@ def _selftest():
     check.names = []
     check("a find answer is its entry", parse_found("4127@88412\n"), 4127)
     check("an empty find answer is none", parse_found(""), None)
-    acks = {}
-    check("no flush yet records nothing", attribute_tip(acks, "main", 1, None, 10), False)
-    check("a mkfs flush is not an acknowledgement",
-          attribute_tip(acks, "main", 1, 9, 10), False)
-    check("those refusals leave the table empty", acks, {})
-    check("the first post-mkfs flush takes the tip",
-          attribute_tip(acks, "main", 1, 10, 10), True)
-    check("the same flush does not take a later tip",
-          attribute_tip(acks, "main", 4, 10, 10), False)
-    check("the tip on that flush stayed", acks[10]["height"], 1)
-    check("a newer flush takes the tip seen now",
-          attribute_tip(acks, "main", 4, 15, 10), True)
-    check("the ack stores the flush's own index", acks[15]["entry"], 15)
+    check("the first report is new", reported_new(None, "main", 0), True)
+    check("the same tip again is not a new report", reported_new(("main", 3), "main", 3), False)
+    check("a higher tip is a new report", reported_new(("main", 3), "main", 4), True)
+    check("the same height on the fork is a new report",
+          reported_new(("main", 30), "fork", 30), True)
+    check("marks are numbered by report", mark_name(7), "ack-7")
     rows = [{"entry": 90, "chain": "main", "height": 2},
             {"entry": 40, "chain": "main", "height": 1},
             {"entry": 200, "chain": "fork", "height": 3}]
-    check("the flush's own entry is not yet the replay point", acked_at(rows, 40), None)
-    check("the point after that flush sees it", acked_at(rows, 41), ("main", 1))
+    check("a point before the mark judges no report", acked_at(rows, 40), None)
+    check("the point after the mark's entry holds its report", acked_at(rows, 41), ("main", 1))
     check("a later entry wins numerically", acked_at(rows, 100), ("main", 2))
     check("a fork acknowledgement", acked_at(rows, 500), ("fork", 3))
+    # LoopDevices over a fake losetup: what is held after each failure.
+    module = sys.modules[__name__]
+    real_attach, real_sh = module.loop_attach, module.sh
+    attached, detached = [], []
+
+    class Refused(Exception):
+        pass
+
+    def fake_attach(path):
+        if path == "no-free-loop":
+            raise Refused(path)
+        attached.append(path)
+        return f"/dev/loop-{path}"
+
+    def fake_sh(*argv, check=True, capture=False):
+        dev = argv[-1]
+        if dev == "/dev/loop-stuck" and check:
+            raise Refused(dev)
+        detached.append(dev)
+        return 0
+
+    module.loop_attach, module.sh = fake_attach, fake_sh
+    try:
+        loops = LoopDevices()
+        try:
+            loops.attach("data")
+            loops.attach("no-free-loop")
+        except Refused:
+            pass
+        check("a failed second attach leaves the first held", loops.held, ["/dev/loop-data"])
+        loops.detach_all(check=False)
+        check("the cleanup releases it", (loops.held, detached), ([], ["/dev/loop-data"]))
+        detached.clear()
+        loops = LoopDevices()
+        loops.attach("stuck")
+        loops.attach("log")
+        try:
+            loops.detach_all()
+        except Refused:
+            pass
+        check("a failed checked detach keeps that device held",
+              (loops.held, detached), (["/dev/loop-stuck"], ["/dev/loop-log"]))
+        loops.detach_all(check=False)
+        check("the unchecked cleanup tries it once and forgets it", loops.held, [])
+    finally:
+        module.loop_attach, module.sh = real_attach, real_sh
     pts, sampled = checkpoints({100, 50}, 200, 1, None)
     check("boundaries, midpoints and the end", pts, [25, 50, 75, 100, 150, 200])
     check("the full list is not a subsample", sampled, False)

@@ -69,7 +69,7 @@ struct ResidentServe {
 }
 
 async fn open_persona(seed: u8) -> (TempDir, Engine<SoloSigner>, PersonaIdentity) {
-    let (wallet, engine) = staker_engine(SLOT, seed);
+    let (wallet, engine) = staker_engine(SLOT, seed).await;
     activate_persona(&engine, SLOT).await;
     let stake = engine.stake_handle().expect("staker has a StakeEngine");
     let identity = stake

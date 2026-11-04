@@ -59,7 +59,7 @@ use crate::archival_driver::{first_spending_height, ENDPOINT, FEE};
 use crate::bundle_producer::{run, ProducerParts, ProducerProgress, ProducerSeat};
 use crate::connector::{TipChanged, WatchTip};
 use crate::scenario::{FreeHash, Mined, Scenario};
-use crate::scenario_archival::{shard_set, Persona};
+use crate::scenario_archival::{complete_tree, shard_set, Persona};
 use crate::scenario_shard::{close_shards, first_admissible_compact_join, mine_to};
 use crate::schedule::ChainRules;
 use crate::shard_facts::{StoreHolderSource, StoreShardFacts};
@@ -514,6 +514,119 @@ async fn a_produced_bundle_is_admitted_and_connects_through_the_staged_door() {
     assert!(
         queued(&scenario).iter().all(|e| e.h != h),
         "the entry for {h} left with its window"
+    );
+    producing.stop().await;
+    scenario.close().await;
+}
+
+/// The support stream through the same door (`SO-D12` 4b §5.1 item 3): a
+/// complete tree is seated by the connect path's schedule, this daemon's
+/// producer reads it and files the support bitmap, the queue admits the
+/// bundle over the store's view, and the next block takes it.
+///
+/// One chain, in the live lane, because the archive needs a closed and
+/// final shard for the tree to be a member at all (a complete tree of an
+/// empty archive is seated nowhere):
+///
+/// 1. Shard 0 fills and closes, and persona T joins as a complete tree. The
+///    next epoch's snapshot holds T as its one support member over an
+///    archive of one shard, and no drawable pair.
+/// 2. T serves its prefix (shard 0's real bytes) behind the loopback shim,
+///    signing with the staged `ResidentReceiptKey`.
+/// 3. Through the epoch's usable span and the last seat's window, every
+///    admitted bundle is support only: each observation is T at shard 0,
+///    passed, at a height whose row seats T. T is issued exactly its `c`
+///    seats, every one filed and admitted.
+///
+/// Red edit: the store view's `support_roster` answers `None` (the
+/// producer's support targets are unanswered, no support bitmap is filed,
+/// and no seat is observed).
+///
+/// Live lane: `cargo test -p shekyl-chain-ingest -- --ignored
+/// a_produced_support_bundle_is_admitted`.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+#[ignore = "fills a shard with real proofs and mines two long epochs; minutes. Live lane: cargo test -p shekyl-chain-ingest -- --ignored a_produced_support_bundle_is_admitted"]
+async fn a_produced_support_bundle_is_admitted_and_connects_through_the_staged_door() {
+    let rules = rules();
+    let schedule = rules.in_force(BlockHeight::ZERO).settlement_schedule();
+    let mut scenario = Scenario::open_under("bundle-producer-support", FreeHash, rules);
+    let mut chain = scenario
+        .mine(ChainCount::from_next_height(first_spending_height()).to_raw())
+        .await;
+
+    // 1. Shard 0 closes and is final; T joins as a complete tree.
+    let filled = close_shards(&mut scenario, &mut chain, FILL_FROM_COINBASE, 1).await;
+    let close = filled.closed[0];
+    let shard = close.shard;
+    mine_to(
+        &mut scenario,
+        &mut chain,
+        first_admissible_compact_join(&rules, close),
+    )
+    .await;
+    let tree = Persona::at(SLOT);
+    let joining = Spender::over(&chain).spend_coinbase_posting(
+        scenario.wallet(),
+        BlockHeight::ZERO,
+        tip_of(&chain).saturating_add(BlockCount::ONE),
+        FEE,
+        Some(&tree.join(complete_tree(), ENDPOINT)),
+    );
+    let join = scenario
+        .mine_listing(vec![joining])
+        .await
+        .unwrap_or_else(|outcome| panic!("the join connects: {outcome}"));
+    let epoch = SettlementEpoch::from_raw(schedule.epoch_at(join.height).to_raw() + 1);
+    chain.push(join);
+
+    // 2. The ring, T serving its prefix, the producer.
+    let ring = Arc::new(WitnessRing::new());
+    scenario.draw_from(Arc::clone(&ring));
+    let p_tip = Arc::new(DaemonTipCache::new(Duration::from_secs(24 * 60 * 60)));
+    p_tip.stamp_synced(tip_of(&chain));
+    let body = shard_body(&scenario, &chain, shard);
+    let (_serving, client) = serve(shard, body, &p_tip, true).await;
+    let mut producing = start(&scenario, &ring, client).await;
+
+    // 3. Through the usable span and the last seat's window.
+    let open = schedule.open_height(epoch.to_raw());
+    let span = EPOCH_BLOCKS - W2;
+    let through = BlockHeight::from_raw(open + span + W2 + 1);
+    let mut observed = BTreeSet::new();
+    while tip_of(&chain) < through {
+        let admitted = step(&mut scenario, &mut chain, &mut producing, &p_tip, true).await;
+        for bundle in admitted {
+            assert!(bundle.draws.is_empty(), "no drawable pair: no economy draw");
+            for seen in &bundle.support {
+                assert_eq!(seen.persona, tree.id(), "the seat is T's");
+                assert_eq!(seen.shard, shard, "an archive of one shard");
+                assert!(
+                    seen.passed,
+                    "T served its prefix: the support draw passed; reads that did not \
+                     pass: {:#?}",
+                    producing.ended.lock().expect("the outcome list")
+                );
+            }
+            if !bundle.support.is_empty() && schedule.epoch_at(bundle.kept.h) == epoch {
+                observed.insert(bundle.kept.h);
+            }
+        }
+    }
+    let store = scenario.store();
+    let snap = store.begin_read().expect("snapshot");
+    for h in &observed {
+        let row = snap
+            .support_block_seats(*h, shekyl_chain_rules::BlockDrawsFloor::NONE)
+            .expect("the row reads")
+            .expect("an admitted block's row");
+        assert_eq!(row.as_slice(), [tree.id()], "{h}'s row seats T");
+    }
+    drop(snap);
+    drop(store);
+    assert_eq!(
+        observed.len(),
+        usize::try_from(shekyl_archival_retention::SUPPORT_DRAWS_PER_EPOCH).expect("small"),
+        "T is issued its c seats in epoch {epoch}, each filed and admitted: {observed:?}"
     );
     producing.stop().await;
     scenario.close().await;

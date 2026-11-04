@@ -566,6 +566,10 @@ pub(crate) struct Shared<S: Substrate> {
     followed: tokio::sync::watch::Sender<u64>,
     /// The live phases' measurement sink ([`Follow::metrics`]).
     metrics: Option<Arc<crate::metrics::Metrics>>,
+    /// The postings the follower has written and not yet dropped. The
+    /// follower and the found-block sink share this map: a generation's
+    /// job and the bodies it listed are one record.
+    kept: crate::follower::Postings,
     /// The pool, when one is wired.
     pool: Option<PoolWiring>,
     /// Cleared when the pool file faults. Block ingest does not stop.
@@ -605,6 +609,12 @@ where
     /// The tip attendant acted on publication `seq`.
     pub(crate) fn followed(&self, seq: u64) {
         self.followed.send_replace(seq);
+    }
+
+    /// The publication record the follower writes and the found-block sink
+    /// reads.
+    pub(crate) fn postings(&self) -> crate::follower::Postings {
+        Arc::clone(&self.kept)
     }
 
     /// The seeds the slots hold now, including while the service is stopping.
@@ -1258,6 +1268,7 @@ where
             seeds: tokio::sync::watch::Sender::new(None),
             followed: tokio::sync::watch::Sender::new(0),
             metrics: follow.metrics,
+            kept: crate::follower::Postings::default(),
             pool: follow.pool,
             pool_live: Arc::new(AtomicBool::new(true)),
             pending: Mutex::new(Vec::new()),

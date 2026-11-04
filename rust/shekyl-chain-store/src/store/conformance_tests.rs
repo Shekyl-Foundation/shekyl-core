@@ -197,7 +197,7 @@ where
         Err(never) => match never {},
     };
     Outcome::of(
-        validate(formed, view, &RuleSet::GENESIS, &Trust::UNANCHORED)
+        validate(formed, view, &RuleSet::GENESIS, &Trust::UNPINNED)
             .map(|verdict| verdict.map(|valid| valid.coverage().iter().collect::<Vec<_>>())),
     )
 }

@@ -9,8 +9,10 @@ until the store flip (`DRS-X`), and the RPC says so with its own code.
 Landing order §4: steps 1, 2a, 2b, 3 and 4 **landed** (2026-10-08/09).
 2c's serve read landed 2026-10-10: `StoreShardProvider` over a
 `BodyStoreReader`, the writer owned by `StakeEngine` (`WSS-Q1`(a)).
-Fill (`WSS-Q4`) remains open. Erase (`WSS-Q8`) runs when the pin-release gate clears a shard. The reader still
-decrypts, so `WSS-Q13` is not met. The round stays OPEN on `SV-D4`…`SV-D8`'s
+Fill (`WSS-Q4`) remains open. Erase (`WSS-Q8`) runs when the pin-release gate clears a shard. The reader
+decrypted, so `WSS-Q13` was not met, until 2026-11-02 (#1261): the provider
+now reads through a body-store actor that owns the store and its key, one
+chunk copy per message (`CURVE_TREE_CLIENT.md` §11.1). The round stays OPEN on `SV-D4`…`SV-D8`'s
 review, `SV-D9`'s falsifier, and `SV-D10`. Visualization continuation
 (entropy audit, CVD gate, candidate.v2 criteria) is in
 [`../V3_SHARD_VISUALIZATION.md`](../V3_SHARD_VISUALIZATION.md) *SV-D
@@ -344,8 +346,8 @@ branch.
 | 1 | `SV-D1`'s fold in `shekyl-types`, its KAT, the domain-registry entry; the Python mirror and re-pinned fixtures | this round | — |
 | 2a | fetch Sub-PR 2 client: tx-range frame, streaming per-tx `ContentVerify`, range-derived response ceiling, `ServedFrameHeader` / `recompute_segment_r_k` out of the client path | `SF-` (FOLLOWUPS row) | — |
 | 2b | the scheduler: `shekyl-archival-fetch-sched` as a real `fetch()` scheduler (holder draw `SF-D10`, `MAX_INFLIGHT = 8`, `SF-D6` outcomes), the view caller folding `SV-D1`/`SV-D4`, the `SV-D5` cache | this round | 2a |
-| 2c | the serve read: `StoreShardProvider` over a `BodyStoreReader` streams the tx-range frame. The writer is `StakeEngine`'s (`WSS-Q1`(a)). Fill (`WSS-Q4`) is not written, so an empty store answers 404 until fill. Erase (`WSS-Q8`) runs when the pin-release gate clears a shard. The reader still decrypts (`WSS-Q13` is not met) | the wallet lane (`WSS-`) | fill `WSS-Q4`, erase `WSS-Q8` |
-| 3 | `request_archival_shard` natively in `shekyl-daemon-rpc`; C++ deleted (`SV-D3`); `close_height` on the wire — **landed 2026-10-08** over the `SkeletonAbsent` facts; the `ViewDesk` adapter in the daemon's composition root (`shekyl-daemon-image`, now `rust/shekyld`) is `SV-D9`'s | this round | 2b |
+| 2c | the serve read: `StoreShardProvider` over a `BodyStoreReader` streams the tx-range frame. The writer is `StakeEngine`'s (`WSS-Q1`(a)). Fill (`WSS-Q4`) is not written, so an empty store answers 404 until fill. Erase (`WSS-Q8`) runs when the pin-release gate clears a shard. The reader decrypted (`WSS-Q13` unmet) until 2026-11-02, when the reads moved to the store's owning actor (#1261) | the wallet lane (`WSS-`) | fill `WSS-Q4`, erase `WSS-Q8` |
+| 3 | `request_archival_shard` natively in `shekyl-daemon-rpc`; C++ deleted (`SV-D3`); `close_height` on the wire — **landed 2026-10-08** over the `SkeletonAbsent` facts; the `ViewDesk` adapter in the daemon's composition root (`rust/shekyld`) is `SV-D9`'s | this round | 2b |
 | 4 | wallet RPC method (contract registry), CLI and GUI local render, shekyl-web server PNG route — **landed 2026-10-09**: `get_shard_view` SPECIFIED (`wallet_rpc.yaml` 0.11.0; codes `-29534` `SHARD_STILL_OPEN`, `-29535` `SHARD_UNAVAILABLE`, `-29536` `SHARD_VIEW_NOT_OFFERED` with `data.cause` `restricted` \| `skeleton_absent`), the daemon call and refusal mapping once in `shekyl-wallet-contract::shard_view::fetch_shard_view`, served by `shekyl-wallet-rpc`; CLI `shard fetch <id> [--png <path>] [--size <n>]`; GUI `get_shard_view` contract adapter drawing locally; `shekyl-shard-render` (`shekyl-shard-visual`, feature `cli`) for shekyl-web, whose `/api/shards/{id}/view[/png]` routes call the site daemon's unrestricted listener; the `ArchivalShardSource` stub deleted | this round | 3 |
 
 **What a viewer shows today.** Every shipped daemon answers `SV-D9`'s
@@ -360,7 +362,8 @@ be retrieved"*, a visible state, never an empty picture (rule 82). That
 404 is an empty store, not evidence against the holder (`SF-D8`
 amendment, 2026-10-08). Erase at the second absent epoch (`WSS-Q8`)
 asks the stake actor to drop that shard's body row when the pin-release
-gate clears it. The reader still decrypts, so `WSS-Q13` is not met.
+gate clears it. The reader decrypted, so `WSS-Q13` was not met, until
+2026-11-02 (#1261, `CURVE_TREE_CLIENT.md` §11.1).
 
 ---
 

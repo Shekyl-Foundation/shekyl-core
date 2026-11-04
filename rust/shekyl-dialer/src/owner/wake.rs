@@ -17,7 +17,6 @@ use shekyl_peerlist::{
 use super::address::LiveSessions;
 use super::recovery;
 use super::Shared;
-use crate::bans::BanSnapshot;
 use crate::candidate::CandidateFilter;
 use crate::fill::{plan, Census, DialAim, DrawList};
 
@@ -106,10 +105,8 @@ fn idle_if_undrawn(census: &Census, retry_waiting: bool, bound: usize) -> Option
 
 /// Settle once, count once, and either recover, idle, or begin one attempt.
 /// [`super::Dialer::choose`] has already returned when the connector cannot dial.
-/// `bans` was copied out of the hub before the lists lock was taken.
 pub(super) fn plan_wake<R: RelayRng + ?Sized>(
     shared: &mut Shared,
-    bans: &mut BanSnapshot,
     connector: ConnectorId,
     live: &LiveSessions,
     now: Tick,
@@ -145,24 +142,30 @@ pub(super) fn plan_wake<R: RelayRng + ?Sized>(
     let exclusive = shared.exclusive.clone();
     let (wake, undrawn, kept) = {
         let Shared {
-            lists, attempts, ..
+            lists,
+            attempts,
+            pending,
+            ..
         } = &mut *shared;
         let kept = attempts[index].kept_count();
         let in_flight = attempts[index].in_flight();
-        let mut settled = lists.settle(connector, now, bans, &mut attempts[index], rng);
-        let mut filter = CandidateFilter {
+        let mut settled = lists.settle(connector, now, &mut attempts[index], rng);
+        let filter = CandidateFilter {
             own: &own,
             sessions: &live.addresses,
             outbound_hosts: &live.outbound_hosts,
             attempts: &attempts[index],
-            bans: &mut *bans,
-            now,
         };
+        // An address whose verdict waits is not drawn again. A gray one's
+        // seat is still outstanding; a white one has no such state.
         let mut eligible = |address: &NetworkAddress| {
             exclusive
                 .as_ref()
                 .is_none_or(|population| population.contains(address))
                 && filter.admits(address)
+                && !pending
+                    .iter()
+                    .any(|verdict| verdict.outcome.address() == address)
         };
         let seats = settled.census(&mut eligible);
         let census = Census {

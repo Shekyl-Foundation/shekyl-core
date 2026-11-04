@@ -104,7 +104,7 @@
 //! (commit 7) is a pipeline barrier for the same reason.
 
 use shekyl_chain_rules::{
-    ArchivalDelta, ChainValid, ChainView, RecordWriteKind, ReleaseAnchors, Trust,
+    ArchivalDelta, ChainValid, ChainView, GenesisPin, RecordWriteKind, Trust,
 };
 use shekyl_types::archival::{AttestationWitness, IndexedDraw, IssuedDigest};
 use shekyl_types::{BlockHeight, PCanonicalId, SettlementEpoch, ShardId};
@@ -454,13 +454,13 @@ impl<'id> WriteBatch<'_, 'id> {
         Ok(())
     }
 
-    /// 9e. `archival_support_block[h] = count` at every connecting height,
-    /// insert-once: a block records its support count once, and a row
-    /// already there is SI-40 before any journal entry. The count is the
-    /// transition's. While the support schedule is not on the transition
-    /// the count is [`shekyl_types::archival::SupportCount::NONE`]: the
-    /// block issued none. A missing row is the hole, and this zero is not
-    /// that hole. No archival family governs it, for
+    /// 9e. `archival_support_block[h] = seats` at every connecting height,
+    /// insert-once: a block records its support seats once, and a row
+    /// already there is SI-40 before any journal entry. The seats are the
+    /// transition's: the epoch's support members its schedule puts on this
+    /// height, in persona order (`SO-D12` S1). A block that seated nobody
+    /// writes [`shekyl_types::archival::SupportSeats::EMPTY`]. A missing row
+    /// is the hole, and that empty row is not the hole. No archival family governs it, for
     /// [`Self::write_block_draws`]'s reason. `pop` removes it through the
     /// journal, and the boundary retires it on the draw rows' floor.
     fn write_support_block(
@@ -474,7 +474,7 @@ impl<'id> WriteBatch<'_, 'id> {
         )?
         .insert(
             connecting.to_raw(),
-            delta.support_count().encoded().as_encoded(),
+            delta.support_seats().encoded().as_encoded(),
         )?;
         Ok(())
     }
@@ -682,14 +682,12 @@ impl ChainStore {
     /// tip)] = Present`, a bit no block earned, attributed to the tip's
     /// height — the C++'s `regtest_inject_archival_serve_credit`
     /// (`blockchain.cpp:4708`), the Gate-6 stand-in that lets a regtest
-    /// reach a closed epoch with a credit in it. Refused off Fakechain as
-    /// the C++ refuses it: `trust` must be [`Trust::UNANCHORED`] — the one
-    /// posture no release vouches for, which is what a Fakechain node
-    /// always is and a public-network node never is
-    /// ([`ReleaseAnchors`] has no constructor from arbitrary entries, so
-    /// the empty table cannot be minted for a public network). The store
-    /// holds no nettype (rule 71); it reads the posture the caller runs
-    /// under, and the ingest maps `ChainRules::Regtest` to it.
+    /// reach a closed epoch with a credit in it. Refused unless `trust` is
+    /// [`Trust::UNPINNED`], which is what a Fakechain run is and a public
+    /// network's `trust()` never is ([`GenesisPin`] has no constructor a
+    /// public network can use to mint an empty pin). The store holds no
+    /// nettype (rule 71); it reads the pin the caller runs under, and the
+    /// ingest maps `ChainRules::Regtest` to `Trust::UNPINNED`.
     ///
     /// Its own transaction, **not journaled** (module doc): a pop below the
     /// returned height leaves the bit, as the C++'s does. Returns the
@@ -697,8 +695,8 @@ impl ChainStore {
     ///
     /// # Errors
     ///
-    /// [`StoreCannot::InjectionOffFakechain`] if `trust` carries any
-    /// anchor; [`StoreCannot::ChainEmpty`] with no block recorded (no tip
+    /// [`StoreCannot::InjectionOffFakechain`] if `trust` pins a genesis;
+    /// [`StoreCannot::ChainEmpty`] with no block recorded (no tip
     /// to attribute the bit to); [`StoreCannot::InjectionForUnbondedPersona`]
     /// if `persona` has no bond record — every serve-credit read arms
     /// SI-15, so a bit for a stranger would be a file the reads refuse
@@ -713,7 +711,7 @@ impl ChainStore {
         shard: ShardId,
         epoch: SettlementEpoch,
     ) -> Result<BlockHeight, StoreError> {
-        if *trust.anchors() != ReleaseAnchors::EMPTY {
+        if *trust.genesis_pin() != GenesisPin::NONE {
             return Err(StoreCannot::InjectionOffFakechain.into());
         }
         self.write(|batch| {
@@ -764,8 +762,8 @@ impl ChainStore {
     ///
     /// # Errors
     ///
-    /// [`StoreCannot::InjectionOffFakechain`] if `trust` carries any
-    /// anchor; [`StoreCannot::InjectionForUnbondedPersona`] if a draw names
+    /// [`StoreCannot::InjectionOffFakechain`] if `trust` pins a genesis;
+    /// [`StoreCannot::InjectionForUnbondedPersona`] if a draw names
     /// a persona with no bond record; [`StoreCannot::DrawAlreadyIssued`]
     /// if the index holds one of the draws; the admission and engine
     /// errors of [`write`](Self::write).
@@ -776,7 +774,7 @@ impl ChainStore {
         draws: &[IndexedDraw],
         digest: IssuedDigest,
     ) -> Result<(), StoreError> {
-        if *trust.anchors() != ReleaseAnchors::EMPTY {
+        if *trust.genesis_pin() != GenesisPin::NONE {
             return Err(StoreCannot::InjectionOffFakechain.into());
         }
         self.write(|batch| {

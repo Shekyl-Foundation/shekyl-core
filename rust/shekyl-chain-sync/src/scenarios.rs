@@ -117,7 +117,7 @@ fn a_spend_chain_skeleton_is_bound_and_wanted_in_full_from_another_session() {
     let schedule =
         FakechainSchedule::new(epoch, BlockCount::from_raw(720)).expect("the corpus cap");
     let rules = RuleSet::fakechain(NonZeroU128::new(1), schedule);
-    let mut sync = Sync::new(Trust::UNANCHORED, move |_| rules);
+    let mut sync = Sync::new(Trust::UNPINNED, move |_| rules);
     let genesis = Prefix(&records[..1]);
     let tip = genesis.tip().expect("genesis").expect("a tip");
     drive(&mut sync, &genesis, Event::Tip { tip });
@@ -305,7 +305,7 @@ fn an_unavailable_body_is_asked_of_the_other_session_first() {
 fn parted(defer: bool) {
     let main = chain_of(8);
     let mut block = candidate_on(&main, Vec::new()).block;
-    let mut sync = Sync::new(Trust::UNANCHORED, target_one);
+    let mut sync = Sync::new(Trust::UNPINNED, target_one);
     main.with_view(|view| {
         let tip = view.tip().expect("main answers").expect("a tip");
         drive(&mut sync, &view, Event::Tip { tip });
@@ -413,7 +413,7 @@ fn parted(defer: bool) {
 fn a_late_body_after_the_selected_chain_changes_is_not_a_fault() {
     let main = chain_of(8);
     let mut block = candidate_on(&main, Vec::new()).block;
-    let mut sync = Sync::new(Trust::UNANCHORED, target_one);
+    let mut sync = Sync::new(Trust::UNPINNED, target_one);
     main.with_view(|view| {
         let tip = view.tip().expect("main answers").expect("a tip");
         drive(&mut sync, &view, Event::Tip { tip });
@@ -658,7 +658,7 @@ fn cancelled_and_stopped_ask_for_the_block_again() {
 fn a_body_for_a_header_no_longer_in_the_tree_is_not_a_fault() {
     let main = chain_of(8);
     let mut block = candidate_on(&main, Vec::new()).block;
-    let mut sync = Sync::new(Trust::UNANCHORED, target_one);
+    let mut sync = Sync::new(Trust::UNPINNED, target_one);
     main.with_view(|view| {
         let tip = view.tip().expect("main answers").expect("a tip");
         drive(&mut sync, &view, Event::Tip { tip });
@@ -746,7 +746,7 @@ fn the_slot_holder_is_hashed_on_each_response() {
     let rules = fixed(1, 2);
     let main = chain_of(40);
     let mut block = candidate_on(&main, Vec::new()).block;
-    let mut sync = Sync::new(Trust::UNANCHORED, move |_| rules);
+    let mut sync = Sync::new(Trust::UNPINNED, move |_| rules);
     main.with_view(|view| {
         let view = UnitWork(view);
         let tip = view.tip().expect("main answers").expect("a tip");
@@ -863,7 +863,7 @@ where
 {
     let main = chain_of(8);
     let mut block = candidate_on(&main, Vec::new()).block;
-    let mut sync = Sync::new(Trust::UNANCHORED, target_one as fn(BlockHeight) -> RuleSet);
+    let mut sync = Sync::new(Trust::UNPINNED, target_one as fn(BlockHeight) -> RuleSet);
     main.with_view(|view| {
         let tip = view.tip().expect("main answers").expect("a tip");
         drive(&mut sync, &view, Event::Tip { tip });

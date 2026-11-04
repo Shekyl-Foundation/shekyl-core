@@ -23,17 +23,16 @@ use shekyl_capped_stream::Session;
 
 /// Drive `session` until the reader stops or the handler refuses a frame.
 ///
-/// The cause is the one the connector stored on the session.
-/// [`crate::CloseKind::PeerClosed`] is that cause only when the reader saw
-/// end-of-file. A session closed with no stored cause is
-/// [`crate::CloseKind::LocalClose`].
+/// The end is the one the connector stamped and stored on the session,
+/// handed to the hub unchanged. A session closed with nothing stored is
+/// this node's own close.
 pub fn drive_inbound(hub: &Hub, id: shekyl_transport_layer::SocketId, mut session: Session) {
     while let Some(frame) = session.recv_blocking() {
         if !hub.deliver(id, frame) {
             return;
         }
     }
-    hub.finish(id, session.close_cause());
+    hub.finish(id, session.close_end());
 }
 
 /// [`drive_inbound`] as a task. Holds no thread between frames or while the
@@ -59,5 +58,5 @@ pub async fn drive_inbound_async(
             return;
         }
     }
-    hub.finish(id, session.close_cause());
+    hub.finish(id, session.close_end());
 }

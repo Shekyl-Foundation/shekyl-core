@@ -93,9 +93,11 @@ impl RuleSetId {
 /// `mined_money_unlock_window` (CEN-F6) — landed with slice 4
 /// (`CHAIN_RULES_SLICE_4.md` Q5): the C++ `#define`
 /// `CRYPTONOTE_MINED_MONEY_UNLOCK_WINDOW`, stated here because F6 reads it.
-/// The fifth — `reorg_cap` (CEN-E2's `D_max`, `PDM-Q11`) — is the deepest
-/// reorganisation a node following this rule set is built to accept:
-/// consensus data, so it lives here and not in any store's configuration
+/// The fifth — `reorg_cap` (`D_max`, `PDM-Q11`) — is the deepest
+/// reorganisation a node following this rule set is built to follow.
+/// It is the switch's local limit and the floor under the store's undo
+/// retention, not a consensus refusal (CEN-E2 rejected, S1 2026-11-03).
+/// Consensus data, so it lives here and not in any store's configuration
 /// (PR #861 review: the store's undo retention is *constrained by* the
 /// in-force set's cap, never the other way round). `GENESIS` carries
 /// [`D_MAX`]; a Fakechain set names its own through [`RuleSet::fakechain`],
@@ -519,10 +521,12 @@ impl RuleSet {
     }
 
     /// The deepest reorganisation a node under this rule set is built to
-    /// accept (`D_max`, CEN-E2 / `PDM-Q11`). The store's undo retention is
-    /// at least this (S-CHAIN-W SCW-7), so a legal reorg never meets
-    /// `PopBelowFloor`; CEN-E2's `is_alternative_block_allowed` reads this,
-    /// never `D_MAX` directly, so a Fakechain set and its store agree.
+    /// follow (`D_max`, `PDM-Q11`). The switch refuses a deeper one locally
+    /// (`PopBeyondReorgCap`); the block is not invalid for it. The store's
+    /// undo retention is at least this (S-CHAIN-W SCW-7), so a reorg the
+    /// node does follow never meets `PopBelowFloor`. Readers take this,
+    /// never [`D_MAX`](crate::D_MAX) directly, so a Fakechain set and its
+    /// store agree.
     #[must_use]
     pub const fn reorg_cap(&self) -> BlockCount {
         self.reorg_cap
@@ -562,7 +566,7 @@ impl RuleSet {
     /// The consensus rows this rule set holds a block to **and the
     /// per-block stages can evaluate**, in census order. Excluded: rows
     /// this crate enforces at another site ([`RowStatus::EnforcedAt`] —
-    /// CEN-E5 at writer open, the alt tier's K1b, K4, D5, E2) or holds by
+    /// CEN-E5 at writer open, the alt tier's K1b, K4, D5) or holds by
     /// construction ([`RowStatus::ByConstruction`] — CEN-F2, F8, F19),
     /// which no per-block coverage could contain; and rows a Rust crate
     /// below the validator holds ([`RowStatus::HeldByStore`] — CEN-K1a, K2,

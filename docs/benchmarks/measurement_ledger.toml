@@ -283,6 +283,7 @@ id = "serve-floor-verdict"
 spec = [
   "rust/shekyl-p-serve/src",
   ":(exclude,glob)rust/shekyl-p-serve/src/*_tests.rs",
+  "rust/shekyl-engine-core/src/engine/stake_engine/body_store_actor.rs",
 ]
 stale_through = [
   { through = "155e85a130", note = "PR #995. Its code commit, bfcf46c092, is arm B of the same capture: every line of the verdict was read on it beside arm A and holds there, with an abandoned full segment at 3.8 ms against 3.9. The two commits after it reword doc comments in delivery.rs and serve.rs and change no code." },
@@ -304,6 +305,8 @@ stale_through = [
   { through = "08af7470a1", note = "The pass transcript opens with a stream byte, so a served response signs 113 bytes where it signed 112, and a header that does not decode is refused before the store. A valid economy header is the previous 72 bytes with a leading zero. The floor verdict prices an abandoned request, which never reaches the signature; the extra byte is on the header check ahead of the body. Not re-measured." },
   { through = "1871825227", note = "The module comment in serve.rs states that 73-byte header and 113-byte transcript. No executable code changed, so a served response costs what it did at 08af7470a1. Not re-measured." },
   { through = "efa02f64b", note = "The served identity pin is regenerated from the same seeds, so the signature covers the 113-byte transcript 08af7470a1 already signs. Fixture bytes only. No read, hash, sign or socket operation on the serve path changed. Not re-measured." },
+  { through = "24ef80f60c", note = "The serve provider reads a held shard through HeldShardSource. A served body asks the body-store actor once to open and once per chunk; the endpoint's blocking thread waits, and the actor does the redb read and the AEAD open. An abandoned request that never opens a shard does not pay that hop. The floor probe's BodyStore source still reads in process. A response's bytes are unchanged. Not re-measured; the rows stay stale from the sealed-body decrypt." },
+  { through = "d85697a328", note = "The body-store actor leaves the engine runtime for its own one-worker runtime, sk-body-store, whose threads lower themselves to serving nice before they take work. The redb read and the chunk decrypt of a served body run there for the whole session. The endpoint thread still only waits. Not re-measured; the rows stay stale." },
 ]
 
 [[path_set]]
@@ -313,6 +316,7 @@ spec = [
   ":(exclude,glob)rust/shekyl-p-serve/src/*_tests.rs",
   "rust/shekyl-p-fetch/src",
   ":(exclude,glob)rust/shekyl-p-fetch/src/*_tests.rs",
+  "rust/shekyl-engine-core/src/engine/stake_engine/body_store_actor.rs",
 ]
 stale_through = [
   { through = "765d6991ba", note = "PR #969 (dev, 2026-10-05): the pass-digest audit bound to its types — a rewritten doc comment in served_frame.rs and pass_anchor.rs and a new test in delivery.rs. No production code path changed, so no cost moved. Heard here by the next branch to merge it, since the gate landed between the two." },
@@ -362,6 +366,8 @@ stale_through = [
   { through = "3a1e5a9d4", note = "SO-D12 4c: Malformed::FrameLong carries the count of content bytes left ahead of the envelope, the value the reader already held when it refused. One u64 in an error value on a refused read; a good read is unchanged. Not re-measured." },
   { through = "6cf2bff68", note = "SO-D12 4c: Timeouts::fetch_ceiling in shekyl-p-fetch client.rs is a const fn summing the existing bounds, called at compile time by the bundle producer; no fetch runs it. The producer now starts at most MAX_INFLIGHT (8) challenge reads at once where it spawned every due read and let the rest queue on the client's semaphore, so the client's concurrency is the 8 it already was. No read, hash, signature or socket operation is added. Not re-measured." },
   { through = "6e5d82e510", note = "The fetch client can read its SOCKS address at each fetch (the managed Tor's route) instead of holding one: a function call before the TCP connect, and with no route the fetch is Stall::NoRoute before any I/O. The dial, the head and body reads and the countersignature check are unchanged. Not re-measured." },
+  { through = "24ef80f60c", note = "The serve provider reads a held shard through HeldShardSource. A served body asks the body-store actor once to open and once per chunk; the endpoint's blocking thread waits, and the actor does the redb read and the AEAD open. One actor round trip per chunk is added on the wallet's serve path. The floor probe's BodyStore source still reads in process, and the fetch client is unchanged. A response's bytes are unchanged. Not re-measured; the rows stay stale." },
+  { through = "d85697a328", note = "The body-store actor leaves the engine runtime for its own one-worker runtime, sk-body-store, whose threads lower themselves to serving nice before they take work. The redb read and the chunk decrypt of a served body run there for the whole session. The endpoint thread still only waits, and the fetch client is unchanged. Not re-measured; the rows stay stale." },
 ]
 
 [[constant]]
@@ -610,6 +616,26 @@ stale_through = [
   { through = "b23fd66a5d", note = "The Tor supervisor's clock ruling: link.rs's inbound causes lose DescriptorRejected and gain UploadsRefused and ClockBehind, set by the supervisor's core after a sample or a round. No clearnet code path changes; dial, handshake, and gap I/O are unchanged. Not re-measured." },
   { through = "482e42e014", note = "Tests only, ported from the deleted C++ ban tests; admitted I/O unchanged." },
   { through = "d57f15525c", note = "Tests and the module doc only: the ban tests are split and the doc names the operator as the list's only writer; admitted I/O unchanged." },
+  { through = "02956b9c5e", note = "The dial-failure judge's type (failure.rs) and each connector's judging row in the dial profile: data read after a dial has ended. No span constant moved. The clearnet dial, handshake and gap do the same I/O. Not re-measured." },
+  { through = "94c9ba7130", note = "Each connector stamps its own failures into DialFailure (clearnet's stamping.rs, the Tor reply table), after a dial has ended. The clearnet dial, handshake and gap do the same I/O. Not re-measured." },
+  { through = "6488776789", note = "Connectors stamp only what they observe, and a retry follows the failure's meaning: classification after a dial has ended; it may add or remove a redial within a test; each dial's I/O is unchanged. The clearnet dial, handshake and gap do the same I/O. Not re-measured." },
+  { through = "687aa88f7d", note = "Doc comments in the dial profile: the outage-retry bases and the build-time check say what they hold. No value moved. The clearnet dial, handshake and gap do the same I/O. Not re-measured." },
+  { through = "b86c3760ac", note = "The ban list posts each ban and lift to its subscribers as an event: bookkeeping on a ban or a lift, not on a dial. The clearnet dial, handshake and gap do the same I/O. Not re-measured." },
+  { through = "1a4c78117f", note = "Ban expiry is the timer's alone and bans arrive as events: the admission check on an accept, and on a clearnet dial after its TCP connect (2b moves it before the connect), is a lookup that reads no clock and does no I/O; open_clearnet drops its now argument. The clearnet dial, handshake and gap do the same I/O. Not re-measured." },
+  { through = "8067c817eb", note = "One ban-set type, a keyed lookup (the exact host, then a range over the subnets), held once by the peer list: bookkeeping with no I/O. The clearnet dial, handshake and gap do the same I/O. Not re-measured." },
+  { through = "63bfdbc714", note = "Ban subscribers are rung after the socket table's lock drops, on a ban, a lift or an expiry, never on a dial. The clearnet dial, handshake and gap do the same I/O. Not re-measured." },
+  { through = "92a5de3824", note = "The merge of dev: one ban.rs test calls is_banned(host) under this branch's signature. Tests only. The clearnet dial, handshake and gap do the same I/O. Not re-measured." },
+  { through = "f8162491ba", note = "Step 2b's contract: each connector stamps every end it observed from its own table and hands it on as a DialEnd beside the same D12 cause; read_capped no longer stores its cause, and the connector seals with the stamped end in the same select arm. Classification only, after each step: no deadline moved, and the ban check still runs after the TCP connect (step 3 moves it). The clearnet dial, handshake and gap do the same I/O. Not re-measured." },
+  { through = "18493ce394", note = "The I/O changes: a clearnet dial is admitted before its TCP connect, so a host banned between the draw and the connect gets no SYN; an admitted dial holds its socket's slot through the connect. An admitted dial's connect, handshake and gap do the same I/O as before. Not re-measured." },
+  { through = "f3438c1330", note = "Two commits. 3cf7479839 binds a test's send result instead of dropping it: tests only. f3438c1330 deletes the close cause's marks byte and its readers; the cause is now a kind and a reply code, and what a close is evidence of is the DialFailure the connector already stamped beside it. A proxy refusal is built without the marks argument. The clearnet dial, handshake and gap do the same I/O, and no deadline moved. Not re-measured." },
+  { through = "316dbce93a", note = "The quiet guard's thresholds are deleted from the dial profile: K, the quiet span S, its derivation and the build-time check that S covered a dial deadline. Nothing read them after the judge replaced the guard. The dial deadline, handshake and gap spans these rows price are untouched, and no I/O changes. Not re-measured." },
+  { through = "2e51e0f20d", note = "A comment in the dial profile: clearnet corroboration is a byte on an outbound session, as OE-D5 already ruled, where the comment still said the ruling was open. The judging row is unchanged. The clearnet dial, handshake and gap do the same I/O. Not re-measured." },
+  { through = "93a1e8ff42", note = "One commit path for a ban: the four ban methods become one, and the ban API moves beside the occupancy table. A store that changes nothing closes nothing. Bookkeeping on a ban, a lift or an expiry, not on a dial. The clearnet dial, handshake and gap do the same I/O. Not re-measured." },
+  { through = "c9fb52ee4b", note = "The socket table claims one ban timer for the process engine it registers on, and the node starts that timer at open, so a finite ban expires with no zone host. The claim is taken when the timer starts, not on a dial. The clearnet dial, handshake and gap do the same I/O. Not re-measured." },
+  { through = "496c6d8858", note = "The I/O change, Windows only: the dial socket caps its SYN retransmissions at one (SIO_TCP_INITIAL_RTO), so a refused connect is reported after one retry, about 0.5 s, where the default retried for about 2.0 s past the deadline; a lost SYN is still resent once at +1.0 s. On Linux the dial builds its socket before the connect and the I/O is unchanged. The dial deadline, handshake and gap spans are untouched. Not re-measured; the Windows timings are shekyl-dev data/windows-refused-connect/, 2026-11-03." },
+  { through = "91073c960d", note = "The Windows SYN retry cap is narrowed to direct dials: a dial to the operator's SOCKS proxy keeps the system's retries, as before 496c6d8858. Linux I/O is unchanged and no span moved. Not re-measured." },
+  { through = "9864bff631", note = "Tests only: the Windows refusal-timing tests hold the port bound instead of dropping the listener first. No dial, handshake or gap I/O changes, and no span moved. Not re-measured." },
+  { through = "f4b32aa2a8", note = "Tests only: the Windows refusal test names Ipv4Addr by its path, so the Windows build resolves it. No dial I/O changes and no span moved. Not re-measured." },
 ]
 
 [[constant]]
@@ -721,6 +747,23 @@ cleared = [
   { through = "b23fd66a5d", reason = "The Tor supervisor's clock ruling: link.rs's inbound causes lose DescriptorRejected and gain UploadsRefused and ClockBehind, set by the supervisor's core after a sample or a round. The dial, the gap, the shutdown wait and their I/O are unchanged, so the capture still prices this tree." },
   { through = "482e42e014", reason = "Tests only, ported from the deleted C++ ban tests; admitted I/O unchanged." },
   { through = "d57f15525c", reason = "Tests and the module doc only: the ban tests are split and the doc names the operator as the list's only writer; admitted I/O unchanged." },
+  { through = "02956b9c5e", reason = "The dial-failure judge's type (failure.rs) and each connector's judging row in the dial profile: data read after a dial has ended. No span constant moved. The Tor dial, the gap, the shutdown wait and their I/O are unchanged, so the 2026-10-14 capture still prices this tree." },
+  { through = "94c9ba7130", reason = "Each connector stamps its own failures into DialFailure (clearnet's stamping.rs, the Tor reply table), after a dial has ended. The Tor dial, the gap, the shutdown wait and their I/O are unchanged, so the 2026-10-14 capture still prices this tree." },
+  { through = "6488776789", reason = "Connectors stamp only what they observe, and a retry follows the failure's meaning: classification after a dial has ended. The Tor dial, the gap, the shutdown wait and their I/O are unchanged, so the 2026-10-14 capture still prices this tree." },
+  { through = "687aa88f7d", reason = "Doc comments in the dial profile: the outage-retry bases and the build-time check say what they hold. No value moved. The Tor dial, the gap, the shutdown wait and their I/O are unchanged, so the 2026-10-14 capture still prices this tree." },
+  { through = "b86c3760ac", reason = "The ban list posts each ban and lift to its subscribers as an event: bookkeeping on a ban or a lift, not on a dial. The Tor dial, the gap, the shutdown wait and their I/O are unchanged, so the 2026-10-14 capture still prices this tree." },
+  { through = "0e3f7f869c", reason = "The Tor reply table stamps each SOCKS reply as tor 0.4.9.14 reads it: classification after a dial has ended. The Tor dial, the gap, the shutdown wait and their I/O are unchanged, so the 2026-10-14 capture still prices this tree." },
+  { through = "9a43553917", reason = "SOCKS 0x02 is classed Uncertain, and the reply table cites the rulings retry finality rests on: classification after a dial has ended; it may add or remove a redial within a test; each dial's I/O is unchanged. The Tor dial, the gap, the shutdown wait and their I/O are unchanged, so the 2026-10-14 capture still prices this tree." },
+  { through = "1a4c78117f", reason = "Ban expiry is the timer's alone and bans arrive as events: the admission check on an accept, and on a clearnet dial after its TCP connect (2b moves it before the connect), is a lookup that reads no clock and does no I/O; open_clearnet drops its now argument. The Tor dial, the gap, the shutdown wait and their I/O are unchanged, so the 2026-10-14 capture still prices this tree." },
+  { through = "8067c817eb", reason = "One ban-set type, a keyed lookup (the exact host, then a range over the subnets), held once by the peer list: bookkeeping with no I/O. The Tor dial, the gap, the shutdown wait and their I/O are unchanged, so the 2026-10-14 capture still prices this tree." },
+  { through = "63bfdbc714", reason = "Ban subscribers are rung after the socket table's lock drops, on a ban, a lift or an expiry, never on a dial. The Tor dial, the gap, the shutdown wait and their I/O are unchanged, so the 2026-10-14 capture still prices this tree." },
+  { through = "92a5de3824", reason = "The merge of dev: one ban.rs test calls is_banned(host) under this branch's signature. Tests only. The Tor dial, the gap, the shutdown wait and their I/O are unchanged, so the 2026-10-14 capture still prices this tree." },
+  { through = "f8162491ba", reason = "Step 2b's contract: each connector stamps every end it observed from its own table and hands it on as a DialEnd beside the same D12 cause; a malformed SOCKS exchange is labelled ProxyUnavailable instead of LocalClose. Classification only, after each step; no deadline moved. The Tor dial, the gap, the shutdown wait and their I/O are unchanged, so the 2026-10-14 capture still prices this tree." },
+  { through = "f3438c1330", reason = "The close cause's marks are deleted: a cause is a kind and a reply code, and the Tor reply table's retry set is a private predicate behind stamp_reply, which already decided each reply's DialFailure. A proxy refusal is built without the marks argument. The Tor dial, the gap, the shutdown wait and their I/O are unchanged, and no deadline moved, so the 2026-10-14 capture still prices this tree." },
+  { through = "316dbce93a", reason = "The quiet guard's thresholds are deleted from the dial profile: K, the quiet span S and its derivation, which nothing read after the judge replaced the guard. The Tor dial deadline, the gap, the shutdown wait and their I/O are unchanged, and no deadline moved, so the 2026-10-14 capture still prices this tree." },
+  { through = "2e51e0f20d", reason = "A comment in the dial profile: clearnet corroboration is a byte on an outbound session, as OE-D5 already ruled, where the comment still said the ruling was open. The judging row is unchanged. The Tor dial, the gap, the shutdown wait and their I/O are unchanged, so the 2026-10-14 capture still prices this tree." },
+  { through = "93a1e8ff42", reason = "One commit path for a ban: the four ban methods become one, and the ban API moves beside the occupancy table. A store that changes nothing closes nothing. Bookkeeping on a ban, a lift or an expiry, not on a dial. The Tor dial, the gap, the shutdown wait and their I/O are unchanged, so the 2026-10-14 capture still prices this tree." },
+  { through = "c9fb52ee4b", reason = "The socket table claims one ban timer for the process engine it registers on, and the node starts that timer at open, so a finite ban expires with no zone host. The claim is taken when the timer starts, not on a dial. The Tor dial, the gap, the shutdown wait and their I/O are unchanged, so the 2026-10-14 capture still prices this tree." },
 ]
 
 [[constant]]
@@ -887,6 +930,10 @@ stale_through = [
   { through = "1871825227", note = "The request-header doc and its length assertion name the stream byte (1 + 32 + 8 + 32). The constant stays 73. No function on the spend path changed. Not measured." },
   { through = "501c0896eb", note = "ESR-16 completion, ruling 3: SEGMENT_FREEZE_REORG_MARGIN_BLOCKS in segment.rs reads shekyl_types::ARCHIVAL_REORG_DEPTH_BLOCKS instead of a constant curve-tree's own build script generated from the same key. The value stays 720; tree build, path assembly and the prover do the same work. Not measured." },
   { through = "72168f6f2e", note = "DEL-008's Rust half (#1212): doc comments only, in shekyl-curve-tree's client.rs and redb_backend.rs and shekyl-fcmp's tree.rs, re-tensed because the frozen-segment count they contrasted with is deleted. No function, constant or code path changed; nothing the capture prices moved." },
+  { through = "f6276873bf", note = "CurveTreeClient forwards the store facts a serve-set witness reads (sync tip, missing pins, prune flag, pruned segments) and gains rebuild, which resumes the in-memory tree over the store it already holds. Those are the witness and the poison recovery. Tree build, path assembly and the prover are untouched. Not measured; the rows stay stale." },
+  { through = "c28af0881e", note = "test_tamper_poison, compiled only under the test-tamper feature, sets the client's poisoned flag. No production function changed. The spend path is untouched. Not measured." },
+  { through = "cbc978bfd5", note = "ServingReader and WriterRecovery are deleted, and with them the frozen-segment body read and the external resume handle. The client's fact forwards remain. Path assembly, tree build and the prover do the same work. Not measured; the rows stay stale." },
+  { through = "981fc8af04", note = "is_already_open is deleted from ClientError and StoreError, and the LockedElsewhere doc says the lock is not transient. No spend-path function changed. Not measured." },
 ]
 
 [[constant]]
@@ -1117,3 +1164,28 @@ capture = "docs/benchmarks/ba_t5_serve_floor_device_20261007_obs.tsv"
 capture_rev = "42233bd135"
 verdict = "held"
 note = "Median of six eight-in-flight blocks on the floor device with the hash on the executor; the blocks are bimodal, three near 41 and three near 56, which is what run 3's two disagreeing blocks were. With the hash in the blocking-pool hop (bfcf46c092) all six read 52."
+
+[[path_set]]
+id = "rpc-hash-budget"
+spec = [
+  "rust/shekyl-daemon-rpc/src/hash_budget.rs",
+  # HASH_CPU_NANOS is one RandomX hash. The budget file spends the
+  # constant; this tree is the work the capture timed (BA-Q23).
+  "rust/shekyl-pow-randomx/src",
+]
+cleared = [
+  { through = "e44ab0a578", reason = "Introduces the hash budget and sets HASH_CPU_NANOS from the floor run at 3d0bf6844c. The instrument that produced the capture is not this file, and this commit does not change it." },
+  { through = "b257c61a6f", reason = "fill_pow_hash reads the hash recorded at validation and no longer charges this budget. The module comment says so, and a test reads the balance. HASH_CPU_NANOS is unchanged, and the instrument the capture timed is unchanged." },
+  { through = "6d9cc0f756", reason = "The spend is judged at the caller's instant, so a test can hold time still. The charge is still one HASH_CPU_NANOS. The RandomX sources this row watches are unchanged." },
+]
+
+[[constant]]
+name = "hash_cpu_nanos"
+defined_in = "rust/shekyl-daemon-rpc/src/hash_budget.rs"
+needle = "pub const HASH_CPU_NANOS: u64 = 1_290_885_199;"
+measured_by = ["BA-T40"]
+status = "current"
+capture = "docs/benchmarks/rt_w10_request_cost_20261102.md"
+capture_rev = "3d0bf6844c"
+rev_source = "the record's results name the build: git revision 3d0bf6844c on the floor device (docs/benchmarks/rt_w10_request_cost_20261102.md, Results). The header series' thread-CPU 99th percentile, which the hash budget charges once per hash."
+path_set = "rpc-hash-budget"

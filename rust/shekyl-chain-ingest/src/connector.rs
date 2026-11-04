@@ -93,10 +93,8 @@ pub(crate) use bundles::ApplyAdmitting;
 pub use bundles::{BundleOffered, LearnDraws, Learned, OfferBundle};
 pub(crate) use run_fault::{fault_reply, halt_on_corrupt};
 pub use run_fault::{PlanMismatchReason, RunEnd, RunFault};
-#[cfg(test)]
-pub use switch::AnchorForTests;
 pub use switch::{
-    AltBlocksHeld, OfferAlt, Offered, PlannedBlock, PlannedDemotion, PlannedPromotion,
+    AltBlocksHeld, DeepReorg, OfferAlt, Offered, PlannedBlock, PlannedDemotion, PlannedPromotion,
     PopBeyondReorgCap, RefusePromotion, Reorganize, SwitchDone, SwitchPlan, Switched, TableRows,
 };
 
@@ -563,12 +561,12 @@ pub struct Connector {
     /// every write that sets it (`DRS_X_STORE_FLIP.md` DX-Q2 item 8). `None`
     /// is clear.
     degraded: tokio::sync::watch::Sender<Option<FollowingDegraded>>,
+    /// The most recent switch deeper than the lock window
+    /// ([`DeepReorg`]): an event, overwritten by
+    /// the next, never read by anything that decides whether this node is
+    /// following. Not persisted: the warning line is the durable record.
+    deep_reorg: tokio::sync::watch::Sender<Option<DeepReorg>>,
     rules: ChainRules,
-    /// What the run takes on the release's word — `rules.trust()`, read
-    /// once at start. A field rather than a call so a test can reach the
-    /// checkpoint arm of the fork choice with a fixture table no regtest
-    /// run carries ([`AnchorForTests`]).
-    trust: shekyl_chain_rules::Trust,
     /// Drawable sets the count has already built, keyed by the epoch and
     /// the opening block's hash. Not chain state (`SO-D12b`).
     memo: DrawableMemo,
@@ -587,9 +585,9 @@ impl Actor for Connector {
         let mut connector = Self {
             tip: tokio::sync::watch::Sender::new(TipChanged { seq: 0, tip }),
             degraded: tokio::sync::watch::Sender::new(degraded),
+            deep_reorg: tokio::sync::watch::Sender::new(None),
             writer: Writer::live(args.store),
             rules: args.rules,
-            trust: args.rules.trust(),
             memo: DrawableMemo::new(),
         };
         // The bundle queue and the body store are reconciled at open
@@ -626,6 +624,20 @@ impl Connector {
         Ok(set)
     }
 
+    /// Report a switch deeper than the lock window: a warning, and the most
+    /// recent record replaced. Refuses nothing and sets no latch.
+    pub(crate) fn note_deep_reorg(&mut self, reorg: DeepReorg) {
+        tracing::warn!(
+            depth = reorg.depth.to_raw(),
+            fork_at = reorg.fork_at.to_raw(),
+            old_tip = %reorg.old_tip,
+            new_tip = %reorg.new_tip,
+            "a reorganization popped more blocks than the lock window; outputs a wallet \
+             treated as spendable may have been un-confirmed"
+        );
+        self.deep_reorg.send_replace(Some(reorg));
+    }
+
     /// Publish the tip after a committed write (module docs: `TipChanged`).
     /// A read that fails here leaves the last publication standing: the
     /// next write meets the same store.
@@ -650,6 +662,22 @@ pub struct RaiseAlarm(pub FollowingDegraded);
 /// A receiver of the `following_degraded` latch: `None` is clear.
 #[derive(Clone, Copy, Debug)]
 pub struct WatchLatch;
+
+/// A receiver of the most recent deep reorganization: `None` until one.
+#[derive(Clone, Copy, Debug)]
+pub struct WatchDeepReorg;
+
+impl Message<WatchDeepReorg> for Connector {
+    type Reply = tokio::sync::watch::Receiver<Option<DeepReorg>>;
+
+    async fn handle(
+        &mut self,
+        _: WatchDeepReorg,
+        _ctx: &mut Context<Self, Self::Reply>,
+    ) -> Self::Reply {
+        self.deep_reorg.subscribe()
+    }
+}
 
 impl Message<RaiseAlarm> for Connector {
     type Reply = Result<bool, RunFault>;
@@ -684,29 +712,12 @@ impl Message<WatchTip> for Connector {
     }
 }
 
-/// The death rule's second bound (`shekyl_chain_store`'s `store/alt.rs`):
-/// after a connect at `height`, every alt block at or below the last anchor
-/// at or below it leaves with its bodies. Its fork point would be below the
-/// anchor, which CEN-E2 refuses at offer and at the switch, so nothing can
-/// promote it. The store's own connect applies the cap; the anchors are the
-/// release's trust, which the store does not hold.
-pub(crate) fn retire_below_the_anchor(
-    batch: &shekyl_chain_store::store::WriteBatch<'_, '_>,
-    trust: &shekyl_chain_rules::Trust,
-    height: BlockHeight,
-) -> Result<u64, shekyl_chain_store::store::StoreError> {
-    match trust.anchors().last_at_or_below(height) {
-        Some(anchor) => batch.retire_alt_blocks(anchor.height),
-        None => Ok(0),
-    }
-}
-
 impl Message<Apply> for Connector {
     type Reply = Result<Applied, RunFault>;
 
     async fn handle(&mut self, msg: Apply, _ctx: &mut Context<Self, Self::Reply>) -> Self::Reply {
         let rules = self.rules;
-        let trust = self.trust;
+        let trust = self.rules.trust();
         let memo = &mut self.memo;
         let applied = self.writer.write(|batch| {
             let mut applied = Applied::default();
@@ -726,7 +737,6 @@ impl Message<Apply> for Connector {
                 let height = judged.height;
                 applied.exercised.extend(judged.exercised());
                 batch.connect(judged.valid, judged.rule_set)?;
-                retire_below_the_anchor(batch, &trust, height)?;
                 connect_step::record_connected(&mut applied, height, judged.facts);
             }
             Ok(applied)
@@ -888,7 +898,7 @@ impl Message<Inject> for Connector {
                 rules: self.rules,
             });
         }
-        let at = self.writer.inject(self.trust, credit)?;
+        let at = self.writer.inject(self.rules.trust(), credit)?;
         Ok(Injected { at })
     }
 }
@@ -907,7 +917,7 @@ impl Message<IssueDraws> for Connector {
                 rules: self.rules,
             });
         }
-        self.writer.issue_draws(self.trust, &msg)
+        self.writer.issue_draws(self.rules.trust(), &msg)
     }
 }
 

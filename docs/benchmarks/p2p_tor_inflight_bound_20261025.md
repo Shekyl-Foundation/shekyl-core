@@ -149,7 +149,7 @@ the binding cost in both regimes below; the count of plants is not.
   planted onion is drawable at most once an hour, so the hour takes about
   170 planted onions at the cap, planted once: 8 attacker sessions at the
   intake cap (24 addresses per session per 24 h).
-- **In a quiet stretch** (no session held, the last 13 attempts unopened,
+- *SUPERSEDED by the dialer's judge (#1235; `DIALER_OUTAGE_EVIDENCE.md` §3.4): with no sign of life on Tor a plant's failure is excused and waits the 10–15 s outage retry, so about six plants hold the hour. As measured and argued here, under the quiet stretch:* **In a quiet stretch** (no session held, the last 13 attempts unopened,
   364.5 s since one opened: Tor's quiet threshold) a failed test cools at the first step, 2 to 3 min, so a plant is
   drawable again about every 4 to 5 min, its attempt included: about 13
   draws an hour each, so about 13 plants hold the hour. The node is then

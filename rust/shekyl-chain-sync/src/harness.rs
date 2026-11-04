@@ -284,7 +284,7 @@ fn an_honest_chain_longer_than_one_response_is_never_refused() {
     let rules = cap(64);
     let main = chain_of(21);
     let mut block = candidate_on(&main, Vec::new()).block;
-    let mut sync = Sync::new(Trust::UNANCHORED, move |_| rules);
+    let mut sync = Sync::new(Trust::UNPINNED, move |_| rules);
     main.with_view(|view| {
         let tip = view.tip().expect("main answers").expect("a tip");
         let mut out = Vec::new();
@@ -326,7 +326,7 @@ fn a_run_that_does_not_beat_the_selected_chain_is_not_hashed() {
     let main = chain_of(21);
     let fork = chain_of(11);
     let mut block = candidate_on(&fork, Vec::new()).block;
-    let mut sync = Sync::new(Trust::UNANCHORED, move |_| rules);
+    let mut sync = Sync::new(Trust::UNPINNED, move |_| rules);
     main.with_view(|view| {
         let tip = view.tip().unwrap().unwrap();
         let mut out = Vec::new();
@@ -365,7 +365,7 @@ fn a_lighter_run_kept_for_its_continuation_does_not_hold_the_draw() {
     let main = chain_of(21);
     let fork = chain_of(11);
     let mut block = candidate_on(&fork, Vec::new()).block;
-    let mut sync = Sync::new(Trust::UNANCHORED, move |_| rules);
+    let mut sync = Sync::new(Trust::UNPINNED, move |_| rules);
     main.with_view(|view| {
         let tip = view.tip().unwrap().unwrap();
         let mut out = Vec::new();
@@ -454,7 +454,7 @@ fn the_selected_chain_is_the_most_verified_work() {
     let rules = cap(64);
     let main = chain_of(21);
     let mut block = candidate_on(&main, Vec::new()).block;
-    let mut sync = Sync::new(Trust::UNANCHORED, move |_| rules);
+    let mut sync = Sync::new(Trust::UNPINNED, move |_| rules);
     main.with_view(|view| {
         let tip = view.tip().unwrap().unwrap();
         let mut out = Vec::new();
@@ -483,7 +483,7 @@ fn the_selected_chain_is_the_most_verified_work() {
 #[test]
 fn a_claim_never_changes_the_derived_state() {
     proptest::proptest!(|(work in 2u128..10_000, count in 1u64..100)| {
-        let mut sync = Sync::new(Trust::UNANCHORED, |_: BlockHeight| RuleSet::GENESIS);
+        let mut sync = Sync::new(Trust::UNPINNED, |_: BlockHeight| RuleSet::GENESIS);
         let main = chain_of(4);
         main.with_view(|view| {
             let tip = view.tip().unwrap().unwrap();
@@ -511,7 +511,7 @@ fn a_claim_never_changes_the_derived_state() {
 /// The latch is not a sync state. `Synced` still holds while it is set.
 #[test]
 fn the_latch_does_not_withhold_synced() {
-    let mut sync = Sync::new(Trust::UNANCHORED, |_: BlockHeight| RuleSet::GENESIS);
+    let mut sync = Sync::new(Trust::UNPINNED, |_: BlockHeight| RuleSet::GENESIS);
     let main = chain_of(4);
     main.with_view(|view| {
         let tip = view.tip().unwrap().unwrap();
@@ -554,7 +554,7 @@ fn the_latch_does_not_withhold_synced() {
 /// A missed deadline ends the request and does not close the session.
 #[test]
 fn a_missed_deadline_ends_the_request_and_does_not_close() {
-    let mut sync = Sync::new(Trust::UNANCHORED, |_: BlockHeight| RuleSet::GENESIS);
+    let mut sync = Sync::new(Trust::UNPINNED, |_: BlockHeight| RuleSet::GENESIS);
     let main = chain_of(4);
     main.with_view(|view| {
         let tip = view.tip().unwrap().unwrap();
@@ -601,7 +601,7 @@ fn a_missed_deadline_ends_the_request_and_does_not_close() {
 #[test]
 fn payload_refused_is_only_an_impossible_claim() {
     proptest::proptest!(|(count in 1u64..50, extra in 0u128..100)| {
-        let mut sync = Sync::new(Trust::UNANCHORED, |_: BlockHeight| RuleSet::GENESIS);
+        let mut sync = Sync::new(Trust::UNPINNED, |_: BlockHeight| RuleSet::GENESIS);
         let main = chain_of(2);
         main.with_view(|view| {
             let mut out = Vec::new();
@@ -655,7 +655,7 @@ fn a_proof_refusal_closes_and_a_stale_does_not() {
     let rules = cap(64);
     let main = chain_of(21);
     let mut block = candidate_on(&main, Vec::new()).block;
-    let mut sync = Sync::new(Trust::UNANCHORED, move |_| rules);
+    let mut sync = Sync::new(Trust::UNPINNED, move |_| rules);
     main.with_view(|view| {
         let tip = view.tip().unwrap().unwrap();
         let mut out = Vec::new();
@@ -743,7 +743,7 @@ fn no_body_is_requested_off_the_selected_chain() {
     let rules = cap(64);
     let main = chain_of(21);
     let mut block = candidate_on(&main, Vec::new()).block;
-    let mut sync = Sync::new(Trust::UNANCHORED, move |_| rules);
+    let mut sync = Sync::new(Trust::UNPINNED, move |_| rules);
     main.with_view(|view| {
         let tip = view.tip().unwrap().unwrap();
         let mut out = Vec::new();
@@ -805,7 +805,7 @@ fn no_header_request_is_drawn_while_a_run_is_being_proven() {
     let rules = cap(64);
     let main = chain_of(21);
     let mut block = candidate_on(&main, Vec::new()).block;
-    let mut sync = Sync::new(Trust::UNANCHORED, move |_| rules);
+    let mut sync = Sync::new(Trust::UNPINNED, move |_| rules);
     main.with_view(|view| {
         let tip = view.tip().expect("main answers").expect("a tip");
         let mut out = Vec::new();

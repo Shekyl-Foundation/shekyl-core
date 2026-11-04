@@ -129,7 +129,7 @@ fn judge<'b, 'id>(
         Ok(Err(refused)) => panic!("the bench chain satisfies every stateless rule: {refused}"),
         Err(never) => match never {},
     };
-    match validate(formed, view, &RULES, &Trust::UNANCHORED) {
+    match validate(formed, view, &RULES, &Trust::UNPINNED) {
         Ok(verdict) => Ok(verdict.expect("the bench chain satisfies every landed rule")),
         Err(Fault::View(fault)) => Err(fault),
         Err(Fault::Stale(stale)) => panic!("bench claim went stale: {stale}"),

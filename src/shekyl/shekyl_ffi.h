@@ -2678,9 +2678,6 @@ int shekyl_seam_send(std::uint64_t id, const std::uint8_t* bytes, std::size_t le
 int shekyl_seam_send_report(std::uint64_t id, const std::uint8_t* bytes, std::size_t len,
     int* found, std::uint8_t* cause_kind);
 void shekyl_seam_close(std::uint64_t id);
-/// Record `kind` on `id` when the row has no cause yet. The row stays
-/// until `shekyl_seam_reap`. An unknown kind records nothing.
-void shekyl_seam_record_cause(std::uint64_t id, std::uint8_t kind, std::uint16_t reply);
 std::uint64_t shekyl_seam_socket_count(std::uint32_t connector, std::uint32_t direction);
 std::uint64_t shekyl_seam_inbound_held(void);
 

@@ -180,7 +180,9 @@ pub use constants::{
 pub use debit_auth::{
     cold_authority_pin, debit_auth_pin, requires_cold_authority, ColdAuthorityError, DebitAuthError,
 };
-pub use drawable_epoch::{DrawableEpoch, DrawableEpochError, DRAWABLE_EPOCH_DIGEST_CUSTOMIZATION};
+pub use drawable_epoch::{
+    DrawableEpoch, DrawableEpochError, SupportRoster, DRAWABLE_EPOCH_DIGEST_CUSTOMIZATION,
+};
 pub use drawable_pair::DrawablePair;
 pub use emission_kat_shape::{EmissionKatShape, EMISSION_KAT_SHAPE};
 pub use emission_verify::{
@@ -248,7 +250,7 @@ pub use shard_view_hash::{
 };
 pub use support_draw::{
     select_support_shard, settle_support, support_challenge_nonce, support_counted, support_offset,
-    support_slot, support_span, SupportSettlementKey, SupportUnissued,
+    support_seated_at, support_slot, support_span, SupportSettlementKey, SupportUnissued,
     SUPPORT_CHALLENGE_NONCE_CUSTOMIZATION, SUPPORT_DRAWS_PER_EPOCH, SUPPORT_DRAW_CUSTOMIZATION,
     SUPPORT_SELECT_SHARD,
 };

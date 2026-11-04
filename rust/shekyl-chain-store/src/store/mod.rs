@@ -81,7 +81,9 @@
 //! # The header is checked before anything else (increment 2)
 //!
 //! A fresh file is **sealed** in its first transaction with the layout
-//! version and the creating session's provenance; an existing file has
+//! version and the creating session's provenance (the engine's own empty
+//! commit precedes it, so a file with no table at all is a creation that
+//! stopped before its seal, and a writable open finishes it); an existing file has
 //! both read back — in a read transaction, so a stale file is never
 //! stamped current in passing — before any table is opened. A file with no
 //! version cell is not one this binary wrote and is refused
@@ -112,6 +114,7 @@ mod header;
 mod invariant;
 mod keyed;
 mod leaf_reads;
+mod open;
 mod output_reads;
 mod pop;
 mod prune;
@@ -154,15 +157,18 @@ pub use undo::{RawRows, Restorable};
 pub use view::BatchView;
 pub use write::{invariant_of, WriteBatch};
 
+pub use crate::creation::CutShort;
+
 use std::path::Path;
 
 use redb::{Database, Durability, ReadOnlyDatabase, ReadableDatabase, WriteTransaction};
-use shekyl_chain_rules::{AtHeight, ReleaseAnchors};
+use shekyl_chain_rules::GenesisPin;
 
 use crate::apply_policy::ApplyPolicy;
 use crate::codec::SettlementEpochBlocks;
 use crate::provenance::Provenance;
 
+use open::{open_at, GenesisAdmission};
 use shared::Shared;
 
 /// The durability every write transaction is armed with (DRS-D9, Tier-A A4).
@@ -220,6 +226,22 @@ impl core::fmt::Debug for ChainStore {
 }
 
 impl ChainStore {
+    /// A writable handle over a database the open path already sealed or
+    /// reopened. The open module is the only caller.
+    fn opened(
+        db: Database,
+        apply_policy: ApplyPolicy,
+        horizons: Horizons,
+        provenance: Provenance,
+    ) -> Self {
+        Self {
+            backend: Backend::Writable(db),
+            apply_policy,
+            horizons,
+            shared: Shared::new(provenance),
+        }
+    }
+
     /// Create or open the store at `path` for reading and writing, under
     /// the settlement-epoch schedule `epoch` (a fresh file is pinned to it;
     /// an existing file must have been built under it).
@@ -227,7 +249,7 @@ impl ChainStore {
     /// This door does not admit a release pin. Harness chains, synthetic
     /// block ids, and Fakechain open here: nothing they record is a pin
     /// this binary vouches for. A public network opens through
-    /// [`with_release`](Self::with_release).
+    /// [`with_genesis`](Self::with_genesis).
     ///
     /// # Errors
     ///
@@ -280,7 +302,7 @@ impl ChainStore {
     /// `undo_log_floor` cell.
     ///
     /// This door does not admit a release pin. A public network opens
-    /// through [`with_release`](Self::with_release), which cannot skip the
+    /// through [`with_genesis`](Self::with_genesis), which cannot skip the
     /// comparison. Calling it after this returns is not a step a caller
     /// can forget and still be holding a checked handle: admission is the
     /// constructor, not a method on a store this door already returned.
@@ -289,74 +311,32 @@ impl ChainStore {
     ///
     /// [`StoreCannot::EmptyApplyStub`] if the policy stubs no families —
     /// checked before the path is touched; [`EngineError::Open`] if the file
-    /// cannot be created or opened, including an existing file that is not
-    /// a redb database (refused unread and unwritten, never initialized);
-    /// on an existing database, [`StoreCannot::SchemaVersionAbsent`],
+    /// cannot be created or opened. An existing file the engine will not
+    /// open is refused unread and unwritten, except a creation whose
+    /// initialization did not finish ([`CutShort::Uninitialized`]): that
+    /// file is moved aside and a fresh store created. On an existing
+    /// database that holds any table, [`StoreCannot::SchemaVersionAbsent`],
     /// [`StoreCannot::SchemaVersionMismatch`],
     /// [`StoreCannot::SettlementEpochMismatch`] or
     /// [`StoreInvariant::CellCorrupt`] if its header is not one this binary
     /// can vouch for. A fresh file the engine refuses to take, or that
     /// cannot be sealed, is removed again, so a failed create does not
-    /// leave a headerless file the next open refuses.
+    /// leave a headerless file the next open refuses. An existing file
+    /// with no table at all, a creation cut off before its seal
+    /// ([`CutShort::Unsealed`]), is sealed in place. This door discards
+    /// that report; [`with_genesis`](Self::with_genesis) returns it.
     pub fn with_horizons(
         path: impl AsRef<Path>,
         apply_policy: ApplyPolicy,
         horizons: Horizons,
     ) -> Result<Self, StoreError> {
-        let epoch = horizons.epoch();
-        apply_policy
-            .reject_empty_stub()
-            .map_err(|crate::apply_policy::EmptyApplyStub| StoreCannot::EmptyApplyStub)?;
-        // Fresh-vs-existing is decided by the SAME syscall that claims the
-        // path, never by a separate probe: `create_new` either creates the
-        // file atomically (fresh) or fails with AlreadyExists (reopen). An
-        // earlier draft checked `exists()` first and then called `create`,
-        // which also opens existing files -- a creator racing between the
-        // two would have sealed a file it did not create. redb's own
-        // `create` does exactly this open-with-create and hands the file to
-        // `create_file`, so a 0-byte file is the path it knows.
-        //
-        // The reopen arm is therefore `open`, which never creates and never
-        // initializes (`redb-4.4.0/src/db.rs:2130`; an empty file is
-        // `InvalidData`, `page_manager.rs:1080`). With `create` there, a
-        // path removed between AlreadyExists and the open -- or an empty
-        // file some other process left -- would be initialized as a fresh,
-        // unsealed database and then refused by `verify`, leaving behind
-        // exactly the headerless file the fresh arm's cleanup exists to
-        // prevent. Only the `create_new` winner initializes a file.
-        let mut builder = redb::Builder::new();
-        builder.set_cache_size(CACHE_SIZE);
-        let path = path.as_ref();
-        let (db, provenance) = match std::fs::OpenOptions::new()
-            .read(true)
-            .write(true)
-            .create_new(true)
-            .open(path)
-        {
-            Ok(file) => match create_sealed(&builder, file, apply_policy, epoch) {
-                Ok(fresh) => fresh,
-                Err(e) => {
-                    // The path exists only because `create_new` just made
-                    // it. Whatever refused after that -- the engine taking
-                    // the file or the seal -- must not leave it behind for
-                    // the next open to refuse as an existing store with no
-                    // header. `create_sealed` has dropped its `Database` by
-                    // the time we get here, so the file is unlocked.
-                    drop(std::fs::remove_file(path));
-                    return Err(e);
-                }
-            },
-            Err(e) if e.kind() == std::io::ErrorKind::AlreadyExists => {
-                open_existing(&builder, path, epoch)?
-            }
-            Err(e) => return Err(EngineError::Open(redb::DatabaseError::Storage(e.into())).into()),
-        };
-        Ok(Self {
-            backend: Backend::Writable(db),
+        open_at(
+            path.as_ref(),
             apply_policy,
             horizons,
-            shared: Shared::new(provenance),
-        })
+            GenesisAdmission::Unpinned,
+        )
+        .map(|(store, _cut)| store)
     }
 
     /// The settlement-epoch schedule this file is pinned to — equal to the
@@ -421,12 +401,15 @@ impl ChainStore {
     /// pair has already passed [`Horizons::new`]. A reader retires nothing.
     ///
     /// Does not admit a release pin. A public-network reader opens through
-    /// [`open_read_only_with_release`](Self::open_read_only_with_release).
+    /// [`open_read_only_with_genesis`](Self::open_read_only_with_genesis).
     ///
     /// # Errors
     ///
     /// [`EngineError::Open`] if the file is absent or cannot be opened; the
     /// same header refusals as [`with_apply_policy`](Self::with_apply_policy).
+    /// A read-only open does not take the creation lock and does not finish
+    /// a creation a power loss cut short: it cannot seal, and it does not
+    /// move a file.
     pub fn open_read_only(path: impl AsRef<Path>, horizons: Horizons) -> Result<Self, StoreError> {
         let epoch = horizons.epoch();
         let db = redb::Builder::new()
@@ -444,88 +427,85 @@ impl ChainStore {
         })
     }
 
-    /// Create or open the store and admit `anchors` (CEN-E5).
+    /// Create or open the store and admit `genesis` (CEN-E5).
     ///
-    /// The unanchored doors — [`create`](Self::create),
+    /// The unpinned doors — [`create`](Self::create),
     /// [`with_apply_policy`](Self::with_apply_policy),
-    /// [`with_horizons`](Self::with_horizons) — do not do this. Harness
-    /// chains, synthetic block ids, and Fakechain open there.
-    /// [`ReleaseAnchors::EMPTY`] agrees with any chain the snapshot can
-    /// read, which is what those files are. A public network passes the
-    /// table [`ReleaseAnchors::for_network`] returns. The store does not
-    /// know which networks exist: the table is the data, and nettype does
-    /// not select a branch here (rule 71).
+    /// [`with_horizons`](Self::with_horizons) — do not do this; harness
+    /// chains with synthetic block ids open there. A node passes its
+    /// network's pin ([`GenesisPin::for_network`], or
+    /// [`GenesisPin::FAKECHAIN`] for regtest). The store does not know which
+    /// networks exist: the pin is the data, and nettype does not select a
+    /// branch here (rule 71).
     ///
-    /// Admission runs once, in this constructor. An empty file agrees:
-    /// there is no block for a pin to contradict. A recorded pin that is
-    /// not the table's is [`StoreCannot::ReleasePin`]. The open does not
-    /// pop. A genesis conflict's remedy is refuse-to-run, which is this
-    /// error. A later checkpoint's remedy is a pop the ingest driver still
-    /// owes (`docs/FOLLOWUPS.md`); this door reports that conflict the same
-    /// way, so a session cannot start on a chain that disagrees with its
-    /// pins and then forget to rewind.
-    ///
-    /// The walk is [`ReleaseAnchors::conflict_over`], the same one
-    /// [`ReleaseAnchors::conflict_with`] runs over a `ChainView`. The
-    /// snapshot is not a `ChainView` — that impl is deferred — so admission
-    /// reads [`ReadSnapshot::tip`] and [`ReadSnapshot::block_info`] and
-    /// hands those to the walk. A hole at or below the tip is the read's
-    /// own fault, not a pin mismatch.
+    /// An existing file is admitted on a read-only open, before any
+    /// writable one, so another network's store is refused with nothing
+    /// written. The admission runs again under the writable open's lock,
+    /// because the directory entry can be replaced between the two opens.
+    /// A file the engine must repair first cannot be judged read-only, and
+    /// is repaired (its own committed state, nothing lost) before it is
+    /// refused. An empty file agrees: there is no block for a pin to
+    /// contradict. A recorded block 0 that is not the pin is
+    /// [`StoreCannot::ForeignGenesis`]. The open does not pop: genesis
+    /// cannot be popped, and the remedy is refuse-to-run.
     ///
     /// # Errors
     ///
     /// The header refusals of [`with_horizons`](Self::with_horizons);
-    /// [`StoreCannot::ReleasePin`] when a pin at or below the tip is not
-    /// the block recorded there; a read fault when the snapshot cannot
-    /// answer.
-    pub fn with_release(
+    /// [`StoreCannot::ForeignGenesis`] when block 0 is not the pinned
+    /// genesis; a read fault when the snapshot cannot answer.
+    ///
+    /// The open also reports what it finished when the file was a creation
+    /// a power loss cut short ([`CutShort`]). `None` is an ordinary create
+    /// or reopen. The daemon logs the report; the unpinned doors drop it.
+    pub fn with_genesis(
         path: impl AsRef<Path>,
         apply_policy: ApplyPolicy,
         horizons: Horizons,
-        anchors: &ReleaseAnchors,
-    ) -> Result<Self, StoreError> {
-        let store = Self::with_horizons(path, apply_policy, horizons)?;
-        store.admit(anchors)?;
-        Ok(store)
+        genesis: &GenesisPin,
+    ) -> Result<(Self, Option<CutShort>), StoreError> {
+        // The filter admits an existing file on its read-only open, so a
+        // store from another network is refused unwritten. This admission
+        // is the one under the writable open's lock: the file can change
+        // between the two opens.
+        let (store, cut) = open_at(
+            path.as_ref(),
+            apply_policy,
+            horizons,
+            GenesisAdmission::Pinned(genesis),
+        )?;
+        store.admit(genesis)?;
+        Ok((store, cut))
     }
 
-    /// Open an existing store read-only and admit `anchors`.
+    /// Open an existing store read-only and admit `genesis`.
     ///
-    /// The reader twin of [`with_release`](Self::with_release): the same
+    /// The reader twin of [`with_genesis`](Self::with_genesis): the same
     /// admission, and no write. [`open_read_only`](Self::open_read_only)
     /// does not admit, so a reader of a public file cannot skip the pin
-    /// by opening the unanchored door and calling it a check.
+    /// by opening the unpinned door and calling it a check.
     ///
     /// # Errors
     ///
     /// As [`open_read_only`](Self::open_read_only), then the admission
-    /// errors of [`with_release`](Self::with_release).
-    pub fn open_read_only_with_release(
+    /// errors of [`with_genesis`](Self::with_genesis).
+    pub fn open_read_only_with_genesis(
         path: impl AsRef<Path>,
         horizons: Horizons,
-        anchors: &ReleaseAnchors,
+        genesis: &GenesisPin,
     ) -> Result<Self, StoreError> {
         let store = Self::open_read_only(path, horizons)?;
-        store.admit(anchors)?;
+        store.admit(genesis)?;
         Ok(store)
     }
 
-    /// CEN-E5 over this file. `Ok` agrees, including an empty file and an
-    /// empty table. A contradiction is [`StoreCannot::ReleasePin`]. A read
-    /// that cannot answer is that read's error: a fault is not agreement
-    /// and not a pin mismatch.
-    fn admit(&self, anchors: &ReleaseAnchors) -> Result<(), StoreError> {
+    /// CEN-E5 over this file. `Ok` agrees, including an empty file and a
+    /// pin that names nothing. A contradiction is [`StoreCannot::ForeignGenesis`].
+    /// A read that cannot answer is that read's error: a fault is not
+    /// agreement and not a pin mismatch.
+    fn admit(&self, genesis: &GenesisPin) -> Result<(), StoreError> {
         let snap = self.begin_read()?;
-        let tip = snap.tip()?.recorded;
-        match anchors.conflict_over(tip, |height| -> Result<_, StoreError> {
-            Ok(match snap.block_info(height)? {
-                AtHeight::Recorded(info) => Some(info.hash),
-                AtHeight::AboveTip => None,
-            })
-        })? {
-            None => Ok(()),
-            Some(conflict) => Err(StoreCannot::ReleasePin(conflict).into()),
-        }
+        open::admit_genesis(snap.txn(), genesis)
     }
 
     /// Whether the writer is live or halted (`DAEMON_REDB_STORE.md` §3.6.2).
@@ -694,61 +674,6 @@ fn arm_write(db: &Database) -> Result<WriteTransaction, StoreError> {
     Ok(txn)
 }
 
-/// Reopen an existing file.
-///
-/// The read-only open is the refusal filter: a file [`header::verify`]
-/// rejects is rejected with nothing written, because a writable open
-/// records the engine's allocator state when it closes. `RepairAborted`
-/// is not a refusal. A read-only open returns it before any table read
-/// when the file needs recovery, and only the writable open repairs it.
-/// The writable open's `verify` is the admission, and the provenance of
-/// the handle it returns. The filter's result is not that provenance.
-/// redb opens read-only only by path, so the two opens cannot share a
-/// descriptor. A refusal of the filter writes nothing to the inode it
-/// opened. A directory entry replaced before the writable open is a
-/// different file: refusing it drops that open, which writes the inode
-/// the writable open took.
-fn open_existing(
-    builder: &redb::Builder,
-    path: &Path,
-    epoch: crate::codec::SettlementEpochBlocks,
-) -> Result<(Database, Provenance), StoreError> {
-    match builder.open_read_only(path) {
-        Ok(read_only) => {
-            header::verify(
-                &read_only.begin_read().map_err(EngineError::BeginRead)?,
-                epoch,
-            )?;
-        }
-        Err(redb::DatabaseError::RepairAborted) => {}
-        Err(e) => return Err(EngineError::Open(e).into()),
-    }
-    let db = builder.open(path).map_err(EngineError::Open)?;
-    let provenance = header::verify(&db.begin_read().map_err(EngineError::BeginRead)?, epoch)?;
-    Ok((db, provenance))
-}
-
-/// Hand a just-created, still-empty file to the engine and seal its header
-/// in the first transaction, under the same durability every batch
-/// commits with.
-///
-/// Everything that can fail between `create_new` and a usable store runs
-/// here, so the caller has exactly one place to undo the creation. On
-/// `Err` the `Database` is dropped before returning, releasing the
-/// engine's file lock so the caller's `remove_file` can succeed.
-fn create_sealed(
-    builder: &redb::Builder,
-    file: std::fs::File,
-    policy: ApplyPolicy,
-    epoch: SettlementEpochBlocks,
-) -> Result<(Database, Provenance), StoreError> {
-    let db = builder.create_file(file).map_err(EngineError::Open)?;
-    let txn = arm_write(&db)?;
-    let provenance = header::seal(&txn, policy, epoch)?;
-    txn.commit().map_err(EngineError::Commit)?;
-    Ok((db, provenance))
-}
-
 #[cfg(test)]
 #[path = "store_tests.rs"]
 mod store_tests;
@@ -757,7 +682,7 @@ mod store_tests;
 #[path = "header_tests.rs"]
 mod header_tests;
 
-/// CEN-E5 at the public-network open (`with_release`).
+/// CEN-E5 at the public-network open (`with_genesis`).
 #[cfg(test)]
 #[path = "release_admission_tests.rs"]
 mod release_admission_tests;
@@ -777,6 +702,11 @@ mod connect_fixtures;
 #[cfg(test)]
 #[path = "connect_tests.rs"]
 mod connect_tests;
+
+#[cfg(all(test, target_os = "linux"))]
+#[allow(unsafe_code)]
+#[path = "rt_w10_cost.rs"]
+mod rt_w10_cost;
 
 #[cfg(test)]
 #[path = "connect_ruleset_tests.rs"]

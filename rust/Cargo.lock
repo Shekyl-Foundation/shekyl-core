@@ -3979,6 +3979,7 @@ dependencies = [
  "shekyl-chain-rules",
  "shekyl-chain-store",
  "shekyl-chain-sync",
+ "shekyl-consensus",
  "shekyl-crypto-hash",
  "shekyl-crypto-pq",
  "shekyl-curve-generators",
@@ -4112,6 +4113,7 @@ dependencies = [
  "shekyl-socks",
  "shekyl-timing-engine",
  "shekyl-transport-layer",
+ "shekyl-win-sec",
  "tokio",
  "tracing",
 ]
@@ -4338,6 +4340,8 @@ dependencies = [
  "curve25519-dalek",
  "hex",
  "http",
+ "hyper",
+ "hyper-util",
  "rand_chacha 0.3.1",
  "rand_core 0.6.4",
  "serde",
@@ -4381,6 +4385,7 @@ name = "shekyl-dialer"
 version = "3.1.0"
 dependencies = [
  "shekyl-capped-stream",
+ "shekyl-clearnet",
  "shekyl-dialer",
  "shekyl-draw-rng",
  "shekyl-levin",
@@ -4505,8 +4510,10 @@ dependencies = [
  "shekyl-rpc-client",
  "shekyl-rpc-transport",
  "shekyl-rpc-types",
+ "shekyl-runtime",
  "shekyl-scanner",
  "shekyl-standoff",
+ "shekyl-thread-priority",
  "shekyl-tor-control-client",
  "shekyl-tor-control-wallet",
  "shekyl-tx-builder",
@@ -5065,6 +5072,7 @@ dependencies = [
  "shekyl-runtime",
  "shekyl-seam",
  "shekyl-timing-engine",
+ "shekyl-tor",
  "shekyl-transport-layer",
  "shekyl-types",
  "shekyl-wire",
@@ -5331,9 +5339,11 @@ name = "shekyl-seam"
 version = "3.1.0"
 dependencies = [
  "shekyl-capped-stream",
+ "shekyl-clearnet",
  "shekyl-onion-v3",
  "shekyl-peer-policy",
  "shekyl-timing-engine",
+ "shekyl-tor",
  "shekyl-transport-layer",
  "tokio",
  "tracing",

@@ -143,7 +143,7 @@ pub(crate) fn sync_then_connect(count: usize) -> (Cost, Cost) {
     let rules = fixed(1, 64);
     let main = chain_of(8);
     let mut block = candidate_on(&main, Vec::new()).block;
-    let mut sync = Sync::new(Trust::UNANCHORED, move |_| rules);
+    let mut sync = Sync::new(Trust::UNPINNED, move |_| rules);
     // Far past every synthetic timestamp, which climb by 120 s a header.
     let wall = Timestamp::from_raw(u64::MAX / 4);
     sync.set_wall(wall);

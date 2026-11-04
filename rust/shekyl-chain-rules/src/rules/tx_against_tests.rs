@@ -139,12 +139,7 @@ fn i7_at_a_listed_slot_the_refusal_names_the_slot() {
         let block = candidate_on(&chain, vec![listed_on(&chain, point(11))]);
         let formed = formed_on(&chain, block);
         assert_refused(
-            judged(validate(
-                formed,
-                &view,
-                &RuleSet::GENESIS,
-                &Trust::UNANCHORED,
-            )),
+            judged(validate(formed, &view, &RuleSet::GENESIS, &Trust::UNPINNED)),
             CenRow::I7,
             Locus::Input {
                 slot: TxSlot::Listed(0),
@@ -226,13 +221,8 @@ fn i7_is_vacuous_on_the_coinbase() {
     let chain = MockChain::default();
     chain.with_view(|view| {
         let formed = formed_on(&chain, candidate_on(&chain, Vec::new()));
-        let valid = judged(validate(
-            formed,
-            &view,
-            &RuleSet::GENESIS,
-            &Trust::UNANCHORED,
-        ))
-        .expect("a block of one coinbase");
+        let valid = judged(validate(formed, &view, &RuleSet::GENESIS, &Trust::UNPINNED))
+            .expect("a block of one coinbase");
         assert!(valid.coverage().contains(CenRow::I7));
         assert!(valid.coverage().contains(CenRow::L1));
     });

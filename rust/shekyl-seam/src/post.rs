@@ -8,7 +8,7 @@
 //! The hub posts these. It does not parse them: the handshake owner already
 //! decoded the response, and the strand reads the fields.
 
-use shekyl_transport_layer::{CloseCause, ConnectorId, SocketId};
+use shekyl_transport_layer::{ConnectorId, DialEnd, SocketId};
 
 use crate::endpoint::Endpoint;
 
@@ -66,8 +66,9 @@ pub enum Post {
         id: SocketId,
         /// The connector this id was established on, as on `Deliver`.
         connector: ConnectorId,
-        /// The cause that won.
-        cause: CloseCause,
+        /// The first end recorded on the row: the one the dialer reads. Its
+        /// D12 cause ([`DialEnd::cause`]) is what the C side and the log read.
+        end: DialEnd,
     },
 }
 

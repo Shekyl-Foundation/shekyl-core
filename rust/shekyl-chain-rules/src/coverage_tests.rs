@@ -139,8 +139,8 @@ fn complete_means_every_per_block_row_and_nothing_less() {
         CenRow::ALL.len() - at_open - by_construction - held_by_store
     );
     assert_eq!(
-        at_open, 5,
-        "slice 3 enforces E5 at open; DRS-E5 slice 9 enforces K1b, K4, D5, E2 at the alt tier"
+        at_open, 4,
+        "slice 3 enforces E5 at open; DRS-E5 slice 9 enforces K1b, K4, D5 at the alt tier"
     );
     assert_eq!(
         by_construction, 22,
@@ -166,7 +166,6 @@ fn complete_means_every_per_block_row_and_nothing_less() {
         CenRow::K4,
         CenRow::K8,
         CenRow::D5,
-        CenRow::E2,
     ] {
         assert!(!coverage.contains(row));
         assert!(!RuleSet::GENESIS.enforced().any(|r| r == row));

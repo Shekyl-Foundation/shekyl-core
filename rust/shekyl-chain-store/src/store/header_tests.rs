@@ -439,6 +439,33 @@ fn a_recovery_bit_reopens_the_probe_row() {
     cleanup(&path);
 }
 
+/// A newer layout that also needs repair is still a mismatch, and the
+/// probe row survives it. Red if the repair refusal deletes the file or
+/// drops the row. The bytes change: the repair runs before the mismatch
+/// is known.
+#[test]
+fn a_newer_layout_that_needs_repair_is_refused_and_the_probe_remains() {
+    let path = tmp("repair-newer");
+    seeded(&path, ApplyPolicy::Full);
+    let newer = SchemaVersion::new(SCHEMA_VERSION.get() + 1);
+    raw_put(&path, "schema_version", Some(&newer.encode()));
+    mark_recovery_required(&path);
+    assert!(
+        read_only_open_is_repair_aborted(&path),
+        "the bit is the repair arm"
+    );
+    match ChainStore::create(&path, EPOCH) {
+        Err(StoreError::Cannot(StoreCannot::SchemaVersionMismatch { found, expected })) => {
+            assert_eq!((found, expected), (newer, SCHEMA_VERSION));
+        }
+        other => panic!("a newer layout is a mismatch, got {other:?}"),
+    }
+    raw_put(&path, "schema_version", Some(&SCHEMA_VERSION.encode()));
+    let store = ChainStore::create(&path, EPOCH).expect("the repaired file reopens");
+    assert_eq!(super::store_tests::probe_val(&store, "k"), Some(1));
+    cleanup(&path);
+}
+
 #[test]
 fn a_malformed_header_cell_is_corruption_not_a_version() {
     let path = tmp("corrupt");
@@ -731,3 +758,53 @@ fn a_corrupt_cell_read_through_a_batch_poisons_it() {
 // The write bound is the permission: `upsert_property::<SchemaVersionCell>`
 // and `upsert_property::<ApplyPolicyCell>` do not compile. Pinned by the
 // `compile_fail` doctests on `WriteBatch::upsert_property`.
+
+/// What a power loss between the engine's first commit and the seal leaves
+/// behind: a valid redb file with no table at all. PB-S2's first replay
+/// (2026-11-01) found a node that could not start again from one. A
+/// writable open finishes the creation in place; a read-only open cannot
+/// seal, and still refuses. Red edit: drop the `creation_interrupted`
+/// branch from `with_horizons`, and the open refuses with
+/// `SchemaVersionAbsent`.
+#[test]
+fn a_creation_cut_off_before_its_seal_is_finished_by_the_next_open() {
+    let path = tmp("interrupted-create");
+    {
+        let file = std::fs::OpenOptions::new()
+            .read(true)
+            .write(true)
+            .create_new(true)
+            .open(&path)
+            .expect("create the path");
+        drop(
+            redb::Builder::new()
+                .create_file(file)
+                .expect("the engine's first commit"),
+        );
+    }
+    assert!(
+        raw_get(&path, "schema_version").is_none(),
+        "the fixture is a file the seal never reached"
+    );
+    assert!(matches!(
+        ChainStore::open_read_only(&path, production_horizons()),
+        Err(StoreError::Cannot(StoreCannot::SchemaVersionAbsent))
+    ));
+    let (store, cut) = open_at(
+        &path,
+        ApplyPolicy::Full,
+        production_horizons(),
+        GenesisAdmission::Unpinned,
+    )
+    .expect("the creation is finished");
+    assert_eq!(cut, Some(CutShort::Unsealed));
+    drop(store);
+    assert_eq!(
+        raw_get(&path, "schema_version").as_deref(),
+        Some(SCHEMA_VERSION.encode().as_slice()),
+        "sealed at this binary's layout"
+    );
+    ChainStore::create(&path, EPOCH).expect("and reopens as an ordinary store");
+    ChainStore::open_read_only(&path, production_horizons()).expect("read-only too");
+    cleanup(&path);
+}
