@@ -82,8 +82,8 @@ pub fn resolve(
     // A development lever off its networks is refused when given (below) and
     // has no default either: on mainnet no `dev-` row exists (IG-8).
     for row in table.rows.iter().filter(|r| r.is_live()) {
-        if let Visibility::Dev { networks } = row.visibility {
-            if !networks.contains(&network.name()) {
+        if let Visibility::Dev { gate } = row.visibility {
+            if !gate.admits(network) {
                 continue;
             }
         }
@@ -102,12 +102,12 @@ pub fn resolve(
         }
     }
     for given in file.into_iter().chain(cli.given) {
-        if let Visibility::Dev { networks } = given.row.visibility {
-            if !networks.contains(&network.name()) {
+        if let Visibility::Dev { gate } = given.row.visibility {
+            if !gate.admits(network) {
                 faults.push(
                     Diagnostic::new(Code::DevNetwork, given.source.clone())
                         .option(given.row.name)
-                        .param("networks", networks.join(", "))
+                        .param("networks", gate.networks())
                         .param("network", network.name()),
                 );
                 continue;

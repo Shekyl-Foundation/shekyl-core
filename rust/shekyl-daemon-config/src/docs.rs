@@ -41,7 +41,7 @@ pub fn options_markdown(table: &Table) -> String {
         .rows
         .iter()
         .filter_map(|r| match r.visibility {
-            Visibility::Dev { networks } => Some(format!("{} ({})", r.name, networks.join(", "))),
+            Visibility::Dev { gate } => Some(format!("{} ({})", r.name, gate.networks())),
             _ => None,
         })
         .collect();

@@ -4957,6 +4957,7 @@ dependencies = [
 name = "shekyl-options"
 version = "3.1.0"
 dependencies = [
+ "shekyl-network",
  "shekyl-onion-v3",
  "shekyl-rpc-grants",
  "strsim",
