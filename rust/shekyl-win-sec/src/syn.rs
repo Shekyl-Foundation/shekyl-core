@@ -63,7 +63,7 @@ pub fn cap_syn_retransmissions(socket: &impl AsRawSocket, retries: u8) -> std::i
         )
     })?;
     let size = u32::try_from(std::mem::size_of::<TCP_INITIAL_RTO_PARAMETERS>())
-        .expect("a three-byte struct fits in u32");
+        .expect("a four-byte struct (u16, u8, padding) fits in u32");
     let mut returned = 0u32;
     // SAFETY: the handle is a live socket borrowed for the call. `params` is
     // a local the call only reads, `size` is its size, there is no output
