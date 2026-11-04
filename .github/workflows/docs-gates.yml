@@ -76,7 +76,7 @@ on:
     # one 3m31s outlier), on a job already bounded at 10 minutes.
 
 concurrency:
-  group: docs-gates-${{ github.ref }}
+  group: docs-gates-${{ github.ref }}${{ github.event.action == 'edited' && !contains(toJSON(github.event.changes), 'base') && '-edited' || '' }}
   cancel-in-progress: true
 
 permissions:

@@ -53,7 +53,7 @@ on:
 
 # Superseded-run cancellation (house pattern: economics-c2a-prime.yml).
 concurrency:
-  group: gf7-no-emit-guard-${{ github.ref }}
+  group: gf7-no-emit-guard-${{ github.ref }}${{ github.event.action == 'edited' && !contains(toJSON(github.event.changes), 'base') && '-edited' || '' }}
   cancel-in-progress: true
 
 permissions:

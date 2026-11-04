@@ -46,7 +46,7 @@ on:
       - '.github/workflows/gui-drift.yml'
 
 concurrency:
-  group: gui-drift-${{ github.ref }}
+  group: gui-drift-${{ github.ref }}${{ github.event.action == 'edited' && !contains(toJSON(github.event.changes), 'base') && '-edited' || '' }}
   cancel-in-progress: true
 
 permissions:

@@ -154,6 +154,15 @@ def problems_in(filename: str, doc: object) -> list[str]:
     jobs = doc.get("jobs")
     if not isinstance(jobs, dict) or not jobs:
         return problems + [f"{filename}: no jobs"]
+    # A title or body edit must not land in the same concurrency group as a
+    # push: cancel-in-progress would abort the run the edit is not replacing.
+    # Workflows with no concurrency group have nothing to cancel.
+    group = (doc.get("concurrency") or {}).get("group") if isinstance(doc.get("concurrency"), dict) else None
+    if isinstance(group, str) and "!contains(toJSON(github.event.changes), 'base')" not in group:
+        problems.append(
+            f"{filename}: concurrency group does not isolate a title or body "
+            "edit from cancel-in-progress"
+        )
     for jid, job in jobs.items():
         if not isinstance(job, dict):
             problems.append(f"{filename}: job `{jid}` is not a mapping")
@@ -253,6 +262,14 @@ def selftest() -> int:
         ),
         ("push only", _doc({"a": _job()}, pull_request=False), False),
         (
+            "concurrency group does not isolate a title edit",
+            {
+                **_doc({"a": _job(if_=_clause())}),
+                "concurrency": {"group": "build-${{ github.ref }}", "cancel-in-progress": True},
+            },
+            True,
+        ),
+        (
             "pull_request is null",
             {"on": {"pull_request": None}, "jobs": {"a": _job(if_=clause)}},
             True,
@@ -315,6 +332,7 @@ def main() -> int:
     problems: list[str] = []
     pull_request_files: list[str] = []
     allowed_seen: set[tuple[str, str]] = set()
+    isolated_groups = 0
     for name in names:
         path = os.path.join(WORKFLOWS, name)
         try:
@@ -326,6 +344,9 @@ def main() -> int:
         trigger = doc.get("on") if isinstance(doc, dict) else None
         if isinstance(trigger, dict) and "pull_request" in trigger:
             pull_request_files.append(name)
+            group = ((doc.get("concurrency") or {}).get("group") if isinstance(doc, dict) and isinstance(doc.get("concurrency"), dict) else None)
+            if isinstance(group, str) and "!contains(toJSON(github.event.changes), 'base')" in group:
+                isolated_groups += 1
             jobs = doc.get("jobs") if isinstance(doc, dict) else None
             if isinstance(jobs, dict):
                 for jid, job in jobs.items():
@@ -342,6 +363,14 @@ def main() -> int:
                 f"{name}: named as one of the workflows the branches filter "
                 "used to silence, and it has no pull_request trigger"
             )
+    # Every pull_request workflow in this tree has a concurrency group. A
+    # count that falls means the isolation was deleted rather than the
+    # workflows going away (that case is the minimum above).
+    if isolated_groups < MIN_PULL_REQUEST_WORKFLOWS:
+        problems.append(
+            f"concurrency isolation: {isolated_groups} pull_request workflows, "
+            f"want at least {MIN_PULL_REQUEST_WORKFLOWS}"
+        )
     if len(pull_request_files) < MIN_PULL_REQUEST_WORKFLOWS:
         problems.append(
             f"pull_request workflows: {len(pull_request_files)}, want at least "

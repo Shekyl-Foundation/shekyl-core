@@ -21,7 +21,10 @@ on:
 # queue out ALL runners (measured: ~80% of CI wait). `github.ref` is
 # unique per PR (refs/pull/N/merge), so only same-PR runs supersede.
 concurrency:
-  group: codeql-${{ github.ref }}
+  # A title or body edit is `edited` and does not change the base. It has its
+  # own group so cancel-in-progress does not abort the run that edit is not
+  # replacing. A base change stays in the main group and does replace it.
+  group: codeql-${{ github.ref }}${{ github.event.action == 'edited' && !contains(toJSON(github.event.changes), 'base') && '-edited' || '' }}
   cancel-in-progress: true
 
 jobs:

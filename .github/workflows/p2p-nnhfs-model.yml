@@ -45,7 +45,7 @@ on:
   workflow_dispatch:
 
 concurrency:
-  group: p2p-nnhfs-model-${{ github.ref }}
+  group: p2p-nnhfs-model-${{ github.ref }}${{ github.event.action == 'edited' && !contains(toJSON(github.event.changes), 'base') && '-edited' || '' }}
   cancel-in-progress: true
 
 permissions:

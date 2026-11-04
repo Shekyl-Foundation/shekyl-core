@@ -47,7 +47,7 @@ on:
     branches: [dev, main]
 
 concurrency:
-  group: grep-gates-${{ github.ref }}
+  group: grep-gates-${{ github.ref }}${{ github.event.action == 'edited' && !contains(toJSON(github.event.changes), 'base') && '-edited' || '' }}
   cancel-in-progress: true
 
 permissions:

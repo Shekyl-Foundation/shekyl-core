@@ -42,7 +42,7 @@ on:
 # Own concurrency group (distinct from build.yml's `build-<ref>`) so same-PR
 # reruns of the Rust gate supersede only each other, not the OS build run.
 concurrency:
-  group: rust-audit-${{ github.ref }}
+  group: rust-audit-${{ github.ref }}${{ github.event.action == 'edited' && !contains(toJSON(github.event.changes), 'base') && '-edited' || '' }}
   cancel-in-progress: true
 
 permissions:

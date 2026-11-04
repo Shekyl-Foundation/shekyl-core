@@ -34,7 +34,7 @@ on:
   workflow_dispatch:
 
 concurrency:
-  group: rpc-channel-model-${{ github.ref }}
+  group: rpc-channel-model-${{ github.ref }}${{ github.event.action == 'edited' && !contains(toJSON(github.event.changes), 'base') && '-edited' || '' }}
   cancel-in-progress: true
 
 permissions:

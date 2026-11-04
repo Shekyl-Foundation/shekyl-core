@@ -45,7 +45,7 @@ on:
     paths: *paths
 
 concurrency:
-  group: rpc-route-liveness-${{ github.ref }}
+  group: rpc-route-liveness-${{ github.ref }}${{ github.event.action == 'edited' && !contains(toJSON(github.event.changes), 'base') && '-edited' || '' }}
   cancel-in-progress: true
 
 permissions:

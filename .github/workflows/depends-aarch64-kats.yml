@@ -35,7 +35,7 @@ on:
   workflow_dispatch:
 
 concurrency:
-  group: depends-aarch64-kats-${{ github.ref }}
+  group: depends-aarch64-kats-${{ github.ref }}${{ github.event.action == 'edited' && !contains(toJSON(github.event.changes), 'base') && '-edited' || '' }}
   cancel-in-progress: true
 
 permissions:

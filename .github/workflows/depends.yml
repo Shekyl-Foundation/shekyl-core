@@ -37,7 +37,7 @@ on:
 # queue out ALL runners (measured: ~80% of CI wait). `github.ref` is
 # unique per PR (refs/pull/N/merge), so only same-PR runs supersede.
 concurrency:
-  group: depends-${{ github.ref }}
+  group: depends-${{ github.ref }}${{ github.event.action == 'edited' && !contains(toJSON(github.event.changes), 'base') && '-edited' || '' }}
   cancel-in-progress: true
 
 permissions:

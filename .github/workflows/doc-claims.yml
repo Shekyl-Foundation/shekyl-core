@@ -63,7 +63,7 @@ on:
       - ".github/workflows/doc-claims.yml"
 
 concurrency:
-  group: doc-claims-${{ github.ref }}
+  group: doc-claims-${{ github.ref }}${{ github.event.action == 'edited' && !contains(toJSON(github.event.changes), 'base') && '-edited' || '' }}
   cancel-in-progress: true
 
 permissions:

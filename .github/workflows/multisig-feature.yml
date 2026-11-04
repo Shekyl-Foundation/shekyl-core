@@ -72,7 +72,7 @@ on:
     paths: *paths
 
 concurrency:
-  group: multisig-feature-${{ github.ref }}
+  group: multisig-feature-${{ github.ref }}${{ github.event.action == 'edited' && !contains(toJSON(github.event.changes), 'base') && '-edited' || '' }}
   cancel-in-progress: true
 
 permissions:
