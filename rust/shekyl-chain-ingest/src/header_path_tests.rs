@@ -145,7 +145,7 @@ fn validate_said<'id, V: ChainView<'id, Fault = StoreError>>(
         seed,
         target,
         &references,
-        &shekyl_network::HARNESS_NETWORK_ID,
+        &trust.network_id(),
         FormAttempt::FIRST,
     )
     .expect("the mock answers")
@@ -242,7 +242,7 @@ fn the_header_path_agrees_with_validate_on_every_captured_block() {
                         seed,
                         target,
                         &references,
-                        &shekyl_network::HARNESS_NETWORK_ID,
+                        &rules.trust().network_id(),
                         FormAttempt::FIRST,
                     )
                     .expect("the mock answers")
@@ -354,7 +354,7 @@ fn at_first_later_block(
                     seed,
                     target,
                     &references,
-                    &shekyl_network::HARNESS_NETWORK_ID,
+                    &rules.trust().network_id(),
                     FormAttempt::FIRST,
                 )
                 .expect("mock")
@@ -697,7 +697,7 @@ fn bind_body_agrees_with_validate() {
                         seed,
                         target,
                         &references,
-                        &shekyl_network::HARNESS_NETWORK_ID,
+                        &rules.trust().network_id(),
                         FormAttempt::FIRST,
                     )
                     .expect("mock")
@@ -907,7 +907,7 @@ fn appended_bytes_are_not_the_transaction() {
                     seed,
                     target,
                     &references,
-                    &shekyl_network::HARNESS_NETWORK_ID,
+                    &rules.trust().network_id(),
                     FormAttempt::FIRST,
                 )
                 .expect("mock")
@@ -1006,7 +1006,7 @@ fn a_longhash_the_target_refuses_is_d1_on_both_paths() {
                 seed,
                 target,
                 &references,
-                &shekyl_network::HARNESS_NETWORK_ID,
+                &rules.trust().network_id(),
                 FormAttempt::FIRST,
             )
             .expect("the mock answers")
@@ -1057,7 +1057,7 @@ fn a_judged_header_forms_the_block_without_hashing() {
                         seed,
                         target,
                         &references,
-                        &shekyl_network::HARNESS_NETWORK_ID,
+                        &rules.trust().network_id(),
                         FormAttempt::FIRST,
                     )
                     .expect("mock")
@@ -1066,7 +1066,7 @@ fn a_judged_header_forms_the_block_without_hashing() {
                         candidate.clone(),
                         &judged,
                         &references,
-                        &shekyl_network::HARNESS_NETWORK_ID,
+                        &rules.trust().network_id(),
                     )
                     .expect("forms from the header");
                     assert_eq!(from_header.coverage(), from_bytes.coverage());
