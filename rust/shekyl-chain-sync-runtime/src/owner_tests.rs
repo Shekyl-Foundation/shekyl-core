@@ -265,6 +265,7 @@ fn an_owner_exit_publishes_no_view_and_reports_how_it_ended() {
         ended: ended_tx.clone(),
         stop: stop.clone(),
         how: super::Ended::Failed(super::PANICKED),
+        syncing: true,
     };
     assert_eq!(*node.borrow(), SyncState::Synced);
     assert_eq!(*ended.borrow(), None, "a running owner has not ended");
@@ -287,6 +288,7 @@ fn an_owner_exit_publishes_no_view_and_reports_how_it_ended() {
             ended: ended_tx.clone(),
             stop: stop.clone(),
             how: super::Ended::Failed(super::PANICKED),
+            syncing: true,
         };
         panic!("the owner's task");
     }));
@@ -300,6 +302,25 @@ fn an_owner_exit_publishes_no_view_and_reports_how_it_ended() {
         ended: ended_tx,
         stop,
         how: super::Ended::Failed(super::PANICKED),
+        syncing: true,
     });
     assert_eq!(*ended.borrow(), Some(super::Ended::Stopped));
+    // An owner that ends before its hub never published: the state at open
+    // stands (a node declared offline or closed is `Synced` with no seam),
+    // and the end is still reported.
+    let (open, at_open) = tokio::sync::watch::channel(SyncState::Synced);
+    let (unbound_tx, unbound) = tokio::sync::watch::channel(None);
+    drop(super::EndGuard {
+        state: open,
+        ended: unbound_tx,
+        stop: tokio::sync::watch::channel(false).1,
+        how: super::Ended::Failed("the seam never bound, so chain sync never started"),
+        syncing: false,
+    });
+    assert_eq!(
+        *at_open.borrow(),
+        SyncState::Synced,
+        "an unbound owner's end overwrote the state at open"
+    );
+    assert!(matches!(*unbound.borrow(), Some(super::Ended::Failed(_))));
 }

@@ -133,12 +133,13 @@ pub struct OwnerParts<C: Clock + Clone, R> {
     pub pool_hashes: Arc<dyn Fn() -> Vec<[u8; HASH_SIZE]> + Send + Sync>,
     /// The router's output.
     pub routed: mpsc::UnboundedReceiver<Routed>,
-    /// Where the derived sync state is published (CS-Q2 step 8): the
-    /// node's one sync sender (`shekyl_node::Node::sync()`, cloned), which
-    /// the RPC's facts, the miner's follower and the relay gate read. The
-    /// owner is its publisher and holds no other. The node keeps its
-    /// sender, so the watch does not close when this task ends; the task
-    /// publishes [`SyncState::NoView`] on every exit.
+    /// Where the derived sync state is published (CS-Q2 step 8), which the
+    /// RPC's facts, the miner's follower and the relay gate read. The owner
+    /// is its only publisher: the node hands this sender over and keeps a
+    /// receiver. [`spawn`] publishes the declaration's state at open
+    /// before it returns; [`Running`] keeps a clone that never sends, so
+    /// the watch does not close when the task ends, and the task publishes
+    /// [`SyncState::NoView`] on every exit.
     pub state: watch::Sender<SyncState>,
 }
 
@@ -152,6 +153,10 @@ pub struct Running {
     alarm: watch::Receiver<bool>,
     view: watch::Receiver<SyncView<SocketId>>,
     ended: watch::Receiver<Option<Ended>>,
+    /// Holds the state watch open after the task ends, so a reader sees
+    /// the [`SyncState::NoView`] the task published, not a closed watch.
+    /// Never sends.
+    _state_open: watch::Sender<SyncState>,
 }
 
 impl Running {
@@ -217,7 +222,11 @@ where
         },
         &name,
     )?;
+    // The state at open is the owner's first publish (CS-Q2 step 8), made
+    // before this returns, so a reader of the node just opened reads it.
+    parts.state.send_replace(parts.declaration.state_at_open());
     let state = parts.state.subscribe();
+    let state_open = parts.state.clone();
     let (alarm_tx, alarm) = watch::channel(false);
     let (view_tx, view) = watch::channel(SyncView::empty());
     let (stop_tx, stop_rx) = watch::channel(false);
@@ -234,6 +243,7 @@ where
         alarm,
         view,
         ended,
+        _state_open: state_open,
     })
 }
 
@@ -259,12 +269,15 @@ const ENGINE_CLOSED: &str = "the timing engine closed";
 /// Reports the owner task's end, however it ends: a stop, a closed input
 /// and a panic alike.
 ///
-/// It publishes [`SyncState::NoView`]. The node keeps its own sender, so
-/// the watch does not close and the facts' and the follower's
-/// closed-watch reading never fires; without this publish they would keep
-/// the last state, including `Synced`, after the owner is gone. It also
-/// sends [`Ended`] on [`Running::ended`]: each exit sets `how` first, and
-/// an unwind leaves [`PANICKED`]. Once a stop was asked, the end is
+/// Once the owner has its hub (`syncing`), it publishes
+/// [`SyncState::NoView`]. [`Running`] keeps the watch open, so the facts'
+/// and the follower's closed-watch reading never fires; without this
+/// publish they would keep the last state, including `Synced`, after the
+/// owner is gone. Before the hub, the state at open stands: an owner that
+/// never had a hub never changed it, and a node declared offline or closed
+/// is `Synced` with no seam at all. It always sends [`Ended`] on
+/// [`Running::ended`]: each exit sets `how` first, and an unwind leaves
+/// [`PANICKED`]. Once a stop was asked, the end is
 /// [`Ended::Stopped`] whatever `how` says: [`Running::stop`] shuts the
 /// owner's runtime down, which can cancel the task before it reads the
 /// request.
@@ -273,11 +286,15 @@ struct EndGuard {
     ended: watch::Sender<Option<Ended>>,
     stop: watch::Receiver<bool>,
     how: Ended,
+    /// The owner has its hub and publishes the state.
+    syncing: bool,
 }
 
 impl Drop for EndGuard {
     fn drop(&mut self) {
-        self.state.send_replace(SyncState::NoView);
+        if self.syncing {
+            self.state.send_replace(SyncState::NoView);
+        }
         let how = if *self.stop.borrow() {
             Ended::Stopped
         } else {
@@ -458,6 +475,7 @@ async fn run<C, R>(
         ended,
         stop: stop.clone(),
         how: Ended::Failed(PANICKED),
+        syncing: false,
     };
     let hub = tokio::select! {
         biased;
@@ -473,6 +491,7 @@ async fn run<C, R>(
             }
         },
     };
+    end.syncing = true;
     let (inputs, mut input_rx) = mpsc::unbounded_channel();
     let schedule: Box<dyn Fn(BlockHeight) -> shekyl_chain_rules::RuleSet + Send> =
         Box::new(move |height| rules.in_force(height));

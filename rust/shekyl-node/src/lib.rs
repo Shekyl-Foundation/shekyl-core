@@ -232,9 +232,13 @@ struct Slots {
 /// The daemon's one node (module docs).
 pub struct Node {
     slots: Arc<Slots>,
-    /// Chain sync's state, as the follower reads it. The node publishes
-    /// the state at open; chain sync's cutover publishes from then on.
-    sync: tokio::sync::watch::Sender<SyncState>,
+    /// Chain sync's state, as the follower reads it. The owner is its only
+    /// publisher: the node hands it the one sender and keeps this receiver.
+    sync: tokio::sync::watch::Receiver<SyncState>,
+    /// A sender for this crate's tests, which set the state by hand. Not in
+    /// the shipped build: there the owner holds the only sender.
+    #[cfg(test)]
+    sync_tx: tokio::sync::watch::Sender<SyncState>,
     /// What the board holds, as the follower last left it.
     posting: tokio::sync::watch::Receiver<Posting>,
     mining: Arc<MiningControl>,
@@ -304,9 +308,11 @@ impl Node {
         let network = args.config.network;
         let declared = declaration(args.config);
         // No view until genesis has connected, so the follower never builds
-        // a genesis of its own; the declaration's state at open is published
-        // after.
-        let (sync, sync_rx) = tokio::sync::watch::channel(SyncState::NoView);
+        // a genesis of its own. The owner, started after genesis connects,
+        // publishes the declaration's state at open and every state after.
+        let (sync_tx, sync) = tokio::sync::watch::channel(SyncState::NoView);
+        #[cfg(test)]
+        let test_sync_tx = sync_tx.clone();
         let (found, found_inbox) = shekyl_miner::found_blocks();
         let (posting_tx, posting) =
             tokio::sync::watch::channel(Posting::Withdrawn(NoJob::Starting));
@@ -330,7 +336,7 @@ impl Node {
                 keys,
                 miner: MinerFeed {
                     found: found_inbox,
-                    sync: sync_rx.clone(),
+                    sync: sync.clone(),
                 },
                 posting: posting_tx,
                 witness: Arc::clone(&witness),
@@ -413,7 +419,7 @@ impl Node {
             },
             declaration: declared,
             pool: complement_pool,
-            state: sync.clone(),
+            state: sync_tx,
         }) {
             Ok(owner) => owner,
             Err(error) => {
@@ -486,13 +492,12 @@ impl Node {
         tracing::info!(
             "chain sync's state at open: {at_open:?} (declared {declared:?}); the node posts a template only while it reads Synced"
         );
-        sync.send_replace(at_open);
         let door = service.door();
         let surroundings = Arc::new(Surroundings {
             pool: Arc::clone(&pool_slot),
             data_dir: args.config.data_dir.clone(),
             offline: args.config.offline(),
-            sync: sync_rx,
+            sync: sync.clone(),
             latch,
             view: sync_owner.view(),
             health: pool_health.clone(),
@@ -554,6 +559,8 @@ impl Node {
         let node = Self {
             slots,
             sync,
+            #[cfg(test)]
+            sync_tx: test_sync_tx,
             posting,
             mining,
             armed: args.config.dev.rpc,
@@ -589,10 +596,10 @@ impl Node {
     }
 
     /// Chain sync's state, which the follower posts a job on only while it
-    /// reads `Synced`. Chain sync's cutover is its publisher.
+    /// reads `Synced`. The owner is its only publisher; this is a reader.
     #[must_use]
-    pub const fn sync(&self) -> &tokio::sync::watch::Sender<SyncState> {
-        &self.sync
+    pub fn sync(&self) -> tokio::sync::watch::Receiver<SyncState> {
+        self.sync.clone()
     }
 
     /// How chain sync's owner ended, once it has: `None` while it runs.

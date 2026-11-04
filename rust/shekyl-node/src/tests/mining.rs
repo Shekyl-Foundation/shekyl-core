@@ -410,7 +410,7 @@ fn a_job_withdrawn_mid_wait_ends_generateblocks() {
     let node = open_posted(dir.path(), &[]);
     let row = shekyl_rpc_types::methods::json_rpc("generateblocks").expect("a row");
     let handles = node.handles();
-    let sync = node.sync().clone();
+    let sync = node.sync_tx.clone();
     let answered = a_runtime().block_on(async {
         let withdraw = async {
             tokio::time::sleep(Duration::from_millis(300)).await;
@@ -637,7 +637,7 @@ fn a_node_on_an_open_network_posts_nothing_until_chain_sync_says_synced() {
         .chain
         .chain_tip()
         .is_ok_and(|tip| !tip.synchronized));
-    node.sync().send_replace(SyncState::Synced);
+    node.sync_tx.send_replace(SyncState::Synced);
     let started = std::time::Instant::now();
     while !matches!(*posting.borrow_and_update(), Posting::Posted(_)) {
         assert!(
