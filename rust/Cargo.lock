@@ -3828,6 +3828,7 @@ version = "3.1.0"
 dependencies = [
  "bech32",
  "serde",
+ "serde_json",
  "shekyl-crypto-hash",
  "shekyl-encoding",
  "shekyl-network",

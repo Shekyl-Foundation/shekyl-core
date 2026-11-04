@@ -259,8 +259,10 @@ prover Option D and is withdrawn for the E′ product path.)*
 ### 5.3 Group identity — **the address fingerprint** (`group_id` retired)
 
 The group's identity is the **address fingerprint** (§6.3):
-`cSHAKE256(canonical(MultisigAddressPayload), "shekyl/multisig-address-v1")`.
-It is per-group, computable by every participant from the address alone, and
+`cSHAKE256(len(tag) ‖ tag ‖ canonical(MultisigAddressPayload), "shekyl/multisig-address-v2")`,
+where `tag` is the network's name, `shekyl/<network>`: a group is derived from
+keys and addresses, which exist before any genesis, so it binds the name, not
+the genesis-derived id (`NETWORK_IDENTITY.md` NI-R15). It is per-group, computable by every participant from the address alone, and
 covers the group's whole public state (`B_group`, `Y_group`, the N KEM pubkeys,
 both version axes, `m`/`n`). Four independent implementers exchange the address
 file and compare the 67-char fingerprint string: same bytes → same fingerprint,
@@ -402,9 +404,13 @@ channel, imported at recipient end.
 send confirmation:
 
 ```
-address_fingerprint = cSHAKE256(canonical(MultisigAddressPayload),
-                                customization = "shekyl/multisig-address-v1")
+address_fingerprint = cSHAKE256(len(tag) ‖ tag ‖ canonical(MultisigAddressPayload),
+                                customization = "shekyl/multisig-address-v2")
+tag = "shekyl/<network>"   # one length byte, then the name
 ```
+
+Vectors: `docs/test_vectors/MULTISIG_FINGERPRINT_V2.json`, rebuilt by
+`scripts/kat/multisig_fingerprint_oracle.py`.
 
 The address is on **no consensus path** (no C++ mirror, no FFI, no leaf), so
 nothing requires byte-identity with the daemon — the only reason the

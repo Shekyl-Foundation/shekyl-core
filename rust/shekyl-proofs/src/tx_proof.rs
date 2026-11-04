@@ -49,7 +49,11 @@ use shekyl_crypto_pq::kem::SharedSecret;
 use shekyl_crypto_pq::output::{derive_proof_secrets, rederive_combined_ss, ProofSecrets};
 use shekyl_crypto_pq::schnorr;
 
-pub const CURRENT_PROOF_VERSION: u8 = 1;
+/// The tx proof format's version, the proof's first byte. Version 2: the
+/// address bytes the proof binds start with the network's 16-byte id, where
+/// version 1 bound its one-byte code (`NETWORK_IDENTITY.md` NI-R15). A
+/// version-1 proof is refused as an unsupported version.
+pub const CURRENT_PROOF_VERSION: u8 = 2;
 
 const OUTBOUND_DOMAIN: &[u8] = b"shekyl-outbound-tx-proof-v1";
 const INBOUND_DOMAIN: &[u8] = b"shekyl-inbound-tx-proof-v1";

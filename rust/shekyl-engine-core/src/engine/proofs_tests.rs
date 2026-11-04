@@ -36,11 +36,20 @@ fn test_address() -> ShekylAddress {
 fn canonical_address_bytes_layout_is_pinned() {
     let addr = test_address();
     let bytes = canonical_address_bytes(&addr);
-    assert_eq!(bytes.len(), 1 + 32 + 32 + 1184);
-    assert_eq!(bytes[0], Network::Mainnet.code());
-    assert_eq!(&bytes[1..33], &[0xAA; 32]);
-    assert_eq!(&bytes[33..65], &[0xBB; 32]);
-    assert_eq!(&bytes[65..], &[0xCC; 1184][..]);
+    assert_eq!(bytes.len(), 16 + 32 + 32 + 1184);
+    assert_eq!(
+        &bytes[..16],
+        &Network::Mainnet.network_id()[..],
+        "the id at byte 0"
+    );
+    assert_eq!(&bytes[16..48], &[0xAA; 32]);
+    assert_eq!(&bytes[48..80], &[0xBB; 32]);
+    assert_eq!(&bytes[80..], &[0xCC; 1184][..]);
+    // The same keys on another network are other bytes: a proof made against
+    // one chain does not verify against another (NI-R15).
+    let mut other = addr.clone();
+    other.network = Network::Testnet;
+    assert_ne!(canonical_address_bytes(&other)[..16], bytes[..16]);
 }
 
 // ── tx-proof framing ─────────────────────────────────────────────

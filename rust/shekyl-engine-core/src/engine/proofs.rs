@@ -323,7 +323,12 @@ pub enum CheckedReserveProof {
 // ── Canonical address bytes ──────────────────────────────────────────
 
 /// The canonical decoded-address byte form both proof sides bind to:
-/// `network[1] ‖ spend_key[32] ‖ view_key[32] ‖ ml_kem_encap_key`.
+/// `network_id[16] ‖ spend_key[32] ‖ view_key[32] ‖ ml_kem_encap_key`.
+///
+/// `network_id` is the address network's 16-byte genesis-derived id, at a
+/// fixed position (byte 0) with a fixed width: a tx or reserve proof is made
+/// against one chain after genesis, so it binds the id, not the network's
+/// name or code (`NETWORK_IDENTITY.md` NI-R15, NI-F13).
 ///
 /// This is **payment identity**, not the full address string.
 /// `msg_sign_pk` is the message-signing anchor (SM-R-8); it is not a
@@ -341,8 +346,9 @@ pub enum CheckedReserveProof {
 /// same address (a string binding would let re-encodings break
 /// verification of an honest proof).
 pub fn canonical_address_bytes(address: &ShekylAddress) -> Vec<u8> {
-    let mut out = Vec::with_capacity(1 + 32 + 32 + address.ml_kem_encap_key.len());
-    out.push(address.network.code());
+    let network_id = address.network.network_id();
+    let mut out = Vec::with_capacity(network_id.len() + 32 + 32 + address.ml_kem_encap_key.len());
+    out.extend_from_slice(&network_id);
     out.extend_from_slice(&address.spend_key);
     out.extend_from_slice(&address.view_key);
     out.extend_from_slice(&address.ml_kem_encap_key);

@@ -31,7 +31,11 @@ use shekyl_crypto_pq::key_image::KeyImage;
 use shekyl_crypto_pq::output::ProofSecrets;
 use shekyl_crypto_pq::schnorr;
 
-pub const CURRENT_PROOF_VERSION: u8 = 1;
+/// The reserve proof format's version, the proof's first byte. Version 2: the
+/// address bytes the proof binds start with the network's 16-byte id, where
+/// version 1 bound its one-byte code (`NETWORK_IDENTITY.md` NI-R15). A
+/// version-1 proof is refused as an unsupported version.
+pub const CURRENT_PROOF_VERSION: u8 = 2;
 
 const RESERVE_DOMAIN: &[u8] = b"shekyl-reserve-proof-v1";
 

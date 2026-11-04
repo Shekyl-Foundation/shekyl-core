@@ -384,6 +384,23 @@ fn test_04_reserve_proof_round_trip() {
     }
     assert_eq!(total, 10_000_000 + 10_000_001 + 10_000_002);
     eprintln!("[test_04] reserve proof round-trip OK, total={total}");
+
+    // A version-1 proof (the address bytes bound the network's code, before
+    // NI-R15) is refused as an unsupported version, by name.
+    let mut v1 = proof.clone();
+    v1[0] = 1;
+    let refused = verify_reserve_proof(
+        &v1,
+        &ctx.address_bytes,
+        &ctx.user_message,
+        &ctx.spend_pubkey,
+        &reserve_on_chain,
+    )
+    .expect_err("a version-1 reserve proof is refused");
+    assert!(
+        refused.to_string().contains("unsupported proof version 1"),
+        "{refused}"
+    );
 }
 
 // --------------------------------------------------------------------------

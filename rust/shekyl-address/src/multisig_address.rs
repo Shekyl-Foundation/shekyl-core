@@ -34,8 +34,8 @@
 //!
 //! # The fingerprint is the group's identity
 //!
-//! `cSHAKE256(canonical(MultisigAddressPayload), "shekyl/multisig-address-v1")` —
-//! per-group, computable by every participant from the address alone, and (with
+//! `cSHAKE256(len(tag) ‖ tag ‖ canonical(MultisigAddressPayload), "shekyl/multisig-address-v2")`,
+//! where `tag` is the network's name (`shekyl/<network>`) — per-group, computable by every participant from the address alone, and (with
 //! `B`/`Y` in the payload) covering the whole of the group's public state: both
 //! points, the KEM pubkeys, the versions, and `m`/`n`. This is the artifact the
 //! §5.5 setup ritual wanted ("did we all derive the same group?"), and it
@@ -366,12 +366,20 @@ impl MultisigAddressPayload {
 
 /// cSHAKE256 customization for [`address_fingerprint`] (SP 800-185).
 ///
-/// Versioned: a change to the canonical payload's preimage takes `-v2`, so it
-/// becomes a new domain rather than a silent reinterpretation of the old one.
-pub const MULTISIG_ADDRESS_FINGERPRINT_CUSTOMIZATION: &[u8] = b"shekyl/multisig-address-v1";
+/// Versioned: a change to the preimage takes a new version, so it becomes a
+/// new domain rather than a silent reinterpretation of the old one. `-v2`:
+/// the input starts with the network's name (`NETWORK_IDENTITY.md` NI-R15),
+/// where `-v1` relied on the payload's one-byte network code.
+pub const MULTISIG_ADDRESS_FINGERPRINT_CUSTOMIZATION: &[u8] = b"shekyl/multisig-address-v2";
 
 /// Compute the 32-byte address fingerprint:
-/// `cSHAKE256(canonical payload, "shekyl/multisig-address-v1")`.
+/// `cSHAKE256-32(S = "shekyl/multisig-address-v2", X = len(tag) ‖ tag ‖ canonical payload)`.
+///
+/// `tag` is the payload network's name, `shekyl/<network>`, behind its
+/// one-byte length at a fixed position (byte 0). A group's address is
+/// derived from keys and addresses, which exist before any genesis, so it
+/// binds the network's name, not its genesis-derived id
+/// (`NETWORK_IDENTITY.md` NI-R10, NI-R15).
 ///
 /// This is the primary human-verifiable identifier for a multisig group address
 /// (PQC_MULTISIG.md SS6.3) **and, under E′, the group's identity** — the artifact
@@ -401,10 +409,13 @@ pub const MULTISIG_ADDRESS_FINGERPRINT_CUSTOMIZATION: &[u8] = b"shekyl/multisig-
 /// `shekyl/receive-label-hash-v1`); `shekyl_crypto_hash::keccak256` keeps exactly
 /// the consumers that require parity.
 pub fn address_fingerprint(payload: &MultisigAddressPayload) -> [u8; 32] {
-    shekyl_crypto_hash::cshake256_32(
-        MULTISIG_ADDRESS_FINGERPRINT_CUSTOMIZATION,
-        &payload.to_canonical_bytes(),
-    )
+    let tag = payload.network.tag().as_bytes();
+    let canonical = payload.to_canonical_bytes();
+    let mut input = Vec::with_capacity(1 + tag.len() + canonical.len());
+    input.push(u8::try_from(tag.len()).expect("a network's tag is under 256 bytes (tested)"));
+    input.extend_from_slice(tag);
+    input.extend_from_slice(&canonical);
+    shekyl_crypto_hash::cshake256_32(MULTISIG_ADDRESS_FINGERPRINT_CUSTOMIZATION, &input)
 }
 
 /// Format a fingerprint as grouped hex (4-char blocks separated by spaces).
@@ -681,27 +692,84 @@ mod tests {
         }
     }
 
+    /// The vector file every independent implementer reproduces
+    /// (`scripts/kat/multisig_fingerprint_oracle.py` recomputes it).
+    const FINGERPRINT_VECTORS: &str =
+        include_str!("../../../docs/test_vectors/MULTISIG_FINGERPRINT_V2.json");
+
     #[test]
     fn address_fingerprint_kat() {
-        // Fixed payload → fixed cSHAKE256 fingerprint. This vector *defines* the
-        // fingerprint bytes every independent implementer (payer wallet, scanner,
-        // exchange, light client) must reproduce, so it is a consensus artifact:
-        // the code is tested against it, never it against the code (rule 30). If
-        // this fails, the canonical payload preimage, the customization string, or
-        // the hash changed — do NOT regenerate the constant to make it pass; that
-        // silently moves the identity all implementers rely on. Either revert the
-        // change or, if the move is deliberate, bump the customization to `-v2`
-        // (a new domain) and re-pin under that version with a recorded rationale.
+        // Fixed payload → fixed cSHAKE256 fingerprint, per network. These
+        // vectors *define* the fingerprint bytes every independent implementer
+        // (payer wallet, scanner, exchange, light client) must reproduce, so
+        // they are the code's test, never the other way round (rule 30). If
+        // this fails, the preimage, the customization or the hash changed — do
+        // NOT regenerate the vectors to make it pass. Either revert, or bump
+        // the customization (a new domain) and re-pin with a recorded
+        // rationale, as `-v2` did for the network's name (NI-R15, 2026-11-04).
+        let vectors: serde_json::Value =
+            serde_json::from_str(FINGERPRINT_VECTORS).expect("vectors parse");
+        assert_eq!(
+            vectors["customization"].as_str(),
+            core::str::from_utf8(MULTISIG_ADDRESS_FINGERPRINT_CUSTOMIZATION).ok()
+        );
+        let mut seen = Vec::new();
+        for net in Network::ALL {
+            let payload = MultisigAddressPayload::new(
+                net,
+                2,
+                2,
+                [0xB1; 32],
+                [0x71; 32],
+                (0..2).map(|i| vec![i; HYBRID_KEM_PUBKEY_LEN]).collect(),
+            )
+            .unwrap();
+            let fp = address_fingerprint(&payload);
+            let hex: String = fp.iter().map(|b| format!("{b:02x}")).collect();
+            assert_eq!(
+                vectors["fingerprints"][net.name()].as_str(),
+                Some(hex.as_str()),
+                "{net}"
+            );
+            seen.push(fp);
+        }
+        seen.sort_unstable();
+        seen.dedup();
+        assert_eq!(
+            seen.len(),
+            Network::ALL.len(),
+            "two networks share a fingerprint"
+        );
+    }
+
+    /// The fingerprint's input is `len(tag) ‖ tag ‖ payload`, the name first:
+    /// the same payload hashed without the name is not the fingerprint.
+    #[test]
+    fn the_fingerprint_starts_with_the_networks_name() {
         let payload = make_test_payload(2, 2);
+        let tag = Network::Mainnet.tag().as_bytes();
+        let mut input = vec![u8::try_from(tag.len()).unwrap()];
+        input.extend_from_slice(tag);
+        input.extend_from_slice(&payload.to_canonical_bytes());
         let fp = address_fingerprint(&payload);
         assert_eq!(
             fp,
-            [
-                0xed, 0x49, 0xa8, 0x39, 0xc9, 0xef, 0x73, 0x91, 0x17, 0x70, 0xac, 0x15, 0xcd, 0x5b,
-                0x11, 0x10, 0xd0, 0x8b, 0xeb, 0xf6, 0xb3, 0xe7, 0xd9, 0xd6, 0xf2, 0xed, 0x3a, 0xc9,
-                0x66, 0x1f, 0x6f, 0x2e,
-            ],
+            shekyl_crypto_hash::cshake256_32(MULTISIG_ADDRESS_FINGERPRINT_CUSTOMIZATION, &input)
         );
+        assert_ne!(
+            fp,
+            shekyl_crypto_hash::cshake256_32(
+                MULTISIG_ADDRESS_FINGERPRINT_CUSTOMIZATION,
+                &payload.to_canonical_bytes()
+            ),
+            "the name is load-bearing"
+        );
+        for net in Network::ALL {
+            assert!(
+                u8::try_from(net.tag().len()).is_ok(),
+                "{net}: the tag fits its length byte"
+            );
+        }
     }
 
     #[test]
