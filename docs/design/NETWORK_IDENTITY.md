@@ -2,7 +2,7 @@
 
 **Families (registered in `IMPLEMENTATION_INDEX.md` §2, rule 94):** **`NI-R`** (rulings), **`NI-Q`** (questions) and **`NI-F`** (findings). `NI-` is free at `8f2b68dbbf`.
 **Ground:** `feat/drs-s1-no-checkpoints` at `8f2b68dbbf` (#1263, 2026-11-03), read from the tree. The design review's first draft read `dev` at `b8f1b76c0`; the two places this ground differs from that draft are NI-F1 and NI-F2.
-**Status:** OPEN — Round 0. NI-R1…NI-R12 RULED by Rick 2026-11-03 (NI-R6 rules NI-Q11, NI-R7 NI-Q12, NI-R8 and NI-R9 NI-F7, NI-R10 NI-F9, NI-R11 NI-F10, NI-R12 amends NI-R10); NI-Q10's shape RULED the same day (§3). NI-Q1…NI-Q9 are building as recommended, in §8's order. Mainnet's row is PROVISIONAL until the genesis ceremony (NI-R11). Each row of §5 carries its own status.
+**Status:** OPEN — Round 0. NI-R1…NI-R12 RULED by Rick 2026-11-03 (NI-R6 rules NI-Q11, NI-R7 NI-Q12, NI-R8 and NI-R9 NI-F7, NI-R10 NI-F9, NI-R11 NI-F10, NI-R12 amends NI-R10); NI-Q10's shape RULED the same day (§3). PR 1 (NI-Q1, Q2, Q3, Q8, Q11, Q12) is built on #1264, every census row of §6 disposed (two carried by #1237); NI-Q4…Q7, Q9 and Q10 follow in §8's order. Mainnet's row is PROVISIONAL until the genesis ceremony (NI-R11). Each row of §5 carries its own status.
 **Related:** [`FCMP_SPEND_SIGNING_PREIMAGE.md`](FCMP_SPEND_SIGNING_PREIMAGE.md) (NI-Q4), [`CRYPTO_DOMAIN_REGISTRY.tsv`](CRYPTO_DOMAIN_REGISTRY.tsv) (NI-Q9), [`GENESIS_TX_WIRE_FORMAT.md`](GENESIS_TX_WIRE_FORMAT.md) (the genesis content), rule [`71-network-uniformity`](../../.cursor/rules/71-network-uniformity.mdc).
 
 ---
