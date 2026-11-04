@@ -52,8 +52,16 @@ shekyl-oxide output. Its full end-to-end proof is the live-oracle spend KAT
 
 ```
 payload(i) = prefix_blob ‖ ct_base_blob ‖ prunable_hash ‖ pqc_header(i) ‖ all_key_hashes
-signed_hash(i) = keccak256(payload(i))         # PQC sig (ML-DSA+ed25519) signs this
+signed_hash(i) = cSHAKE256-32(S = "shekyl/fcmp-spend-signing-v1",
+                              X = network_id ‖ payload(i))   # PQC sig (ML-DSA+ed25519) signs this
 ```
+
+`network_id` is the 16-byte genesis-derived id of the network the spend is
+for (`NETWORK_IDENTITY.md` NI-Q4, NI-R10): a signature is valid on one
+network by construction. The C++ assembly signed `keccak256(payload(i))`;
+the payload bytes are unchanged, and the KAT (`pqc_signing_preimage_kat.rs`)
+keeps its captured payloads and pins each hash per network against
+`scripts/kat/spend_signing_hash_oracle.py`.
 
 - **prefix_blob** = `serialize(transaction_prefix)` — see §1.2. *Includes the tx version.*
 - **ct_base_blob** = `CtSigBase::serialize_ctsig_base(inputs, outputs)` — see §1.3.
