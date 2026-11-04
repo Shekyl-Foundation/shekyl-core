@@ -46,7 +46,7 @@ on:
       - '.github/workflows/gui-drift.yml'
 
 concurrency:
-  group: gui-drift-${{ github.ref }}${{ github.event.action == 'edited' && !contains(toJSON(github.event.changes), 'base') && '-edited' || '' }}
+  group: gui-drift-${{ github.ref }}${{ github.event.action == 'edited' && !contains(toJSON(github.event.changes), '"base":') && '-edited' || '' }}
   cancel-in-progress: true
 
 permissions:
@@ -54,7 +54,7 @@ permissions:
 
 jobs:
   wallet-ref:
-    if: (github.event.action != 'edited' || contains(toJSON(github.event.changes), 'base'))
+    if: (github.event.action != 'edited' || contains(toJSON(github.event.changes), '"base":'))
     name: wallet ref
     runs-on: ubuntu-latest
     # `contents: read` cannot call the pulls API. The merge-queue path
@@ -131,7 +131,7 @@ jobs:
           echo "Wallet ref: $REF (candidate: ${CANDIDATE:-<empty>})"
 
   gui-builds-against-core:
-    if: (github.event.action != 'edited' || contains(toJSON(github.event.changes), 'base'))
+    if: (github.event.action != 'edited' || contains(toJSON(github.event.changes), '"base":'))
     name: shekyl-gui-wallet builds against this branch
     needs: wallet-ref
     # The wallet repository owns the recipe (system libraries, toolchain,

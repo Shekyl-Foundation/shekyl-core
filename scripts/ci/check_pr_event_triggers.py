@@ -18,7 +18,7 @@ What a passing `pull_request` trigger is:
 * a mapping, with no `branches` or `branches-ignore`
 * `types` exactly `[opened, synchronize, reopened, edited]`
 * every job carries
-  `(github.event.action != 'edited' || contains(toJSON(github.event.changes), 'base'))`
+  `(github.event.action != 'edited' || contains(toJSON(github.event.changes), '"base":'))`
   so a title edit runs nothing and a base change runs the job
 
 A job whose name interpolates `matrix.*` cannot carry it on the job `if`:
@@ -55,11 +55,12 @@ TYPES = ["opened", "synchronize", "reopened", "edited"]
 
 # `github.event.changes` is absent except on `edited`. Indexing it fails the
 # `if` on a push, so every job skips. `toJSON` of an absent value stays
-# defined, and that JSON contains `base` only when the base changed.
-# Comparing the object with `!= null` also did not come out true.
+# defined. The key is `"base":`, so a title that says "rebase" or
+# "database" is not a base change. Comparing the object with `!= null`
+# also did not come out true.
 CLAUSE_RE = re.compile(
-    r"\(\s*github\.event\.action\s*!=\s*'edited'\s*\|\|\s*"
-    r"contains\(toJSON\(github\.event\.changes\),\s*'base'\)\s*\)"
+    r"""\(\s*github\.event\.action\s*!=\s*'edited'\s*\|\|\s*"""
+    r"""contains\(toJSON\(github\.event\.changes\),\s*'"base":'\)\s*\)"""
 )
 
 # Kept in step with check_matrix_job_gating.ALLOWED. A row here that is not
@@ -99,6 +100,22 @@ def clause_in(value: object) -> bool:
     return isinstance(value, str) and CLAUSE_RE.search(value) is not None
 
 
+def pull_request_form(trigger: object) -> str | None:
+    """How this workflow names `pull_request`, or None when it does not.
+
+    A mapping can carry `types` and the retarget condition. A bare name
+    (`on: pull_request`, `on: [pull_request]`) is a workflow the structural
+    checker accepts and this gate would otherwise not see.
+    """
+    if trigger == "pull_request" or (
+        isinstance(trigger, list) and "pull_request" in trigger
+    ):
+        return "shorthand"
+    if isinstance(trigger, dict) and "pull_request" in trigger:
+        return "mapping"
+    return None
+
+
 def needs_list(job: dict) -> list[str] | None:
     needs = job.get("needs")
     if needs is None:
@@ -123,8 +140,7 @@ def _steps_lack_clause(filename: str, jid: str, job: dict) -> list[str]:
         if not isinstance(step, dict) or not clause_in(step.get("if")):
             out.append(
                 f"{filename}: job `{jid}` step {index} is missing the retarget "
-                "condition `(github.event.action != 'edited' || "
-                "contains(toJSON(github.event.changes), 'base'))`"
+                "condition " + _clause()
             )
     return out
 
@@ -133,8 +149,14 @@ def problems_in(filename: str, doc: object) -> list[str]:
     if not isinstance(doc, dict):
         return [f"{filename}: not a mapping"]
     trigger = doc.get("on")
-    if not isinstance(trigger, dict) or "pull_request" not in trigger:
+    form = pull_request_form(trigger)
+    if form is None:
         return []
+    if form == "shorthand":
+        return [
+            f"{filename}: `pull_request` is a bare event name, so it cannot "
+            "name `types` or the retarget condition. Write it as a mapping."
+        ]
     pr = trigger["pull_request"]
     problems: list[str] = []
     if not isinstance(pr, dict):
@@ -158,7 +180,7 @@ def problems_in(filename: str, doc: object) -> list[str]:
     # push: cancel-in-progress would abort the run the edit is not replacing.
     # Workflows with no concurrency group have nothing to cancel.
     group = (doc.get("concurrency") or {}).get("group") if isinstance(doc.get("concurrency"), dict) else None
-    if isinstance(group, str) and "!contains(toJSON(github.event.changes), 'base')" not in group:
+    if isinstance(group, str) and "!contains(toJSON(github.event.changes), '\"base\":')" not in group:
         problems.append(
             f"{filename}: concurrency group does not isolate a title or body "
             "edit from cancel-in-progress"
@@ -192,7 +214,7 @@ def problems_in(filename: str, doc: object) -> list[str]:
 
 def _clause() -> str:
     return (
-        "(github.event.action != 'edited' || contains(toJSON(github.event.changes), 'base'))"
+        "(github.event.action != 'edited' || contains(toJSON(github.event.changes), '\"base\":'))"
     )
 
 
@@ -274,6 +296,24 @@ def selftest() -> int:
             {"on": {"pull_request": None}, "jobs": {"a": _job(if_=clause)}},
             True,
         ),
+        (
+            "bare pull_request",
+            yaml.load(
+                "on: pull_request\njobs:\n  a:\n    runs-on: ubuntu-latest\n"
+                "    steps:\n      - run: 'true'\n",
+                Loader=StrictLoader,
+            ),
+            True,
+        ),
+        (
+            "list pull_request",
+            yaml.load(
+                "on: [push, pull_request]\njobs:\n  a:\n    runs-on: ubuntu-latest\n"
+                "    steps:\n      - run: 'true'\n",
+                Loader=StrictLoader,
+            ),
+            True,
+        ),
     ]
     failed = 0
     for label, doc, want_problem in cases:
@@ -291,7 +331,7 @@ jobs:
   archive:
     name: source archive
     if: >-
-      (github.event.action != 'edited' || contains(toJSON(github.event.changes), 'base'))
+      (github.event.action != 'edited' || contains(toJSON(github.event.changes), '"base":'))
       && (
       (github.event_name == 'push'))
     runs-on: ubuntu-latest
@@ -345,7 +385,7 @@ def main() -> int:
         if isinstance(trigger, dict) and "pull_request" in trigger:
             pull_request_files.append(name)
             group = ((doc.get("concurrency") or {}).get("group") if isinstance(doc, dict) and isinstance(doc.get("concurrency"), dict) else None)
-            if isinstance(group, str) and "!contains(toJSON(github.event.changes), 'base')" in group:
+            if isinstance(group, str) and "!contains(toJSON(github.event.changes), '\"base\":')" in group:
                 isolated_groups += 1
             jobs = doc.get("jobs") if isinstance(doc, dict) else None
             if isinstance(jobs, dict):

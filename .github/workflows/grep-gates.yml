@@ -47,7 +47,7 @@ on:
     branches: [dev, main]
 
 concurrency:
-  group: grep-gates-${{ github.ref }}${{ github.event.action == 'edited' && !contains(toJSON(github.event.changes), 'base') && '-edited' || '' }}
+  group: grep-gates-${{ github.ref }}${{ github.event.action == 'edited' && !contains(toJSON(github.event.changes), '"base":') && '-edited' || '' }}
   cancel-in-progress: true
 
 permissions:
@@ -55,7 +55,7 @@ permissions:
 
 jobs:
   grep-gates:
-    if: (github.event.action != 'edited' || contains(toJSON(github.event.changes), 'base'))
+    if: (github.event.action != 'edited' || contains(toJSON(github.event.changes), '"base":'))
     name: "Grep gates (bundled)"
     runs-on: ubuntu-latest
     timeout-minutes: 15

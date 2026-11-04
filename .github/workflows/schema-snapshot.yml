@@ -87,7 +87,7 @@ on:
 # queue out ALL runners (measured: ~80% of CI wait). `github.ref` is
 # unique per PR (refs/pull/N/merge), so only same-PR runs supersede.
 concurrency:
-  group: schema-snapshot-${{ github.ref }}${{ github.event.action == 'edited' && !contains(toJSON(github.event.changes), 'base') && '-edited' || '' }}
+  group: schema-snapshot-${{ github.ref }}${{ github.event.action == 'edited' && !contains(toJSON(github.event.changes), '"base":') && '-edited' || '' }}
   cancel-in-progress: true
 
 permissions:
@@ -95,7 +95,7 @@ permissions:
 
 jobs:
   assert-snapshots:
-    if: (github.event.action != 'edited' || contains(toJSON(github.event.changes), 'base'))
+    if: (github.event.action != 'edited' || contains(toJSON(github.event.changes), '"base":'))
     name: "Assert committed schema snapshots"
     runs-on: ubuntu-latest
     steps:
@@ -155,7 +155,7 @@ jobs:
           cargo test -p shekyl-peerlist address_file::snapshot --no-fail-fast
 
   enforce-version-bump:
-    if: (github.event.action != 'edited' || contains(toJSON(github.event.changes), 'base'))
+    if: (github.event.action != 'edited' || contains(toJSON(github.event.changes), '"base":'))
     name: "Enforce paired block_version bump"
     runs-on: ubuntu-latest
     steps:

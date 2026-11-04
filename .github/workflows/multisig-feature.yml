@@ -72,7 +72,7 @@ on:
     paths: *paths
 
 concurrency:
-  group: multisig-feature-${{ github.ref }}${{ github.event.action == 'edited' && !contains(toJSON(github.event.changes), 'base') && '-edited' || '' }}
+  group: multisig-feature-${{ github.ref }}${{ github.event.action == 'edited' && !contains(toJSON(github.event.changes), '"base":') && '-edited' || '' }}
   cancel-in-progress: true
 
 permissions:
@@ -83,7 +83,7 @@ env:
 
 jobs:
   f6-multisig-feature:
-    if: (github.event.action != 'edited' || contains(toJSON(github.event.changes), 'base'))
+    if: (github.event.action != 'edited' || contains(toJSON(github.event.changes), '"base":'))
     name: "F-6: cargo check/clippy/test --features multisig"
     runs-on: ubuntu-latest
     defaults:

@@ -62,7 +62,7 @@ on:
       - ".github/workflows/ffi-signatures.yml"
 
 concurrency:
-  group: ffi-signatures-${{ github.ref }}${{ github.event.action == 'edited' && !contains(toJSON(github.event.changes), 'base') && '-edited' || '' }}
+  group: ffi-signatures-${{ github.ref }}${{ github.event.action == 'edited' && !contains(toJSON(github.event.changes), '"base":') && '-edited' || '' }}
   cancel-in-progress: true
 
 permissions:
@@ -70,7 +70,7 @@ permissions:
 
 jobs:
   check-ffi-signatures:
-    if: (github.event.action != 'edited' || contains(toJSON(github.event.changes), 'base'))
+    if: (github.event.action != 'edited' || contains(toJSON(github.event.changes), '"base":'))
     name: "FFI signature gate"
     runs-on: ubuntu-latest
     steps:

@@ -45,7 +45,7 @@ on:
     paths: *paths
 
 concurrency:
-  group: rpc-route-liveness-${{ github.ref }}${{ github.event.action == 'edited' && !contains(toJSON(github.event.changes), 'base') && '-edited' || '' }}
+  group: rpc-route-liveness-${{ github.ref }}${{ github.event.action == 'edited' && !contains(toJSON(github.event.changes), '"base":') && '-edited' || '' }}
   cancel-in-progress: true
 
 permissions:
@@ -53,7 +53,7 @@ permissions:
 
 jobs:
   rpc-route-liveness:
-    if: (github.event.action != 'edited' || contains(toJSON(github.event.changes), 'base'))
+    if: (github.event.action != 'edited' || contains(toJSON(github.event.changes), '"base":'))
     name: "RK: every served RPC route has a consumer"
     runs-on: ubuntu-latest
     steps:
