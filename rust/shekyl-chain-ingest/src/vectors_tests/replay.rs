@@ -52,12 +52,15 @@ pub(crate) fn rules_for(manifest: &Manifest) -> ChainRules {
             manifest.shape
         )
     });
-    ChainRules::Regtest {
-        fixed_difficulty: Some(
+    // Captured on regtest's table genesis: held to it, as the daemon was.
+    ChainRules::new(
+        shekyl_network::Network::Regtest,
+        Some(
             NonZeroU128::new(manifest.fixed_difficulty).expect("a regtest difficulty is non-zero"),
         ),
         schedule,
-    }
+    )
+    .expect("regtest's row permits its levers")
 }
 
 /// Replay `source` against `trace` and keep the store and the source.

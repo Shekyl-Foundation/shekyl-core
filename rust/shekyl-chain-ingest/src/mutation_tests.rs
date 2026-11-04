@@ -33,10 +33,8 @@ use crate::test_support::{
     Scripted, FIRST_SPEND_HEIGHT,
 };
 
-const GENESIS_RULES: ChainRules = ChainRules::Regtest {
-    fixed_difficulty: None,
-    schedule: shekyl_chain_rules::FakechainSchedule::PRODUCTION,
-};
+const GENESIS_RULES: ChainRules =
+    ChainRules::harness_regtest(None, shekyl_chain_rules::FakechainSchedule::PRODUCTION);
 
 /// D1's target for the mined chain: half of all hashes pass.
 const MINED_DIFFICULTY: u128 = 2;
@@ -51,10 +49,10 @@ const NONCE_BUDGET: u32 = 1 << 16;
 const WRONG_SEED: [u8; 32] = [0xbb; 32];
 
 fn mined_rules() -> ChainRules {
-    ChainRules::Regtest {
-        fixed_difficulty: Some(NonZeroU128::new(MINED_DIFFICULTY).expect("non-zero")),
-        schedule: shekyl_chain_rules::FakechainSchedule::PRODUCTION,
-    }
+    ChainRules::harness_regtest(
+        Some(NonZeroU128::new(MINED_DIFFICULTY).expect("non-zero")),
+        shekyl_chain_rules::FakechainSchedule::PRODUCTION,
+    )
 }
 
 /// A seed-sensitive mock longhash: `keccak256(blob ‖ seed)`. Deterministic,

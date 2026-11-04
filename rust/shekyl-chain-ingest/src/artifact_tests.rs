@@ -397,9 +397,10 @@ mod fetch {
     use shekyl_types::{BlockHeight, PCanonicalId, SettlementEpoch, ShardId, TxHash};
 
     use super::three_blocks;
-    use crate::corpus::{CorpusFault, CorpusNet, CorpusReader, CorpusWriter};
+    use crate::corpus::{CorpusFault, CorpusReader, CorpusWriter};
     use crate::fetch::{fetch_corpus, FetchFault, ROUTE};
     use crate::source::{IngestEvent, Injection, Sequenced, ServeCredit, Source};
+    use shekyl_network::Network;
 
     /// One recorded request: the route and the heights asked.
     type Asked = (String, Vec<u64>);
@@ -473,7 +474,7 @@ mod fetch {
         let rpc = Scripted::new(&[reply(&blocks[..2]), reply(&blocks[2..])]);
         let mut w = CorpusWriter::create(
             std::io::Cursor::new(Vec::new()),
-            CorpusNet::Fakechain,
+            Network::Regtest,
             BlockHeight::from_raw(0),
         )
         .expect("header");
@@ -516,7 +517,7 @@ mod fetch {
         })]);
         let mut w = CorpusWriter::create(
             std::io::Cursor::new(Vec::new()),
-            CorpusNet::Fakechain,
+            Network::Regtest,
             BlockHeight::from_raw(0),
         )
         .expect("header");
@@ -553,7 +554,7 @@ mod fetch {
         })]);
         let mut w = CorpusWriter::create(
             std::io::Cursor::new(Vec::new()),
-            CorpusNet::Fakechain,
+            Network::Regtest,
             BlockHeight::from_raw(0),
         )
         .expect("header");
@@ -578,7 +579,7 @@ mod fetch {
         let rpc = Scripted::new(&[reply(&pruned)]);
         let mut w = CorpusWriter::create(
             std::io::Cursor::new(Vec::new()),
-            CorpusNet::Fakechain,
+            Network::Regtest,
             BlockHeight::from_raw(0),
         )
         .expect("header");
@@ -605,7 +606,7 @@ mod fetch {
         let rpc = Scripted::new(&[refused]);
         let mut w = CorpusWriter::create(
             std::io::Cursor::new(Vec::new()),
-            CorpusNet::Fakechain,
+            Network::Regtest,
             BlockHeight::from_raw(0),
         )
         .expect("header");
@@ -627,7 +628,7 @@ mod fetch {
         let rpc = Scripted::new(&[reply(&blocks[..1])]);
         let mut w = CorpusWriter::create(
             std::io::Cursor::new(Vec::new()),
-            CorpusNet::Fakechain,
+            Network::Regtest,
             BlockHeight::from_raw(0),
         )
         .expect("header");
@@ -649,7 +650,7 @@ mod fetch {
         let rpc = Scripted::new(&[]);
         let mut w = CorpusWriter::create(
             std::io::Cursor::new(Vec::new()),
-            CorpusNet::Fakechain,
+            Network::Regtest,
             BlockHeight::from_raw(0),
         )
         .expect("header");
@@ -683,7 +684,7 @@ mod fetch {
         let rpc = Scripted::new(&[reply(&blocks[..2]), reply(&blocks[2..])]);
         let mut w = CorpusWriter::create(
             std::io::Cursor::new(Vec::new()),
-            CorpusNet::Fakechain,
+            Network::Regtest,
             BlockHeight::from_raw(0),
         )
         .expect("header");
@@ -720,7 +721,7 @@ mod fetch {
         let rpc = Scripted::new(&[reply(&blocks)]);
         let mut w = CorpusWriter::create(
             std::io::Cursor::new(Vec::new()),
-            CorpusNet::Fakechain,
+            Network::Regtest,
             BlockHeight::from_raw(0),
         )
         .expect("header");

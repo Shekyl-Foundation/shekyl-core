@@ -12,6 +12,9 @@ rust-version.workspace = true
 license.workspace = true
 
 [dependencies]
+# A network row's permit for the replay writes (NETWORK_IDENTITY.md NI-R6):
+# the store holds the permit, never the network (rule 71).
+shekyl-network = { path = "../shekyl-network" }
 redb = { workspace = true }
 # The shared redb value contract (CTS-Q2, ruled 2026-09-18): `Canonical`,
 # `CodecError`, the four value shapes, and the codecs for types this crate

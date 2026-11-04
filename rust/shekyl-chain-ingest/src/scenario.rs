@@ -138,9 +138,14 @@ pub struct Scenario<P> {
 /// The rules every scenario runs under: regtest at fixed difficulty one,
 /// so a nonce of zero satisfies any longhash — real or free — and the
 /// subject stays the chain, not the search.
-pub const RULES: ChainRules = ChainRules::Regtest {
-    fixed_difficulty: Some(std::num::NonZeroU128::MIN),
-    schedule: shekyl_chain_rules::FakechainSchedule::PRODUCTION,
+pub const RULES: ChainRules = match ChainRules::new(
+    shekyl_network::Network::Regtest,
+    Some(std::num::NonZeroU128::MIN),
+    shekyl_chain_rules::FakechainSchedule::PRODUCTION,
+) {
+    // The driver mines its own block 0, so its chain is held to none.
+    Ok(rules) => rules.unpinned(),
+    Err(_) => panic!("regtest's row permits a fixed difficulty"),
 };
 
 impl Scenario<FreeHash> {

@@ -62,9 +62,13 @@ impl Substrate for Free {
     }
 }
 
-const RULES: ChainRules = ChainRules::Regtest {
-    fixed_difficulty: Some(std::num::NonZeroU128::MIN),
-    schedule: FakechainSchedule::PRODUCTION,
+const RULES: ChainRules = match ChainRules::new(
+    shekyl_address::Network::Regtest,
+    Some(std::num::NonZeroU128::MIN),
+    FakechainSchedule::PRODUCTION,
+) {
+    Ok(rules) => rules,
+    Err(_) => panic!("regtest's row permits a fixed difficulty"),
 };
 
 fn blob(bytes: &[u8]) -> ShekylIngestBlob {

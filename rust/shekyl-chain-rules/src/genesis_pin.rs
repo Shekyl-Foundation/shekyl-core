@@ -40,20 +40,22 @@ use shekyl_types::{BlockHash, BlockHeight};
 ///
 /// There is no public constructor from an arbitrary hash: the only tables
 /// are the per-network constants [`for_network`](Self::for_network) selects
-/// and [`NONE`](Self::NONE) — nettype selects *data*, never control flow
+/// and `NONE` (test and harness builds) — nettype selects *data*, never control flow
 /// (rule 71), and no path exists for a pin the release did not carry.
 #[derive(Clone, Copy, PartialEq, Eq)]
 pub struct GenesisPin {
     /// The genesis identity the binary defines for this network; verified
     /// by equality (CEN-E1 at height 0, CEN-E5 at open), assumed by nothing.
-    /// `None` only on the table no release vouches for ([`NONE`](Self::NONE)).
+    /// `None` only on the table no release vouches for (`NONE`).
     genesis: Option<BlockHash>,
 }
 
 impl GenesisPin {
-    /// Nothing pinned: the table no release vouches for.
-    /// [`Trust::UNPINNED`](crate::Trust::UNPINNED) carries this into
-    /// `validate`, so a harness chain can mine its own genesis.
+    /// Nothing pinned: the table no release vouches for, so test and
+    /// harness builds only. [`Trust::UNPINNED`](crate::Trust::UNPINNED)
+    /// carries it into `validate`, so a harness chain can mine its own
+    /// genesis.
+    #[cfg(any(test, feature = "harness"))]
     pub const NONE: Self = Self { genesis: None };
 
     const fn genesis_only(genesis: [u8; 32]) -> Self {

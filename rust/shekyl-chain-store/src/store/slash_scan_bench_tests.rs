@@ -124,9 +124,7 @@ use std::time::{Duration, Instant};
 use shekyl_archival_retention::settlement_select::issued_draw_term;
 use shekyl_archival_retention::{ARCHIVAL_BOND_FLOOR_ATOMIC, FAILURE_WINDOW_M, FAILURE_WINDOW_N};
 use shekyl_chain_rules::harness::fixture;
-use shekyl_chain_rules::{
-    Corrupt, FakechainSchedule, RuleSet, SettlementCheck, SlashLogFloor, Trust,
-};
+use shekyl_chain_rules::{Corrupt, FakechainSchedule, RuleSet, SettlementCheck, SlashLogFloor};
 use shekyl_crypto_hash::keccak256;
 use shekyl_harness_spender::Persona;
 use shekyl_types::archival::{
@@ -425,7 +423,7 @@ fn issue(store: &ChainStore, epoch: u64, personas: u64, plan: Plan) {
         .expect("read");
     store
         .regtest_issue_draws(
-            Trust::UNPINNED,
+            super::store_tests::issue_permit(),
             epoch,
             &draws,
             folded(digest, epoch, &draws),

@@ -58,14 +58,14 @@ pub const REORG_CAP_BLOCKS: u64 = 10;
 /// Regtest rules under the levered schedule: the pair every scenario that
 /// closes a shard mines under.
 pub fn levered_rules() -> ChainRules {
-    ChainRules::Regtest {
-        fixed_difficulty: Some(std::num::NonZeroU128::MIN),
-        schedule: FakechainSchedule::new(
+    ChainRules::harness_regtest(
+        Some(std::num::NonZeroU128::MIN),
+        FakechainSchedule::new(
             SettlementEpochBlocks::new(EPOCH_BLOCKS).expect("non-zero"),
             BlockCount::from_raw(REORG_CAP_BLOCKS),
         )
         .expect("the cap sits inside the epoch"),
-    }
+    )
 }
 
 /// The settlement schedule [`levered_rules`] runs.
@@ -249,14 +249,14 @@ fn issues_every_pair(blocks: u64, pairs: u64) -> bool {
 /// Regtest rules under the settled schedule ([`settled_epoch_blocks`]),
 /// with the levered reorg cap.
 pub fn settled_rules() -> ChainRules {
-    ChainRules::Regtest {
-        fixed_difficulty: Some(std::num::NonZeroU128::MIN),
-        schedule: FakechainSchedule::new(
+    ChainRules::harness_regtest(
+        Some(std::num::NonZeroU128::MIN),
+        FakechainSchedule::new(
             SettlementEpochBlocks::new(settled_epoch_blocks()).expect("non-zero"),
             BlockCount::from_raw(REORG_CAP_BLOCKS),
         )
         .expect("the cap sits inside the settled epoch"),
-    }
+    )
 }
 
 /// The settlement schedule [`settled_rules`] runs.

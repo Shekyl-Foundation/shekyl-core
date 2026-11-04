@@ -109,10 +109,12 @@ impl Corpus {
             BlockCount::from_raw(cap),
         )
         .expect("a reorg cap inside the epoch");
-        ChainRules::Regtest {
-            fixed_difficulty: Some(NonZeroU128::new(difficulty).expect("non-zero")),
+        ChainRules::new(
+            shekyl_network::Network::Regtest,
+            Some(NonZeroU128::new(difficulty).expect("non-zero")),
             schedule,
-        }
+        )
+        .expect("regtest's row permits its levers")
     }
 
     /// The rules the corpus was mined under.

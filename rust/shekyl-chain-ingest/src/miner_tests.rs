@@ -42,10 +42,8 @@ use crate::substrate::ProductionSubstrate;
 static MINER_LANE: tokio::sync::Mutex<()> = tokio::sync::Mutex::const_new(());
 
 /// Regtest at a fixed difficulty of eight: a block takes a search.
-const RULES: ChainRules = ChainRules::Regtest {
-    fixed_difficulty: NonZeroU128::new(8),
-    schedule: FakechainSchedule::PRODUCTION,
-};
+const RULES: ChainRules =
+    ChainRules::harness_regtest(NonZeroU128::new(8), FakechainSchedule::PRODUCTION);
 
 /// How long a test waits for a block at difficulty eight before calling the
 /// search broken: generous for a debug build's light-mode hash.

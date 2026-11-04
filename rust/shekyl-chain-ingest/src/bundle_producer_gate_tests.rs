@@ -80,14 +80,14 @@ const FILL_FROM_COINBASE: u64 = 10;
 const SETTLE: Duration = Duration::from_secs(120);
 
 fn rules() -> ChainRules {
-    ChainRules::Regtest {
-        fixed_difficulty: Some(std::num::NonZeroU128::MIN),
-        schedule: FakechainSchedule::new(
+    ChainRules::harness_regtest(
+        Some(std::num::NonZeroU128::MIN),
+        FakechainSchedule::new(
             SettlementEpochBlocks::new(EPOCH_BLOCKS).expect("non-zero"),
             BlockCount::from_raw(REORG_CAP_BLOCKS),
         )
         .expect("the cap sits inside the epoch and the window under the anchor depth"),
-    }
+    )
 }
 
 /// The spread each read's start delay is drawn below here. The node's is

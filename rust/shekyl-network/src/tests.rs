@@ -102,3 +102,17 @@ fn the_id_is_a_function_of_the_genesis_hash() {
     assert_ne!(id_a, network_id_from_genesis(&b));
     assert_ne!(prefix_for(&id_a), prefix_for(&network_id_from_genesis(&b)));
 }
+
+/// A permit exists exactly where the row permits the lever, and names it.
+#[test]
+fn a_permit_is_the_rows_permission() {
+    for net in Network::ALL {
+        for lever in Lever::ALL {
+            assert_eq!(
+                net.permit(lever).map(Permit::lever),
+                net.permits(lever).then_some(lever),
+                "{net} {lever:?}"
+            );
+        }
+    }
+}

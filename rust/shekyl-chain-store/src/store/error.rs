@@ -373,14 +373,17 @@ pub enum StoreCannot {
     /// `pop`, or the regtest injection, on a store with no block recorded
     /// (nothing to pop; no tip to attribute an injected bit to).
     ChainEmpty,
-    /// The regtest serve-credit injection
-    /// (`ChainStore::regtest_inject_serve_credit`, DRS-E4 §3.8 item 3) was
-    /// asked for under a [`Trust`](shekyl_chain_rules::Trust) that pins a
-    /// genesis. The door writes a bit the rules did not admit and opens
-    /// only for [`Trust::UNPINNED`](shekyl_chain_rules::Trust::UNPINNED),
-    /// which is what a Fakechain run is. The C++ refuses the same door off
-    /// `FAKECHAIN` (`blockchain.cpp:4715`).
-    InjectionOffFakechain,
+    /// A replay write (`ChainStore::regtest_inject_serve_credit`,
+    /// `regtest_issue_draws`; DRS-E4 §3.8 item 3) was handed a network
+    /// row's permit for another lever. Each door writes what the rules did
+    /// not admit and opens only on its own lever's permit, which only
+    /// regtest's row grants (`NETWORK_IDENTITY.md` NI-R6).
+    PermitForAnotherLever {
+        /// The lever the permit is for.
+        given: shekyl_network::Lever,
+        /// The lever the write needs.
+        wanted: shekyl_network::Lever,
+    },
     /// The regtest serve-credit injection named a persona with no bond
     /// record. The door writes the one row the rules did not admit, but
     /// it does not mint a file the reads refuse: every serve-credit read
@@ -590,9 +593,11 @@ impl core::fmt::Display for StoreCannot {
                  force at height {height}; re-validate under the rule set in force"
             ),
             Self::ChainEmpty => f.write_str("the chain store has no block recorded"),
-            Self::InjectionOffFakechain => f.write_str(
-                "regtest injection refused: the node's trust pins a genesis, so this is not an \
-                 unpinned Fakechain",
+            Self::PermitForAnotherLever { given, wanted } => write!(
+                f,
+                "a replay write needs the permit for {}; it was handed the permit for {}",
+                wanted.name(),
+                given.name()
             ),
             Self::InjectionForUnbondedPersona { persona } => write!(
                 f,

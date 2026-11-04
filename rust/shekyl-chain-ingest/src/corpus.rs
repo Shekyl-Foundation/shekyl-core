@@ -63,11 +63,11 @@
 //! daemon wrote. Before any block there is no tip
 //! ([`CorpusFault::InjectOnEmpty`]). The reader emits the event without
 //! the height: the pipeline applies it at the committed tip, which is that
-//! height by this law. Regtest-only at every layer that can say so: the
-//! writer and reader refuse the record under any net tag but `Fakechain`
-//! ([`CorpusFault::InjectOffFakechain`] — no injector exists off it), and
-//! the store refuses the write under any rules but regtest. The record is
-//! the version-3 change.
+//! height by this law. Only where a network's row permits the write, at
+//! every layer that can say so (`NETWORK_IDENTITY.md` NI-R6): the writer
+//! and reader refuse the record under any other network's tag
+//! ([`CorpusFault::InjectNotPermitted`]), and the store refuses the write
+//! without the row's permit. The record is the version-3 change.
 //!
 //! # Verified, not declared (RD-F15)
 //!
@@ -82,17 +82,15 @@
 //! reason. Completeness is a property the artifact demonstrates on read,
 //! never a byte it asserts.
 //!
-//! # What the corpus's `net` tag is, and is not
+//! # The corpus's `net` tag
 //!
-//! [`CorpusNet`] is the artifact's own tag with **four** arms, including
-//! `Fakechain` — `shekyl_address::Network` has three and no regtest witness
-//! (slice 2 F10, still owed). The tag says what chain the blocks came from
-//! so the driver can pick a schedule; it is not a `Network` and does not
-//! pretend to be one.
+//! The network the blocks came from, as its code ([`Network::code`]): the
+//! driver resolves that network's schedule and genesis from it.
 
 use std::io::{self, BufRead, Read, Seek, SeekFrom, Write};
 
 use shekyl_chain_rules::Candidate;
+use shekyl_network::{Lever, Network};
 use shekyl_types::{BlockCount, BlockHeight, PCanonicalId, SettlementEpoch, ShardId, TxHash};
 use shekyl_wire::block::MAX_BLOCK_BLOB_SIZE;
 use shekyl_wire::transaction::MAX_TX_SIZE;
@@ -121,37 +119,6 @@ const REWIND_RECORD_LEN: usize = 1 + core::mem::size_of::<u64>();
 const INJECT_RECORD_LEN: usize =
     1 + core::mem::size_of::<u64>() + 32 + 2 * core::mem::size_of::<u64>();
 
-/// Which chain the corpus was taken from — the artifact's own tag, and the
-/// one spelling of "which chain" the driver's command line takes (`--chain
-/// regtest` names the Fakechain arm, as the daemon's flag does).
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-#[cfg_attr(feature = "replay-cli", derive(clap::ValueEnum))]
-#[repr(u8)]
-pub enum CorpusNet {
-    /// The public main network.
-    Mainnet = 0,
-    /// The public test network.
-    Testnet = 1,
-    /// The public stage network.
-    Stagenet = 2,
-    /// A single-operator regtest chain (`--regtest`); the one nettype whose
-    /// rule set may carry a fixed difficulty (RD-Q7).
-    #[cfg_attr(feature = "replay-cli", value(name = "regtest"))]
-    Fakechain = 3,
-}
-
-impl CorpusNet {
-    fn from_tag(tag: u8) -> Option<Self> {
-        match tag {
-            0 => Some(Self::Mainnet),
-            1 => Some(Self::Testnet),
-            2 => Some(Self::Stagenet),
-            3 => Some(Self::Fakechain),
-            _ => None,
-        }
-    }
-}
-
 /// Why a corpus could not be written or read.
 #[derive(Debug)]
 pub enum CorpusFault {
@@ -162,7 +129,7 @@ pub enum CorpusFault {
         /// What the header said.
         found: u32,
     },
-    /// The header's network tag is none of [`CorpusNet`]'s arms.
+    /// The header's network tag is no network's code.
     UnknownNet(u8),
     /// A block arrived with fewer (or more) bodies than its header lists.
     /// **The pruned-source signature** (RD-F15): a pruned node drops bodies
@@ -233,11 +200,11 @@ pub enum CorpusFault {
     },
     /// An `inject` before any block: there is no tip to attribute it to.
     InjectOnEmpty,
-    /// An `inject` in a corpus whose net tag is not `Fakechain`: no
-    /// injector exists off regtest.
-    InjectOffFakechain {
-        /// The corpus's net tag.
-        net: CorpusNet,
+    /// An `inject` in a corpus whose network's row does not permit the
+    /// write (NI-R6).
+    InjectNotPermitted {
+        /// The corpus's network.
+        net: Network,
     },
     /// A `rewind` to the tip or above it: nothing to pop.
     RewindNotBackward {
@@ -327,9 +294,9 @@ impl core::fmt::Display for CorpusFault {
                 "inject attributed to {at} is filed where the tip is {tip}"
             ),
             Self::InjectOnEmpty => write!(f, "inject before any block"),
-            Self::InjectOffFakechain { net } => write!(
+            Self::InjectNotPermitted { net } => write!(
                 f,
-                "inject in a {net:?} corpus; the regtest injector is the only producer"
+                "inject in a {net} corpus; {net}'s row does not permit the serve-credit write"
             ),
             Self::CountMismatch { declared, present } => write!(
                 f,
@@ -436,7 +403,7 @@ const COUNT_OFFSET: u64 = 8 + 4 + 1 + 8;
 /// after finish" is unrepresentable — there is no finished flag.
 pub struct CorpusWriter<W: Write + Seek> {
     out: W,
-    net: CorpusNet,
+    net: Network,
     first: BlockHeight,
     /// The height the next `append` records; `None` once `u64::MAX` has
     /// been written.
@@ -454,12 +421,12 @@ impl<W: Write + Seek> CorpusWriter<W> {
     /// I/O.
     pub fn create(
         mut out: W,
-        net: CorpusNet,
+        net: Network,
         first_height: BlockHeight,
     ) -> Result<Self, CorpusFault> {
         out.write_all(&CORPUS_MAGIC)?;
         out.write_all(&CORPUS_FORMAT_VERSION.to_le_bytes())?;
-        out.write_all(&[net as u8])?;
+        out.write_all(&[net.code()])?;
         out.write_all(&first_height.to_raw().to_le_bytes())?;
         out.write_all(&0u64.to_le_bytes())?;
         Ok(Self {
@@ -479,7 +446,7 @@ impl<W: Write + Seek> CorpusWriter<W> {
     ///
     /// # Errors
     ///
-    /// [`CorpusFault::InjectOffFakechain`], [`CorpusFault::InjectOnEmpty`],
+    /// [`CorpusFault::InjectNotPermitted`], [`CorpusFault::InjectOnEmpty`],
     /// [`CorpusFault::InjectNotAtTip`]; I/O.
     pub fn inject(&mut self, at: BlockHeight, credit: ServeCredit) -> Result<(), CorpusFault> {
         check_inject(self.net, self.first, self.next, at)?;
@@ -590,13 +557,13 @@ fn check_rewind(
 /// The inject law shared by writer and reader: the corpus is a regtest
 /// chain's, there is a tip, and `at` is that tip (`next − 1`).
 fn check_inject(
-    net: CorpusNet,
+    net: Network,
     first: BlockHeight,
     next: Option<BlockHeight>,
     at: BlockHeight,
 ) -> Result<(), CorpusFault> {
-    if net != CorpusNet::Fakechain {
-        return Err(CorpusFault::InjectOffFakechain { net });
+    if !net.permits(Lever::InjectServeCredit) {
+        return Err(CorpusFault::InjectNotPermitted { net });
     }
     let tip = match next {
         Some(n) if n == first => return Err(CorpusFault::InjectOnEmpty),
@@ -671,7 +638,7 @@ fn write_len_only<W: Write>(
 /// Reads a corpus as a [`Source`], re-verifying every record.
 pub struct CorpusReader<R: BufRead> {
     input: R,
-    net: CorpusNet,
+    net: Network,
     first: BlockHeight,
     /// The height the next `extend` must carry; `None` once `u64::MAX` has
     /// been read (a header that needs more is refused at `open`).
@@ -701,7 +668,7 @@ impl<R: BufRead> CorpusReader<R> {
         }
         let mut tag = [0u8; 1];
         input.read_exact(&mut tag)?;
-        let net = CorpusNet::from_tag(tag[0]).ok_or(CorpusFault::UnknownNet(tag[0]))?;
+        let net = Network::from_code(tag[0]).ok_or(CorpusFault::UnknownNet(tag[0]))?;
         let first = BlockHeight::from_raw(read_u64(&mut input)?);
         // `declared` is a record count, not a height span (rewinds occupy
         // no height), so it says nothing about whether the heights fit;
@@ -721,7 +688,7 @@ impl<R: BufRead> CorpusReader<R> {
 
     /// The chain the corpus was taken from.
     #[must_use]
-    pub const fn net(&self) -> CorpusNet {
+    pub const fn net(&self) -> Network {
         self.net
     }
 

@@ -39,10 +39,8 @@ use crate::test_support::{
 };
 
 /// Regtest without a fixed target: the genesis rules at every height.
-const GENESIS_RULES: ChainRules = ChainRules::Regtest {
-    fixed_difficulty: None,
-    schedule: shekyl_chain_rules::FakechainSchedule::PRODUCTION,
-};
+const GENESIS_RULES: ChainRules =
+    ChainRules::harness_regtest(None, shekyl_chain_rules::FakechainSchedule::PRODUCTION);
 
 fn nz(n: usize) -> NonZeroUsize {
     NonZeroUsize::new(n).expect("non-zero")
@@ -273,7 +271,12 @@ async fn the_connector_stays_stopped_after_a_halt_and_does_not_come_back() {
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn an_inject_off_regtest_is_refused_before_the_store_is_asked() {
     let path = tmp("connector-inject-off-regtest");
-    let rules = ChainRules::Scheduled(shekyl_address::Network::Testnet);
+    let rules = ChainRules::new(
+        shekyl_network::Network::Testnet,
+        None,
+        shekyl_chain_rules::FakechainSchedule::PRODUCTION,
+    )
+    .expect("no lever");
     let joined = JoinedConnector::spawn(ConnectorArgs {
         store: open_store(&path).into(),
         rules,
@@ -291,10 +294,10 @@ async fn an_inject_off_regtest_is_refused_before_the_store_is_asked() {
     assert!(
         matches!(
             refused,
-            SendError::HandlerError(RunFault::InjectOffRegtest {
+            SendError::HandlerError(RunFault::InjectNotPermitted {
                 credit: named,
-                rules: under,
-            }) if named == credit && under == rules
+                network: under,
+            }) if named == credit && under == rules.network()
         ),
         "{refused:?}"
     );
@@ -311,7 +314,12 @@ async fn an_inject_off_regtest_is_refused_before_the_store_is_asked() {
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn an_issue_of_draws_off_regtest_is_refused_before_the_store_is_asked() {
     let path = tmp("connector-issue-off-regtest");
-    let rules = ChainRules::Scheduled(shekyl_address::Network::Testnet);
+    let rules = ChainRules::new(
+        shekyl_network::Network::Testnet,
+        None,
+        shekyl_chain_rules::FakechainSchedule::PRODUCTION,
+    )
+    .expect("no lever");
     let joined = JoinedConnector::spawn(ConnectorArgs {
         store: open_store(&path).into(),
         rules,
@@ -329,10 +337,10 @@ async fn an_issue_of_draws_off_regtest_is_refused_before_the_store_is_asked() {
     assert!(
         matches!(
             refused,
-            SendError::HandlerError(RunFault::IssueOffRegtest {
+            SendError::HandlerError(RunFault::IssueNotPermitted {
                 epoch: named,
-                rules: under,
-            }) if named == epoch && under == rules
+                network: under,
+            }) if named == epoch && under == rules.network()
         ),
         "{refused:?}"
     );
@@ -1185,10 +1193,10 @@ async fn a_regtest_corpus_replays_under_a_fixed_difficulty_and_connects() {
     let trace = Arc::new(trace_of(&chain, false));
     let bytes = corpus_of(&chain);
     let mut source = CorpusReader::open(std::io::Cursor::new(&bytes)).expect("open");
-    let rules = ChainRules::Regtest {
-        fixed_difficulty: std::num::NonZeroU128::new(7),
-        schedule: shekyl_chain_rules::FakechainSchedule::PRODUCTION,
-    };
+    let rules = ChainRules::harness_regtest(
+        std::num::NonZeroU128::new(7),
+        shekyl_chain_rules::FakechainSchedule::PRODUCTION,
+    );
     let report = run(
         &mut source,
         substrate(),

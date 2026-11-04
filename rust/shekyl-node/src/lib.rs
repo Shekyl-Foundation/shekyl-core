@@ -74,7 +74,7 @@ use shekyl_chain_ingest::follower::{JobSeat, MinerFeed, NoJob, Posting};
 use shekyl_chain_ingest::service::{
     ArrivalTag, Follow, PoolWiring, Reply, Service, ServiceConfig, ServiceFault,
 };
-use shekyl_chain_ingest::{Chain, ChainRules, Metrics, ProductionSubstrate, SubstrateFault};
+use shekyl_chain_ingest::{ChainRules, Metrics, ProductionSubstrate, SubstrateFault};
 use shekyl_chain_rules::{AdmissionPolicy, FakechainSchedule, GenesisPin, RuleSet};
 use shekyl_chain_store::apply_policy::ApplyPolicy;
 use shekyl_chain_store::pool::PoolOpen;
@@ -760,18 +760,13 @@ unsafe extern "C" {
 }
 
 fn rules_of(config: &DaemonConfig) -> Result<ChainRules, OpenError> {
-    let chain = match config.network {
-        shekyl_daemon_config::Network::Mainnet => Chain::Public(shekyl_address::Network::Mainnet),
-        shekyl_daemon_config::Network::Testnet => Chain::Public(shekyl_address::Network::Testnet),
-        shekyl_daemon_config::Network::Stagenet => Chain::Public(shekyl_address::Network::Stagenet),
-        shekyl_daemon_config::Network::Regtest => Chain::Regtest,
-    };
     let fixed = config
         .dev
         .difficulty
         .map(|n| std::num::NonZeroU128::new(u128::from(n)).expect("zero is refused at parse"));
     let schedule = schedule_of(&config.dev)?;
-    ChainRules::new(chain, fixed, schedule).map_err(|error| OpenError::Rules(error.to_string()))
+    ChainRules::new(config.network, fixed, schedule)
+        .map_err(|error| OpenError::Rules(error.to_string()))
 }
 
 fn schedule_of(dev: &Dev) -> Result<FakechainSchedule, OpenError> {
@@ -867,15 +862,10 @@ fn store_durability_line() -> String {
     )
 }
 
+/// The store is held to the network's table genesis, every network alike
+/// (NI-Q8): the pin `validate` holds block 0 to.
 fn genesis_pin_of(rules: ChainRules) -> GenesisPin {
-    match rules {
-        ChainRules::Scheduled(net) => GenesisPin::for_network(net),
-        // Regtest's block 0 is its own genesis, pinned like any network's
-        // (NI-Q8).
-        ChainRules::Regtest { .. } => {
-            GenesisPin::for_network(shekyl_daemon_config::Network::Regtest)
-        }
-    }
+    GenesisPin::for_network(rules.network())
 }
 
 fn open_pool(

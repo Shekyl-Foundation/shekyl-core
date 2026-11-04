@@ -471,11 +471,10 @@ impl RuleSet {
     /// refuses a retention below the cap, and a pinned epoch other than
     /// the set's, at open and at every connect).
     ///
-    /// The one constructor of a non-issued rule set, and deliberately not
-    /// reachable from [`RuleSchedule::for_network`]: `shekyl_address::Network`
-    /// has no Fakechain variant (slice 2 §4.5 F10), so the daemon's
-    /// `--regtest` is what binds this call to fakechain today; when the
-    /// variant exists this takes it as a witness. `fixed` is non-zero by
+    /// [`GENESIS`](Self::GENESIS) under the levers: `GENESIS.with_levers(fixed,
+    /// schedule)`. Which network may pull a lever is its row's
+    /// (`NETWORK_IDENTITY.md` NI-R6); the ingest's `ChainRules` asks the row
+    /// and resolves the network's own schedule under them. `fixed` is non-zero by
     /// its type, so the target it fixes is a [`Target`] by construction
     /// (CEN-D6); `schedule` is a valid pair by its type, so the invariant
     /// between the two fields it sets holds by construction — and so does
@@ -489,15 +488,29 @@ impl RuleSet {
         fixed: Option<core::num::NonZeroU128>,
         schedule: FakechainSchedule,
     ) -> Self {
+        Self::GENESIS.with_levers(fixed, schedule)
+    }
+
+    /// This set under the levers: the target fixed when `fixed` is given,
+    /// and the settlement schedule and reorg cap `schedule` names. A set
+    /// with no lever pulled is itself:
+    /// `set.with_levers(None, FakechainSchedule::PRODUCTION)` keeps its
+    /// difficulty rule and takes the production pair.
+    #[must_use]
+    pub const fn with_levers(
+        self,
+        fixed: Option<core::num::NonZeroU128>,
+        schedule: FakechainSchedule,
+    ) -> Self {
         let difficulty = match fixed {
             Some(fixed) => DifficultyRule::Fixed(Target::fixed(fixed)),
-            None => DifficultyRule::Lwma1,
+            None => self.difficulty,
         };
         Self {
             difficulty,
             reorg_cap: schedule.reorg_cap,
             settlement_schedule: schedule.settlement,
-            ..Self::GENESIS
+            ..self
         }
     }
 
