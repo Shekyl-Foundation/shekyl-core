@@ -1097,20 +1097,19 @@ impl WalletFile {
     /// Raw CLI-ephemeral overrides captured at `open` time. Callers
     /// typically do not need this — prefer the `effective_*`
     /// accessors below, which already overlay the overrides on the
-    /// per-network defaults. Exposed for diagnostics, dry-run tools,
+    /// defaults. Exposed for diagnostics, dry-run tools,
     /// and for the FFI layer to surface "any override active?" to C++.
     pub fn overrides(&self) -> SafetyOverrides {
         self.overrides
     }
 
     /// Minimum confirmations before a transfer is treated as final.
-    /// Equals [`NetworkSafetyConstants::max_reorg_depth`] for the
-    /// handle's network unless a CLI override replaced it for this
-    /// session.
+    /// Equals [`WalletSafetyConstants::max_reorg_depth`] unless a CLI
+    /// override raised it for this session.
     ///
-    /// [`NetworkSafetyConstants::max_reorg_depth`]: shekyl_engine_state::NetworkSafetyConstants::max_reorg_depth
+    /// [`WalletSafetyConstants::max_reorg_depth`]: shekyl_engine_state::WalletSafetyConstants::max_reorg_depth
     pub fn effective_max_reorg_depth(&self) -> BlockCount {
-        self.overrides.effective_max_reorg_depth(self.network)
+        self.overrides.effective_max_reorg_depth()
     }
 
     /// Starting height for a from-scratch scan. Applies only on paths
@@ -1118,15 +1117,14 @@ impl WalletFile {
     /// (fresh wallet, lost-`.wallet` recovery, explicit rescan).
     /// See `docs/WALLET_PREFS.md` §3.3.
     pub fn effective_skip_to_height(&self) -> BlockHeight {
-        self.overrides.effective_skip_to_height(self.network)
+        self.overrides.effective_skip_to_height()
     }
 
     /// Refresh cursor used when the wallet opens without a
     /// `SyncStateBlock`. Mirrors `effective_skip_to_height` but
     /// scoped to the recovery path per the audit doc §3.3.
     pub fn effective_refresh_from_block_height(&self) -> BlockHeight {
-        self.overrides
-            .effective_refresh_from_block_height(self.network)
+        self.overrides.effective_refresh_from_block_height()
     }
 }
 
@@ -2086,7 +2084,7 @@ mod tests {
     /// hardcoded defaults — i.e. the no-override path is transparent.
     #[test]
     fn open_without_overrides_exposes_network_defaults() {
-        use shekyl_engine_state::NetworkSafetyConstants;
+        use shekyl_engine_state::WalletSafetyConstants;
         let dir = tempfile::tempdir().unwrap();
         let base = dir.path().join("x.wallet");
         let fx = Fixture::new();
@@ -2100,7 +2098,7 @@ mod tests {
             WalletFile::open(&base, b"pw", TEST_NETWORK, SafetyOverrides::none()).expect("open");
 
         assert_eq!(handle.overrides(), SafetyOverrides::none());
-        let k = NetworkSafetyConstants::for_network(TEST_NETWORK);
+        let k = WalletSafetyConstants::DEFAULTS;
         assert_eq!(handle.effective_max_reorg_depth(), k.max_reorg_depth);
         assert_eq!(handle.effective_skip_to_height(), k.default_skip_to_height);
         assert_eq!(
@@ -2117,7 +2115,7 @@ mod tests {
     /// header.
     #[test]
     fn open_with_overrides_propagates_to_effective_accessors() {
-        use shekyl_engine_state::NetworkSafetyConstants;
+        use shekyl_engine_state::{ReorgDepthOverride, WalletSafetyConstants};
         let dir = tempfile::tempdir().unwrap();
         let base = dir.path().join("x.wallet");
         let fx = Fixture::new();
@@ -2129,7 +2127,9 @@ mod tests {
         }
 
         let overrides = SafetyOverrides {
-            max_reorg_depth: Some(BlockCount::from_raw(2)),
+            max_reorg_depth: Some(
+                ReorgDepthOverride::new(BlockCount::from_raw(25)).expect("above the lock window"),
+            ),
             skip_to_height: Some(12_345),
             refresh_from_block_height: None,
         };
@@ -2139,13 +2139,13 @@ mod tests {
         // Overrides survive on the handle.
         assert_eq!(handle.overrides(), overrides);
         // Overridden fields take the override's value.
-        assert_eq!(handle.effective_max_reorg_depth(), BlockCount::from_raw(2));
+        assert_eq!(handle.effective_max_reorg_depth(), BlockCount::from_raw(25));
         assert_eq!(
             handle.effective_skip_to_height(),
             BlockHeight::from_raw(12_345)
         );
         // Non-overridden field still reads the network default.
-        let k = NetworkSafetyConstants::for_network(TEST_NETWORK);
+        let k = WalletSafetyConstants::DEFAULTS;
         assert_eq!(
             handle.effective_refresh_from_block_height(),
             k.default_refresh_from_block_height,

@@ -103,7 +103,7 @@ use std::time::{Duration, Instant};
 use shekyl_address::{AddressError, Network, PaymentAddress};
 use shekyl_crypto_pq::archival_p::PersonaDestination;
 #[cfg(test)]
-use shekyl_engine_state::{LedgerBlock, NetworkSafetyConstants, SendJournalBlock};
+use shekyl_engine_state::{LedgerBlock, SendJournalBlock, WalletSafetyConstants};
 use shekyl_engine_state::{PaymentRequestId, SendDestination};
 use shekyl_units::AtomicUnits;
 
@@ -887,15 +887,13 @@ pub(crate) fn build_pending_tx_in_state(
 pub(crate) fn submit_pending_tx_in_state(
     ledger: &mut LedgerBlock,
     reservations: &mut BTreeMap<ReservationId, Reservation>,
-    network: Network,
     id: ReservationId,
 ) -> Result<TxHash, PendingTxError> {
     let Some(entry) = reservations.get(&id) else {
         return Err(PendingTxError::UnknownHandle);
     };
 
-    let safety = NetworkSafetyConstants::for_network(network);
-    let max_reorg = safety.max_reorg_depth;
+    let max_reorg = WalletSafetyConstants::DEFAULTS.max_reorg_depth;
     let synced = ledger.height();
     let built = entry.built_at_height;
 

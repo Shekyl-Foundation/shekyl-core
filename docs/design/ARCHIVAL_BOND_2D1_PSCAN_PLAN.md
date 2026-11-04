@@ -175,9 +175,9 @@ State it deliberately, so nobody later "improves" the `P`-scan by reading closer
 and silently reintroduces a rollback surface.
 
 **Consequence 2 (cost) — a network-parameterized funding-visibility lag feeds cold-start.**
-That finality horizon is **`max_reorg_depth`, which is *network-parameterized*, not a
-constant** (the cover work already moved off the hardcoded `720`: archival ≈ 720, testnet
-6 — `NetworkSafetyConstants`). `P` discovers its funding by **scanning** (the firewall-clean
+That finality horizon is **`max_reorg_depth`**, the wallet's finality depth, not a
+hardcoded `720` (`WalletSafetyConstants`: the consensus lock window on every network, which
+a session may raise but not lower). `P` discovers its funding by **scanning** (the firewall-clean
 path — being *handed* the funding tx out-of-band would relink principal→`P`). So
 **cold-start "stake from the cover" inherits a `max_reorg_depth`-deep discovery latency**:
 `P` cannot see the cover output to spend it until it is finality-deep — most of a day on

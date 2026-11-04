@@ -252,13 +252,8 @@ fn submit_unknown_handle_returns_unknown_handle() {
     let mut ledger = LedgerBlock::empty();
     let mut reservations: std::collections::BTreeMap<ReservationId, Reservation> =
         std::collections::BTreeMap::new();
-    let err = submit_pending_tx_in_state(
-        &mut ledger,
-        &mut reservations,
-        Network::Testnet,
-        ReservationId(42),
-    )
-    .unwrap_err();
+    let err =
+        submit_pending_tx_in_state(&mut ledger, &mut reservations, ReservationId(42)).unwrap_err();
     assert!(matches!(err, PendingTxError::UnknownHandle));
 }
 
@@ -283,8 +278,8 @@ fn submit_too_old_when_built_height_outside_reorg_window() {
     )
     .expect("build");
 
-    // Advance ledger so synced - built_at_height > max_reorg_depth.
-    // Testnet's max_reorg_depth = 6.
+    // Advance ledger so synced - built_at_height > max_reorg_depth, the
+    // lock window (10) on every network.
     for h in 21..=40 {
         let hash = [u8::try_from(h & 0xFF).unwrap(); 32];
         let _ = indexes.process_scanned_outputs(
@@ -295,9 +290,7 @@ fn submit_too_old_when_built_height_outside_reorg_window() {
         );
     }
 
-    let err =
-        submit_pending_tx_in_state(&mut ledger, &mut reservations, Network::Testnet, pending.id)
-            .unwrap_err();
+    let err = submit_pending_tx_in_state(&mut ledger, &mut reservations, pending.id).unwrap_err();
     match err {
         PendingTxError::TooOld {
             built,
@@ -306,7 +299,7 @@ fn submit_too_old_when_built_height_outside_reorg_window() {
         } => {
             assert_eq!(built, shekyl_types::BlockHeight::from_raw(20));
             assert_eq!(current, shekyl_types::BlockHeight::from_raw(40));
-            assert_eq!(max_reorg, shekyl_types::BlockCount::from_raw(6));
+            assert_eq!(max_reorg, shekyl_engine_state::MIN_REORG_DEPTH);
         }
         other => panic!("unexpected error: {other:?}"),
     }
@@ -366,9 +359,7 @@ fn submit_chain_state_changed_when_tip_hash_at_built_height_no_longer_matches() 
         );
     }
 
-    let err =
-        submit_pending_tx_in_state(&mut ledger, &mut reservations, Network::Testnet, pending.id)
-            .unwrap_err();
+    let err = submit_pending_tx_in_state(&mut ledger, &mut reservations, pending.id).unwrap_err();
     match err {
         PendingTxError::ChainStateChanged { height } => {
             assert_eq!(height, shekyl_types::BlockHeight::from_raw(15));
@@ -400,8 +391,7 @@ fn submit_marks_inputs_spent_and_consumes_reservation() {
     .expect("build");
 
     let tx_hash =
-        submit_pending_tx_in_state(&mut ledger, &mut reservations, Network::Testnet, pending.id)
-            .expect("submit");
+        submit_pending_tx_in_state(&mut ledger, &mut reservations, pending.id).expect("submit");
 
     assert_eq!(reservations.len(), 0);
     // Output was marked locally spent by the reference body.
