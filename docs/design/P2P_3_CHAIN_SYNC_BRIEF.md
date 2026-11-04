@@ -2,20 +2,57 @@
 
 **Families (registered in `IMPLEMENTATION_INDEX.md` §2, rule 94):** **`CS-Q`** (questions, ruled here) and **`CS-F`** (findings). Grep surface: `rg -n -e '\bCS-[QF]'`, because the serve-credit findings family `SCS-F` contains `CS-F` as a substring. `CSR-` is a separate family.
 **Ground:** `dev` at `24961a9a8` (2026-10-19), after #1101 (DRS-X Round 0), #1088 (the daemon-config cutover) and #1102 (the Rust pool); DRS-X PR 2 (#1123, open) read at `e3180b665` for the door's `BeyondCap`. The handler is 2,669 + 228 lines; `block_queue` is 651 (`.h` 115 + `.cpp` 536); `cryptonote_protocol_defs.h` is 300.
-**Status:** CS-1 implemented (2026-10-21); CS-2 model and its §5 harness are in `shekyl-chain-sync` (2026-10-22); CS-3 implemented (2026-10-23): the runtime half and CS-Q11's loopback harness. CS-4 (pre-cutover, pure Rust): the inbound claim tap, the relay, the state handle's publisher and the cutover's deletion table. The cutover follows the DRS-X flip. Round 0 RULED, Rick 2026-10-18: CS-Q1…CS-Q12 as recommended, with four amendments: the complement request is chain sync's (CS-Q1, CS-Q10); `Synced` reads verified headers only (CS-Q2 step 8); the long-run slot is paid for in PoW and goes to the most verified work (CS-Q2 step 3); `following_degraded` gets a Rust producer (§A, coupling 4). Three corrections to CS-Q2 and CS-Q3, confirmed 2026-10-19 (Rick): a body, with its attestation witness, is bound to its header before the offer, so a substituted body or witness never invalidates an honest header (CEN-G2, CEN-B4); `Synced` waits for PDM-Q5's backward fill, with `Following` until then; and the body form is per transaction. The objects response follows PWD-B3's continuation (Rick, 2026-10-20): every requested block is sent, deferred by the budget, or marked unavailable, and only an unmarked shortfall closes the session (CS-Q3.2). Ruled 2026-10-19 (Rick), from DRS-X PR 2's design review: `following_degraded` is set by ingest's three refusals and by the sync owner, all through the connector, its one writer (§A items 7 and coupling 4); header PoW follows the earned-seed rule; and a past-cap branch is checked as evidence under `Class::Evidence` (CS-Q2 step 3). **Amended 2026-10-22 (Rick):** CS-Q2 step 1 refuses a block count of 0, or cumulative work below that count. **CS-1 is implemented (2026-10-21):** `form_header`, `judge_header`, `judge_header_cheap` and `bind_body` in `shekyl-chain-rules`; `PowBlob` and `BlockBody` in `shekyl-wire`; commands 2011–2014 in `shekyl-levin`, not admitted at ingress; the handler files are shrink-frozen (CS-Q9). CS-2, the sync model, is in `shekyl-chain-sync` (2026-10-22): the branch view, runs, the long-run slot, bodies, entry outcomes and close causes. **CS-3 is implemented (2026-10-23),** in `shekyl-chain-sync-runtime`, layered over the pure model in `shekyl-chain-sync` (Rick, 2026-10-23: ingest and the node depend on the model, the runtime on them): the router (the seam's post sink, pass-through in the daemon), the sync owner on its `chain-sync` row, the executor with `Class::Evidence`, serving 2011–2014 from the store, `Door::offer_bound` (formed with `form_judged`), the latch through the connector (`RaiseAlarm`, `WatchLatch`), and CS-Q11's loopback harness in `shekyl-p2p-harness` (`sync`). The daemon builds the router pass-through, so no live session reaches the owner until the cutover (CS-Q10).
+**Status:** **CS-5, the cutover, is implemented (2026-11-01, #1237):** live sessions sync through the Rust owner, which the node owns and the seam's bind attaches; the C++ handler keeps RD's transaction routes only; `sync_info` is the owner's view (3.68); 2003, 2004, 2006 and 2007 are retired (§ CS-5 below). CS-1 implemented (2026-10-21); CS-2 model and its §5 harness are in `shekyl-chain-sync` (2026-10-22); CS-3 implemented (2026-10-23): the runtime half and CS-Q11's loopback harness. CS-4 (pre-cutover, pure Rust): the inbound claim tap, the relay, the state handle's publisher and the cutover's deletion table. The cutover follows the DRS-X flip. Round 0 RULED, Rick 2026-10-18: CS-Q1…CS-Q12 as recommended, with four amendments: the complement request is chain sync's (CS-Q1, CS-Q10); `Synced` reads verified headers only (CS-Q2 step 8); the long-run slot is paid for in PoW and goes to the most verified work (CS-Q2 step 3); `following_degraded` gets a Rust producer (§A, coupling 4). Three corrections to CS-Q2 and CS-Q3, confirmed 2026-10-19 (Rick): a body, with its attestation witness, is bound to its header before the offer, so a substituted body or witness never invalidates an honest header (CEN-G2, CEN-B4); `Synced` waits for PDM-Q5's backward fill, with `Following` until then; and the body form is per transaction. The objects response follows PWD-B3's continuation (Rick, 2026-10-20): every requested block is sent, deferred by the budget, or marked unavailable, and only an unmarked shortfall closes the session (CS-Q3.2). Ruled 2026-10-19 (Rick), from DRS-X PR 2's design review: `following_degraded` is set by ingest's three refusals and by the sync owner, all through the connector, its one writer (§A items 7 and coupling 4); header PoW follows the earned-seed rule; and a past-cap branch is checked as evidence under `Class::Evidence` (CS-Q2 step 3). **Amended 2026-10-22 (Rick):** CS-Q2 step 1 refuses a block count of 0, or cumulative work below that count. **CS-1 is implemented (2026-10-21):** `form_header`, `judge_header`, `judge_header_cheap` and `bind_body` in `shekyl-chain-rules`; `PowBlob` and `BlockBody` in `shekyl-wire`; commands 2011–2014 in `shekyl-levin`, not admitted at ingress; the handler files are shrink-frozen (CS-Q9). CS-2, the sync model, is in `shekyl-chain-sync` (2026-10-22): the branch view, runs, the long-run slot, bodies, entry outcomes and close causes. **CS-3 is implemented (2026-10-23),** in `shekyl-chain-sync-runtime`, layered over the pure model in `shekyl-chain-sync` (Rick, 2026-10-23: ingest and the node depend on the model, the runtime on them): the router (the seam's post sink, attached to the node's owner since CS-5), the sync owner on its `chain-sync` row, the executor with `Class::Evidence`, serving 2011–2014 from the store, `Door::offer_bound` (formed with `form_judged`), the latch through the connector (`RaiseAlarm`, `WatchLatch`), and CS-Q11's loopback harness in `shekyl-p2p-harness` (`sync`).
 **Parent:** [`P2P_3_IMPLEMENTATION_ROUND.md`](P2P_3_IMPLEMENTATION_ROUND.md) §4.2, row **CS**. [`DRS_X_STORE_FLIP.md`](DRS_X_STORE_FLIP.md) carries §A below as chain sync's Round 0 requirement.
 
 ## Constants (CS-1)
 
-Values this PR introduces that are not derived. Each is an `Assumption`
-(Ruling B): written down, not measured.
+Values this PR introduces that are not derived. Each began as an
+`Assumption` (Ruling B): written down, not measured. The two the table
+marks **measured** were read on CS-5's §10 fleet (2026-11-03; #1237's §12
+report is the public record, the captures are in `shekyl-dev`
+`infrastructure/captures/cs5-s10/`), and the table after this one gives
+the host-role figures that reading rests on.
 
 | Name | Value | Basis | Replaced by |
 | --- | --- | --- | --- |
 | `HEADERS_RESPONSE_BYTES` | 2 MiB | A header response's preimage budget. About ten thousand headers, past the tip case (~144 KiB) and short of a whole initial-sync run. A preimage shorter than a PoW preimage is refused, so the encoded cap's two-byte length-prefix allowance holds. | CS-Q11: headers per second and peak memory on the floor device, after the cutover |
 | `BODIES_RESPONSE_BYTES` | 8 MiB | How much a body response adds after the first held block, which is sent whatever its size. Charged when the response is stored and when it is decoded. Not derived from the block-weight limit. | CS-Q11: bodies per second and peak memory on the floor device, after the cutover |
-| `SYNC_RATE_FLOOR` | 8 KiB/s | The deadline of a header request and of a body request. A full header response (`HEADERS_RESPONSE_BYTES`, 2 MiB) takes 256 seconds. A body deadline is `BODIES_RESPONSE_BYTES` at this rate, the same construction as the header deadline. The request names hashes; the bytes the peer may send are the body budget, which is known when the request is made. One rate: the two streams are not different measurements. Slow for one Tor stream, and not a clearnet rate, so an honest Tor peer is not declared late. | CS-Q11: a post-cutover regtest measurement over a real Tor path. Loopback has no network and cannot measure it. Split the constant only if that measurement shows the streams need different floors. |
-| `BODY_REQUESTS_IN_FLIGHT` | 4 | How many body spans may be outstanding at once, before the entry's room is the limit. | CS-Q11: a post-cutover regtest measurement over a real Tor path: how many spans keep a slow honest peer's stream full. Loopback has no network and cannot measure it. |
+| `SYNC_RATE_FLOOR` | 8 KiB/s | The deadline of a header request and of a body request. A full header response (`HEADERS_RESPONSE_BYTES`, 2 MiB) takes 256 seconds. A body deadline is `BODIES_RESPONSE_BYTES` at this rate, the same construction as the header deadline. The request names hashes; the bytes the peer may send are the body budget, which is known when the request is made. One rate: the two streams are not different measurements. Slow for one Tor stream, and not a clearnet rate, so an honest Tor peer is not declared late. | **Measured 2026-11-03 (CS-Q11), kept at 8 KiB/s.** Over the managed Tor on the §10 fleet, 122 body responses of 3–46 KiB arrived in 0.4–8.2 s: responses of 4–32 KiB at p10 6.8 / p50 13.4 KiB/s, of 32–262 KiB at p10 25 / p50 48 / max 74 KiB/s; the two under 8 KiB/s were sub-second round trips of small responses, not slow streams. The slowest transit, 8.2 s, was 1/125 of its deadline. The 26 header responses took 0.3–1.9 s, the large ones at p50 57 KiB/s. Clearnet bodies ran at p50 818 KiB/s. Nothing in the measurement separates the two streams: one floor stands. |
+| `BODY_REQUESTS_IN_FLIGHT` | 4 | How many body spans may be outstanding at once, before the entry's room is the limit. | **Measured 2026-11-03 (CS-Q11), kept at 4.** One node on the public host syncing 1,200 blocks over the managed Tor from eight servers, on builds capped at 2, 4 and 8 (4 is the tree's build): spans in flight at each request p50 / max 2 / 2, 4 / 4, 5 / 8; requests made at the cap 54 of 59, 35 of 63, 11 of 39; seated spans 53, 49, 39, none of them waited (`waited=true` 0, door refusals 0 at every cap: the door drained a 31-block span in about 0.6 s on that host, so its 32 seats never bound); body throughput 23.4, 36.7, 37.6 blocks/s, per-response p50 24, 28, 34 KiB/s. The reading rule written before the first run — the smallest cap at which the seats limit before the cap does — returned no cap up to 8, which is the most eight sessions can hold; the throughput knee is at 4 (+57% from 2, +2.5% from 4 to 8), and a request on a dead Tor circuit holds the apply line whatever the cap, with the exposure growing in the count (#1237 §12). Over clearnet the question did not arise: bodies at p50 818 KiB/s drained faster than they were asked for. |
+
+### What the §10 fleet measured, by host role (2026-11-03)
+
+The figures the two measured constants rest on, and the one finding that
+bears on them. The store commit is the connector's apply per block read
+from the profile deltas between consecutive `sync reached the best chain`
+lines over the 60-minute stale-rate takes; propagation is the finder's tip
+move to this node's, net of both stores; fsync is 40 × 4 KiB `pwrite` +
+`fsync` 250 ms apart with the hosts idle.
+
+| Host role | Honest sync, 400 blocks (clearnet / Tor) | Store commit per block (p50 / max; clearnet, Tor) | Propagation to this node (p50 / p90 / max; clearnet, Tor) | fsync (p50 / max) |
+| --- | --- | --- | --- | --- |
+| The public host (4 vCPU, KVM) | served the chain | 0.01 / 0.1 s; 0.01 / 0.02 s | 0.81 / 0.93 / 1.05 s; 1.31 / 1.52 / 35.0 s | 5 / 23 ms |
+| The lab miner host (8 vCPU, KVM) | 79.1 s / 197.4 s | 0.46 / 20.9 s; 0.30 / 33.3 s | 1.67 / 2.15 / 22.1 s; 1.95 / 17.7 / 39.8 s | 133 ms / 23.5 s |
+| The staging staker host (8 vCPU, KVM; a testnet daemon beside it) | 170.6 s / 144.9 s | 7.76 / 38.1 s; 7.12 / 40.1 s | 9.5 / 43.3 / 55.9 s; 2.46 / 32.1 / 49.3 s | 107 ms / 962 ms |
+| The floor device (rule 76) | not in the fleet: derived | — | — | — |
+
+The learn latencies the stale-rate takes report (#1237 §12: p50 3.0 s
+clearnet, 3.7 s Tor; p90 29–36 s) are the finder's commit, the wire and
+the receiver's commit, because the relay fires on the tip event after the
+local commit; 51 of the 54 clearnet learns over 10 s and 50 of the 54 Tor
+ones land on a commit of more than 5 s for the block on one of the two lab
+hosts, whose virtual disks stall (the fsync column). Net of the store the
+wire is the public host's row. The store is redb at `Durability::Immediate`
+with two-phase commit, two fsyncs a batch; CS-5 did not change it or its
+policy (`DAEMON_REDB_STORE.md`), and the figures are recorded for that
+document's ruling, not acted on here.
+
+The floor device was not in the fleet (`cs2-long-run.yml`'s aarch64 runner
+does not exist), so its row is derived: its light-mode hash is slower than
+the public host's 0.76 s, so an honest sync there runs at the verifier's
+rate (§8), and neither constant depends on it — both bound the wire and
+the door, and were read where the store did not stall.
 
 ## CS-2 rulings (Rick, 2026-10-21)
 
@@ -181,7 +218,7 @@ owner of block propagation.
 | Sync-time estimate pair, `cumulative_block_sync_weight` | CS | Redesign. Progress is read from the header chain (rule 80). The Monero mainnet size table is deleted (rules 60, 71) |
 | `log_connections` | console | Delete. The console reads the board |
 | `safesyncmode`, the `pause_mine`/`resume_mine` coupling | — | Delete. `safesyncmode` is an LMDB knob and leaves with DRS-X; the miner reacts to tip changes, not to sync |
-| `dev-sync` (was `--no-sync`; `INPUT_GRAMMAR.md:262`, "the chain-sync lane owns it"; regtest only) | CS (data) | Keep as the grammar has it: with `dev-sync = off` the sync owner is not started. Read from the snapshot (`net_node.inl:429-430`) |
+| `dev-sync` (was `--no-sync`; `INPUT_GRAMMAR.md:262`, "the chain-sync lane owns it"; regtest only) | CS (data) | Keep as the grammar has it: with `dev-sync = off` the sync owner requests nothing (`Requesting::Off`; CS-5). The node reads it from the configuration (`rust/shekyl-node/src/lib.rs:369`); the snapshot carries no field for it |
 | `prep-blocks-threads`, `block-sync-size`, `span-limit`, `block-download-max-size` (`INPUT_GRAMMAR.md:272`, **X**), and the hardcoded `m_block_download_max_size = 0`, `m_span_time = 2` (`.inl` `init`) | CS | Per CS-Q12: refused; the constants stand until the cutover |
 | Constructor and `deinit` (found by CS-4's read, as are the rows below) | CS | Shrink: the sync half's members and their initialisers go with it; what RD's routes use stays until the file goes (CS-Q9) |
 | `set_p2p_endpoint` | RD | Stays: the transaction routes send through the endpoint |
@@ -227,13 +264,43 @@ ingest deciding forks.**
   - A header tree `T` of verified headers.
   - The best chain `H*`: the most cumulative work among the
     **reachable** chains in `T`, meaning those whose fork point with `L`
-    lies within `D_max`.
+    lies within `D_max`. `T` hangs off main: a header main connected
+    leaves `T`, and when main pops a block (a chain switch demotes it),
+    every branch anchored at it leaves `T` with it
+    (`HeaderTree::drop_orphans`, one `header_at` per branch on each
+    tip). The peers on that chain serve those headers again, above a
+    parent the node then holds. **Amended 2026-11-03 (#1237, the
+    three-miner rehearsal):** before, the children stayed as a branch
+    anchored off main and a re-served parent adopted them (the
+    2026-11-02 form). That held only while the page stopped at the
+    parent. A page that walked the demoted chain — new to the node —
+    and reached the orphan met a held header after new ones
+    (`HeadersForm(HeldAfterNew)`), so a node that switched once closed
+    every later session from that peer and mined alone
+    (`switch_orphan_tests`). The close causes name the form rule they
+    failed (`HeadersFormFault`), which is how the 47 closes were read.
 - **Per session.**
   - the peer's claim (height and cumulative work, a hint only);
   - its verified frontier in `T`;
   - its **run**: headers received but not yet PoW-verified, held within
     a per-session byte budget;
-  - at most one outstanding request with its deadline.
+  - at most one outstanding request with its deadline;
+  - the ids of frontier requests to it that a new `H*` **withdrew**
+    before they were answered (`Peer::withdrawn`). **Amended 2026-11-03
+    (#1237, the three-miner rehearsal):** a new `H*` is a new locator,
+    so the frontier request in flight is withdrawn; its answer is still
+    owed, arrives in request order, and is this node's doing. Before,
+    the request was forgotten and its answer, matching no request,
+    closed the session at `HeadersForm(ParentUnrequested)` — a fault
+    charged to a peer that did what it was asked; or, when the
+    replacement request to the same session had the same fork point,
+    the stale answer was taken as the replacement's and the real one
+    then closed it. A miner's own block connecting, or a proof landing,
+    moves `H*`, so a request in flight across either cost the session
+    (`abandoned_request_tests`). Now the answer to a withdrawn request
+    is discarded unjudged and its deadline, if it passes first, drops
+    the id. A follow-up sent before the withdrawn request is answered
+    before it and is judged as before.
 
 **Steps.**
 1. **Hint.**
@@ -263,6 +330,18 @@ ingest deciding forks.**
      locator hash it holds. The first preimage's parent is that hash.
    - The first header's parent must be in the store (main or alt) or in
      `T`. If not, the response is a protocol violation.
+   - **Amended 2026-11-02 (#1237, the CS-5 §10 rehearsal):** the
+     locator is sparse below its dense prefix, so a page routinely opens
+     with headers the node already holds: on main between the locator
+     point and the fork, then in `T`. Those are the page's *held
+     prefix*; the new headers follow it and are judged above its last
+     header, which is where the branch view starts. A held header after
+     a new one is a chain rejoining what it left, a form the peer cannot
+     have: `HeadersForm`. Before the amendment a main-held header counted
+     as new and the `T`-held stretch was dropped from the page, so the
+     first new header was judged above the wrong parent and CEN-A2
+     refused it on every page; three miners at target 1 never converged
+     (`page_overlap_tests`).
 3. **Verify headers: cheap checks per response, then the work test on
    the run, then PoW.**
    - **Cheap checks, on each response as it arrives, at almost no
@@ -288,7 +367,40 @@ ingest deciding forks.**
        This is the liar.
      - **The peer has no more, and the run's work is at most
        `work(H*)`:** the run is dropped and the session is kept. This is
-       an honest lighter fork, or a peer that is behind.
+       an honest lighter fork, or a peer that is behind. **Amended
+       2026-11-02 (#1237, the CS-5 §10 rehearsal):** the session is then
+       *spent* for this `H*` (`Command::HeadersSpent`, a record the
+       owner logs): it is not drawn to extend `H*` again until its claim
+       or `H*` changes, because the same locator would get the same
+       answer. The same gate closes on a response that names no header
+       `T` lacks and says the chain ends there, and on a run whose
+       headers could not be judged where they were placed; a response
+       that names only headers `T` holds *with more to come* continues
+       from the last header served instead of from `H*`. Before the
+       gate, a node whose `H*` was reachable by no heavier tip re-sent
+       the same request every millisecond. **A proof whose seed the
+       cache slots did not hold is not a spend (amended 2026-11-02,
+       #1237's `a_main_seed_not_held_asks_again_when_the_window_changes`;
+       defect 8):** the gate as first written closed on it too, and a
+       joiner whose one source was idle then stood at height 1 for ever,
+       because neither the source's claim nor `H*` would move while the
+       ingest attendant was still deriving the genesis seed's cache (a
+       startup race a 4-vCPU host loses and a 16-thread one does not).
+       The slots are the window's state, not the peer's answer: the run
+       is dropped (`Command::SeedNotHeld`, a record the owner logs) and
+       the session is closed to header draws only until the window's
+       published pair changes (`Event::Seeds`, raised by the owner off
+       the door's seed watch, and again by the owner itself when the
+       pair already holds the seed by the time the record is handled),
+       its claim changes, or `H*` does. **The
+       liar is judged first (amended 2026-11-02, #1237's
+       `the_liar_closes_at_claim_unmet`):** a response that names only
+       held headers, or none, and says the chain ends there is read
+       against the work of the chain it served (the last held header's
+       record, or `H*` for an empty page), and a claim above that work
+       closes the session as the liar's; the gate spends only a claim at
+       or below it. Until that day the gate spent the liar too, and it
+       kept its session.
      - **The run fills its per-session budget without exceeding
        `work(H*)`:** the run is dropped with zero hashes, and the
        session is not asked again until its claim changes.
@@ -409,6 +521,26 @@ ingest deciding forks.**
             dialer's rule: an honest chain served by many honest sessions
             is reached in proportion to their share.
           - **At most one check per session.**
+          - **When the draw runs (Defect 11, §10's partition regtest,
+            2026-11-03):** a header response records its candidate and
+            does not draw, so responses of one round are drawn over as
+            a set; the draw runs at the next event. That event is not
+            promised — a peer that has served its chain may send nothing
+            more, and the regtest's heavier-chain node sat with its
+            peer's 841 headers and never began the check. The response
+            therefore arms a wake (`Command::ArmDraw`) one declared
+            transit out, the bound on the draw when nothing else
+            arrives; one is armed at a time.
+          - **While the check runs (Defect 12, the same regtest):** a
+            page from the session that does not continue the drawn run
+            is discarded and the run stays. The page is the branch asked
+            for again — the peer's claim moved while the check ran, and
+            this node's locator holds nothing of the branch, so the peer
+            answered from the fork — and it adds nothing the check
+            needs. The branch counts as followed until the claim moves
+            again. Until 2026-11-03 the page dropped the run, and with
+            the session's one draw spent nothing drew again: the heavier
+            node that kept mining was never latched against.
        4. **In order from the fork, and stop at proof.**
           - Every later seed on the run is earned under B2's 65-block
             rule (above).
@@ -499,8 +631,21 @@ ingest deciding forks.**
      lack).
    - `NoRoom`: the entry refused before acceptance. Sync keeps the span
      within its byte budget and offers it again when the entry reports
-     room. It is never a fault of the peer. It arises only from the race
-     between asking for room and offering.
+     room, and the owner reports room after every `NoRoom` whether or
+     not the door's count moved. It is never a fault of the peer. The
+     door seats a bound span as solicited however each body reached the
+     owner (since 2026-11-02; `BoundArrival` in `shekyl-chain-ingest`),
+     so a span within the room the door reported is seated, and
+     `NoRoom` arises only from the race between asking for room and
+     offering. *Premise refuted, 2026-11-02, by #1237's three-miner
+     rehearsal: the brief said the race was the only source while the
+     door still seated a bound announcement as unsolicited (Rick,
+     2026-10-25), so a span of more announced bodies than the
+     unsolicited share was `NoRoom` in an empty window, the owner's
+     room sample read the count it had last reported and sent no
+     `Room`, and a node that had learned its peers' chain from
+     announcements sat `behind` for good with its seats frozen at
+     zero.*
    - `Held` and the switch outcomes are ingest's. Sync reads the new
      `L`. The owner translates `Reply::Switched` before the model sees
      it: `Connected { height }` when the arrival is main's new tip, and
@@ -522,10 +667,50 @@ ingest deciding forks.**
      `following_degraded` (step 8). Sync only reads the latch. These
      arise only on the announce path, because bodies are requested only
      along reachable `H*`.
-8. **State, published as one source.** **A claim's value never changes
-   the sync state; only verified headers do.** A higher claim only starts
-   a header request (step 1).
-   - **`NoView`**: no session has completed a handshake.
+8. **State, published as one source.** **A claim never grants a state
+   and never demotes a node that has a view; only verified headers do.**
+   A higher claim starts a header request (step 1), and it may hold the
+   opening `NoView`, for a bounded time (below).
+   - **The inputs** (Rick, 2026-11-01): verified work, the sessions, and
+     **the operator's declaration of the node's network**, read from the
+     resolved configuration once at open and never from the network type
+     (rule 71):
+     - **`Offline`**: both connectors off (`DaemonConfig::offline`);
+     - **`Closed`**: the peer list is closed (`p2p-closed-peer` rows), so
+       the operator has named the node's whole network;
+     - **`Open`**: everything else.
+   - **The derivation**, in this order, which `state()` and the relay
+     decision both read:
+     1. **No session open:** `Offline` and `Closed` give `Synced`, subject
+        to the backward fill (`Following`), which is local; `Open` gives
+        `NoView`.
+     2. **Verified headers heavier than `L`** give `Behind`, whatever else
+        holds: a verified view exists.
+     3. **The opening is unresolved:** `NoView`.
+     4. **Otherwise** `Following` or `Synced`.
+   - **The opening** starts when a session opens while none was open. It
+     resolves at whichever comes first:
+     - **(a)** every open session whose claim exceeds `work(L)` has
+       resolved its header request: verified, refused, or past its
+       deadline. A session whose claim has not arrived has not resolved:
+       the outbound handshake's claim is posted just after the session
+       opens, so that wait is one post, and reading an absent claim as
+       not exceeding `work(L)` would bring the flash back;
+     - **(b)** the first session's header deadline has passed: its transit
+       plus `HEADERS_RESPONSE_BYTES / SYNC_RATE_FLOOR`, armed when that
+       session opens (whether or not a request is ever sent) and fired
+       through the owner's timer like the other deadlines. No new
+       constant.
+
+     Two readings of (a) are accepted as built (Rick, 2026-11-01): a
+     session whose claim has not arrived is unanswered, and a header
+     response counts only once its headers are verified (headers still
+     waiting for their proofs have not resolved the request).
+
+     Once resolved, the opening stays resolved until the last session
+     closes. A later claim never moves the state. Nothing is relayed while
+     the node is `NoView`.
+   - **`NoView`**: no verified view of the network.
    - **`Behind { have, best }`**: `work(L) < work(H*)`, over verified
      headers.
    - **`Following { verified_to }`**: `work(L) ≥ work(H*)` over verified
@@ -542,13 +727,23 @@ ingest deciding forks.**
      tip" would stop mining during an ordinary equal-work tip race.
      Reading it as "a higher claim means we are behind" would let anyone
      rotating sessions halt mining and transaction intake.
-   - **The first session's flash is accepted** (Rick, 2026-10-23). A node
-     holding only its own chain reads `Synced` the moment a session
-     opens, before that session's claim has started a header request,
-     and `Behind` once the headers it asked for are verified: the
-     published state goes `NoView → Synced → Behind → Synced`. That is
-     the consequence of "a claim never changes the state", and the
-     loopback harness's honest sync records it.
+   - **The opening's wargame** (Rick, 2026-11-01).
+     - **Honest node at the tip, peers claiming equal work:** no request
+       is sent, so (a) holds once the claims arrive: `NoView → Synced`.
+     - **Honest node behind:** `NoView → Behind → Synced`, with no
+       `Synced` before the first verified headers.
+     - **A liar claims more and stalls:** it delays a restarting node's
+       first `Synced` by at most one header deadline (b), about 4 minutes
+       at `SYNC_RATE_FLOOR`. Until then the node acts as `NoView`: no
+       template, no relay of its tips, no transaction intake. A node that
+       has not checked the network should do none of those.
+     - **Rotating liars** do not extend it: (b) is fixed from the first
+       session, and a resolved opening is not reopened by a claim.
+     - **`Closed` with its peers down** mines alone on its own tip, by the
+       operator's declaration. Its blocks may fork from the wider chain;
+       that is the declared network's business, and the audit accepts
+       local configuration.
+     - **`Offline`** has no sessions, so no claim can reach it.
    - **`Diverged { fork_at }`**: an **alarm** carried beside the state,
      not a state of its own.
      - **Primary source:** `T` holds a verified chain that is heavier
@@ -628,13 +823,17 @@ emits `Rewind`; it offers blocks, and the alt tier switches.
   - So the walk to `L = H*` terminates unless no session can serve,
     which is surfaced as stalled (rule 82), not looped on.
 - **Tiny network.**
-  - A lone genesis node has `NoView`, so it is not `Synced` and does not
-    mine.
+  - A lone genesis node on an open network has `NoView`, so it is not
+    `Synced` and does not mine.
   - Mining alone is the operator's declaration (`clearnet = off` and
     `tor = off`, or a closed network through `p2p-closed-peer`): local
-    configuration, which the exception audit accepts.
-  - This keeps today's behaviour without the latch: the C++ also needs a
-    peer to mark synced.
+    configuration, which the exception audit accepts. **Built** (CS-5,
+    Rick 2026-11-01): `shekyl_chain_sync::Declaration`, read by the node
+    from the configuration; `an_offline_testnet_node_is_synced_at_open`,
+    `an_offline_regtest_node_mines` (the mining half runs on regtest under
+    `dev-difficulty`: a testnet block is real proof of work whose time is
+    a draw, 5 s to past 180 s on one runner) and
+    `a_closed_node_whose_peer_is_down_mines_and_opens_when_it_arrives`.
 - **Large network.** `T` holds headers only, about 150-200 B each (CS-F6),
   so a full header chain is held in memory. Runs add one byte budget per
   session.
@@ -976,6 +1175,19 @@ nothing:
     - Dropping an honest announce is safe. The next announce's
       `Unlinked` reply, or a hint from another session, starts a
       solicited sync.
+    - **Amended 2026-11-02 (#1237, the CS-5 §10 rehearsal):** one hash
+      per *block*, not per announcing peer. An announce of a header
+      already in `T` is not proved; its body is bound if none is held.
+      A proof that lands after another peer's copy entered `T`, or
+      after main connected the block, is dropped: a header main holds
+      is judged by nobody. An announced header whose parent is on main
+      below the tip (main moved on while the proof ran) is judged above
+      the parent at its own height. Before the amendment the second
+      peer's proof was judged against a view of main at height zero and
+      a copy of the connected block entered `T` anchored at its parent;
+      every later announce was judged above the copy, and a node that
+      heard each block from two peers connected the first relayed block
+      and no later one (`announce_connected_tests`).
     - So an inbound flood can delay how fast we learn a new tip, but it
       cannot stall a sync in progress.
     - The cap's value is an `Assumption`.
@@ -1034,15 +1246,17 @@ the cutover:
 - `heavier_score` on `BlockAnnounceAction` and `BlockSyncAction`, its
   two FFI predicates, and the C++ wrappers. It had no production
   caller. It existed only to pick a ban weight. `Drop` and
-  `DropBadPow` stay: CS-Q2 maps an ingest outcome onto an action, and
-  the bad-PoW arm is that action, not a score. The rest of the crate
-  stays and is extended (CS-Q1, CS-Q4).
+  `DropBadPow` stayed then: CS-Q2 maps an ingest outcome onto an
+  action, and the bad-PoW arm is that action, not a score. CS-5 then
+  deleted `BlockAnnounceAction` and `BlockSyncAction` whole with the
+  handler's sync half, their only consumer (§9); `BlockIngest` and the
+  rest of the crate stay and are extended (CS-Q1, CS-Q4).
 
 **What stays:** operator bans and their expiry, and the registered
 reconnect throttle, which is not a ban.
 
-What CS still cuts at its cutover, with the sync half: `hit_score`
-and `m_score`.
+What CS cut at its cutover, with the sync half: `hit_score` and
+`m_score`.
 
 **Wargame.**
 - **Invalid-PoW spam from rotating IPv6 addresses.**
@@ -1395,7 +1609,7 @@ handler.
 | 5 | Its tests | `:53-74` |
 | 6 | C++ caller, in `update_sync_search` | `.inl:1747` |
 | 7 | C++ caller, in `needs_new_sync_connections` | `.inl:2553` |
-| 8 | Declarations | `src/shekyl/shekyl_ffi.h:3153-3159` |
+| 8 | Declarations | `src/shekyl/shekyl_ffi.h` (deleted by CS-5) |
 | 9 | Module | `rust/shekyl-ffi/src/lib.rs:184` |
 | 10 | FFI signature gate's registration | `scripts/ci/check_ffi_signatures.sh:87-88` |
 | 11 | `sync_connector_of` | 1c #9 |
@@ -1420,7 +1634,7 @@ Falsifier: `rg -n heavier_score rust src tests` returns nothing.
 | --- | --- | --- | --- |
 | 1 | `block-download-max-size` | `m_block_download_max_size = 0`, `.inl:251` (member `.h:197`) | `.inl:1918`, falling back to `BLOCK_QUEUE_SIZE_THRESHOLD` (`.inl:82`) |
 | 2 | `span-limit` | `m_span_time = 2`, `.inl:252` (constructor `:226`; member `.h:198`) | `.inl:263` → `m_span_limit` (`.h:199`), read `:261`, `:266-267`, `:1919`, `:1948`; floor `BLOCK_QUEUE_NSPANS_MINIMUM` `.inl:81` |
-| 3 | `prep-blocks-threads` | `blocks_threads = 4`, `src/cryptonote_core/cryptonote_core.cpp:313` | `:401` → `Blockchain::set_user_options` `src/cryptonote_core/blockchain.cpp` → `m_max_prepare_blocks_threads` (`blockchain.h:1076`; read `blockchain.cpp:6230-6231`) |
+| 3 | `prep-blocks-threads` | `blocks_threads = 4` in `src/cryptonote_core/cryptonote_core.cpp` (deleted by CS-5) | `:401` → `Blockchain::set_user_options` `src/cryptonote_core/blockchain.cpp` → `m_max_prepare_blocks_threads` (`blockchain.h:1076`; read `blockchain.cpp:6230-6231`) |
 | 4 | `block-sync-size` | `block_sync_size = 0`, `cryptonote_core.cpp:417` (member `cryptonote_core.h:900`) | `core::get_block_sync_size` `cryptonote_core.cpp:610-634`, defaulting to `BLOCKS_SYNCHRONIZING_DEFAULT_COUNT` (`cryptonote_config.h:103`); its one production caller `.inl:2029` |
 
 **5. The router's forwarding list, and what the cutover does to each row.**
@@ -1450,11 +1664,17 @@ lines needs none; a file with an edited line needs one naming its path.
 | 2 | `src/p2p/net_node.h` | shrinks | none expected |
 | 3 | `…/cryptonote_protocol_handler.inl` | shrinks; RD's routes stay | one: the constructor's initialiser list is edited |
 | 4 | `…/cryptonote_protocol_handler.h` | shrinks | one: the base-class list (`.h:84`) is edited |
-| 5 | `…/cryptonote_protocol_handler-base.cpp` | deleted | none |
+| 5 | `…/cryptonote_protocol_handler-base.cpp` | deleted; row removed | none |
 | 6 | `…/cryptonote_protocol_handler_common.h` | shrinks; `relay_transactions` stays | none expected |
-| 7 | `…/block_queue.h` | deleted | none |
-| 8 | `…/block_queue.cpp` | deleted | none |
+| 7 | `…/block_queue.h` | deleted; row removed | none |
+| 8 | `…/block_queue.cpp` | deleted; row removed | none |
 | 9 | `…/cryptonote_protocol_defs.h` | shrinks (1d) | none expected |
+
+A deleted file's row leaves with the file, in the cutover (rows 5, 7, 8).
+The gate reads the list at the base revision, so a row whose file the base
+no longer has is a rule-47 failure for every PR after the one that deleted
+it; the cutover is judged by the list it started from, where the three
+files are present at base and deleted at head, which passes.
 
 **The claim tap is slice 4's to delete (Rick, 2026-10-24).** Once the hub
 posts `HandshakeResult` for inbound sessions, as it does for outbound
@@ -1467,9 +1687,34 @@ the cutover's, and it touches no C++:
 | 2 | The split's tap copy and `tapped` | `rust/shekyl-chain-sync-runtime/src/router.rs` |
 | 3 | The owner's `tap` | `rust/shekyl-chain-sync-runtime/src/owner.rs` |
 | 4 | Their tests: `an_attached_router_taps_the_messages_that_carry_a_claim`, `an_inbound_session_serves_the_sync_after_its_handshake_request` | `router_tests.rs`, `shekyl-p2p-harness/tests/chain_sync_loopback.rs` |
+| 5 | The install slot (CS-5 §2): `chain_sync_ffi::install`'s router sender and hub one-shot, taken by `shekyl_seam_bind`. When the hub is the node's, the node hands its owner the hub | `rust/shekyl-ffi/src/chain_sync_ffi.rs`, `seam_ffi.rs` |
+| 6 | The one handshake-tip export (CS-5 F4), `shekyl_p2p_handshake_tip`, and `net_node`'s `handshake_tip`: they go with the C++ handshake | `rust/shekyl-ffi/src/dialer_ffi.rs`, `src/p2p/net_node.inl` |
 
 **Wargame.** A shrink row cannot block a deletion. It only makes an
 addition visible.
+
+### CS-5's disposition of the table (2026-11-01)
+
+Each row's gate was `rg -n -e <name>` over `src/`, `rust/` and `tests/`
+before and after; the counts are in #1237's report.
+
+| Table | Rows | Fate |
+| --- | --- | --- |
+| 1a | #1–10, #14–36, #39–40 | deleted |
+| 1a | #11–13, #38 | gone before CS-5 (DRS-X's) |
+| 1a | #37 `log_connections` | stays (the console's), without its state column |
+| 1b | #1–3 | stay, RD's: 2002 reads the shell's `is_synchronized`; 2010 answers a session past its handshake on the seam's flag |
+| 1c | #1–4, #6, #7, #13 | stay, RD's: the constructor and `deinit` shrunk to the core and the endpoint; one plain `drop_connection(context)` |
+| 1c | #5, #8–12, #14, #15 | deleted |
+| 1d | #4, #5, #7–10 (2003, 2004, 2006–2009) | deleted with their last users |
+| 1d | #1, #2, #3, #6, #11 | stay: `json_object` reads #1 and #2; 2002, `CORE_SYNC_DATA` and 2010 are live |
+| 2 | `sync_ffi.rs` and its rows | deleted whole |
+| 3a | #2, #3, #11 | deleted with scoring; #4–#6 stay slice 4's |
+| 3b | all | deleted with the peer-policy block family |
+| 4 | #1, #2, #4 | deleted; #3 went with DRS-X |
+| 5 | #4–7 | retired at the Rust ingress too (`DefinedCommand`) |
+| 5 | #8, #9 | the owner's |
+| 6 | UNFREEZE lines | the handler's `.inl` and `.h`, `net_node.inl` (F4), `net_node.h` (F3) |
 
 ---
 
@@ -1684,6 +1929,136 @@ with its reason, under IG's REJECTED convention:
   point.
 
 ---
+
+## CS-5. The cutover
+
+Implemented 2026-11-01 (#1237), against the design review's brief. What
+it decided beyond the rows above:
+
+- **The node owns the owner.** `Node::open` spawns it on its
+  `chain-sync` row with everything but the hub, and leaves the router's
+  sender and a hub one-shot in one process slot. The seam's bind takes
+  the slot once, builds `Router::attached`, mints the hub and sends it.
+  The owner handles nothing until the hub arrives; the router precedes
+  every session. `Node::stop` stops it after the doors and before the
+  service. A bind with nothing left is pass-through.
+- **A stall is a fact, not a state.** `Sync::stalled()` is `Behind` with
+  nothing moving toward `H*`: no header or body request in flight, no
+  proof running, nothing with the entry. The entry's own refusals (an
+  unreadable store, seats not yet reported) are not a stall. It is
+  derived on every read. The owner logs it once when it sets and once
+  when it clears, and acts on nothing: new sessions clear it (CS-Q7).
+- **The view.** `Sync::view()` copies out one row per session (claim,
+  mode, header request and body spans with when they were sent and are
+  late, transit, rate) and the overall state, stall and target. A
+  session with no header run is `idle`. The rate is the last response's
+  bytes over the time since its request was sent. The owner publishes
+  the view on a watch after every event; `sync_info` renders it and
+  `get_connections` joins it to the board (3.68).
+- **Our own blocks.** The model relays a new tip it neither accepted nor
+  still awaits from the entry, from the tip event, to every session
+  (`Command::Relay::from` is `None`). The first tip observed relays
+  nothing.
+- **`dev-sync = off` is `Requesting::Off`:** no header, body, complement
+  or missing-transaction request; the owner still serves, relays and
+  publishes. Its state is derived as any node's: synchronized at the tip,
+  and `Behind` once its peer mines ahead, since it follows by
+  announcements alone and cannot fetch the chain. The e2e harness's sink
+  relies on that second half (a sink behind its origin ignores the stem
+  transaction); its comment said the sink is never synchronized, and is
+  corrected to this.
+- **"Established" is the seam's flag.** `p2p_connection_context_t`
+  answers `session_established()` from it, which timed sync, the
+  double-handshake refusal and epee's post-handshake packet limit read.
+- **A session opens when its handshake has completed, not when it is
+  attached.** The hub posts `Opened` for an outbound row when the
+  dialer marks it established, having read the reply, and for an
+  inbound row when the handler finishes the delivery that carried the
+  handshake, so the handler's reply is already queued. The owner opens
+  the model's session on `Opened`, relays only to opened sessions, and
+  closes a session that sends chain-sync traffic before it. A session
+  opened at attach would send ahead of the reply, and the dialing peer
+  refuses that frame (`LevinHandshakeRejected`).
+- **The per-block cost is the verifier** (§8, measured 2026-11-01 on the
+  qualified external host and accepted as measured by Rick the same day, the DRS re-take's chains, the data in
+  `shekyl-dev`). F-B 150.2 s and 152.2 s for 761 blocks, F-A 396.6 s and
+  392.6 s for 2,000: about 197 ms a block. Each block costs one
+  light-mode RandomX hash of its header, about 0.76 s, with the host's
+  four hasher permits busy (hash time over wall time about 3.9), which is
+  about 190 ms of each block's wall time; `form_judged` is under 1 ms,
+  the connector's apply 5–7 ms, the body transit under 0.2 ms. The sync
+  path has nothing left to tune at that cost: the hash is one per block
+  by ruling, and it already runs on every core. At that rate PB-D2's
+  5,040 blocks (a week offline) take about 16 minutes of proof of work
+  on the qualified host (5,040 × 0.76 s ÷ 3.9), against its 15-minute
+  reference.
+- **The per-block profile is one sink.** The node's measurement sink
+  (`shekyl-chain-ingest`'s `Metrics`, schema `shekyl_e2_metrics_v4`),
+  which the substrate already hashes into, also takes the entry's
+  `form_judged` and the connector's apply (through `Follow::metrics`)
+  and the owner's body transit and offer-to-answer time (through the
+  executor). The owner logs it as one line of JSON each time a sync
+  reaches the best chain; `drs_bench.py` records the subject's last such
+  line as `sync_profile`. The door's own wait is the answer time less
+  `form_judged` and the apply. For §10's two constants the sink also
+  records, from `v4`, each body response's bytes (`transit_bytes`), the
+  header responses' count, bytes and round trip (`header_*`), and the
+  door's seat wait per body span (`seated_spans`, `seat_waits`,
+  `seat_wait_ns_*`: a span counts as waiting from the door's first
+  `NoRoom` refusal to the offer it admitted; a `Throttled` refusal is
+  the session's bucket, not the door's room, so the model takes the
+  seat back and asks for the body — until 2026-11-02 the owner reported
+  it as `NoRoom`, and a node `behind` with every unsolicited offer
+  throttled held its bodies for a seat report that never came; since
+  the same day a bound span takes no token and is seated as solicited,
+  so the door answers no bound offer `Throttled`), all as
+  totals; and the owner logs each response (`a sync response`: its kind,
+  bytes, blocks and request-to-response time) and each seated span (`a
+  body span seated`: its blocks and wait) at `debug`. `SYNC_RATE_FLOOR`
+  is throughput after the round trip, which only the per-response lines
+  separate, so the sink carries no derived rate; `BODY_REQUESTS_IN_FLIGHT`
+  reads as the cap at which spans wait for seats. Not timed: the model's
+  own gate on planning while it reads zero seats (`plan_bodies`), which
+  the per-response lines show as fewer requests in flight than the cap.
+- **§10, measured (2026-11-03, #1237's §12 report).** Three CS-5 nodes on
+  the public host, the lab miner host and the staging staker host, clearnet
+  then the managed Tor, with a fourth daemon for the stall case. Honest sync
+  of 400 blocks: 79–197 s. §4's relay reached every node that held a
+  session; the stall case recovered on the redial (clearnet: a fresh node
+  at 156 of 417 when its only peer stopped, back to 417 26 s after that
+  peer returned; Tor: a fresh node holding its only peer's 400 headers
+  when that peer was frozen for 300 s, its connection closed by the
+  120 s timed-sync bound during the freeze, back at 400 30 s after the
+  thaw, on the redial). The stale-rate take (60 min at a 30 s
+  interval, calibrated from the fleet's measured hash rate): clearnet 85
+  heights, 7 forks (8.2%; alpha.10 9.9%), learn latency p50 3.0 s / p90
+  28.8 s / p99 52.4 s, 54 of 170 over 10 s; Tor 84 heights, 13 forks
+  (15.5%), p50 3.7 s / p90 36.3 s / p99 46.5 s, 54 of 168 over 10 s
+  (alpha.10's sync-path median: 29 s). The learns over 10 s are the store's,
+  not the wire's: 30 + 21 of the clearnet 54 and 32 + 18 of the Tor 54 land
+  on a receiver's or the finder's connector apply of more than 5 s for a
+  block (the relay fires on the tip event, after the local commit), and the
+  two lab hosts' commits — redb at `Durability::Immediate` with two-phase
+  commit, two fsyncs a batch — stalled for 20–49 s at a time on their
+  virtual disks, twice on both hosts at the same moment. Net of the store,
+  propagation to the public host was p50 0.81 s, p90 0.93 s, max 1.05 s
+  over clearnet and p50 1.31 s, p90 1.52 s over Tor. The store and its
+  durability policy are not CS-5's; the measurement is recorded here for a
+  ruling (`DAEMON_REDB_STORE.md`). One convergence take over Tor was void
+  (the harness restarted a node against a peer onion the peer's own
+  restart had retired, so the node held no session; a node with no
+  session learns nothing, which is §4's rule, not a defect); rerun on
+  fresh onions, that node — 35 blocks down its own fork, 177 behind —
+  reached the best chain 198 s after its start. The `D_max` partition
+  regtest (CS-Q11) passed every leg between the public host and a lab
+  host over clearnet (a common chain of 100, branches of 900 and 830,
+  fork depth 730 past `D_max` 720): the lighter half latched 122 s after
+  the rejoin, the heavier half stayed clear for 60 s and at equal work for
+  120 s, and the overtaken half latched 91 s after the other passed it,
+  then kept mining — each latch all proof, read on the 2 s `get_info`
+  poll. Its first two runs found Defects 11 and 12 in the evidence check
+  (CS-Q2, the past-cap evidence check, item 3); the third, on the fixed
+  head, is the measurement. The two constants: the table above.
 
 ## §A. What chain sync needs from the DRS-X entry
 

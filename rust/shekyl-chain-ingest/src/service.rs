@@ -112,14 +112,21 @@ pub struct Arrival {
 /// 3 and 6; CS2-Q1). The service forms it with `form_judged`, which consumes
 /// the proof and does not hash, so it takes no hasher permit and pins no
 /// seed.
+///
+/// It is seated as a solicited arrival however the body reached the owner.
+/// The owner admits an announcement itself (one unproved announce per
+/// session, proved under the hasher's unsolicited class) and offers only
+/// bodies on `H*`'s path within the room [`Door::room`] reported, so the
+/// door's unsolicited share and bucket have nothing left to decide for it:
+/// until 2026-11-02 they did decide, and a span of more announced bodies
+/// than the share was `NoRoom` in an empty window (the sync owner's
+/// `Event::Room` docs).
 #[derive(Clone, Debug)]
 pub struct BoundArrival {
     /// The caller's name for it.
     pub tag: ArrivalTag,
     /// The session that served the body.
     pub session: SessionId,
-    /// Whether this node asked for the body. An announcement is not.
-    pub solicited: bool,
     /// The header the sync owner's proof accepted.
     pub judged: shekyl_chain_rules::HeaderJudged,
     /// The block blob.
@@ -144,7 +151,7 @@ impl BoundArrival {
             tag: self.tag,
             origin: Origin::Peer {
                 session: self.session,
-                solicited: self.solicited,
+                solicited: true,
             },
             block_len: self.block.len(),
             body_lens: self.bodies.iter().map(Vec::len).collect(),
@@ -557,6 +564,8 @@ pub(crate) struct Shared<S: Substrate> {
     seeds: tokio::sync::watch::Sender<Option<crate::cache_window::SeedPair>>,
     /// The last `TipChanged` publication the tip attendant acted on.
     followed: tokio::sync::watch::Sender<u64>,
+    /// The live phases' measurement sink ([`Follow::metrics`]).
+    metrics: Option<Arc<crate::metrics::Metrics>>,
     /// The postings the follower has written and not yet dropped. The
     /// follower and the found-block sink share this map: a generation's
     /// job and the bodies it listed are one record.
@@ -868,9 +877,19 @@ pub struct Door {
     spans: mpsc::UnboundedSender<Vec<Accepted>>,
     room: Arc<crate::room::Room>,
     admission: Arc<Admission>,
+    seeds: tokio::sync::watch::Receiver<Option<SeedPair>>,
 }
 
 impl Door {
+    /// The seed window as last pinned and published: the pair the
+    /// lookup-only longhash answers from. `None` until the first pair is
+    /// pinned. A caller whose proof found a seed absent waits on this for
+    /// the slots to change, and reads it to see whether they already have.
+    #[must_use]
+    pub fn seeds(&self) -> tokio::sync::watch::Receiver<Option<SeedPair>> {
+        self.seeds.clone()
+    }
+
     /// Seats a sync caller can take now. Zero when the door is closed.
     #[must_use]
     pub fn room(&self) -> usize {
@@ -1050,6 +1069,12 @@ pub struct Follow {
     /// [`Notify`] the pool door's fluff hook fires. `None` is a private
     /// notify: tests that admit through the pool lock wake it themselves.
     pub shown: Option<Arc<Notify>>,
+    /// The measurement sink the live phases are timed into: each
+    /// `form_judged`, and each run the connector applies
+    /// (`P2P_3_CHAIN_SYNC_BRIEF.md` CS-5, the per-block profile). The
+    /// composition root hands the substrate's own sink. `None` times
+    /// nothing.
+    pub metrics: Option<Arc<crate::metrics::Metrics>>,
 }
 
 /// Told the ids that left the pool on a reconcile.
@@ -1252,6 +1277,7 @@ where
             branch_gate: tokio::sync::Mutex::new(()),
             seeds: tokio::sync::watch::Sender::new(None),
             followed: tokio::sync::watch::Sender::new(0),
+            metrics: follow.metrics,
             kept: crate::follower::Postings::default(),
             pool: follow.pool,
             pool_live: Arc::new(AtomicBool::new(true)),
@@ -1276,6 +1302,7 @@ where
             spans: spans_tx,
             room: crate::room::Room::new(config.room.get()),
             admission,
+            seeds: shared.seeds.subscribe(),
         };
         let loop_shared = Arc::clone(&shared);
         let loop_door = door.clone();
@@ -1512,6 +1539,8 @@ mod span;
 mod window;
 
 pub use window::Reservation;
+
+pub use crate::cache_window::SeedPair;
 pub(crate) use window::{
     divide_pool_faults, install_window, record_store_read, record_window_stop, with_pool,
     PoolDivision,

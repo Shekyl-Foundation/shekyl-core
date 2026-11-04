@@ -92,7 +92,7 @@ struct t_internals {
 
   explicit t_internals(const ShekylDaemonSnapshot& snapshot)
     : core(nullptr)
-    , protocol{core, nullptr, snapshot.offline}
+    , protocol{core, nullptr}
     , p2p{protocol}
     , subject{nullptr, nullptr}
   {

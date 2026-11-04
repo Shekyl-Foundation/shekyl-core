@@ -18,6 +18,10 @@
 #![deny(unsafe_code)]
 
 #[cfg(test)]
+mod abandoned_request_tests;
+#[cfg(test)]
+mod announce_connected_tests;
+#[cfg(test)]
 mod announce_tests;
 #[cfg(test)]
 mod continuation_tests;
@@ -28,7 +32,11 @@ mod harness;
 #[cfg(all(test, feature = "cs2-long-run"))]
 mod long_run;
 #[cfg(test)]
+mod model_inspect;
+#[cfg(test)]
 mod offer_tests;
+#[cfg(test)]
+mod page_overlap_tests;
 #[cfg(test)]
 mod proof;
 #[cfg(test)]
@@ -39,6 +47,12 @@ mod scaling_tests;
 mod scenarios;
 #[cfg(test)]
 mod select_tests;
+#[cfg(test)]
+mod spent_tests;
+#[cfg(test)]
+mod stall_tests;
+#[cfg(test)]
+mod switch_orphan_tests;
 
 mod arrivals;
 mod branch;
@@ -50,12 +64,15 @@ mod protocol;
 mod runs;
 mod state;
 mod tree;
+mod view;
 
 pub use claim::{PayloadRefused, PeerClaim};
 pub use locator::locator;
 pub use model::{
-    BoundArrival, CachePlan, ClaimError, CloseCause, Command, Event, HashClass, Job, OfferedBody,
-    Outcome, ProveItem, Proved, Sync, BODY_REQUESTS_IN_FLIGHT, SYNC_RATE_FLOOR,
+    BoundArrival, CachePlan, ClaimError, CloseCause, Command, Event, HashClass, HeadersFormFault,
+    Job, OfferedBody, Outcome, ProveItem, Proved, Requesting, Spent, Sync, BODY_REQUESTS_IN_FLIGHT,
+    SYNC_RATE_FLOOR,
 };
 pub use shekyl_chain_rules::HeaderView;
-pub use state::SyncState;
+pub use state::{Declaration, SyncState};
+pub use view::{BodiesInFlight, HeaderInFlight, SessionMode, SessionView, SyncView};

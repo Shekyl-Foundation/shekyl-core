@@ -207,6 +207,19 @@ impl Chain {
         substrate: Arc<ProductionSubstrate>,
         budget: Budget,
     ) -> Self {
+        Self::empty_following(tag, rules, substrate, budget, Follow::default())
+    }
+
+    /// An empty store and its service, with `follow` seated on the tip
+    /// follower. Call from inside a runtime.
+    #[must_use]
+    pub fn empty_following(
+        tag: &str,
+        rules: ChainRules,
+        substrate: Arc<ProductionSubstrate>,
+        budget: Budget,
+        follow: Follow,
+    ) -> Self {
         let path = store_path(tag);
         let store = Arc::new(open_store(&path, rules));
         let service = Service::start(
@@ -217,7 +230,7 @@ impl Chain {
                 room: NonZeroUsize::new(64).expect("non-zero"),
             },
             budget,
-            Follow::default(),
+            follow,
         );
         Self {
             store,

@@ -7,14 +7,61 @@
 //! end is the loopback harness's (`shekyl-p2p-harness`,
 //! `tests/chain_sync_loopback.rs`).
 
-use shekyl_chain_ingest::service::{ArrivalTag, CannotFollow, Reply};
+use shekyl_chain_ingest::service::{ArrivalTag, CannotFollow, Refusal, Reply};
 use shekyl_chain_ingest::PopBeyondReorgCap;
 use shekyl_chain_rules::{CenRow, InvalidBlock, Locus};
 use shekyl_levin::{RequestBodies, RequestHeaders};
 use shekyl_types::{BlockCount, BlockHash, BlockHeight};
 
-use super::{outcome_of, ServeRequest, Serving};
+use super::{ServeRequest, Serving};
+use crate::outcome::{of_refusal, of_reply};
 use shekyl_chain_sync::{Outcome, SyncState};
+
+/// A refused offer reaches the model as the outcome its refusal names. A
+/// dry bucket is `Throttled`, never `NoRoom`: the model takes the seat back
+/// and asks for the body (2026-11-02, a node `behind` with every offer
+/// throttled, each frozen as `NoRoom`). A bound span takes no token since
+/// the same day (`shekyl_chain_ingest::service::BoundArrival`), and the
+/// owner forgets its sampled room after any `NoRoom`, so a seat report
+/// follows every refusal that waits for one ([`super::Owner::offer`]).
+#[test]
+fn every_door_refusal_has_an_outcome() {
+    let cases = [
+        (Refusal::NoRoom, true, 10, Some(100), Outcome::NoRoom),
+        (Refusal::Throttled, true, 10, Some(100), Outcome::Throttled),
+        (Refusal::Throttled, false, 10, None, Outcome::Throttled),
+        (
+            Refusal::StoreUnreadable,
+            true,
+            10,
+            Some(100),
+            Outcome::StoreUnreadable,
+        ),
+        (
+            Refusal::Oversize,
+            true,
+            101,
+            Some(100),
+            Outcome::Oversize { invalidate: true },
+        ),
+        (
+            Refusal::Oversize,
+            false,
+            101,
+            Some(100),
+            Outcome::Oversize { invalidate: false },
+        ),
+        (Refusal::Oversize, true, 100, Some(100), Outcome::Again),
+        (Refusal::Oversize, true, 101, None, Outcome::Again),
+    ];
+    for (refusal, solicited, bytes, max, expected) in cases {
+        assert_eq!(
+            of_refusal(refusal, solicited, bytes, max),
+            expected,
+            "{refusal:?} solicited={solicited} bytes={bytes} max={max:?}"
+        );
+    }
+}
 
 #[test]
 fn every_entry_reply_has_an_outcome() {
@@ -97,7 +144,7 @@ fn every_entry_reply_has_an_outcome() {
     ];
     for (reply, expected) in cases {
         assert_eq!(
-            outcome_of(reply.clone(), true, Some(hash)),
+            of_reply(reply.clone(), true, Some(hash)),
             expected,
             "{reply:?}"
         );
@@ -114,7 +161,7 @@ fn a_connect_carries_its_height_however_the_body_arrived() {
         hash: BlockHash::from_bytes([3; 32]),
     };
     assert_eq!(
-        outcome_of(
+        of_reply(
             connected.clone(),
             false,
             Some(BlockHash::from_bytes([3; 32]))
@@ -122,7 +169,7 @@ fn a_connect_carries_its_height_however_the_body_arrived() {
         Outcome::Connected { height }
     );
     assert_eq!(
-        outcome_of(connected, true, None),
+        of_reply(connected, true, None),
         Outcome::Connected { height }
     );
 }
@@ -142,24 +189,24 @@ fn a_switch_is_a_connect_only_when_the_arrival_is_the_new_tip() {
         ],
     };
     assert_eq!(
-        outcome_of(switched(arrival), true, Some(arrival)),
+        of_reply(switched(arrival), true, Some(arrival)),
         Outcome::Connected { height }
     );
     assert_eq!(
-        outcome_of(switched(arrival), false, Some(arrival)),
+        of_reply(switched(arrival), false, Some(arrival)),
         Outcome::Connected { height }
     );
     assert_eq!(
-        outcome_of(
+        of_reply(
             switched(BlockHash::from_bytes([9; 32])),
             true,
             Some(arrival)
         ),
         Outcome::Noted
     );
-    assert_eq!(outcome_of(switched(arrival), true, None), Outcome::Noted);
+    assert_eq!(of_reply(switched(arrival), true, None), Outcome::Noted);
     assert_eq!(
-        outcome_of(
+        of_reply(
             Reply::Switched {
                 demoted: Vec::new(),
                 promoted: Vec::new(),
@@ -195,7 +242,9 @@ fn a_session_holds_one_waiting_request_of_each_kind() {
     assert_eq!(serving.queue.len(), 2);
     match &serving.queue[0] {
         ServeRequest::Headers(request) => assert_eq!(request.block_ids, vec![[64; 32]]),
-        ServeRequest::Bodies(_) => panic!("the header request keeps its place"),
+        ServeRequest::Bodies(_) | ServeRequest::MissingTxs(_) => {
+            panic!("the header request keeps its place")
+        }
     }
     assert!(
         matches!(&serving.queue[1], ServeRequest::Bodies(request) if request.hashes == vec![[9; 32]])

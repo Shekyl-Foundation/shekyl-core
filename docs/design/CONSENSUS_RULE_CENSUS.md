@@ -905,7 +905,7 @@ at `c72048125560c11112daaf464a6acfa65cc3e1da`     reads `get_curve_tree_root()` 
     connects — and every block after it; the chain halts at height 60.
     Not observed until the fix's own regression (entry 18) because every Blockchain-level test was FAKECHAIN (the
     check is skipped, `:6411`), `--regtest` sets `FAKECHAIN`
-    (`cryptonote_core.cpp:423–426`), and every real network is at height 1.
+    (at `8466b7a6a9`, `cryptonote_core.cpp:423–426`), and every real network is at height 1.
     **That is rule 71's strongest evidence to date:** `m_nettype !=
     FAKECHAIN` gating a *check* is nettype selecting control flow, so the
     entire test surface took the arm without the check and was structurally

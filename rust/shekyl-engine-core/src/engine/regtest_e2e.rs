@@ -172,11 +172,11 @@ pub(super) struct RegtestDaemon {
     /// Whether this daemon was started offline (both connectors off). Its
     /// `get_info` must then report that state, not a count of zero.
     offline: bool,
-    /// Whether this daemon posts a template at open: a regtest daemon with
-    /// no peers reads `Synced` at open and posts once its follower has
-    /// looped (`shekyl-node` `sync_at_open`). Readiness then includes that
-    /// post: a `generateblocks` sent before it is honestly refused
-    /// `mine.not_synced` by a daemon whose RPC is already up.
+    /// Whether this daemon posts a template at open: an offline daemon is
+    /// synced from open on any network (`Declaration::Offline`, CS-Q2 step
+    /// 8) and posts once its follower has looped. Readiness then includes
+    /// that post: a `generateblocks` sent before it is honestly refused by
+    /// a daemon whose RPC is already up.
     posts_at_open: bool,
     /// When true, `Drop` leaves `data_dir` in place. Set only by
     /// `start_keeping_data`. Every other spawn deletes the directory.
@@ -194,22 +194,33 @@ pub(super) struct RegtestDaemon {
 /// How a spawned daemon takes part in peer-to-peer.
 #[derive(Clone, Copy, Debug)]
 enum Peering {
-    /// `--clearnet off --tor off`: no listener and no dial. The protocol
-    /// starts synchronized, so a submitted transaction finds no route and
-    /// is broadcast-recorded within milliseconds.
+    /// `--clearnet off --tor off`: no listener and no dial. Both
+    /// connectors off is the operator's declaration that the node has no
+    /// network to be behind (`Declaration::Offline`, CS-Q2 step 8), so
+    /// chain sync reads `Synced` from open on any network, and a submitted
+    /// transaction finds no route and is broadcast-recorded within
+    /// milliseconds.
     Offline,
     /// Bound on loopback and dialling exactly one peer.
     ///
     /// `--p2p-closed-peer` is what keeps the daemon off the public
     /// network: a closed list is the condition under which it dials no
-    /// seed. `--tor off` declines the managed Tor, so the node is
+    /// seed. It is also the operator naming the node's whole network
+    /// (`Declaration::Closed`, CS-Q2 step 8): with its peer down the node
+    /// reads `Synced` and mines alone, and when the peer is up its opening
+    /// runs. `--tor off` declines the managed Tor, so the node is
     /// clearnet-only and a local origin takes the stem slot, not a hidden
     /// own-edge.
     Linked {
         p2p_port: u16,
         peer_p2p_port: u16,
-        /// `--dev-sync off`: the daemon never reports itself synchronized,
-        /// so it drops every transaction a peer sends it and relays none.
+        /// `--dev-sync off`: the daemon requests nothing (`Requesting::Off`)
+        /// and follows its peer by announcements alone. It is synchronized
+        /// at the tip like any closed node (CS-Q2 step 8), but once its
+        /// peer mines ahead it cannot fetch the chain and stays `Behind`,
+        /// and a node that is behind ignores every transaction a peer sends
+        /// it. Observed 2026-11-01: synced at heights 1 and 2, then behind
+        /// while its peer mined to 70, ignoring the stem transaction.
         sink: bool,
     },
     /// Bound on loopback and dialling exactly `peers`, two simulated
@@ -274,6 +285,9 @@ struct RegtestSpawn {
     /// The DX-Q8 capture is the caller. The default deletes, except under
     /// a failing test (`Drop` keeps the directory while its thread panics).
     keep_data: bool,
+    /// Another daemon binary than `SHEKYLD_BIN`: a released version, for a
+    /// mixed-version walk.
+    binary: Option<PathBuf>,
 }
 
 impl RegtestSpawn {
@@ -288,7 +302,14 @@ impl RegtestSpawn {
             peering: Peering::Offline,
             mine_address: None,
             keep_data: false,
+            binary: None,
         }
+    }
+
+    /// Spawn `binary` instead of `SHEKYLD_BIN`.
+    fn with_binary(mut self, binary: PathBuf) -> Self {
+        self.binary = Some(binary);
+        self
     }
 
     fn with_mine_address(mut self, address: String) -> Self {
@@ -585,10 +606,11 @@ impl RegtestDaemon {
             peering,
             mine_address,
             keep_data,
+            binary,
         } = spec;
         install_wallet_tracing();
 
-        let bin = Self::binary();
+        let bin = binary.unwrap_or_else(Self::binary);
         let offline = matches!(peering, Peering::Offline);
         let p2p_ports: Vec<u16> = match &peering {
             Peering::Offline => Vec::new(),
@@ -744,7 +766,7 @@ impl RegtestDaemon {
             restricted_url: restricted_port.map(|p| format!("http://127.0.0.1:{p}")),
             schedule,
             offline,
-            posts_at_open: offline && matches!(network, SpawnNetwork::Regtest),
+            posts_at_open: offline,
             keep_data,
             _serial: serial,
             recipe,
@@ -753,11 +775,11 @@ impl RegtestDaemon {
         daemon
     }
 
-    /// Poll `get_info` until the daemon answers (or time out).
-    /// A regtest daemon with no peers posts a template once its follower
-    /// has read `Synced`; until then `generateblocks` is refused
-    /// `mine.not_synced` (`no_view`), which is the daemon's honest answer
-    /// and not a test's finding. Ready is the first posted job.
+    /// Poll `get_miner_data` until the daemon has posted a job (or time
+    /// out). An offline daemon posts a template once its follower has read
+    /// `Synced`; until then `generateblocks` is refused `mine.starting`,
+    /// which is the daemon's honest answer and not a test's finding. Ready
+    /// is the first posted job.
     async fn await_posted(&self, deadline: Instant, log_path: &std::path::Path) {
         let mut last = String::new();
         while Instant::now() < deadline {
@@ -1437,11 +1459,22 @@ async fn assert_tx_confirmed(daemon: &RegtestDaemon, txid: TxHash) -> u64 {
          connected at height {after}; that block carries {carried:?}"
     );
 
-    assert_eq!(
-        daemon.tx_pool_size().await,
-        0,
-        "the mined spend must leave the pool"
-    );
+    // `generateblocks` answers when the connector's tip reaches the
+    // target; the tip follower reconciles the pool after that commit, so
+    // the pool is read until it drains, within a bound.
+    let reconciled = Instant::now() + Duration::from_secs(30);
+    loop {
+        let size = daemon.tx_pool_size().await;
+        if size == 0 {
+            break;
+        }
+        assert!(
+            Instant::now() < reconciled,
+            "the mined spend must leave the pool: {size} transaction(s) still there 30 s \
+             after its block connected"
+        );
+        tokio::time::sleep(Duration::from_millis(100)).await;
+    }
 
     eprintln!("spend confirmed in the block that connected at height {after}");
     after

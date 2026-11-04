@@ -7,16 +7,18 @@
 //!
 //! An inbound session's claim arrives in its handshake request, which the
 //! router's claim tap copies to the owner. A block that connects is sent
-//! compact to every established session but the one that supplied it.
+//! compact to every established session but the one that supplied it, and
+//! a block this node mined to every established session.
 
 use std::sync::Arc;
 use std::time::Duration;
 
+use shekyl_chain_ingest::service::{ArrivalTag, Reply};
 use shekyl_chain_sync::SyncState;
 use shekyl_levin::{
     invoke, BasicNodeData, CoreSyncData, HandshakeRequest, PortableMap, COMMAND_HANDSHAKE,
 };
-use shekyl_p2p_harness::sync::{announcement, Bodies, Node, ServingPeer};
+use shekyl_p2p_harness::sync::{announcement, Bodies, Node, ServingPeer, Step};
 
 #[path = "chain_sync/support.rs"]
 mod support;
@@ -168,6 +170,55 @@ async fn a_block_fetched_by_sync_is_relayed_to_all_but_its_supplier() {
     );
     tokio::time::sleep(Duration::from_secs(1)).await;
     assert_eq!(supplier.announced(), 0, "not back to the supplier");
+    node.stop().await;
+    held.stop().await;
+}
+
+/// A block this node mined is relayed to every established session (CS-5
+/// F1): no session supplied it, so none is skipped. The block enters by
+/// `offer_local`, the one path in for the miner's sink, `submit_block` and
+/// `generateblocks`, and the owner learns of it only from the new tip.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn a_block_this_node_mined_is_relayed_to_every_session() {
+    logs();
+    let (corpus, steps) = spend();
+    let held = source("mined-relay-src", &corpus, &steps).await;
+    let (count, _, _) = held.tip().expect("a chain");
+    let Some((Step::Block { block, bodies }, before)) = steps.split_last() else {
+        panic!("the corpus ends in a block");
+    };
+    let mut node = Node::start("mined-relay", corpus.rules(), before, 2, rng()).await;
+    let (_, work, top) = node.chain.tip().expect("a chain");
+    let mut seen = Vec::new();
+    for _ in 0..3 {
+        let (peer, asked) = ServingPeer::new(Arc::clone(&held.store), Bodies::Honest);
+        seen.push(asked);
+        node.connect(Box::new(peer), Some(claim(count - 1, work, top)));
+    }
+    assert!(
+        node.wait(LIMIT, |node| node.state() == SyncState::Synced)
+            .await,
+        "state {:?}",
+        node.state()
+    );
+    let mined = node
+        .chain
+        .service
+        .door()
+        .offer_local(ArrivalTag(u64::MAX), block.clone(), bodies.clone())
+        .await
+        .expect("the door takes a local block");
+    assert!(
+        matches!(mined.reply, Reply::Connected { .. }),
+        "the mined block did not connect: {:?}",
+        mined.reply
+    );
+    assert!(
+        node.wait(LIMIT, |_| seen.iter().all(|seen| seen.announced() == 1))
+            .await,
+        "relayed {:?}",
+        seen.iter().map(|seen| seen.announced()).collect::<Vec<_>>()
+    );
     node.stop().await;
     held.stop().await;
 }

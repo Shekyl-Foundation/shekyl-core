@@ -39,7 +39,6 @@
 #include "cryptonote_basic/verification_context.h"
 #include "cryptonote_basic/difficulty.h"
 #include "cryptonote_core/i_core_events.h"
-#include "cryptonote_core/tx_verification_utils.h"
 #include "cryptonote_protocol/cryptonote_protocol_handler_common.h"
 #include "cryptonote_protocol/enums.h"
 #include "syncobj.h"
@@ -53,8 +52,6 @@
 PUSH_WARNINGS
 DISABLE_VS_WARNINGS(4355)
 
-enum { HAVE_BLOCK_MAIN_CHAIN, HAVE_BLOCK_ALT_CHAIN, HAVE_BLOCK_INVALID };
-
 namespace cryptonote
 {
   /************************************************************************/
@@ -64,10 +61,10 @@ namespace cryptonote
    /**
     * @brief the thin C++ shell over the Rust node
     *
-    * One method per call the protocol handler, `levin_notify` and the
+    * One method per call the transaction handler, `levin_notify` and the
     * daemon's entry still make (`DRS_X_STORE_FLIP.md` DX-Q1); each forwards
-    * to a `shekyl_core_*` / `shekyl_pool_*` export or holds the handler's
-    * own sync state. The chain and the pool are the Rust store's.
+    * to a `shekyl_pool_*` or `shekyl_node_*` export. The chain, the pool
+    * and chain sync are Rust's (CS-5).
     */
    class core final: public i_core_events
    {
@@ -81,23 +78,6 @@ namespace cryptonote
        * @param pprotocol pre-constructed protocol object to store and use
        */
      core(i_cryptonote_protocol* pprotocol);
-
-    /**
-     * @copydoc Blockchain::handle_get_objects
-     *
-     * @note see Blockchain::handle_get_objects()
-     * @param context connection context associated with the request
-     */
-     bool handle_get_objects(NOTIFY_REQUEST_GET_OBJECTS::request& arg, NOTIFY_RESPONSE_GET_OBJECTS::request& rsp, cryptonote_connection_context& context);
-
-     /**
-      * @brief calls various idle routines
-      *
-      * @note see miner::on_idle and pool::on_idle
-      *
-      * @return true
-      */
-     bool on_idle();
 
      /**
       * @brief handles an incoming transaction
@@ -113,60 +93,6 @@ namespace cryptonote
       * @return true if the transaction was accepted, false otherwise
       */
      bool handle_incoming_tx(const blobdata& tx_blob, tx_verification_context& tvc, relay_method tx_relay, bool relayed);
-
-    /**
-      * @brief handles a single incoming block
-      *
-      * Attempts to add the block to the Blockchain and, on success,
-      * optionally updates the miner's block template.
-      *
-      * Unlike handle_incoming_block(), this call does not take the incoming
-      * transaction lock around the add.
-      *
-      * @param block_blob the block to be added
-      * @param block the block to be added, or NULL
-      * @param bvc return-by-reference metadata context about the block's validity
-      * @param extra_block_txs txs belonging to this block that may not be in the mempool
-      * @param update_miner_blocktemplate whether or not to update the miner's block template
-      *
-      * @return false if the block is not added, otherwise true
-      */
-     bool handle_single_incoming_block(const blobdata& block_blob,
-      const block *b,
-      block_verification_context& bvc,
-      block_connect_supplement& connect,
-      bool update_miner_blocktemplate = true);
-
-     /**
-      * @brief handles an incoming block as part of a batch
-      *
-      * Attempts to add the block to the Blockchain and, on success,
-      * optionally updates the miner's block template.
-      *
-      * @param block_blob the block to be added
-      * @param block the block to be added, or NULL
-      * @param bvc return-by-reference metadata context about the block's validity
-      * @param extra_block_txs txs belonging to this block that may not be in the mempool
-      * @param update_miner_blocktemplate whether or not to update the miner's block template
-      *
-      * @return false if the block is not added, otherwise true
-      */
-     bool handle_incoming_block(const blobdata& block_blob, const block *b,
-       block_verification_context& bvc,
-       bool update_miner_blocktemplate = true);
-
-     bool handle_incoming_block(const blobdata& block_blob, const block *b,
-       block_verification_context& bvc, block_connect_supplement& connect,
-       bool update_miner_blocktemplate = true);
-
-     /**
-      * @brief check the size of a block against the current maximum
-      *
-      * @param block_blob the block to check
-      *
-      * @return whether or not the block is too big
-      */
-     bool check_incoming_block_size(const blobdata& block_blob) const;
 
      /**
       * @brief get the cryptonote protocol instance
@@ -203,56 +129,6 @@ namespace cryptonote
      bool deinit();
 
      /**
-      * @copydoc Blockchain::get_current_blockchain_height
-      *
-      * @note see Blockchain::get_current_blockchain_height()
-      */
-     uint64_t get_current_blockchain_height() const final;
-
-     /**
-      * @brief get the hash and height of the most recent block
-      *
-      * @param height return-by-reference height of the block
-      * @param top_id return-by-reference hash of the block
-      */
-     void get_blockchain_top(uint64_t& height, crypto::hash& top_id) const;
-
-     /**
-      * @copydoc Blockchain::get_block_id_by_height
-      *
-      * @note see Blockchain::get_block_id_by_height
-      */
-     crypto::hash get_block_id_by_height(uint64_t height) const;
-
-     /**
-      * @copydoc Blockchain::get_transactions
-      *
-      * @note see Blockchain::get_transactions
-      */
-     bool get_transactions(const std::vector<crypto::hash>& txs_ids, std::vector<cryptonote::blobdata>& txs, std::vector<crypto::hash>& missed_txs, bool pruned = false) const;
-
-     /**
-      * @copydoc Blockchain::get_transactions
-      *
-      * @note see Blockchain::get_transactions
-      */
-     bool get_transactions(const std::vector<crypto::hash>& txs_ids, std::vector<transaction>& txs, std::vector<crypto::hash>& missed_txs, bool pruned = false) const;
-
-     /**
-      * @copydoc Blockchain::get_block_by_hash
-      *
-      * @note see Blockchain::get_block_by_hash
-      */
-     bool get_block_by_hash(const crypto::hash &h, block &blk, bool *orphan = NULL) const;
-
-     /**
-      * @copydoc Blockchain::get_block_attestation_witness
-      *
-      * @note see Blockchain::get_block_attestation_witness
-      */
-     blobdata get_block_attestation_witness(const block &blk) const;
-
-     /**
       * @brief set the pointer to the cryptonote protocol object to use
       *
       * @param pprotocol the pointer to set ours as
@@ -267,69 +143,11 @@ namespace cryptonote
      bool pool_has_tx(const crypto::hash &txid) const override;
 
      /**
-      * @copydoc pool::get_transactions
-      * @param include_sensitive_txes include private transactions
-      *
-      * @note see pool::get_transactions
-      */
-     bool get_pool_transaction_hashes(std::vector<crypto::hash>& txs, bool include_sensitive_txes = false) const;
-
-     /**
-      * @copydoc Blockchain::have_block
-      *
-      * @note see Blockchain::have_block
-      */
-     bool have_block_unlocked(const crypto::hash& id, int *where = NULL) const;
-     bool have_block(const crypto::hash& id, int *where = NULL) const;
-
-     /**
-      * @copydoc Blockchain::get_short_chain_history
-      *
-      * @note see Blockchain::get_short_chain_history
-      */
-     bool get_short_chain_history(std::list<crypto::hash>& ids, uint64_t& current_height) const;
-
-     /**
-      * @copydoc Blockchain::find_blockchain_supplement(const std::list<crypto::hash>&, NOTIFY_RESPONSE_CHAIN_ENTRY::request&) const
-      *
-      * @note see Blockchain::find_blockchain_supplement(const std::list<crypto::hash>&, NOTIFY_RESPONSE_CHAIN_ENTRY::request&) const
-      */
-     bool find_blockchain_supplement(const std::list<crypto::hash>& qblock_ids, NOTIFY_RESPONSE_CHAIN_ENTRY::request& resp) const;
-
-     /**
-      * @copydoc Blockchain::get_block_cumulative_difficulty
-      *
-      * @note see Blockchain::get_block_cumulative_difficulty
-      */
-     difficulty_type get_block_cumulative_difficulty(uint64_t height) const;
-
-     /**
       * @brief gets the core synchronization status
       *
       * @return core synchronization status
       */
      bool is_synchronized() const final;
-
-     /**
-      * @copydoc miner::on_synchronized
-      *
-      * @note see miner::on_synchronized
-      */
-     void on_synchronized();
-
-     /**
-      * @brief sets the target blockchain height
-      *
-      * @param target_blockchain_height the height to set
-      */
-     void set_target_blockchain_height(uint64_t target_blockchain_height);
-
-     /**
-      * @brief gets the target blockchain height
-      *
-      * @param target_blockchain_height the target height
-      */
-     uint64_t get_target_blockchain_height() const;
 
      /**
       * @brief gets start_time
@@ -341,13 +159,6 @@ namespace cryptonote
       * @brief the handler's stop hook; the one stop path is the entry's (DX-Q6)
       */
      void stop();
-
-     /**
-      * @brief get the number of blocks to sync in one go
-      *
-      * @return the number of blocks to sync in one go
-      */
-     size_t get_block_sync_size(uint64_t height) const;
 
      /**
       * @brief get the network type we're on
@@ -369,15 +180,9 @@ namespace cryptonote
 
      i_cryptonote_protocol* m_pprotocol; //!< cryptonote protocol instance
 
-     epee::critical_section m_incoming_tx_lock; //!< incoming transaction lock
-
      cryptonote_protocol_stub m_protocol_stub; //!< cryptonote protocol stub instance
 
-     uint64_t m_target_blockchain_height; //!< blockchain height target
-
      network_type m_nettype; //!< which network are we on?
-
-     size_t block_sync_size;
 
      time_t start_time;
    };

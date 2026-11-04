@@ -29,7 +29,6 @@
 set(unit_tests_sources
   account.cpp
   apply_permutation.cpp
-  block_queue.cpp
   block_reward.cpp
   economics_c2a_prime.cpp
   bulletproofs_plus.cpp
@@ -43,7 +42,6 @@ set(unit_tests_sources
   difficulty.cpp
   epee_levin_protocol_handler_async.cpp
   seam_endpoint.cpp
-  relay_peer_height.cpp
   epee_serialization.cpp
   epee_utils.cpp
   expect.cpp
@@ -63,7 +61,6 @@ set(unit_tests_sources
   node_server.cpp
   parse_amount.cpp
   peer_policy_drop_verdict.cpp
-  peer_policy_block_ingest.cpp
   random.cpp
   rpc_target_wire_contract.cpp
   rpc_facts_ffi_roundtrip.cpp
@@ -74,7 +71,6 @@ set(unit_tests_sources
   stall_detection_calibration.cpp
   stack_trace.cpp
   test_tx_utils.cpp
-  test_protocol_pack.cpp
   threadpool.cpp
   util.cpp
   varint.cpp

@@ -330,12 +330,14 @@ where
 
 /// `form_judged` one bound block on a blocking thread. It does not hash, so
 /// it takes no hasher permit: the proof inside `judged` is the one chain
-/// sync's executor paid for (CS2-Q1).
+/// sync's executor paid for (CS2-Q1). Its time goes to `metrics`, when the
+/// service has a sink.
 fn spawn_form_judged<F>(
     candidate: Candidate,
     judged: Box<HeaderJudged>,
     claims: Claims,
     abandon: Arc<AtomicBool>,
+    metrics: Option<Arc<crate::metrics::Metrics>>,
 ) -> tokio::task::JoinHandle<Option<Formed<F>>>
 where
     F: Send + 'static,
@@ -344,7 +346,11 @@ where
         if abandon.load(Ordering::Acquire) {
             return None;
         }
+        let started = std::time::Instant::now();
         let verdict = form_judged(candidate, &judged, &claims.references);
+        if let Some(metrics) = &metrics {
+            metrics.block_formed(started.elapsed());
+        }
         if verdict.is_err() {
             abandon.store(true, Ordering::Release);
         }
@@ -393,7 +399,13 @@ where
     S::Fault: core::fmt::Debug + Send + 'static,
 {
     match proof {
-        Proof::Judged(judged) => Some(spawn_form_judged(candidate, judged, claims, abandon)),
+        Proof::Judged(judged) => Some(spawn_form_judged(
+            candidate,
+            judged,
+            claims,
+            abandon,
+            shared.metrics.clone(),
+        )),
         Proof::Hash { class } => {
             let held = acquire(shared, class).await?;
             Some(spawn_form(shared, held, candidate, claims, abandon))
@@ -592,7 +604,12 @@ where
             run.push((block.height, Ok(block.valid)));
         }
         let submitted = run.len();
-        match shared.connector.ask(Apply(run)).await {
+        let started = std::time::Instant::now();
+        let applied = shared.connector.ask(Apply(run)).await;
+        if let Some(metrics) = &shared.metrics {
+            metrics.applied(submitted, started.elapsed());
+        }
+        match applied {
             Ok(mut applied) => {
                 let settlement = applied.take_settlement(submitted);
                 if let Some(next) = settle(

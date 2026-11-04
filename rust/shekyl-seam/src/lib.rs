@@ -9,7 +9,8 @@
 //! admits on the shared [`Sockets`] table and owns the socket. This crate
 //! posts `established`, `deliver`, and `closed` onto that connection's
 //! strand. It does not run the strand, and it does not build a second
-//! session.
+//! session. It also posts `opened` once a session's Levin handshake has
+//! completed, for chain sync's owner; the strand does not read it.
 //!
 //! A `send` is one whole Levin message on the connector's byte cap. A
 //! message that does not fit is not stored, and the cause is

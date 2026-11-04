@@ -357,9 +357,13 @@ fn rust_client_handshakes_with_shekyld() {
         node_data: BasicNodeData {
             network_id: regtest_network_id(),
         },
+        // The daemon's own chain as a claim: under `dev-difficulty=1` every
+        // block's work is 1, so the work is the block count. Chain sync's
+        // owner closes a session whose claim has less work than blocks
+        // (`PayloadRefused::Work`).
         payload_data: CoreSyncData {
             current_height: tip.height,
-            cumulative_difficulty: 0,
+            cumulative_difficulty: tip.height,
             cumulative_difficulty_top64: 0,
             top_id: tip.top_id,
         },

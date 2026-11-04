@@ -109,4 +109,5 @@ pub mod server;
 pub mod shard_view;
 pub mod store_facts;
 pub mod submit;
+pub mod sync_facts;
 pub mod types;

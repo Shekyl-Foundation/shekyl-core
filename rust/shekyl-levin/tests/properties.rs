@@ -17,8 +17,8 @@ use shekyl_levin::{
 /// After PWD-B3a, `notify` / `invoke` / `response` are dispatch (Q or S), so
 /// an arbitrary `u32` command is connection-fatal at ingress. Sample from
 /// defined commands whose table cap is above the generated payload sizes;
-/// the handshake's derived cap and 2003 (5056) would fail 0..8192.
-const WIDE_CAP_COMMANDS: &[u32] = &[2002, 2004, 2008];
+/// the handshake's derived cap would fail 0..8192.
+const WIDE_CAP_COMMANDS: &[u32] = &[2002, 2008, 2009, 2010];
 
 /// Feed a byte stream to a fresh reader in chunks of at most `chunk` bytes,
 /// pulling messages as they complete.
