@@ -913,7 +913,6 @@ id = "wss-spend"
 spec = [
   "rust/shekyl-curve-tree/src",
   "rust/shekyl-fcmp/src",
-  { through = "7938c51f16", note = "Test-only: one curve-tree client test renamed (rollback_to_the_fork_at_the_tip_changes_nothing). No production code changed, no cost moved. Not measured." },
 ]
 stale_through = [
   { through = "36d0bd5715", note = "collect_block_leaves returns the gindex it already assigned, one slot per output. The matcher's second walk and its scan of the new leaves are gone; the match is still skipped while the expectation map is empty. Nothing on the spend path changed. Not measured." },
@@ -939,6 +938,7 @@ stale_through = [
   { through = "c28af0881e", note = "test_tamper_poison, compiled only under the test-tamper feature, sets the client's poisoned flag. No production function changed. The spend path is untouched. Not measured." },
   { through = "cbc978bfd5", note = "ServingReader and WriterRecovery are deleted, and with them the frozen-segment body read and the external resume handle. The client's fact forwards remain. Path assembly, tree build and the prover do the same work. Not measured; the rows stay stale." },
   { through = "981fc8af04", note = "is_already_open is deleted from ClientError and StoreError, and the LockedElsewhere doc says the lock is not transient. No spend-path function changed. Not measured." },
+  { through = "7938c51f16", note = "Test-only: one curve-tree client test renamed (rollback_to_the_fork_at_the_tip_changes_nothing). No production code changed, no cost moved. Not measured." },
 ]
 
 [[constant]]
