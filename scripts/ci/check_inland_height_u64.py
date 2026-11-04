@@ -143,7 +143,7 @@ SCOPE = (
 # `pub(super)` for the `AltView` tests, and a touched site is typed —
 # both take `BlockHeight` — not re-recorded); 147 at the E2 re-baseline
 # (2026-11-01: the grader left with the reconciliation register).
-GRANDFATHER_CEILING = 147
+GRANDFATHER_CEILING = 144
 # How far the ceiling may sit above the list before the gate demands it be
 # lowered. Small enough that a burn-down is locked in within a few sites.
 GRANDFATHER_SLACK = 5

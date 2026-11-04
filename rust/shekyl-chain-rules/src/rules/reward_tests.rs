@@ -449,13 +449,7 @@ fn validated_on(chain: &MockChain, candidate: Candidate) -> Verdict<(Weights, Pa
         Err(Faulted) => unreachable!("the default MockSubstrate never faults"),
     };
     chain.with_view(|view| {
-        judged(validate(
-            formed,
-            &view,
-            &RuleSet::GENESIS,
-            &Trust::UNANCHORED,
-        ))
-        .map(|valid| {
+        judged(validate(formed, &view, &RuleSet::GENESIS, &Trust::UNPINNED)).map(|valid| {
             for row in [
                 CenRow::F14,
                 CenRow::F14b,

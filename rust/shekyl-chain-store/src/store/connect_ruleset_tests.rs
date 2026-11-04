@@ -42,7 +42,7 @@ fn a_fakechain_verdict_connects_when_the_fakechain_set_is_in_force() {
             Ok(Ok(formed)) => formed,
             other => panic!("stateless stage: {other:?}"),
         };
-        let valid = match validate(formed, &view, &seven, &Trust::UNANCHORED) {
+        let valid = match validate(formed, &view, &seven, &Trust::UNPINNED) {
             Ok(Ok(valid)) => valid,
             other => panic!("view stage: {other:?}"),
         };
@@ -92,7 +92,7 @@ fn a_fakechain_verdict_is_refused_under_genesis_in_force() {
             Ok(Ok(formed)) => formed,
             other => panic!("stateless stage: {other:?}"),
         };
-        let valid = match validate(formed, &view, &seven, &Trust::UNANCHORED) {
+        let valid = match validate(formed, &view, &seven, &Trust::UNPINNED) {
             Ok(Ok(valid)) => valid,
             other => panic!("view stage: {other:?}"),
         };

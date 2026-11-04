@@ -405,8 +405,8 @@ pub fn judge_lone_stateless(
 
 /// The view-bound stage: judge a [`StructurallyValid`] against the chain it
 /// will connect onto, under `rule_set`, with what this node takes on the
-/// release's word (`trust`: the anchors CEN-E1 reads; from slice 6, the
-/// below-anchor posture — `PDM-Q5`, `trust.rs`). `rule_set` and `trust`
+/// release's word (`trust`: the genesis pin CEN-E1 reads — `PDM-Q5`,
+/// `trust.rs`). `rule_set` and `trust`
 /// are orthogonal inputs: the first is consensus, the second is node
 /// state, and `connect` compares only the first against what is in force.
 ///

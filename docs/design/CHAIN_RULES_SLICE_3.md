@@ -1,5 +1,7 @@
 # `shekyl-chain-rules` slice 3 — census 4.E (DRS-E6 increment 4)
 
+> **SUPERSEDED in part 2026-11-03 (S1, design review): no coded checkpoints.** The anchor model this slice built is deleted: the release pins genesis and nothing above it (`GenesisPin`, `rust/shekyl-chain-rules/src/genesis_pin.rs`), CEN-E1 and CEN-E5 keep their genesis arms (`rules/genesis.rs`), CEN-E2 is REJECTED, and `Remedy` is gone. The record below is kept as written.
+
 **Status:** OPEN — Round 0 pre-flight written 2026-09-20 against `dev` @
 `34d111551` (post-#805); **Round 0 RULED 2026-09-20** (Q1–Q7, §8; the
 reframing in §0). **Rules-crate commits 1–6 LANDED on the branch
