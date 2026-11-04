@@ -28,9 +28,11 @@ use shekyl_wire::tx_extra::{
 // `account_from_seed` under the v2 network salt, so their addresses moved, and
 // with them every value below that commits to the recipients (the tx secret
 // and pubkey, the serialized bytes, the tx hash, the block id). The length is
-// unchanged: no layout moved.
-const KAT_TX_SECRET_HEX: &str = "e52da8c2958981cf4c6055f605b96e06155dd9ad515a593ba54f132ffe297e05";
-const KAT_TX_PUB_HEX: &str = "bd6eb2c7df7c87f60d3616ae89b46189626362ad3cbd0760928c0b2daee0cabc";
+// unchanged: no layout moved. Re-pinned again 2026-11-04 for the salt
+// `name_id ‖ shekyl-master-derive-v3` (`V3_WALLET_DECISION_LOG.md`
+// 2026-11-04): the same values moved for the same reason, the length did not.
+const KAT_TX_SECRET_HEX: &str = "92b429a2dfcb758815c0dead2208157aa0307f8da93718e217f4f4709ee39e0e";
+const KAT_TX_PUB_HEX: &str = "ed3fe6ab6003124ce9c293b43992c55c5d68d50456cc5d49b9a51b97dd81e87f";
 // Re-pinned 2026-10-11 with `SO-D12i` (`ARCHIVAL_SETTLEMENT_WRITER.md` §16.8):
 // the genesis extra gained the `0x0C` draw commitment (32 zero bytes) after the
 // nonce, +33 bytes (tag ‖ 32), so the blob, its sha256, the tx hash and the
@@ -42,11 +44,11 @@ const KAT_TX_PUB_HEX: &str = "bd6eb2c7df7c87f60d3616ae89b46189626362ad3cbd076092
 // bytes per output. tx secret / pubkey were unchanged by those layout moves.
 const KAT_BLOB_LEN: usize = 6466;
 const KAT_BLOB_SHA256_HEX: &str =
-    "c6f746ab4f138d466c03e3d27772de740b9a33d8885da7d52ae7badf04f12d3a";
-const KAT_TX_HASH_HEX: &str = "b1d9360bc3d676699678af78eba140554b2e6afc9d5ffe2905bd1b4b95ec4f2b";
+    "7a3fe5d85e64fbdfa76685a14c16efeed7ba76c4bc4fc9ec33cb691c1571dd8f";
+const KAT_TX_HASH_HEX: &str = "6b35c61276dcafbcd404cdec416b50149270046fd9ff9b1005b1bbaf17cf655a";
 // The block id is the genesis header over the tx, nonce 0 on every network
 // (NI-Q1); the tx pins above do not depend on the header.
-const KAT_BLOCK_ID_HEX: &str = "457c32f67081a701690f55231c22f70368d24183b5aaf6bdf50006479908e544";
+const KAT_BLOCK_ID_HEX: &str = "5d182464edb02e4f1bf517b61d22482b41eab780b67327492d00840b729d7308";
 // ----------------------------------------------------------------------------
 
 fn fixture_recipients() -> Vec<Recipient> {
