@@ -68,8 +68,8 @@ fn only_regtest_permits_levers() {
     }
 }
 
-/// NI-R9: staging flags are accepted on the test networks only, each has
-/// an owner and an exit, and none survives mainnet genesis.
+/// NI-R9: staging flags are accepted on the test networks only, and each
+/// has an owner, an exit and a deadline release the release gate can read.
 #[test]
 fn staging_is_the_test_networks_and_never_mainnets() {
     for flag in Staging::ALL {
@@ -78,6 +78,16 @@ fn staging_is_the_test_networks_and_never_mainnets() {
             assert!(n.stages(flag), "{n}: {flag:?}");
         }
         assert!(!flag.owner().is_empty() && !flag.exit().is_empty());
+        let deadline = flag.deadline();
+        let core = deadline
+            .strip_prefix('v')
+            .and_then(|v| v.split('-').next())
+            .unwrap_or_else(|| panic!("{flag:?}: {deadline} is not vMAJOR.MINOR.PATCH[-pre]"));
+        let parts: Vec<&str> = core.split('.').collect();
+        assert!(
+            parts.len() == 3 && parts.iter().all(|p| p.parse::<u32>().is_ok()),
+            "{flag:?}: {deadline} is not vMAJOR.MINOR.PATCH[-pre]"
+        );
     }
 }
 

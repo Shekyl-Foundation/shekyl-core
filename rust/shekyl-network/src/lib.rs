@@ -355,8 +355,10 @@ impl Permit {
 }
 
 /// A staging flag (NI-R9): a candidate mainnet behaviour staged on the
-/// test networks. Each names its owner and its exit, and none survives
-/// mainnet genesis.
+/// test networks. Each names its owner, its exit and its deadline release;
+/// the release gate (`scripts/release/check_staging_deadlines.py`) refuses
+/// a cut at or past the deadline while the flag still exists (NI-R9 as
+/// amended 2026-11-04). Mainnet never stages.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub enum Staging {
     /// `dev-clearnet-encrypt`.
@@ -384,6 +386,24 @@ impl Staging {
         match self {
             Self::ClearnetEncrypt => "deleted at the Noise flip",
             Self::RelayCover => "promoted or deleted by TRC-1's outcome",
+        }
+    }
+
+    /// The release by which the flag has left by its exit, as a tag
+    /// (`vMAJOR.MINOR.PATCH[-pre]`, `docs/VERSIONING.md`). A cut at or past
+    /// it while the flag exists is refused at release time; moving it is a
+    /// ruling, recorded beside the value. Both flags' deadline is the
+    /// genesis release: mainnet launches with each behaviour in final form
+    /// (`RELEASE_CHECKLIST.md`; design review brief, 2026-11-04).
+    #[must_use]
+    #[allow(
+        clippy::match_same_arms,
+        reason = "one arm per flag: each deadline is re-ruled on its own, and the release gate reads one arm per flag"
+    )]
+    pub const fn deadline(self) -> &'static str {
+        match self {
+            Self::ClearnetEncrypt => "v3.1.0",
+            Self::RelayCover => "v3.1.0",
         }
     }
 }
