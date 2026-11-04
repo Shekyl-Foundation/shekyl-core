@@ -493,6 +493,16 @@ ingest deciding forks.**
             therefore arms a wake (`Command::ArmDraw`) one declared
             transit out, the bound on the draw when nothing else
             arrives; one is armed at a time.
+          - **While the check runs (Defect 12, the same regtest):** a
+            page from the session that does not continue the drawn run
+            is discarded and the run stays. The page is the branch asked
+            for again — the peer's claim moved while the check ran, and
+            this node's locator holds nothing of the branch, so the peer
+            answered from the fork — and it adds nothing the check
+            needs. The branch counts as followed until the claim moves
+            again. Until 2026-11-03 the page dropped the run, and with
+            the session's one draw spent nothing drew again: the heavier
+            node that kept mining was never latched against.
        4. **In order from the fork, and stop at proof.**
           - Every later seed on the run is earned under B2's 65-block
             rule (above).
