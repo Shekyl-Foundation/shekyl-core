@@ -23,6 +23,22 @@
 //! One call, one request, one short-lived current-thread runtime: a control
 //! invocation issues a handful of requests and exits, so a runtime per call
 //! is cheaper than threading a handle through the C++ executor.
+//!
+//! Its own crate, not a module of `shekyl-daemon-rpc`, because of who
+//! links it. The C++ callers are two: the daemon remnant inside the Rust
+//! `shekyld` (`src/daemon/rpc_client.h`, `rpc_command_executor.cpp`), which
+//! reaches it as an rlib of the binary's graph through `shekyl-daemon-rpc`'s
+//! console; and `unit_tests` (`daemon_rpc_client.cpp`), a C++ binary that
+//! reaches it through `libshekyl_ffi.a`, the one Rust archive a C++ link
+//! sees. `shekyl-daemon-rpc` itself cannot be a member of that archive: it
+//! imports C++ symbols (`core_rpc_ffi_*`, `shekyl_rpc_*` from `rpc`), and
+//! rustc shares monomorphizations across the archive's crates, so a linker
+//! resolving another crate's `serde_json` instance can pull a
+//! `shekyl-daemon-rpc` member into a binary that links no `rpc` — observed
+//! on the depends Cross-Mac aarch64 leg, `shekyl-gen-ssl-cert` failing on
+//! `_core_rpc_ffi_create` (`DAEMON_CONFIG_CUTOVER.md` DC-F30). This crate
+//! imports nothing from C++, so it can sit in the archive; the server
+//! stays out of it.
 
 use std::os::raw::c_char;
 use std::time::Duration;
@@ -54,7 +70,7 @@ pub const SHEKYL_DAEMON_CTL_ERR_REPLY: i32 = -5;
 ///
 /// `out_ptr` and `out_len` are valid for writes (checked non-null by the
 /// caller before reaching here).
-pub(crate) unsafe fn emit(bytes: Vec<u8>, out_ptr: *mut *mut u8, out_len: *mut usize) {
+pub unsafe fn emit(bytes: Vec<u8>, out_ptr: *mut *mut u8, out_len: *mut usize) {
     if bytes.is_empty() {
         out_ptr.write(std::ptr::null_mut());
         out_len.write(0);
@@ -89,7 +105,7 @@ unsafe fn body_from_ptr(ptr: *const u8, len: usize) -> Option<Vec<u8>> {
 }
 
 /// Run one POST to completion on a private current-thread runtime.
-pub(crate) fn post_blocking(
+pub fn post_blocking(
     address: &str,
     route: &str,
     body: Vec<u8>,
@@ -285,7 +301,7 @@ pub unsafe extern "C" fn shekyl_daemon_ctl_rest_outcome(
 /// # Safety
 ///
 /// `p` must be null or a valid NUL-terminated C string.
-pub(crate) unsafe fn c_string(p: *const c_char) -> Option<String> {
+pub unsafe fn c_string(p: *const c_char) -> Option<String> {
     if p.is_null() {
         return None;
     }

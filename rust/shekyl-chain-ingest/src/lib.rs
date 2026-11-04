@@ -39,7 +39,7 @@
 //!   the covered tip (RD-F18), with typed [`trace::Borrowed`] /
 //!   [`trace::Expected`] doors. [`rebaseline`] writes that artifact from
 //!   the store a run left; `shekyl-ffi` compiles the writer. The pipeline
-//!   stages sit behind the `pipeline` feature so the daemon image does not
+//!   stages sit behind the `pipeline` feature so the daemon binary does not
 //!   pull the replay driver to write a trace.
 //! - [`substrate`] — the production [`Substrate`](shekyl_chain_rules::Substrate):
 //!   RandomX verification through `shekyl-pow-randomx`'s cache path and the

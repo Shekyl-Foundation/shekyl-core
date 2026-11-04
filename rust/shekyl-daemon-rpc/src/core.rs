@@ -32,11 +32,14 @@
 //!
 //! Each read names its deleter (`DRS_X_STORE_FLIP.md` FLIP-Q5): `net_stats`
 //! and `connections` read the C++ node server and the board and go with
-//! slice 4, as does `peer_list`, the inbound handshake's side;
-//! `stem_tallies` reads `levin_notify` and goes with RD.
+//! slice 4; `stem_tallies` reads `levin_notify` and goes with RD.
+//! `peer_list` and the list sizes read the dialer's lists through
+//! [`crate::p2p_reads`], which is Rust and has no C++ deleter.
 
 use crate::ffi;
 use std::ffi::CStr;
+
+use crate::seam::seam;
 
 /// Wrapper around the opaque `core_rpc_handle` pointer.
 /// The handle borrows the daemon's `rpc_subject` (core and the p2p server).
@@ -210,7 +213,7 @@ pub enum P2pRead<T> {
 /// Offline, when configure recorded it. The peer methods return this
 /// before any dialer call. `None` when the daemon is online, so the
 /// caller asks the dialer.
-fn offline_answer<T>() -> Option<Result<P2pRead<T>, i32>> {
+fn offline_answer<T>() -> Option<Result<P2pRead<T>, crate::chain_facts::FactsFault>> {
     if crate::ffi_exports::offline() {
         Some(Ok(P2pRead::Offline))
     } else {
@@ -218,7 +221,7 @@ fn offline_answer<T>() -> Option<Result<P2pRead<T>, i32>> {
     }
 }
 
-/// One peerlist entry, copied out of the Rust peer lists' export. No
+/// One peerlist entry, copied out of the installed peer-list read. No
 /// clock: the lists carry none (3.55). Named apart from
 /// [`crate::info_facts::PeerFacts`], `get_info`'s Peers state.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -265,7 +268,7 @@ impl CoreRpc {
     /// `subject_ptr` must point to a live `rpc_subject` that outlives this
     /// value, or be null. A subject missing either pointer yields `None`.
     pub unsafe fn from_raw(rpc_server_ptr: *mut std::ffi::c_void) -> Option<Self> {
-        let handle = unsafe { ffi::core_rpc_ffi_create(rpc_server_ptr) };
+        let handle = unsafe { (seam().create)(rpc_server_ptr) };
         if handle.is_null() {
             None
         } else {
@@ -281,7 +284,7 @@ impl CoreRpc {
         if self.handle.is_null() {
             return None;
         }
-        unsafe { consume_c_string(ffi::core_rpc_ffi_stem_tallies(self.handle)) }
+        unsafe { consume_c_string((seam().stem_tallies)(self.handle)) }
     }
 
     /// Network throttle counters and the core's start time
@@ -298,7 +301,7 @@ impl CoreRpc {
             total_bytes_out: 0,
         };
         // SAFETY: live handle; `pod` is a valid out pointer for the call.
-        let rc = unsafe { ffi::shekyl_rpc_net_stats(self.handle, &raw mut pod) };
+        let rc = unsafe { (seam().net_stats)(self.handle, &raw mut pod) };
         if rc == ffi::SHEKYL_RPC_FACTS_OK {
             Ok(pod)
         } else {
@@ -320,7 +323,7 @@ impl CoreRpc {
         // view is valid until `shekyl_rpc_connections_free(owner)`, and every
         // copy below is taken before that call.
         unsafe {
-            let rc = ffi::shekyl_rpc_connections(
+            let rc = (seam().connections)(
                 self.handle,
                 &raw mut now,
                 &raw mut rows,
@@ -352,73 +355,46 @@ impl CoreRpc {
                     });
                 }
             }
-            ffi::shekyl_rpc_connections_free(owner);
+            (seam().connections_free)(owner);
             Ok(ConnectionsSnapshot { now, connections })
         }
     }
 
-    /// The peerlist (`shekyl_rpc_peer_list`, exported by `shekyl-ffi` from
-    /// the Rust peer lists), white entries then gray, copied out before the
-    /// owner is released. No core handle: the lists are the dialer's.
-    pub fn peer_list(&self, public_only: bool) -> Result<P2pRead<Vec<PeerEntry>>, i32> {
+    /// The peer list, white entries then gray. `public_only` is the
+    /// clearnet lists alone. No core handle: the lists are the dialer's,
+    /// read through [`crate::p2p_reads`]. [`P2pRead::Offline`] when
+    /// configure recorded offline, before any list read. An online daemon
+    /// with no lists is [`crate::chain_facts::FactsFault::ListsAbsent`],
+    /// not an empty list.
+    pub fn peer_list(
+        &self,
+        public_only: bool,
+    ) -> Result<P2pRead<Vec<PeerEntry>>, crate::chain_facts::FactsFault> {
         if let Some(offline) = offline_answer() {
             return offline;
         }
-        let mut rows: *const ffi::PeerFactsFfi = std::ptr::null();
-        let mut len: usize = 0;
-        let mut owner: *mut std::ffi::c_void = std::ptr::null_mut();
-        // SAFETY: as `connections` above.
-        unsafe {
-            let rc = ffi::shekyl_rpc_peer_list(
-                u8::from(public_only),
-                &raw mut rows,
-                &raw mut len,
-                &raw mut owner,
-            );
-            if rc != ffi::SHEKYL_RPC_FACTS_OK {
-                return Err(rc);
-            }
-            let mut peers = Vec::with_capacity(len);
-            if !rows.is_null() {
-                for e in std::slice::from_raw_parts(rows, len) {
-                    peers.push(PeerEntry {
-                        host: borrowed_string(e.host, e.host_len),
-                        ip: e.ip,
-                        port: e.port,
-                        white: e.white != 0,
-                        blocked: e.blocked != 0,
-                    });
-                }
-            }
-            ffi::shekyl_rpc_peer_list_free(owner);
-            Ok(P2pRead::Running(peers))
-        }
+        let rows = (crate::p2p_reads::reads().peers)(public_only)?;
+        Ok(P2pRead::Running(rows))
     }
 
-    /// How many addresses the clearnet white and gray lists hold
-    /// (`shekyl_rpc_peerlist_sizes`, exported by `shekyl-ffi` from the Rust
-    /// peer lists), as `(white, gray)`. No core handle: the lists are the
-    /// dialer's. [`P2pRead::Offline`] when configure recorded offline,
-    /// before any dialer call.
-    pub fn peerlist_sizes() -> Result<P2pRead<(u64, u64)>, i32> {
+    /// How many addresses the clearnet white and gray lists hold, as
+    /// `(white, gray)`. No core handle: the lists are the dialer's.
+    /// [`P2pRead::Offline`] when configure recorded offline, before any
+    /// list read. An online daemon with no lists is
+    /// [`crate::chain_facts::FactsFault::ListsAbsent`], not zeros.
+    pub fn peerlist_sizes() -> Result<P2pRead<(u64, u64)>, crate::chain_facts::FactsFault> {
         if let Some(offline) = offline_answer() {
             return offline;
         }
-        let mut white: u64 = 0;
-        let mut gray: u64 = 0;
-        // SAFETY: two valid out pointers.
-        let rc = unsafe { ffi::shekyl_rpc_peerlist_sizes(&raw mut white, &raw mut gray) };
-        match rc {
-            ffi::SHEKYL_RPC_FACTS_OK => Ok(P2pRead::Running((white, gray))),
-            fault => Err(fault),
-        }
+        let sizes = (crate::p2p_reads::reads().sizes)()?;
+        Ok(P2pRead::Running(sizes))
     }
 
     /// Whether P2P runs. Offline is the bit configure recorded. Anything
     /// else is running: the RPC is served only after configure, and a
     /// process that never configured still asks the dialer rather than
     /// inventing an offline state.
-    pub fn p2p_state() -> Result<P2pRead<()>, i32> {
+    pub fn p2p_state() -> Result<P2pRead<()>, crate::chain_facts::FactsFault> {
         offline_answer().unwrap_or(Ok(P2pRead::Running(())))
     }
 }
@@ -426,7 +402,7 @@ impl CoreRpc {
 impl Drop for CoreRpc {
     fn drop(&mut self) {
         if !self.handle.is_null() {
-            unsafe { ffi::core_rpc_ffi_destroy(self.handle) };
+            unsafe { (seam().destroy)(self.handle) };
         }
     }
 }
@@ -450,6 +426,6 @@ unsafe fn consume_c_string(ptr: *mut std::os::raw::c_char) -> Option<String> {
     let s = unsafe { CStr::from_ptr(ptr) }
         .to_string_lossy()
         .into_owned();
-    unsafe { ffi::core_rpc_ffi_free_string(ptr) };
+    unsafe { (seam().free_string)(ptr) };
     Some(s)
 }

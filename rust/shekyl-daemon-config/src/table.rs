@@ -246,7 +246,8 @@ const ROWS: &[Row] = &[
     public("notify-block", Kind::Command { placeholders: &["height", "hash"] }, Default::Unset, Surface::File, "A command to run on a new block, with {height} and {hash}."),
     public("notify-reorg", Kind::Command { placeholders: &["split-height", "height", "added", "removed"] }, Default::Unset, Surface::File, "A command to run on a reorganization, with {split-height}, {height}, {added} and {removed}."),
     public("notify-block-rate", Kind::Command { placeholders: &["window", "observed", "expected"] }, Default::Unset, Surface::File, "A command to run on a block-rate warning, with {window}, {observed} and {expected}."),
-    public("mine-address", Kind::Address, Default::Unset, Surface::Both, "Mine to this address from start."),
+    public("mine", Kind::OneOf(&["on", "off"]), Default::Value("off"), Surface::Both, "Start the miner at start, to mine-address."),
+    public("mine-address", Kind::Address, Default::Unset, Surface::Both, "The address the miner pays."),
     public("mine-threads", Kind::Integer { min: 1, keywords: &["auto"] }, Default::Value("auto"), Surface::Both, "The mining thread count, or `auto`."),
     rejected("bg-mining-enable", NO_BG_MINING),
     rejected("bg-mining-ignore-battery", NO_BG_MINING),
@@ -408,13 +409,13 @@ mod tests {
         assert_eq!(TABLE.defects(), Vec::<String>::new());
     }
 
-    /// `INPUT_GRAMMAR.md` §5 counts 49 live names, the four environment
+    /// `INPUT_GRAMMAR.md` §5 counts 50 live names, the four environment
     /// levers among them. A row added or removed without the grammar fails
     /// here first.
     #[test]
     fn the_live_count_is_the_grammars() {
         let live = TABLE.rows.iter().filter(|r| r.is_live()).count();
-        assert_eq!(live, 49);
+        assert_eq!(live, 50);
         let levers = TABLE
             .rows
             .iter()

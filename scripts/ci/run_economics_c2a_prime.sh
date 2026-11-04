@@ -99,7 +99,7 @@ verify_build_artifact_layout() {
   #
   # "No internal .so" is NOT "self-contained", and reading it that way is what
   # made this gate vacuous for its whole life. The binaries still carry a
-  # DT_NEEDED list of SYSTEM libraries (boost, libunwind, ssl, sodium), which
+  # DT_NEEDED list of SYSTEM libraries (boost, ssl, sodium), which
   # the layer job installs by hand. When one is absent the binary exits 127 at
   # the dynamic loader, and a check that only tests for presence on disk calls
   # that "no tests found". So presence is necessary and not sufficient: the

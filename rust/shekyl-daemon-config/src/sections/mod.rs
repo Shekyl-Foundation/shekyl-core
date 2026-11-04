@@ -253,10 +253,15 @@ pub struct MineAddress {
 /// The miner's section.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct Mine {
-    /// Mine to this address from start.
+    /// `mine = on`: the node starts the miner once it has opened, to
+    /// `address`, with `threads`. Off, the miner starts on `start_mining`.
+    /// On without an address is refused at parse (Rick, 2026-11-02).
+    pub start: bool,
+    /// The address the miner pays. It starts nothing by itself.
     pub address: Option<MineAddress>,
-    /// The thread count; `None` is `auto`, which the miner receives as 0
-    /// and resolves itself.
+    /// The thread count for the start-time miner and for a `start_mining`
+    /// that names none; `None` is `auto`, the host's parallelism. A count
+    /// above the host's is the configuration check's refusal.
     pub threads: Option<NonZeroU32>,
 }
 
@@ -575,6 +580,16 @@ fn rpc_section(r: &mut Reader<'_>) -> RpcRead {
 }
 
 fn mine_section(r: &mut Reader<'_>, network: Network) -> Mine {
+    let start = match r.optional_word("mine") {
+        Read::Present("on") => true,
+        // Absent is the table's default, off. Unreadable already recorded
+        // its fault; off starts nothing while the rest of the section builds.
+        Read::Absent | Read::Present("off") | Read::Unreadable => false,
+        Read::Present(other) => {
+            r.word_choice("mine", other, "on, off");
+            false
+        }
+    };
     let address = match r.address("mine-address") {
         Read::Present(text) => {
             let decoded =
@@ -616,7 +631,11 @@ fn mine_section(r: &mut Reader<'_>, network: Network) -> Mine {
         }
         Read::Absent | Read::Unreadable => None,
     };
+    if start && address.is_none() {
+        r.requires("mine", "mine-address");
+    }
     Mine {
+        start,
         address,
         threads: match r.thread_count("mine-threads") {
             ThreadCount::Counted(count) => Some(count),

@@ -21,7 +21,7 @@ use shekyl_wallet_rpc::Network;
 #[command(
     name = "shekyl-cli",
     about = "Shekyl interactive CLI wallet",
-    version = shekyl_wallet_rpc::VERSION,
+    version = shekyl_version::VERSION_FULL,
     disable_help_subcommand = true
 )]
 pub struct Cli {

@@ -1,0 +1,33 @@
+[package]
+name = "shekyl-daemon-ctl"
+description = "The `shekyld <command>` control client: the daemon's outbound HTTP transport, exported to C++ as shekyl_daemon_ctl_*"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+
+# rlib only. It reaches the Rust `shekyld` through `shekyl-daemon-rpc`'s
+# console and the C++ `unit_tests` through `libshekyl_ffi.a` (the
+# single-image contract, V3_WALLET_DECISION_LOG.md 2026-06-11). It is a
+# crate of its own, and not a module of `shekyl-daemon-rpc`, so that the
+# archive carries the client without the server — the server imports C++
+# symbols no other C++ binary links (DAEMON_CONFIG_CUTOVER.md DC-F30; the
+# crate-level doc has the mechanism).
+[lib]
+name = "shekyl_daemon_ctl"
+crate-type = ["lib"]
+
+[dependencies]
+serde_json = "1"
+# A private current-thread runtime per call, with the IO and time drivers
+# the transport's connect, send and timeout need.
+tokio = { version = "1", default-features = false, features = ["rt", "time", "net"] }
+# The same first-party transport the wallet dials the daemon with, replacing
+# epee's `http_simple_client`. `shekyl-rpc-client` supplies the `Rpc` trait
+# that names `post`.
+shekyl-rpc-transport = { path = "../shekyl-rpc-transport" }
+shekyl-rpc-client = { path = "../shekyl-rpc-client", default-features = false, features = ["std"] }
+
+[lints]
+workspace = true

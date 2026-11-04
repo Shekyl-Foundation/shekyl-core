@@ -9,7 +9,7 @@
 # Every wire constant in `rust/shekyl-levin` is a hand-copy of a C++
 # definition, and the crate asserts byte-identity with that C++ in four
 # places. Nothing else in CI compiles the two together: CMake builds only
-# `-p shekyl-ffi` and `-p shekyl-daemon-image`, so `shekyl-levin` is never
+# `-p shekyl-ffi` and the `shekyld` binary crate, so `shekyl-levin` is never
 # seen by the C++ build at all. Without this gate, raising
 # LEVIN_DEFAULT_MAX_PACKET_SIZE or adding a sixth flag bit on the C++ side
 # leaves a fully green tree while the Rust port silently diverges — and the

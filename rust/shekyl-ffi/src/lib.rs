@@ -212,12 +212,16 @@ pub mod peer_policy_ffi;
 /// The account's home from the operating system's account interface (IG-13).
 pub mod platform;
 
+/// Process hardening: no core, and a same-account process cannot attach
+/// (DC-Q21). The first statement of `shekyl_daemon::main`.
+pub mod harden;
+
 /// The daemon's panic hook: a panic is never silent under `panic = "abort"`.
 pub mod panic_hook;
 
 // Single-Rust-image contract: re-export shekyl-logging so its
 // `#[no_mangle]` C exports (`shekyl_log_init_*`, `shekyl_log_emit`,
-// `shekyl_log_install_tracing_forwarder`, …) are compiled into
+// `shekyl_log_set_categories`, …) are compiled into
 // `libshekyl_ffi.a`. Every wallet-side binary then links exactly one
 // Rust archive whose single `tracing-core` GLOBAL_DISPATCH is shared by
 // the C++-installed subscriber and every `tracing::*` call site in this
@@ -226,6 +230,18 @@ pub mod panic_hook;
 // silently dropped. See V3_WALLET_DECISION_LOG.md (single-image
 // contract).
 pub use shekyl_logging;
+
+// The same, for the daemon control client's `#[no_mangle]` exports
+// (`shekyl_daemon_ctl_post`, `shekyl_daemon_ctl_free`). The Rust daemon
+// binary links that crate as an rlib of its own graph; this re-export is
+// for the C++ binaries that still link `libshekyl_ffi.a` and call into it
+// — today `unit_tests`, through `src/daemon/rpc_client.h` — so that
+// archive stays the one Rust image a C++ link sees. The RPC server
+// (`shekyl-daemon-rpc`) is deliberately not re-exported: it imports C++
+// symbols from `rpc`, and a member of this archive can be pulled into any
+// C++ binary by a shared monomorphization (DAEMON_CONFIG_CUTOVER.md
+// DC-F26, corrected by DC-F30).
+pub use shekyl_daemon_ctl;
 
 // Legacy monofile FFI surface (split from the former body of this file).
 // Domain modules keep #[no_mangle] symbols; this root only wires and re-exports.

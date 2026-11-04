@@ -43,8 +43,8 @@ pub fn parse_bind(host: &str, port: &str) -> Result<SocketAddr, String> {
 /// and is refused like any empty host, not skipped: C++ does not compose,
 /// classify, or decide to skip; it passes the operator's strings through.
 /// Deduped on what is bound, not on how it was spelled: `::1` and `[::1]`
-/// are one socket, and so are `127.0.0.1` and `::ffff:127.0.0.1` (the kernel
-/// answers the second with EADDRINUSE).
+/// are one socket, and so are `127.0.0.1` and `::ffff:127.0.0.1`
+/// ([`bind_listener`] binds the canonical form of either).
 pub fn listen_addrs(
     host: &str,
     port: &str,
@@ -119,6 +119,14 @@ impl fmt::Debug for BoundListener {
 /// bind synchronously and fail loudly — the refusal or EADDRINUSE logged
 /// with its reason before any handle is handed back — rather than discovering
 /// the failure asynchronously inside a spawned serve task.
+///
+/// An IPv4-mapped address (`::ffff:127.0.0.1`) binds as the IPv4 address it
+/// names. A mapped bind needs a dual-stack IPv6 socket, which Linux opens
+/// by default and Windows and FreeBSD do not (`IPV6_V6ONLY` is their
+/// default, and the bind fails with `WSAEADDRNOTAVAIL` / `EADDRNOTAVAIL`;
+/// DC-F45). The two spellings reach the same socket, which is what
+/// [`listen_addrs`] already dedupes on, so the canonical form is bound on
+/// every platform and `local_addr` reports it.
 pub async fn bind_listener(addr: SocketAddr) -> std::io::Result<BoundListener> {
     if let Err(refusal) = refuse_non_loopback(addr) {
         return Err(std::io::Error::new(
@@ -126,6 +134,7 @@ pub async fn bind_listener(addr: SocketAddr) -> std::io::Result<BoundListener> {
             refusal,
         ));
     }
+    let addr = SocketAddr::new(addr.ip().to_canonical(), addr.port());
     let listener = tokio::net::TcpListener::bind(addr).await?;
     let addr = listener.local_addr()?;
     Ok(BoundListener { addr, listener })
@@ -263,14 +272,25 @@ mod tests {
     }
 
     /// The complement: loopback in every spelling binds, and what comes back
-    /// knows its own (resolved) address.
+    /// knows its own (resolved) address. The mapped spelling binds as the
+    /// IPv4 socket it names on every platform (DC-F45): binding it as given
+    /// turns this red on Windows and FreeBSD, whose IPv6 sockets are
+    /// v6-only by default.
     #[tokio::test]
     async fn loopback_binds() {
-        for addr in ["127.0.0.1:0", "[::1]:0", "[::ffff:127.0.0.1]:0"] {
+        for (addr, bound_as) in [
+            ("127.0.0.1:0", "127.0.0.1"),
+            ("[::1]:0", "::1"),
+            ("[::ffff:127.0.0.1]:0", "127.0.0.1"),
+        ] {
             let bound = bind_listener(self::addr(addr))
                 .await
                 .unwrap_or_else(|e| panic!("{addr} must bind: {e}"));
-            assert!(bound.local_addr().ip().to_canonical().is_loopback());
+            assert_eq!(
+                bound.local_addr().ip(),
+                bound_as.parse::<std::net::IpAddr>().expect("test address"),
+                "{addr} binds as the canonical loopback"
+            );
             assert_ne!(bound.local_addr().port(), 0, "port 0 resolved by the OS");
         }
     }

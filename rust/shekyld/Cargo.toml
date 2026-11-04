@@ -1,0 +1,57 @@
+# Copyright (c) 2026, The Shekyl Foundation
+#
+# All rights reserved.
+# BSD-3-Clause
+
+[package]
+name = "shekyld"
+description = "The daemon binary: Rust's main over shekyl-daemon's sequence, linking the C++ remnant's archives through CMake (DAEMON_CONFIG_CUTOVER.md DC-Q19)"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+publish = false
+build = "build.rs"
+
+# The shard view's RPC adapter, where the fetch scheduler and the RPC meet
+# (`shard_view`). A library target so its test runs under `cargo test`;
+# the binary links only through CMake and carries no test of its own.
+[lib]
+name = "shekyld"
+path = "src/lib.rs"
+
+[[bin]]
+name = "shekyld"
+path = "src/main.rs"
+test = false
+doctest = false
+
+[dependencies]
+# The sequence: the parse, the lock, logging, the one signal owner, the
+# remnant's run and stop.
+shekyl-daemon = { path = "../shekyl-daemon" }
+# The snapshot type the remnant's `run` is handed (§2.9).
+shekyl-ffi = { path = "../shekyl-ffi" }
+# The RPC server and the fetch scheduler, whose C exports the remnant's
+# archives call, and the shard view's two ends.
+shekyl-daemon-rpc = { path = "../shekyl-daemon-rpc" }
+shekyl-archival-fetch-sched = { path = "../shekyl-archival-fetch-sched" }
+# The scheduler's store-backed facts (`shard_facts`), shared with the
+# bundle producer's reads. Default features: the node's graph, `producer`
+# included.
+shekyl-chain-ingest = { path = "../shekyl-chain-ingest" }
+shekyl-types = { path = "../shekyl-types" }
+# Direct edges with no features of their own, so the measurement build
+# (cmake/BuildRust.cmake, `SHEKYL_MEASUREMENT_SPANS`) can name
+# `shekyl-transport-layer/measurement-spans` and
+# `shekyl-clearnet/measurement-spans` on `cargo rustc -p shekyld`'s command
+# line: cargo lets a command line name a dependency's feature only through
+# the selected package's own edges. Both crates are in this binary's graph
+# already (shekyl-node, shekyl-ffi); nothing here is a feature, so
+# scripts/ci/check_measurement_spans.py's no-Cargo-edge limb holds.
+shekyl-transport-layer = { path = "../shekyl-transport-layer" }
+shekyl-clearnet = { path = "../shekyl-clearnet" }
+
+[lints]
+workspace = true

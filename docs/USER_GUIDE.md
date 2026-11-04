@@ -142,7 +142,6 @@ from a directory service that does not list its accounts are not seen by
 it: keep the daemon's group a local group.
 
 <!-- shekyld-example: begin -->
-```toml
 # shekyld configuration file. Every key is an option's name, spelled
 # as on the command line without the leading dashes. The network is
 # always given on the command line, because it chooses the file.
@@ -243,7 +242,10 @@ it: keep the daemon's group a local group.
 # {expected}.
 # notify-block-rate = ["/path/to/command", "{window}"]
 
-# Mine to this address from start.
+# Start the miner at start, to mine-address.
+# mine = "off"
+
+# The address the miner pays.
 # mine-address = "<address>"
 
 # The mining thread count, or `auto`.
@@ -262,7 +264,6 @@ it: keep the daemon's group a local group.
 
 # The RPC connection cap.
 # rpc-connections-max = 25
-```
 <!-- shekyld-example: end -->
 
 Every option's name, kind and default is in `shekyld --help`.
@@ -310,7 +311,8 @@ whether `option_set` changes it while the daemon runs.
 | `notify-block` | command (an array of words; placeholders `{height}`, `{hash}`) | — | file | no | A command to run on a new block, with {height} and {hash}. |
 | `notify-reorg` | command (an array of words; placeholders `{split-height}`, `{height}`, `{added}`, `{removed}`) | — | file | no | A command to run on a reorganization, with {split-height}, {height}, {added} and {removed}. |
 | `notify-block-rate` | command (an array of words; placeholders `{window}`, `{observed}`, `{expected}`) | — | file | no | A command to run on a block-rate warning, with {window}, {observed} and {expected}. |
-| `mine-address` | Shekyl address | — | both | no | Mine to this address from start. |
+| `mine` | `on` / `off` | `off` | both | no | Start the miner at start, to mine-address. |
+| `mine-address` | Shekyl address | — | both | no | The address the miner pays. |
 | `mine-threads` | integer ≥ 1, or `auto` | `auto` | both | no | The mining thread count, or `auto`. |
 | `rpc-admin-listen` | list of IP endpoint (`address:port`) (`none` for empty) | 127.0.0.1 and the network's rpc port | both | no | The plaintext full-access listeners, loopback only; `none` is no admin listener. |
 | `rpc-view-listen` | list of IP endpoint (`address:port`) (`none` for empty) | `none` | both | no | The plaintext view listeners, loopback only. |
@@ -346,6 +348,34 @@ Task Scheduler on Windows); the GUI wallet supervises its own bundled
 `shekyld` via the Tauri sidecar. An example systemd unit lives at
 `contrib/packaging/linux/shekyld.service`. Nothing reads the daemon's
 stdin unless `--console` is given, so a unit needs no flag for that.
+
+**Crash dumps**
+
+`shekyld` hardens itself before it reads an argument: on every Unix it
+writes no core file whatever the system's limit, and on Linux and
+FreeBSD a process that is not root cannot attach a debugger to it. A
+fault ends it by the signal; a stack overflow prints the runtime's
+message and ends it by `SIGABRT` (on FreeBSD by `SIGSEGV` without the
+message). On Windows it raises no fault dialog and ends itself before
+Windows Error Reporting is consulted: a fault or a stack overflow exits
+with the exception's code (`0xC0000005`, `0xC00000FD`), a panic with
+`0xC0000409`, and none of them writes a dump or a report, whatever the
+machine's policy (shown on a machine with a `LocalDumps` policy in
+force, 2026-11-02). The installer also excludes `shekyld.exe` from
+Windows Error Reporting's reporting, as a backstop for the failures the
+process cannot route itself — an allocation failure, heap corruption the
+system detects, a C++ stack check. In the same run those fail-fast exits
+wrote no dump either while the daemon's own error mode stood; the
+backstop is for the case it does not. It does not reach a **LocalDumps**
+policy: on a machine where
+`HKLM\SOFTWARE\Microsoft\Windows\Windows Error Reporting\LocalDumps`
+is set (by Group Policy or by hand), Windows can still write a memory
+dump of one of *those* failures to that policy's folder (by default
+`%LOCALAPPDATA%\CrashDumps`). If you run the daemon on such a machine,
+treat that folder as you treat the data directory: a dump holds the
+process's memory, and while the daemon holds no wallet keys, it does
+hold its onion service's secret key, its peer list and its mining
+address.
 
 ### Interactive console
 
@@ -840,14 +870,38 @@ mine until it has caught up.
 
 ### Mining from start
 
-To mine from the moment the daemon starts, give it the address and the
-thread count (`mine-threads` defaults to `auto`, one per core):
+To mine from the moment the daemon starts, turn the miner on and give it
+the address it pays; `mine-threads` is the thread count (`auto`, the
+default, is one per core, and a count above the machine's is refused
+before the daemon starts):
 
 ```bash
-./shekyld --mine-address <address> --mine-threads 2
+./shekyld --mine on --mine-address <address> --mine-threads 2
 ```
 
-The same two rows go in the configuration file.
+The same rows go in the configuration file. `mine-address` alone starts
+nothing: the daemon holds the address for `start_mining` (or
+`shekyl-cli mine start`) to use later. `mine = on` without an address is
+refused before the daemon starts. The start-up configuration line shows
+the address shortened to its first and last eight characters.
+
+The miner mines only on a chain the node knows to be synced. A node that
+is alone on its network with `clearnet` or `tor` on has no view of that
+network and never counts itself synced: the start announces `mining: the
+miner waits for a view of the network …`, `mining_status` reports
+`no_template` with `mine.not_synced` (`no_view`), and the height does not
+move. That is the rule, not a fault. To mine alone — a fresh regtest, a
+single-machine test — declare it: turn both connectors off,
+
+```bash
+./shekyld --network regtest --clearnet off --tor off \
+  --mine on --mine-address <address>
+```
+
+or name the whole network with `p2p-closed-peer`, which counts the node
+synced while none of its named peers is up. `dev-sync` is not this lever:
+it only stops the node asking peers for blocks, and a node with a
+connector on still has a network it could be behind.
 
 ### The 60-block lock
 

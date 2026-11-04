@@ -7,7 +7,6 @@ use super::alt_chain::headers_in_correspondence;
 use super::blockchain::median;
 use super::status::{mining_speed, sync_percentage};
 use super::*;
-use crate::ctl_client;
 use std::ffi::CString;
 use std::io::{Read, Write};
 use std::net::TcpListener;
@@ -54,7 +53,7 @@ fn run_on(
         unsafe { String::from_utf8_lossy(std::slice::from_raw_parts(ptr, len)).into_owned() }
     };
     // SAFETY: freeing exactly the produced pair.
-    unsafe { ctl_client::shekyl_daemon_ctl_free(ptr, len) };
+    unsafe { shekyl_daemon_ctl::shekyl_daemon_ctl_free(ptr, len) };
     (code, text)
 }
 
@@ -2462,7 +2461,7 @@ fn an_unrecognised_network_code_refuses_rather_than_defaulting() {
     } else {
         // SAFETY: the export wrote `len` bytes at `ptr`.
         let out = unsafe { std::slice::from_raw_parts(ptr, len) }.to_vec();
-        unsafe { crate::ctl_client::shekyl_daemon_ctl_free(ptr, len) };
+        unsafe { shekyl_daemon_ctl::shekyl_daemon_ctl_free(ptr, len) };
         String::from_utf8(out).unwrap()
     };
     assert_eq!(code, SHEKYL_DAEMON_CONSOLE_ERR_REQUEST, "{text}");

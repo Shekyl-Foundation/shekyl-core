@@ -126,7 +126,7 @@ See `00-mission.mdc` for the V4 transition commitment and
 
 | Location | Purpose |
 |----------|---------|
-| `src/cryptonote_config.h` | `SHEKYL_PROTOCOL_VERSION` constant. Authoritative definition. |
+| `rust/shekyl-version/src/lib.rs` | `PROTOCOL_VERSION` constant. Authoritative definition (`SHEKYL_PROTOCOL_VERSION` in `src/cryptonote_config.h` was deleted with the C++ `main`, `DAEMON_CONFIG_CUTOVER.md` DC-Q20). |
 | Daemon `--version` output | Prints `Shekyl vX.Y.Z (protocol 3)`. |
 | `/get_info` RPC response | `protocol_version` field. |
 | P2P handshake | Network peers exchange protocol versions during connection. |
@@ -175,7 +175,7 @@ RPC changes, schema migrations) will diverge from the protocol version.
 | `cmake/GitVersion.cmake` | Tag-derived at build time | `"3.1.0-alpha.1"` |
 | `cmake/Version.cmake` | `SHEKYL_VERSION_FULL` | `"3.1.0-release"` |
 | `src/version.cpp.in` | Configured by CMake | `SHEKYL_VERSION`, `SHEKYL_VERSION_TAG`, `SHEKYL_VERSION_FULL` |
-| `src/cryptonote_config.h` | `SHEKYL_PROTOCOL_VERSION` | `3` |
+| `rust/shekyl-version/src/lib.rs` | `PROTOCOL_VERSION` | `3` |
 | `rust/Cargo.toml` | `[workspace.package] version` | `"3.1.0"` |
 
 ### shekyl-gui-wallet

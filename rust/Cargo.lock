@@ -4136,6 +4136,7 @@ dependencies = [
  "shekyl-shard-visual",
  "shekyl-types",
  "shekyl-units",
+ "shekyl-version",
  "shekyl-wallet-rpc",
  "shekyl-win-sec",
  "tempfile",
@@ -4295,6 +4296,7 @@ dependencies = [
  "shekyl-timing-engine",
  "shekyl-tor-control-client",
  "shekyl-tor-control-daemon",
+ "shekyl-version",
  "tempfile",
  "tokio",
  "tracing",
@@ -4317,15 +4319,13 @@ dependencies = [
 ]
 
 [[package]]
-name = "shekyl-daemon-image"
+name = "shekyl-daemon-ctl"
 version = "3.1.0"
 dependencies = [
- "shekyl-archival-fetch-sched",
- "shekyl-chain-ingest",
- "shekyl-daemon",
- "shekyl-daemon-rpc",
- "shekyl-ffi",
- "shekyl-types",
+ "serde_json",
+ "shekyl-rpc-client",
+ "shekyl-rpc-transport",
+ "tokio",
 ]
 
 [[package]]
@@ -4354,6 +4354,7 @@ dependencies = [
  "shekyl-curve-io",
  "shekyl-curve-tree",
  "shekyl-daemon-config",
+ "shekyl-daemon-ctl",
  "shekyl-difficulty",
  "shekyl-economics",
  "shekyl-fcmp",
@@ -4362,7 +4363,6 @@ dependencies = [
  "shekyl-options",
  "shekyl-peerlist",
  "shekyl-pow-randomx",
- "shekyl-rpc-client",
  "shekyl-rpc-transport",
  "shekyl-rpc-types",
  "shekyl-runtime",
@@ -4684,6 +4684,7 @@ dependencies = [
  "shekyl-curve-primitives",
  "shekyl-curve-tree",
  "shekyl-daemon-config",
+ "shekyl-daemon-ctl",
  "shekyl-dialer",
  "shekyl-difficulty",
  "shekyl-draw-rng",
@@ -5614,6 +5615,10 @@ dependencies = [
 ]
 
 [[package]]
+name = "shekyl-version"
+version = "3.1.0"
+
+[[package]]
 name = "shekyl-wallet-contract"
 version = "3.1.0"
 dependencies = [
@@ -5659,6 +5664,7 @@ dependencies = [
  "shekyl-scanner",
  "shekyl-types",
  "shekyl-units",
+ "shekyl-version",
  "shekyl-wallet-contract",
  "shekyl-win-sec",
  "subtle",
@@ -5729,6 +5735,20 @@ dependencies = [
  "shekyl-wire",
  "tempfile",
  "tokio",
+]
+
+[[package]]
+name = "shekyld"
+version = "3.1.0"
+dependencies = [
+ "shekyl-archival-fetch-sched",
+ "shekyl-chain-ingest",
+ "shekyl-clearnet",
+ "shekyl-daemon",
+ "shekyl-daemon-rpc",
+ "shekyl-ffi",
+ "shekyl-transport-layer",
+ "shekyl-types",
 ]
 
 [[package]]

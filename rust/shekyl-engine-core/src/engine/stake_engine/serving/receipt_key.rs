@@ -37,7 +37,7 @@
 //!   - `shekyl-p-host`: the serving key is
 //!     `PassKey<IDENTITY_ENVELOPE_LEN>`, and the bind builds
 //!     `PassSigner<IDENTITY_ENVELOPE_LEN>`;
-//!   - `shekyl-daemon-image`'s shard view: the holder's target is built
+//!   - the `shekyld` crate's shard view: the holder's target is built
 //!     from `record.hybrid_pubkey` with
 //!     `HybridPublicKey::from_canonical_bytes`. It becomes
 //!     `FnDsaHybridPublicKey::from_receipt_sign_pk` of the record's

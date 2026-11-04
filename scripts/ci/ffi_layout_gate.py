@@ -51,7 +51,6 @@ GROUPS = [
             # importer's and core_tests' (daemon_snapshot_ffi.rs, §2.9).
             "ShekylStringList": "ShekylStringList",
             "ShekylClientEndpoint": "ShekylClientEndpoint",
-            "ShekylMineAddress": "ShekylMineAddress",
             "ShekylDaemonSnapshot": "ShekylDaemonSnapshot",
             "ShekylBuffer": "ShekylBuffer",
             "ShekylPqcKeypair": "ShekylPqcKeypair",
@@ -72,7 +71,6 @@ GROUPS = [
             "ShekylSeamObserved": "shekyl_seam_observed",
             "ShekylSeamOpenResult": "shekyl_seam_open_result",
             "ShekylSeamBoardRow": "shekyl_seam_board_row",
-            "ShekylSeamSessionCounts": "shekyl_seam_session_counts_t",
             "ShekylSeamHandshakeResult": "shekyl_seam_handshake_result",
             "ShekylRpcPeerFacts": "shekyl_rpc_peer_facts",
             "ShekylBanView": "shekyl_ban_view",
@@ -80,8 +78,9 @@ GROUPS = [
         },
     },
     {
-        # The daemon RPC reads C++ facts through its own twins, some of them
-        # of structs shekyl-ffi also defines.
+        # The daemon RPC's twins of the C++ facts it still reads. The peer
+        # list is an owned Rust row, so it is not paired here; `shekyl-ffi`
+        # pairs that C export. Session counts have no C export.
         "crate": "rust/shekyl-daemon-rpc/src/lib.rs",
         "namespace": "rust_daemon_rpc",
         "headers": [
@@ -104,23 +103,6 @@ GROUPS = [
             "InfoChainFactsFfi": "shekyl_rpc_info_chain_facts",
             "InfoStatusFactsFfi": "shekyl_rpc_info_status_facts",
             "InfoPeersFactsFfi": "shekyl_rpc_info_peers_facts",
-            "PeerFactsFfi": "shekyl_rpc_peer_facts",
-            "SeamSessionCountsFfi": "shekyl_seam_session_counts_t",
-        },
-    },
-    {
-        # The daemon's Rust main() hands the C++ remnant its entry. The
-        # configuration snapshot the remnant reads is shekyl-ffi's
-        # (daemon_snapshot_ffi.rs), paired in the entry above.
-        "crate": "rust/shekyl-daemon/src/lib.rs",
-        "namespace": "rust_daemon",
-        # `run` and `stop` are `Option<RunFn>` and `Option<StopFn>`.
-        "item_types": ["structs", "enums", "typedefs"],
-        "headers": ["src/shekyl/shekyl_ffi.h"],
-        "bounds": [],
-        "exclude": [],
-        "pairs": {
-            "ShekylDaemonEntry": "ShekylDaemonEntry",
         },
     },
 ]

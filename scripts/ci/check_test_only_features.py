@@ -476,9 +476,12 @@ MET_TRIGGER_UNGOVERNED_AT_REGISTRATION: dict[str, tuple[str, frozenset[Hit]]] = 
         }),
     ),
     "shekyl-rpc-client": (
-        "categorization only",
+        "categorization only. The `std` hit from shekyl-daemon-ctl is the one "
+        "shekyl-daemon-rpc recorded here: the console's HTTP client moved to its own "
+        "crate with its `shekyl-rpc-client` edge (DAEMON_CONFIG_CUTOVER.md DC-F30), "
+        "so the enabler's name changed and the hit set did not grow.",
         frozenset({
-            ("std", "shekyl-daemon-rpc", "normal"),
+            ("std", "shekyl-daemon-ctl", "normal"),
             ("std", "shekyl-engine-core", "normal"),
             ("std", "shekyl-rpc-transport", "normal"),
             ("std", "shekyl-scanner", "normal"),

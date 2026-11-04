@@ -7,24 +7,22 @@
 //! (`DAEMON_CONFIG_CUTOVER.md` §2.9), and the snapshot export the C++ test
 //! binaries and the blockchain importer construct their core from.
 //!
-//! **Nine fields** (§2.9). [`SNAPSHOT_FIELDS`] pins the count and
+//! **Five fields** (§2.9). [`SNAPSHOT_FIELDS`] pins the count and
 //! [`shekyl_daemon_snapshot_field_count`] exports it for the C++ to assert;
-//! each later slice that moves a reader into Rust deletes its field.
-//! `dev-sync` is not a field: chain sync's owner reads it from the
-//! configuration. The advertised endpoints are not a field: their reader is Rust, the peer
-//! lists' own entry (§2.8), where the handshake's port check will read it
-//! (Rick, 2026-10-15); no C++ reads them. The snapshot is the whole of what
-//! the remnant reads: it parses nothing.
+//! `scripts/ci/check_snapshot_readers.py` holds every field to a C++ reader
+//! under `src/`, with no exemption: a field whose reader moved into Rust
+//! fails there until it is deleted (DC-Q19's deletion list). A value whose
+//! reader is Rust is not a field: the fixed difficulty, the mining address
+//! and threads, `dev-sync`, the data directory (the chain is the Rust
+//! store), the advertised endpoints (the peer lists' own entry, §2.8), and
+//! the pool's weight bound (a rejected option, IG-Q11). The snapshot is the
+//! whole of what the remnant reads: it parses nothing.
 //!
-//! **Here, not in the daemon image.** [`shekyl_daemon_snapshot_parse`] sits
-//! in the ordinary FFI library on top of `shekyl-daemon-config`, so the
-//! importer and `core_tests` link `libshekyl_ffi.a` and nothing of the
-//! daemon's RPC, whose objects import C++ symbols only `shekyld` links. With
-//! the export in the daemon image, those binaries linked on Linux and macOS
-//! only because `--gc-sections` / `-dead_strip` dropped the unreferenced RPC
-//! code; MinGW keeps it and failed the link (Rick, 2026-10-19). The daemon
-//! image carries this module too: `shekyl-daemon` starts the remnant with
-//! [`SnapshotData::call`].
+//! **Here, in `shekyl-ffi`.** [`shekyl_daemon_snapshot_parse`] sits in the
+//! ordinary FFI library on top of `shekyl-daemon-config`, so the importer
+//! and `core_tests` link `libshekyl_ffi.a` and carry nothing of the daemon.
+//! The `shekyld` binary carries this module too: `shekyl-daemon` starts the
+//! remnant with [`SnapshotData::call`].
 //!
 //! **A test's snapshot.** [`shekyl_daemon_snapshot_parse`] builds a snapshot
 //! from an argument list through the one real parse
@@ -52,8 +50,7 @@ pub struct ShekylStringList {
 ///
 /// Four octets in network order, so a `memcpy` into a `uint32_t` is the
 /// value `inet_addr` would have returned, and the port in host order.
-/// `present` is false for a daemon start. One member of the snapshot, so
-/// the field count stays ten.
+/// `present` is false for a daemon start. One member of the snapshot.
 #[repr(C)]
 #[derive(Clone, Copy, Debug)]
 pub struct ShekylClientEndpoint {
@@ -65,48 +62,16 @@ pub struct ShekylClientEndpoint {
     pub present: bool,
 }
 
-/// A mining address the configuration already decoded.
-///
-/// The text is display only. `spend` and `view` are the classical public
-/// keys. `ml_kem` is the encapsulation key, not the C++ account layout:
-/// the miner derives the X25519 prefix from `view` and assembles the
-/// account address from these bytes. The pointers are into the snapshot's
-/// owned data and live as long as that data does. One member of the
-/// snapshot, so the field count stays ten.
-#[repr(C)]
-#[derive(Clone, Copy, Debug)]
-pub struct ShekylMineAddress {
-    /// The address text, NUL-terminated. Never parsed.
-    pub text: *const c_char,
-    /// The spend public key.
-    pub spend: [u8; 32],
-    /// The view public key.
-    pub view: [u8; 32],
-    /// The ML-KEM encapsulation key. Null when `ml_kem_len` is 0.
-    pub ml_kem: *const u8,
-    /// The encapsulation key's length.
-    pub ml_kem_len: usize,
-}
-
 /// The values whose reader is still C++ (`DAEMON_CONFIG_CUTOVER.md` §2.9),
 /// filled once by Rust before the remnant is constructed.
 #[repr(C)]
 #[derive(Clone, Copy, Debug)]
 pub struct ShekylDaemonSnapshot {
-    /// The resolved data directory, NUL-terminated; read by core.
-    pub data_dir: *const c_char,
     /// The network, as `cryptonote::network_type`: 0 mainnet, 1 testnet,
-    /// 2 stagenet, 3 fakechain (regtest).
+    /// 2 stagenet, 3 fakechain (regtest). Read by core and the p2p server.
     pub network: u8,
-    /// Offline: both connectors off; read by core and the protocol handler.
+    /// Offline: both connectors off; read by the p2p server.
     pub offline: bool,
-    /// The fixed difficulty, or 0 for none; read by core.
-    pub fixed_difficulty: u64,
-    /// The decoded mining address, or null for none; read by the miner.
-    pub mine_address: *const ShekylMineAddress,
-    /// The mining thread count, or 0 for `auto`; read by the miner. The
-    /// miner chooses the count when this is 0.
-    pub mine_threads: u32,
     /// The interactive console on; read by the C++ console.
     pub console: bool,
     /// The console's command words; empty for a daemon start. Read by the
@@ -122,7 +87,7 @@ const _: () = assert!(std::mem::align_of::<ShekylClientEndpoint>() == 2);
 
 /// The snapshot's field count. A gate asserts it against the definition
 /// above and the C++ asserts it against [`shekyl_daemon_snapshot_field_count`].
-pub const SNAPSHOT_FIELDS: u32 = 9;
+pub const SNAPSHOT_FIELDS: u32 = 5;
 
 /// The snapshot's field count, for the C++ to assert against the
 /// structure it reads. `no_mangle` is what the `unsafe_code` lint flags
@@ -133,29 +98,11 @@ pub extern "C" fn shekyl_daemon_snapshot_field_count() -> u32 {
     SNAPSHOT_FIELDS
 }
 
-/// The owned bytes of a mining address. The snapshot's header points at
-/// these allocations, which do not move when this value moves.
-struct MineOwned {
-    text: CString,
-    spend: [u8; 32],
-    view: [u8; 32],
-    ml_kem: Vec<u8>,
-}
-
 /// The owned data behind a snapshot: built on the calling thread, moved to
 /// the run thread, and alive for as long as `run` runs.
-///
-/// The mining header is not stored here. It holds pointers, and this value
-/// is moved onto the run thread before `run` reads it. [`Self::call`] builds
-/// the header on that thread, for the duration of `run`. A lease boxes the
-/// header so the pointer stays valid after the lease is moved.
 pub struct SnapshotData {
-    data_dir: CString,
     network: u8,
     offline: bool,
-    fixed_difficulty: u64,
-    mine: Option<MineOwned>,
-    mine_threads: u32,
     console: bool,
     command: Vec<CString>,
     client_endpoint: ShekylClientEndpoint,
@@ -166,12 +113,6 @@ impl SnapshotData {
     #[must_use]
     pub fn new(config: &DaemonConfig) -> Self {
         let c = |s: &str| CString::new(s.replace('\0', "")).expect("no NUL after the filter");
-        let mine = config.mine.address.as_ref().map(|address| MineOwned {
-            text: c(&address.text),
-            spend: address.spend,
-            view: address.view,
-            ml_kem: address.ml_kem.clone(),
-        });
         let client_endpoint = match config.session.client_endpoint {
             Some(endpoint) => ShekylClientEndpoint {
                 octets: endpoint.ip().octets(),
@@ -185,14 +126,8 @@ impl SnapshotData {
             },
         };
         Self {
-            data_dir: c(&config.data_dir.display().to_string()),
             network: config.network.cryptonote_code(),
             offline: config.offline(),
-            fixed_difficulty: config.dev.difficulty.unwrap_or(0),
-            mine,
-            // 0 is auto. The miner chooses the count; this does not collapse
-            // it to one thread.
-            mine_threads: config.mine.threads.map_or(0, std::num::NonZeroU32::get),
             console: config.session.console,
             command: config.session.command.iter().map(|w| c(w)).collect(),
             client_endpoint,
@@ -200,14 +135,20 @@ impl SnapshotData {
     }
 
     /// Calls `run` with a snapshot over this data, which outlives the call.
-    /// The mining header is a local: its pointers address this data's
-    /// allocations, and it lives until `run` returns.
+    ///
+    /// `run` is the remnant's entry, which dereferences the pointer it is
+    /// given; it is `unsafe` so that no safe Rust can hand C++ a pointer to
+    /// read (rule 40). This is its one call site.
     #[must_use]
-    pub fn call(&self, run: extern "C" fn(*const ShekylDaemonSnapshot) -> c_int) -> c_int {
+    #[allow(unsafe_code)]
+    pub fn call(&self, run: unsafe extern "C" fn(*const ShekylDaemonSnapshot) -> c_int) -> c_int {
         let command = self.command_ptrs();
-        let header = self.mine_header();
-        let snapshot = self.snapshot(&command, header.as_ref());
-        run(&raw const snapshot)
+        let snapshot = self.snapshot(&command);
+        // SAFETY: `snapshot` is a complete, initialised value on this frame,
+        // and every pointer in it addresses `self`'s allocations or
+        // `command`'s buffer; all three outlive the call, which returns
+        // before any is dropped. `run` is `noexcept` on the C++ side.
+        unsafe { run(&raw const snapshot) }
     }
 
     /// The console's command words, as text.
@@ -219,12 +160,6 @@ impl SnapshotData {
             .collect()
     }
 
-    /// The resolved data directory, as text.
-    #[cfg(test)]
-    fn data_dir(&self) -> String {
-        self.data_dir.to_string_lossy().into_owned()
-    }
-
     /// Pointers to the command words. Valid while `self` is borrowed, and
     /// while the returned vector is: the snapshot's `command.items` addresses
     /// this vector's buffer, not `self`.
@@ -232,40 +167,12 @@ impl SnapshotData {
         self.command.iter().map(|w| w.as_ptr()).collect()
     }
 
-    /// A view of the mining address. The pointers address `self` and are
-    /// valid while `self` is borrowed and the header this returns is alive.
-    fn mine_header(&self) -> Option<ShekylMineAddress> {
-        self.mine.as_ref().map(|mine| ShekylMineAddress {
-            text: mine.text.as_ptr(),
-            spend: mine.spend,
-            view: mine.view,
-            ml_kem: if mine.ml_kem.is_empty() {
-                std::ptr::null()
-            } else {
-                mine.ml_kem.as_ptr()
-            },
-            ml_kem_len: mine.ml_kem.len(),
-        })
-    }
-
-    /// The snapshot over this data, `command` and `mine`. All three must
-    /// outlive every read of the result. `mine` is null when there is no
-    /// address. `command.items` addresses `command`'s buffer.
-    fn snapshot(
-        &self,
-        command: &[*const c_char],
-        mine: Option<&ShekylMineAddress>,
-    ) -> ShekylDaemonSnapshot {
+    /// The snapshot over this data and `command`. Both must outlive every
+    /// read of the result. `command.items` addresses `command`'s buffer.
+    fn snapshot(&self, command: &[*const c_char]) -> ShekylDaemonSnapshot {
         ShekylDaemonSnapshot {
-            data_dir: self.data_dir.as_ptr(),
             network: self.network,
             offline: self.offline,
-            fixed_difficulty: self.fixed_difficulty,
-            mine_address: match mine {
-                Some(header) => header,
-                None => std::ptr::null(),
-            },
-            mine_threads: self.mine_threads,
             console: self.console,
             command: ShekylStringList {
                 items: command.as_ptr(),
@@ -279,17 +186,15 @@ impl SnapshotData {
 /// A snapshot leased to a C++ caller: the structure first, so its address
 /// is the lease's, then what it points at.
 ///
-/// The command pointers address `_command`'s buffer. The mining header is
-/// boxed so the snapshot's pointer stays valid when the lease is moved into
-/// the box `shekyl_daemon_snapshot_parse` hands to C++; the header's own
-/// pointers address `_data`'s allocations, which that move does not relocate.
-/// C++ frees the lease on the same thread or any other; the value is not
-/// sent between Rust threads.
+/// The command pointers address `_command`'s buffer and the string
+/// pointers `_data`'s allocations; neither moves when the lease is moved
+/// into the box `shekyl_daemon_snapshot_parse` hands to C++. C++ frees the
+/// lease on the same thread or any other; the value is not sent between
+/// Rust threads.
 #[repr(C)]
 struct Leased {
     snapshot: ShekylDaemonSnapshot,
     _command: Vec<*const c_char>,
-    _header: Option<Box<ShekylMineAddress>>,
     _data: Box<SnapshotData>,
 }
 
@@ -305,14 +210,10 @@ fn snapshot_for(args: &[OsString], platform: &Platform) -> Result<Box<Leased>, i
     let config = load(cli, platform).map_err(|ds| refuse(&ds))?.config;
     let data = Box::new(SnapshotData::new(&config));
     let command = data.command_ptrs();
-    let header = data.mine_header().map(Box::new);
-    // The box's allocation does not move when the box is moved into the lease.
-    let mine = header.as_deref();
-    let snapshot = data.snapshot(&command, mine);
+    let snapshot = data.snapshot(&command);
     Ok(Box::new(Leased {
         snapshot,
         _command: command,
-        _header: header,
         _data: data,
     }))
 }
@@ -384,7 +285,9 @@ mod tests {
     /// this file's text so a field added without moving the pin fails here.
     #[test]
     fn the_snapshot_has_exactly_the_pinned_fields() {
-        let source = include_str!("daemon_snapshot_ffi.rs");
+        // A checkout with `core.autocrlf` hands this file back with CRLF
+        // line ends, and `"\n}\n"` is then not in it (DC-F40).
+        let source = include_str!("daemon_snapshot_ffi.rs").replace("\r\n", "\n");
         let start = source
             .find("pub struct ShekylDaemonSnapshot {")
             .expect("the struct");
@@ -398,7 +301,7 @@ mod tests {
     }
 
     #[test]
-    fn the_snapshot_carries_the_nine_values() {
+    fn the_snapshot_carries_the_five_values() {
         let d = tempfile::tempdir().unwrap();
         let args_v: Vec<OsString> = [
             "--network",
@@ -425,9 +328,8 @@ mod tests {
         assert!(data.client_endpoint.present);
         assert_eq!(data.client_endpoint.octets, [127, 0, 0, 1]);
         assert_eq!(data.client_endpoint.port, 11029);
-        assert_eq!(data.mine_threads, 0, "auto reaches the miner as 0");
-        assert!(data.mine_header().is_none());
-        assert_eq!(data.data_dir(), d.path().display().to_string());
         assert_eq!(data.network, 3);
+        assert!(!data.offline, "regtest keeps the clearnet connector on");
+        assert!(!data.console);
     }
 }

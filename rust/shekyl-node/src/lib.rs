@@ -53,8 +53,12 @@
 //! keys, while chain sync's state reads `Synced`: from open on regtest,
 //! and on every other network once chain sync's cutover publishes. With no
 //! address it posts nothing, and [`Node::posting`] says why. The miner
-//! ([`MiningControl`]) hashes what is posted; it is started on request,
-//! never at open. Stop withdraws the board.
+//! ([`MiningControl`]) hashes what is posted. With `mine = on` the daemon's
+//! sequence starts it once, after [`Node::open`] returns, with the
+//! `mine-threads` count (`start(None)`); it idles until a job is posted.
+//! Off, it starts on `start_mining`. Either way `start_mining` and
+//! `stop_mining` act on the running node, and a restart returns to the
+//! configuration. Stop withdraws the board.
 
 #![deny(unsafe_code)]
 
@@ -67,6 +71,7 @@ mod sync_owner;
 pub use facts::free_bytes;
 pub use mining::{MiningControl, MiningRefused, MiningStatus, PostedJob};
 pub use producer::descriptors as producer_descriptors;
+pub use shekyl_chain_sync::Declaration;
 
 use std::num::NonZeroUsize;
 use std::sync::{Arc, Mutex, PoisonError};
@@ -82,8 +87,7 @@ use shekyl_chain_rules::{AdmissionPolicy, FakechainSchedule, GenesisPin, RuleSet
 use shekyl_chain_store::apply_policy::ApplyPolicy;
 use shekyl_chain_store::pool::PoolOpen;
 use shekyl_chain_store::store::{ChainStore, CutShort, Horizons, SnapshotView};
-use shekyl_chain_sync::SyncState;
-use shekyl_chain_sync::{Declaration, Requesting};
+use shekyl_chain_sync::{Requesting, SyncState};
 use shekyl_chain_sync_runtime::executor::Executor;
 use shekyl_daemon_config::sections::{DaemonConfig, Dev};
 use shekyl_daemon_rpc::handles::Handles;
@@ -112,8 +116,11 @@ fn blocking_threads(permits: NonZeroUsize, window: NonZeroUsize) -> NonZeroUsize
 /// The operator's declaration of the node's network (CS-Q2 step 8), from
 /// the resolved configuration: `Offline` when both connectors are off,
 /// `Closed` when the peer list is closed, `Open` otherwise. Configuration,
-/// never the network type (rule 71).
-fn declaration(config: &DaemonConfig) -> Declaration {
+/// never the network type (rule 71). Public so the daemon's start can say,
+/// before the node opens, that an `Open` node's miner waits for a view
+/// (`shekyl-daemon`'s mining notice, DC-F41).
+#[must_use]
+pub fn declaration(config: &DaemonConfig) -> Declaration {
     if config.offline() {
         Declaration::Offline
     } else if !config.p2p.closed_peers.is_empty() {
@@ -191,6 +198,23 @@ pub struct OpenArgs<'a> {
     /// The stop latch. `shekyl-daemon` passes `signals::request_stop`,
     /// because this crate cannot depend on the binary.
     pub request_stop: Arc<dyn Fn() + Send + Sync>,
+    /// The shell's relay entry, handed in the same way (DC-F43): `true`
+    /// when the relay took the committed transaction's blob; `false` is no
+    /// route (no notifier bound, whatever the reason), and the node shows
+    /// the transaction at the origin. The binary passes the C++
+    /// `shekyl_shell_relay_local`; a test passes [`no_relay`]. RD deletes
+    /// it with `levin_notify`.
+    pub relay_local: RelayLocal,
+}
+
+/// The shell's relay entry, as [`OpenArgs::relay_local`] takes it.
+pub type RelayLocal = Arc<dyn Fn(&[u8]) -> bool + Send + Sync>;
+
+/// A [`RelayLocal`] with no route: an offline node's, and a test's. Every
+/// transaction it is handed is shown at the origin.
+#[must_use]
+pub fn no_relay() -> RelayLocal {
+    Arc::new(|_| false)
 }
 
 struct Slots {
@@ -437,15 +461,17 @@ impl Node {
                 move |fault| health.retire(fault)
             }))
             .nudging(Arc::new({
-                // The shell answers 0 only when no relay exists: an offline
-                // node never constructs one, so there is no network to hide
-                // from and the transaction is shown at once (RX-2, Rick
-                // 2026-10-29). With a relay, the answer is 1 before the zone
-                // plans on its strand, so `NoOwnEdge` and `AwaitSync` never
-                // reach this branch: the zone holds those (`hold_origin`),
-                // neither fluffed nor shown.
+                // The shell answers `false` only when no relay exists: an
+                // offline node never constructs one, so there is no network
+                // to hide from and the transaction is shown at once (RX-2,
+                // Rick 2026-10-29). With a relay, the answer is `true`
+                // before the zone plans on its strand, so `NoOwnEdge` and
+                // `AwaitSync` never reach this branch: the zone holds those
+                // (`hold_origin`), neither fluffed nor shown. An empty blob
+                // is nothing to relay.
+                let relay_local = args.relay_local;
                 move |txid, blob| {
-                    if !relay_local(blob) {
+                    if blob.is_empty() || !relay_local(blob) {
                         shekyl_ffi::pool_ffi::note_shown(*txid);
                     }
                 }
@@ -468,18 +494,27 @@ impl Node {
             view: sync_owner.view(),
             health: pool_health.clone(),
         });
-        let mining = Arc::new(MiningControl::new(
-            Arc::clone(&board),
-            Arc::clone(&caches),
-            budget.clone(),
-            found,
-            miner_address,
-            mining::Watched {
-                posting: posting.clone(),
-                tips: tips.clone(),
-            },
-            pool_health.clone(),
-        ));
+        let mining =
+            Arc::new(MiningControl::new(
+                Arc::clone(&board),
+                Arc::clone(&caches),
+                budget.clone(),
+                found,
+                mining::Configured {
+                    address: miner_address,
+                    // A u32 count fits a usize on every target the node builds
+                    // for; one that did not would be a row's refusal, not a
+                    // silent clamp.
+                    threads: args.config.mine.threads.map(|count| {
+                        NonZeroUsize::try_from(count).expect("a u32 count fits a usize")
+                    }),
+                },
+                mining::Watched {
+                    posting: posting.clone(),
+                    tips: tips.clone(),
+                },
+                pool_health.clone(),
+            ));
         let started_at = facts::unix_now();
         #[cfg(test)]
         let test_budget = budget.clone();
@@ -513,7 +548,7 @@ impl Node {
             pool: pool_slot,
             door: door_slot,
         });
-        Ok(Self {
+        let node = Self {
             slots,
             sync,
             posting,
@@ -526,7 +561,8 @@ impl Node {
             runtime: Mutex::new(Some(runtime)),
             #[cfg(test)]
             budget: test_budget,
-        })
+        };
+        Ok(node)
     }
 
     /// The handles the RPC server carries.
@@ -696,37 +732,6 @@ fn wall_now() -> UnixSeconds {
 /// can empty it between the release and any later count.
 fn pool_departed() -> shekyl_chain_ingest::service::Departed {
     Arc::new(shekyl_ffi::relay_zone_ffi::note_departed)
-}
-
-/// The shell's relay entry. RD deletes it with `levin_notify`. `true`
-/// when the relay took the blob; `false` is no route (no notifier bound,
-/// whatever the reason), and the caller applies the fluff at the origin.
-fn relay_local(blob: &[u8]) -> bool {
-    if blob.is_empty() {
-        return false;
-    }
-    relay_local_ffi(blob) != 0
-}
-
-#[cfg(not(test))]
-#[allow(unsafe_code)]
-fn relay_local_ffi(blob: &[u8]) -> i32 {
-    // SAFETY: `blob` is a live slice. The shell answers 0 to a call before
-    // `core::init` returns.
-    unsafe { shekyl_shell_relay_local(blob.as_ptr(), blob.len()) }
-}
-
-#[cfg(test)]
-fn relay_local_ffi(blob: &[u8]) -> i32 {
-    shekyl_shell_relay_local(blob.as_ptr(), blob.len())
-}
-
-// The C++ shell's one relay entry. The node is the caller; the shell is
-// the definition. Unit tests supply the symbol themselves.
-#[cfg(not(test))]
-#[allow(unsafe_code)]
-unsafe extern "C" {
-    fn shekyl_shell_relay_local(blob: *const u8, len: usize) -> i32;
 }
 
 fn rules_of(config: &DaemonConfig) -> Result<ChainRules, OpenError> {
@@ -938,12 +943,3 @@ async fn connect_genesis(
 
 #[cfg(test)]
 mod tests;
-
-/// The daemon binary supplies this from C++. Unit tests link no C++, so
-/// a test node has no route: its own transactions fluff at the origin.
-#[cfg(test)]
-#[allow(unsafe_code)]
-#[no_mangle]
-extern "C" fn shekyl_shell_relay_local(_blob: *const u8, _len: usize) -> i32 {
-    0
-}

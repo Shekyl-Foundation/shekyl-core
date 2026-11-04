@@ -318,10 +318,10 @@ type and the minimal required-privilege list (RT-P8 confirms both).
   manager runs a foreground process; the SCM kills a registered process
   that never connects to its dispatcher (error 1053). Record:
   [`WINDOWS_SERVICE_RULING_2026-10-13.md`](../completed/WINDOWS_SERVICE_RULING_2026-10-13.md).
-- **The process entry moves to Rust** in the daemon-configuration
-  cutover (`DAEMON_CONFIG_CUTOVER.md`, PR #1066): the SCM dispatcher must
-  run at process entry, and `main()` is C++ until then. RT-W14 depends on
-  it.
+- **The process entry is Rust's** (`DAEMON_CONFIG_CUTOVER.md` DC-Q19,
+  PR #1254, 2026-11-01): `shekyld` is a rustc-linked binary whose `main`
+  runs through `std::rt::lang_start`, so the SCM dispatcher RT-W14 needs
+  has its process entry.
 - **Service mode is new Rust work, not a revival.** The inherited daemonizer
   was deleted in V3.1 and its five flags retired
   (lines 74 to 78 of `src/common/removed_flags.cpp` at `d26148535e`); none of
@@ -2393,7 +2393,7 @@ RK-5c commit 7, 2026-10-10). RT-W13 confirms the read is gone.
 | The `removed_flags.cpp:189-190` message; `--restricted-rpc`, `--rpc-restricted-bind-port`, `--rpc-restricted-bind-ip`, `--rpc-restricted-bind-ipv6-address` (`rpc_args.{h,cpp}`, `core_rpc_server.cpp`, `daemon.cpp`). The plaintext bind flags are re-scoped to the `view` loopback listener and their parsing moves out of C++ `rpc_args` into `shekyl-daemon-rpc` (§7) | RT-W10 |
 | The callers that **pass** those flags: `shekyl-gui-wallet` starts its daemon with `--restricted-rpc` (`src-tauri/src/daemon_manager.rs:115`), and the regtest end-to-end harness starts a second listener with `--rpc-restricted-bind-port` (`engine/regtest_e2e.rs`, `start_with_restricted_listener`). Each gets its replacement in the commit that deletes the flag, or the GUI's daemon and those tests stop starting | RT-W10 |
 | `bind.rs`'s refusal text and its two tests that assert the onion remedy | RT-W10 |
-| `ctl_client.rs`'s plaintext loopback-TCP path: `shekyld <command>` moves to the owner-only socket or pipe for a run-as-me daemon, and to the channel with the console key for a service (RT-15, §5) | RT-W10 |
+| `shekyl-daemon-ctl`'s plaintext loopback-TCP path: `shekyld <command>` moves to the owner-only socket or pipe for a run-as-me daemon, and to the channel with the console key for a service (RT-15, §5) | RT-W10 |
 | `shekyl-cli/src/commands/mine.rs:68`: the "restricted listener" refusal becomes a check for `mining-control` in the effective grant, the request clamped to the ceiling the handshake returned (§6.2) | RT-W10 |
 | The daemon client's `https://` arm (`rust/shekyl-rpc-transport/src/http_client.rs:240-266`), and with it `hyper-rustls` and native-roots loading in the wallet's graph — not before the channel client exists (RT-O8) | RT-W12 |
 | Shipped Windows guidance that points operators at Task Scheduler (`removed_flags.cpp:159-161`, `INSTALLATION_GUIDE.md:229-235`): replaced by RT-16's two run modes (the scheduled task is rejected, §12) | RT-W14 |

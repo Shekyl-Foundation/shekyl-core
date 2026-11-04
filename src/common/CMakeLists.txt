@@ -41,10 +41,6 @@ set(common_sources
   timings.cc
   combinator.cpp)
 
-if (STACK_TRACE)
-  list(APPEND common_sources stack_trace.cpp)
-endif()
-
 if (BACKCOMPAT)
   list(APPEND common_sources compat/glibc_compat.cpp)
 endif()
@@ -64,7 +60,6 @@ monero_add_library(common
 target_link_libraries(common
   PUBLIC
     cncrypto
-    ${LIBUNWIND_LIBRARIES}
     ${Boost_DATE_TIME_LIBRARY}
     ${Boost_FILESYSTEM_LIBRARY}
     ${Boost_SYSTEM_LIBRARY}

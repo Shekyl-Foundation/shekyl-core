@@ -40,7 +40,7 @@
 // compare; the manifest's rename naming a member Rust lacks -> refused.
 // shekyl_rpc_sync_span_facts::remote_address typed uint8_t* -> type. A new struct in rpc_facts_ffi.h with no pair -> the
 // completeness scan. ShekylDaemonEntry::run typed as the stop callback ->
-// type. And the merge of the daemon-configuration cutover (#1088) was
+// type (that struct went with the C++ `main`, DC-Q19). And the merge of the daemon-configuration cutover (#1088) was
 // refused by the completeness scan until its five new structs had a pair.
 //
 // At introduction the gate also found divergences in the tree, fixed in the
@@ -48,8 +48,9 @@
 // `_pad` in Rust (the header now says `_pad`; no C++ reads it), and six text
 // members C++ reads as char were u8 in Rust: ShekylBanView::text,
 // ShekylRpcPeerFacts::host, and daemon-rpc's ConnectionFactsFfi::address and
-// ::host, SyncSpanFactsFfi::remote_address and PeerFactsFfi::host. Rust now
-// declares them c_char.
+// ::host and SyncSpanFactsFfi::remote_address. Rust now declares them
+// c_char. The peer-list row the RPC reads is an owned Rust struct, so it
+// is not a twin here.
 
 #include <cstddef>
 #include <cstdint>

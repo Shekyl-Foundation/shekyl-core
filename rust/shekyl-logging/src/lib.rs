@@ -106,6 +106,7 @@ pub use queue::{flush, Flushed, FLUSH_WITHIN, SINK_QUEUE_LINES};
 #[doc(hidden)]
 pub use colour::LineColour;
 pub use config::{Config, FileSink, Rotation};
+pub use ffi::{install_tracing_forwarder, ForwarderError};
 pub use filter::{
     directives_from_legacy_categories, FilterError, TranslationReport, SHEKYL_LOG_ENV,
 };

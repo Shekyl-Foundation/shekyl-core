@@ -15,6 +15,13 @@
 //! follows. The abort's status is distinct from the configuration
 //! refusal's 2 and the runtime failure's 1, so a supervisor tells the three
 //! apart.
+//!
+//! On Windows the hook does not return. It ends the process with
+//! `TerminateProcess` and `0xC0000409` (`STATUS_STACK_BUFFER_OVERRUN`),
+//! the status `abort` would report. `abort` on MSVC is `__fastfail`, which
+//! passes no top-level exception filter, so [`crate::harden`]'s filter is
+//! not on that path. `TerminateProcess` is an ordinary termination the
+//! fault-reporting path never sees.
 
 use std::panic::PanicHookInfo;
 
@@ -45,6 +52,8 @@ fn report(info: &PanicHookInfo<'_>) {
     write_stderr_raw(line.as_bytes());
     // Queued sinks: this call hands the line to a writer thread and returns.
     tracing::error!(target: "daemon", "{}", line.trim_end());
+    #[cfg(windows)]
+    crate::harden::end_process(windows_sys::Win32::Foundation::STATUS_STACK_BUFFER_OVERRUN);
 }
 
 /// A write that takes no lock: the panicking thread may hold the standard

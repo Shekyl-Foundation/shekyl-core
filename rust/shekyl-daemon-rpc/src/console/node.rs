@@ -18,7 +18,6 @@ use shekyl_units::AtomicUnits;
 use super::identity::get_version_result;
 use super::info::{decode_get_info_ok, fetch_get_info};
 use super::Source;
-use crate::ctl_client;
 
 /// `diff`: the tip, the two difficulties, and the network hash rate.
 ///
@@ -80,8 +79,9 @@ pub(super) fn version(src: &Source) -> Result<String, String> {
             if theirs != CORE_RPC_VERSION {
                 return Err(rpc_version_difference(CORE_RPC_VERSION, theirs));
             }
-            let raw = ctl_client::post_blocking(address, "/get_info", b"{}".to_vec(), *timeout)
-                .map_err(|(_, reason)| reason)?;
+            let raw =
+                shekyl_daemon_ctl::post_blocking(address, "/get_info", b"{}".to_vec(), *timeout)
+                    .map_err(|(_, reason)| reason)?;
             decode_get_info_ok(&raw)?
         }
     };

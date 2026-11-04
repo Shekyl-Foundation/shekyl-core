@@ -62,7 +62,7 @@ WATCHED = {
     "shekyl-tor-control-client",
     "shekyl-tor-control-wallet",
     "shekyl-tor-control-daemon",
-    # The daemon image: the Rust `main()` starts the managed Tor
+    # The daemon: the Rust `main()` starts the managed Tor
     # (shekyl-daemon) and the notify runner spawns operator commands in the
     # same process (shekyl-ffi notify_ffi.rs).
     "shekyl-daemon",

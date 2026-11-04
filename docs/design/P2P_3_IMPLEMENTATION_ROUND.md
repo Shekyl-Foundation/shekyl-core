@@ -712,9 +712,11 @@ Slice 2 is a small diff with a **larger** ripple than its size suggests:
   2026-09-21). **Deleting the option would otherwise be a startup failure on
   every one of them**, and that is confirmed rather than assumed: an
   unregistered option in a config file raises `po::unknown_option`, which
-  [`daemon/main.cpp:186-202`](../../src/daemon/main.cpp#L186) catches and exits
-  `1` on. **But the same catch block first calls
-  [`shekyl::cli::handle_removed_flag`](../../src/daemon/main.cpp#L191)** — a **retired-flag registry**
+  lines 186 to 202 of `src/daemon/main.cpp` at `d26148535e` catch and exit
+  `1` on (that file and the Boost parse were deleted by the
+  daemon-configuration cutover, #1088, and the Rust binary, #1254). **But
+  the same catch block first calls `shekyl::cli::handle_removed_flag`**
+  (line 192 at `d26148535e`) — a **retired-flag registry**
   (`REMOVED_FLAGS`, line 69 of `src/common/removed_flags.cpp` at `d26148535e`,
   23 entries today, with a `TODO(v3.2)` sunset) that refuses a deleted flag **by
   name, with its reason**. So the ripple is **a registry row**, not a

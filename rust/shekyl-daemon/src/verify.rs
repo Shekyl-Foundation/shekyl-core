@@ -11,6 +11,7 @@
 //! for the check, performs the effects the walk withheld. The questions
 //! stay beside those effects; this module is the order and the printing.
 
+use std::num::NonZeroUsize;
 use std::path::Path;
 
 use shekyl_daemon_config::sections::{log_location_creatable, DaemonConfig, Tor};
@@ -46,7 +47,9 @@ impl From<Diagnostic> for Stopped {
 /// file; whether the host has a network id; the marker, read and not
 /// written; whether the account could create the log directory and open
 /// the log file; the owner values the table accepted, judged and not
-/// latched; and the managed Tor's pin, read and not started. Nothing is
+/// latched; a `mine-threads` count above the host's parallelism, refused
+/// here so the start-time miner never asks for it (Rick, 2026-11-02); and
+/// the managed Tor's pin, read and not started. Nothing is
 /// created, opened for writing, locked or latched, so the check can run
 /// while a daemon is up and leaves the machine as it found it.
 pub(crate) fn walk(
@@ -76,6 +79,18 @@ pub(crate) fn walk(
         dev.archival_reorg_depth,
     ) {
         return Err(owner_refusal(resolved, refusal.row(), refusal.rule()).into());
+    }
+    if let Some(threads) = config.mine.threads {
+        let host = std::thread::available_parallelism().map_or(1, NonZeroUsize::get);
+        let asked = usize::try_from(threads.get()).unwrap_or(usize::MAX);
+        if asked > host {
+            return Err(owner_refusal(
+                resolved,
+                Some("mine-threads"),
+                &format!("at most the host's parallelism, {host}"),
+            )
+            .into());
+        }
     }
     let mut warnings = Vec::new();
     if let Tor::Managed { binary } = &config.tor {
@@ -125,8 +140,9 @@ fn accepted_lines(
     config: &DaemonConfig,
     warnings: &[String],
 ) -> (Vec<String>, Vec<String>) {
-    let announced =
+    let mut announced =
         announce::announcements(&TABLE, resolved, read_path, config_path, config, warnings);
+    announced.rest.extend(crate::run::mining_notice(config));
     let out = vec![
         format!("shekyld: configuration verified for {}", account::current()),
         format!("shekyld: {}", announced.effective),
@@ -174,17 +190,17 @@ pub(crate) fn owner_refusal(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use std::ffi::{CStr, OsString};
+    use std::ffi::OsString;
     use std::path::Path;
     use std::sync::atomic::{AtomicUsize, Ordering};
 
     use shekyl_daemon_config::{load, Platform};
     use shekyl_options::read_cli;
 
-    use crate::entry::ShekylDaemonEntry;
+    use crate::remnant::Remnant;
     use crate::{EXIT_FAILED, EXIT_REFUSED};
 
-    /// Runs the check tests give the entry: a start that reaches the
+    /// Runs the check tests give the sequence: a start that reaches the
     /// remnant is the failure. The count is this module's; the start
     /// tests' run counter is a different one.
     static FORBIDDEN_RUNS: AtomicUsize = AtomicUsize::new(0);
@@ -196,19 +212,11 @@ mod tests {
         99
     }
 
-    const RELEASE: &CStr = c"Test";
-    const VERSION: &CStr = c"3.1.0-test";
+    extern "C" fn no_stop() {}
 
-    /// An entry whose `run` must never be reached.
-    fn checking_entry() -> ShekylDaemonEntry {
-        ShekylDaemonEntry {
-            release_name: RELEASE.as_ptr(),
-            version_full: VERSION.as_ptr(),
-            is_release: false,
-            protocol_version: 3,
-            run: Some(forbidden_run),
-            stop: None,
-        }
+    /// A remnant whose `run` must never be reached.
+    fn checking_remnant() -> Remnant {
+        Remnant::absent_core(forbidden_run, no_stop)
     }
 
     fn host(home: &Path) -> Host {
@@ -255,7 +263,7 @@ mod tests {
         let data = d.path().join("deep").join("data");
         let log = d.path().join("logs").join("shekyld.log");
         let a = offline_regtest(&data, &log);
-        assert_eq!(crate::run::main(&checking_entry(), &a, &host(d.path())), 0);
+        assert_eq!(crate::run::main(checking_remnant(), &a, &host(d.path())), 0);
         assert!(
             !d.path().join("deep").exists(),
             "no data directory was created"
@@ -273,7 +281,7 @@ mod tests {
         let held = Lock::take(&data).unwrap();
         marker::check_or_write(&held, shekyl_daemon_config::Network::Regtest, [3u8; 16]).unwrap();
         let before = std::fs::read(data.join("shekyld.network")).unwrap();
-        assert_eq!(crate::run::main(&checking_entry(), &a, &host(d.path())), 0);
+        assert_eq!(crate::run::main(checking_remnant(), &a, &host(d.path())), 0);
         assert_eq!(std::fs::read(data.join("shekyld.network")).unwrap(), before);
         assert!(!log.exists());
         drop(held);
@@ -291,7 +299,7 @@ mod tests {
         std::fs::write(data.join("shekyld.network"), &other).unwrap();
         let a = offline_regtest(&data, &log);
         assert_eq!(
-            crate::run::main(&checking_entry(), &a, &host(d.path())),
+            crate::run::main(checking_remnant(), &a, &host(d.path())),
             EXIT_REFUSED
         );
         assert_eq!(
@@ -317,7 +325,10 @@ mod tests {
             platform: host(d.path()).platform,
             network_id_of: |_| None,
         };
-        assert_eq!(crate::run::main(&checking_entry(), &a, &no_id), EXIT_FAILED);
+        assert_eq!(
+            crate::run::main(checking_remnant(), &a, &no_id),
+            EXIT_FAILED
+        );
         assert!(!data.exists());
     }
 
@@ -327,7 +338,7 @@ mod tests {
     fn config_verify_in_client_mode_stops_after_the_load() {
         let d = tempfile::tempdir().unwrap();
         let status = crate::run::main(
-            &checking_entry(),
+            checking_remnant(),
             &args(&[
                 "--config-verify",
                 "--rpc-admin-listen",
@@ -362,7 +373,7 @@ mod tests {
         assert_eq!(ds[0].option.as_deref(), Some("dev-pow-seed-epoch-blocks"));
         assert_eq!(ds[0].get("value"), Some("3"));
         assert_eq!(
-            crate::run::main(&checking_entry(), &a, &host(d.path())),
+            crate::run::main(checking_remnant(), &a, &host(d.path())),
             EXIT_REFUSED
         );
         assert!(!data.exists());
@@ -422,7 +433,96 @@ mod tests {
         );
         assert!(err.iter().any(|line| line.starts_with("shekyld: posture:")));
         assert!(err.iter().any(|line| line.contains("warning: managed Tor")));
-        assert_eq!(crate::run::main(&checking_entry(), &a, &host(d.path())), 0);
+        assert_eq!(crate::run::main(checking_remnant(), &a, &host(d.path())), 0);
         assert!(!data.exists());
+    }
+
+    /// `mine = on` on a node declared `Open` announces, in the check as at
+    /// a start, that the miner waits for a view of the network (DC-F41);
+    /// the same configuration with both connectors off, or with a closed
+    /// peer list, announces nothing of the kind, and nor does `mine = off`.
+    /// Red edit: drop `mining_notice` from either `accepted_lines` or the
+    /// start, or make it ignore the declaration.
+    #[test]
+    fn mine_on_with_an_open_declaration_announces_that_the_miner_waits_for_a_view() {
+        let address = shekyl_address::ShekylAddress::new(
+            shekyl_address::Network::Mainnet,
+            [0xaa; 32],
+            [0xbb; 32],
+            [0xee; shekyl_address::MSG_SIGN_PK_LEN],
+            vec![0xcc; shekyl_address::PQC_PAYLOAD_LEN],
+        )
+        .encode()
+        .unwrap();
+        let notice_lines = |cli: &[&str]| -> Vec<String> {
+            let d = tempfile::tempdir().unwrap();
+            let data = d.path().join("data");
+            let log = d.path().join("shekyld.log");
+            let mut full = vec![
+                "--config-verify",
+                "--network",
+                "regtest",
+                "--data-dir",
+                data.to_str().unwrap(),
+                "--log-file",
+                log.to_str().unwrap(),
+            ];
+            full.extend_from_slice(cli);
+            let a = args(&full);
+            let cli = read_cli(&TABLE, a[1..].to_vec()).unwrap();
+            let loaded = load(cli, &host(d.path()).platform).unwrap();
+            let walked = walk(&loaded.config, &loaded.resolved, &host(d.path())).unwrap();
+            let (_, err) = accepted_lines(
+                &loaded.resolved,
+                loaded.file_read.as_deref(),
+                &loaded.config_path,
+                &loaded.config,
+                &walked.warnings,
+            );
+            err.into_iter()
+                .filter(|line| line.starts_with("shekyld: mining: "))
+                .collect()
+        };
+        // Open: clearnet on, no closed peer list.
+        let open = notice_lines(&["--tor", "off", "--mine", "on", "--mine-address", &address]);
+        assert_eq!(open.len(), 1, "{open:?}");
+        assert!(
+            open[0].contains("waits for a view of the network"),
+            "{}",
+            open[0]
+        );
+        assert!(
+            open[0].contains("`clearnet = off` and `tor = off`"),
+            "{}",
+            open[0]
+        );
+        assert!(open[0].contains("`p2p-closed-peer`"), "{}", open[0]);
+        // Offline: synced at open, mines at once.
+        let offline = notice_lines(&[
+            "--clearnet",
+            "off",
+            "--tor",
+            "off",
+            "--mine",
+            "on",
+            "--mine-address",
+            &address,
+        ]);
+        assert!(offline.is_empty(), "{offline:?}");
+        // Closed: the operator named the whole network.
+        let closed = notice_lines(&[
+            "--tor",
+            "off",
+            "--p2p-closed-peer",
+            "192.0.2.1:12020",
+            "--mine",
+            "on",
+            "--mine-address",
+            &address,
+        ]);
+        assert!(closed.is_empty(), "{closed:?}");
+        // Open, but the miner is not asked to start.
+        let idle = notice_lines(&["--tor", "off", "--mine-address", &address]);
+        assert!(idle.is_empty(), "{idle:?}");
     }
 }
