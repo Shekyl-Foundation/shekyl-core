@@ -154,9 +154,11 @@ pub(super) struct RegtestDaemon {
     /// asked for. `None` for the ordinary spawn, so no existing test grows a
     /// listener it did not ask for.
     restricted_url: Option<String>,
-    /// The network `shekyl-cli` is given when a test runs a §13 word.
-    /// `None` on regtest: the CLI has no name for a fakechain daemon.
-    cli_network: Option<&'static str>,
+    /// The network `shekyl-cli` is given when a test runs a §13 word: the
+    /// daemon's own, regtest included (NI-R1, NI-R4).
+    cli_network: &'static str,
+    /// Whether this daemon was given `--dev-rpc` (regtest only, NI-R8).
+    armed: bool,
     /// The schedule levers this daemon was spawned under, if any — recorded
     /// so a captured chain's manifest states the `(SEB, cap)` its blocks
     /// were mined under (`DRS_E4_ARCHIVAL_WRITER.md` `ARW-15`: the replay
@@ -554,8 +556,9 @@ impl RegtestDaemon {
         Self::spawn(RegtestSpawn::new(Some(serial)).with_restricted_listener()).await
     }
 
-    /// Spawn the daemon offline on testnet, with the armed switch set as on
-    /// every spawn. It has no fixed difficulty, which is regtest's.
+    /// Spawn the daemon offline on testnet. It is not armed: only regtest's
+    /// row permits `dev-rpc` (NI-R8), and it has no fixed difficulty, which
+    /// is regtest's too. A test that needs a lever runs on regtest.
     pub(super) async fn start_on_testnet() -> RegtestDaemon {
         let serial = serial_lock().lock_owned().await;
         Self::spawn(RegtestSpawn::new(Some(serial)).on_network(SpawnNetwork::Testnet)).await
@@ -633,8 +636,16 @@ impl RegtestDaemon {
         // The grammar's spellings (INPUT_GRAMMAR.md §5). Tor is off on
         // every spawn: regtest's default is the managed Tor, and a test
         // daemon has no business launching one.
+        //
+        // The armed test levers (`generateblocks`, `pop_blocks`) are
+        // served only with `--dev-rpc` set (`RPC_CHANNEL.md` §6.1), and only
+        // regtest's row permits it (NI-R8): a testnet daemon given it
+        // refuses to start, so a testnet spawn never passes it. The daemon
+        // announces the lever at start, and `await_ready` holds it to that.
         match network {
-            SpawnNetwork::Regtest => cmd.args(["--network", "regtest", "--dev-difficulty", "1"]),
+            SpawnNetwork::Regtest => {
+                cmd.args(["--network", "regtest", "--dev-difficulty", "1", "--dev-rpc"])
+            }
             SpawnNetwork::Testnet => cmd.args(["--network", "testnet"]),
         };
         cmd.args([
@@ -656,12 +667,6 @@ impl RegtestDaemon {
             // daemon rejected instead of a bare `Malformed`.
             "--log-level",
             "info",
-            // The armed test levers (`generateblocks`, `pop_blocks`,
-            // `inject_archival_serve_credit`) are served only with this
-            // switch set (`RPC_CHANNEL.md` §6.1): the RPC layer refuses
-            // them otherwise, on every network. The daemon announces it at
-            // start, and `await_ready` holds it to that.
-            "--dev-rpc",
         ]);
         let mine_address = mine_address.unwrap_or_else(|| default_mine_address(network));
         cmd.args(["--mine-address", &mine_address]);
@@ -741,9 +746,10 @@ impl RegtestDaemon {
             restricted_url: restricted_port.map(|p| format!("http://127.0.0.1:{p}")),
             schedule,
             cli_network: match network {
-                SpawnNetwork::Regtest => None,
-                SpawnNetwork::Testnet => Some("testnet"),
+                SpawnNetwork::Regtest => "regtest",
+                SpawnNetwork::Testnet => "testnet",
             },
+            armed: matches!(network, SpawnNetwork::Regtest),
             offline,
             posts_at_open: offline,
             keep_data,
@@ -810,12 +816,16 @@ impl RegtestDaemon {
                         "get_info's P2P state must be the daemon's configuration; got {state:?}"
                     );
                     assert_eq!(info.health.p2p.is_offline(), self.offline);
-                    // The armed row is set and the daemon said so at start
-                    // (IG-8's announcement, written before RPC binds).
+                    // The armed row is set on regtest and the daemon said so
+                    // at start (IG-8's announcement, written before RPC
+                    // binds); a testnet daemon is not armed and says nothing.
                     let log = std::fs::read_to_string(&log_path).unwrap_or_default();
-                    assert!(
+                    assert_eq!(
                         log.contains(ARMED_ROW_ANNOUNCEMENT),
-                        "the daemon did not announce `{ARMED_ROW_ANNOUNCEMENT}` at start; log tail:\n{}",
+                        self.armed,
+                        "the daemon's `{ARMED_ROW_ANNOUNCEMENT}` announcement must match \
+                         its spawn (armed: {}); log tail:\n{}",
+                        self.armed,
                         log_tail(&log_path)
                     );
                     if self.posts_at_open {
@@ -1059,16 +1069,10 @@ impl RegtestDaemon {
     /// Run one §13 word through `shekyl-cli` against this daemon.
     ///
     /// The C++ console is gone, so the harness spawns the binary. The
-    /// binary is `SHEKYL_CLI_BIN`. A regtest daemon is fakechain, which
-    /// the CLI cannot name; those words are covered by `shekyl-cli`'s
-    /// ignored regtest, which builds the renderer with `Fakechain` directly.
+    /// binary is `SHEKYL_CLI_BIN`, given the daemon's own network with
+    /// `--network`, regtest included (NI-R1, NI-R4).
     pub(super) fn console(&self, command: &str) -> String {
-        let Some(network) = self.cli_network else {
-            panic!(
-                "shekyl-cli cannot name a regtest daemon; run the word from \
-                 shekyl-cli's ignored regtest"
-            );
-        };
+        let network = self.cli_network;
         let bin = std::env::var_os("SHEKYL_CLI_BIN").unwrap_or_else(|| {
             panic!(
                 "SHEKYL_CLI_BIN not set. Build shekyl-cli and pass the binary, \
@@ -1661,16 +1665,17 @@ async fn regtest_daemon_spawns_and_mines_to_wallet_address() {
     assert!(after >= before + 3, "chain should advance by >= 3 blocks");
 }
 
-/// The armed switch on a shared test network (`RPC_CHANNEL.md` §6.1,
-/// RT-O36). On testnet, with `dev-rpc` set, `generateblocks` and
-/// `/pop_blocks` pass the armed gate and are served; the network narrows
-/// what the switch enables and never enables a lever. The third lever the
+/// The armed switch (`RPC_CHANNEL.md` §6.1, RT-O36). On regtest, the one
+/// network whose row permits `dev-rpc` (NI-R8; a testnet daemon given it is
+/// refused at load, `dev_rpc_is_refused_on_every_network_but_regtest`),
+/// `generateblocks` and `/pop_blocks` pass the armed gate and are served.
+/// The third lever the
 /// C++ served, `inject_archival_serve_credit`, was deleted with the C++
 /// chain (`DRS_X_STORE_FLIP.md` DX-Q3): the daemon knows no such method,
 /// armed or not.
 ///
-/// Zero blocks keeps the probes cheap: a testnet daemon has no fixed
-/// difficulty, and the claim is about admission, not mining. A gate
+/// Zero blocks keeps the probes cheap: the claim is about admission, not
+/// mining. A gate
 /// refusal would be the grant class (-32002); what is asserted is the
 /// handler's own answer, after the gate: `generateblocks` refuses a zero
 /// count as `BadParams` (-32602) with the diagnostic `block.count_zero`,
@@ -1680,11 +1685,11 @@ async fn regtest_daemon_spawns_and_mines_to_wallet_address() {
 /// the handler's own error.
 #[tokio::test(flavor = "multi_thread")]
 #[ignore = "Track-2 regtest: requires SHEKYLD_BIN; spawns a live daemon"]
-async fn the_armed_switch_on_testnet_serves_two_levers_and_knows_no_third() {
+async fn the_armed_switch_serves_two_levers_and_knows_no_third() {
     const OUTSIDE_THE_GRANT: i64 = -32_002;
     const BAD_PARAMS: i64 = -32_602;
     const METHOD_NOT_FOUND: i64 = -32_601;
-    let daemon = RegtestDaemon::start_on_testnet().await;
+    let daemon = RegtestDaemon::start().await;
     let call = |method: &'static str, params: serde_json::Value| {
         let rpc = &daemon.rpc;
         async move {
@@ -1701,7 +1706,7 @@ async fn the_armed_switch_on_testnet_serves_two_levers_and_knows_no_third() {
     let error = &generated["error"];
     assert_eq!(
         error["code"], BAD_PARAMS,
-        "generateblocks is served on armed testnet and refuses a zero count as its own \
+        "generateblocks is served on armed regtest and refuses a zero count as its own \
          BadParams: {generated}"
     );
     assert_eq!(
@@ -1717,7 +1722,7 @@ async fn the_armed_switch_on_testnet_serves_two_levers_and_knows_no_third() {
         .expect("pop_blocks");
     assert!(
         popped.get("error").is_none() && popped["status"] == "OK",
-        "/pop_blocks is served on armed testnet: {popped}"
+        "/pop_blocks is served on armed regtest: {popped}"
     );
 
     let injected = call(
@@ -6686,12 +6691,12 @@ async fn native_handlers_apply_their_own_request_caps() {
 /// `tx show` and `chain spent` answer through `shekyl-cli`.
 ///
 /// The daemon's own console is deleted. The words run as a one-shot
-/// `shekyl-cli` against this daemon (`SHEKYL_CLI_BIN`). The daemon is
-/// testnet because the CLI cannot name a fakechain daemon.
+/// `shekyl-cli` against this daemon (`SHEKYL_CLI_BIN`), given
+/// `--network regtest` (NI-R1, NI-R4).
 #[tokio::test]
 #[ignore = "requires SHEKYLD_BIN and SHEKYL_CLI_BIN; spawns a live daemon"]
 async fn tx_show_and_chain_spent_answer_through_shekyl_cli() {
-    let daemon = RegtestDaemon::start_on_testnet().await;
+    let daemon = RegtestDaemon::start().await;
 
     // The genesis coinbase is the one transaction a fresh regtest chain has,
     // and it is reachable without mining or spending.
@@ -6720,11 +6725,11 @@ async fn tx_show_and_chain_spent_answer_through_shekyl_cli() {
     );
 }
 
-/// The peer words answer through `shekyl-cli` on an offline testnet daemon.
+/// The peer words answer through `shekyl-cli` on an offline regtest daemon.
 #[tokio::test]
 #[ignore = "requires SHEKYLD_BIN and SHEKYL_CLI_BIN; spawns a live daemon"]
 async fn peer_words_answer_through_shekyl_cli() {
-    let daemon = RegtestDaemon::start_on_testnet().await;
+    let daemon = RegtestDaemon::start().await;
 
     // This daemon runs offline, so each peer command prints the state,
     // not an empty table (Rick, 2026-10-14).
