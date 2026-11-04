@@ -629,6 +629,16 @@ rationale strengthened.**
     genesis lane** (the byte layout is exactly what SM-DQ-7 freezes;
     this is why PR-SM-1 blocks on that ruling); `mode = 0x01`
     spend-tier, future modes append, never renumber.
+  - **Amended 2026-11-04 (`NETWORK_IDENTITY.md` NI-F2): `network_id`
+    is the network's 16-byte genesis-derived id**
+    (`Network::network_id`); PR-SM-1 bound the network's one-byte
+    code. The field's width changes what a signature attests, so
+    `sig_format_version`, the payload layout version (R5-c), is **2**,
+    and a layout-1 signature is refused as an unknown layout version.
+    The envelope version (`shekylmsgsig1.`) and the canonical length do
+    not change: the id is hashed, never carried. Vectors:
+    `docs/test_vectors/MSG_SIGN_PREIMAGE_V2.json`, rebuilt and checked by
+    `scripts/kat/msg_sign_preimage_oracle.py`.
 - **R3-c — the view-tier forward reference is DELETED, not
   softened.** The mode byte's append-only discipline is kept — that
   is cheap, real forward compatibility. But naming view-tier implied

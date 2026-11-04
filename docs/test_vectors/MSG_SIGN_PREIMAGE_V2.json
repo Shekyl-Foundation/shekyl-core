@@ -1,0 +1,57 @@
+{
+    "description": "Message-signing preimages (WALLET_MESSAGE_SIGNING.md SM-R-3, layout version 2; NETWORK_IDENTITY.md NI-F2): the network field is the 16-byte genesis-derived id. Generated and checked by scripts/kat/msg_sign_preimage_oracle.py; read by rust/shekyl-crypto-pq/tests/kat_msg_sign_preimage_v2.rs.",
+    "sig_format_version": 2,
+    "mode": 1,
+    "network_ids": {
+        "mainnet": "cf9f4283032b6ca19545f2696a228d80",
+        "testnet": "8c207793b0f7a373dd418813477e7a72",
+        "stagenet": "d839823161b34fbed969d6411e649d61",
+        "regtest": "6545666f7b24eb45ef7c050de5932330"
+    },
+    "cases": [
+        {
+            "name": "v1-length-segment",
+            "segment_hex": "000102030405060708090a0b0c0d0e0f101112131415161718191a1b1c1d1e1f202122232425262728292a2b2c2d2e2f303132333435363738393a3b3c3d3e3f404142434445464748494a4b4c4d4e4f505152535455565758595a5b5c5d5e5f606162636465666768696a6b6c6d6e6f70",
+            "message_hex": "7368656b796c206d6573736167652d7369676e696e67204b4154",
+            "preimage_by_network": {
+                "mainnet": "6fe6bb77973f9bdab249f43dee85c2d58a6c7ed55a207d8d7bcee7a3954539f3",
+                "testnet": "25f451eb5a5009c26cada0b1a9c5b599720d70aac5b4f7a8909f91cb71130dd0",
+                "stagenet": "b6a556f9476ebffa8a37bfdce284064613442e215a885cd7f1d9b8c1523ce3e3",
+                "regtest": "30792fb995377f0c351a2d757c8f332f9bae9ed4a69da46d9519bdd9046a8357"
+            }
+        },
+        {
+            "name": "empty-message",
+            "segment_hex": "000102030405060708090a0b0c0d0e0f101112131415161718191a1b1c1d1e1f202122232425262728292a2b2c2d2e2f303132333435363738393a3b3c3d3e3f404142434445464748494a4b4c4d4e4f505152535455565758595a5b5c5d5e5f606162636465666768696a6b6c6d6e6f70",
+            "message_hex": "",
+            "preimage_by_network": {
+                "mainnet": "eca4577c7fd93a8de0d47c2adb9d60e2e32a65784f53b3d0c04788b15d6976cb",
+                "testnet": "dad509d0e45d20e3fad92b08d261d1464a72baf2d429d67723b9305476348a42",
+                "stagenet": "6d76c60da29e7ffaa76fd05a7334da4f6db333db40b436110c722fa567236c6a",
+                "regtest": "e18ebffb04d06b3606491baf4293ef42ee952f321183eb8504f87be132c8a40d"
+            }
+        },
+        {
+            "name": "empty-segment",
+            "segment_hex": "",
+            "message_hex": "7368656b796c206d6573736167652d7369676e696e67204b4154",
+            "preimage_by_network": {
+                "mainnet": "c2a843e6c2b39f6d64ab4b8d679c4d7079fc6a13d20d2ce52329e4911b37f652",
+                "testnet": "28dc0861a2cb0be2326bed8ee7b7b52d7e7b9c6a9bb9c49d1df13dd66fa84290",
+                "stagenet": "e223985d55f40b4f3210303aa9b833bc33c911e57f7b291abcbf38539a482860",
+                "regtest": "4b33868dc59bd421b7f908154b46f55fec88ca43889156d28b0c4023f43c5eed"
+            }
+        },
+        {
+            "name": "long-segment-binary-message",
+            "segment_hex": "000102030405060708090a0b0c0d0e0f101112131415161718191a1b1c1d1e1f202122232425262728292a2b2c2d2e2f303132333435363738393a3b3c3d3e3f404142434445464748494a4b4c4d4e4f505152535455565758595a5b5c5d5e5f606162636465666768696a6b6c6d6e6f707172737475767778797a7b7c7d7e7f808182838485868788898a8b8c8d8e8f909192939495969798999a9b9c9d9e9fa0a1a2a3a4a5a6a7a8a9aaabacadaeafb0b1b2b3b4b5b6b7b8b9babbbcbdbebfc0c1c2c3c4c5c6c7c8c9cacbcccdcecfd0d1d2d3d4d5d6d7d8d9dadbdcdddedfe0e1e2e3e4e5e6e7e8e9eaebecedeeeff0f1f2f3f4f5f6f7f8f9fa000102030405060708090a0b0c0d0e0f101112131415161718191a1b1c1d1e1f202122232425262728292a2b2c2d2e2f30",
+            "message_hex": "000102030405060708090a0b0c0d0e0f101112131415161718191a1b1c1d1e1f202122232425262728292a2b2c2d2e2f303132333435363738393a3b3c3d3e3f404142434445464748494a4b4c4d4e4f505152535455565758595a5b5c5d5e5f606162636465666768696a6b6c6d6e6f707172737475767778797a7b7c7d7e7f808182838485868788898a8b8c8d8e8f909192939495969798999a9b9c9d9e9fa0a1a2a3a4a5a6a7a8a9aaabacadaeafb0b1b2b3b4b5b6b7b8b9babbbcbdbebfc0c1c2c3c4c5c6c7c8c9cacbcccdcecfd0d1d2d3d4d5d6d7d8d9dadbdcdddedfe0e1e2e3e4e5e6e7e8e9eaebecedeeeff0f1f2f3f4f5f6f7f8f9fafbfcfdfeff000102030405060708090a0b0c0d0e0f101112131415161718191a1b1c1d1e1f202122232425262728292a2b2c2d2e2f303132333435363738393a3b3c3d3e3f404142434445464748494a4b4c4d4e4f505152535455565758595a5b5c5d5e5f606162636465666768696a6b6c6d6e6f707172737475767778797a7b7c7d7e7f808182838485868788898a8b8c8d8e8f909192939495969798999a9b9c9d9e9fa0a1a2a3a4a5a6a7a8a9aaabacadaeafb0b1b2b3b4b5b6b7b8b9babbbcbdbebfc0c1c2c3c4c5c6c7c8c9cacbcccdcecfd0d1d2d3d4d5d6d7d8d9dadbdcdddedfe0e1e2e3e4e5e6e7e8e9eaebecedeeeff0f1f2f3f4f5f6f7f8f9fafbfcfdfeff",
+            "preimage_by_network": {
+                "mainnet": "6694aa75edefac9bf6dbc9fe0b6d06ae1842b4098e8a56e2513cb21284ddc7ca",
+                "testnet": "f76bc659853532c51d338f5db573895981ddb8ea63a8ee37459904d0857dc1fd",
+                "stagenet": "8177359484668664c741f1c3a8523b806be42965a69ef886b1f655d93f9c221f",
+                "regtest": "1048f3a0d9be8dd387f9620327fd29f1f808f2b989e3358f914dbc1aab52b4ec"
+            }
+        }
+    ]
+}

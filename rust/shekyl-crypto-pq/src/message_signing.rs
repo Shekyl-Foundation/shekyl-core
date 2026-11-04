@@ -136,7 +136,7 @@ pub const MSG_SIGN_OUTER_DOMAIN: &[u8] = b"shekyl/msg-sign-outer-v1";
 /// canonical byte and inside the preimage as `sig_format_version`
 /// (SM-R-5 R5-c: one value, two appearances; the armored prefix's `1` is
 /// the separate envelope version).
-pub const MSG_SIG_LAYOUT_VERSION: u8 = 1;
+pub const MSG_SIG_LAYOUT_VERSION: u8 = 2;
 
 /// Scheme byte: SLH-DSA-SHA2-192s inner + spend-scalar Schnorr outer,
 /// nested (SM-R-8). Append-only — the **value** is the genesis-frozen
@@ -311,9 +311,9 @@ pub fn derive_message_signing_public_key(
 ///     cSHAKE256("shekyl/msg-hash-v1", message))
 /// ```
 ///
-/// `network_id` is the network's code ([`Network::code`]), one byte per
-/// network. `NETWORK_IDENTITY.md` NI-Q9 moves it to the genesis-derived
-/// network id.
+/// `network_id` is the network's 16-byte genesis-derived id
+/// ([`Network::network_id`], `NETWORK_IDENTITY.md` NI-F2). It entered at
+/// layout version 2; layout 1 bound the network's one-byte code.
 ///
 /// The length prefix makes the framing unambiguous by construction
 /// (R3-b): under fork (ii) the segment is variable-length across address
@@ -325,9 +325,10 @@ pub fn message_preimage(
     message: &[u8],
 ) -> [u8; MSG_PREIMAGE_LEN] {
     let msg_hash = shekyl_crypto_hash::cshake256_32(MSG_HASH_DOMAIN, message);
-    let mut buf = Vec::with_capacity(MSG_SIG_HEADER_LEN + 2 + classical_segment.len() + 32);
+    let network_id = network.network_id();
+    let mut buf = Vec::with_capacity(2 + network_id.len() + 2 + classical_segment.len() + 32);
     buf.push(MSG_SIG_LAYOUT_VERSION);
-    buf.push(network.code());
+    buf.extend_from_slice(&network_id);
     buf.push(MSG_SIG_MODE_SPEND);
     // CLIPPY: segment lengths are address-segment-sized, far below u16::MAX.
     #[allow(clippy::cast_possible_truncation)]
@@ -760,7 +761,7 @@ mod tests {
         assert_ne!(a, b);
         assert_ne!(
             a, c,
-            "Fakechain shares Mainnet's address encoding, not its transcript"
+            "regtest and mainnet are two networks, so two transcripts"
         );
     }
 
@@ -929,6 +930,21 @@ mod tests {
         assert_eq!(
             verify(&rechecksummed(2)),
             Err(MessageSigError::Malformed("unknown mode"))
+        );
+
+        // A layout-1 signature, from before the preimage bound the network
+        // id (`NETWORK_IDENTITY.md` NI-F2), is intact but not this layout:
+        // it is named as an unknown layout, not read as damage.
+        let mut c = engine
+            .decode(armored.strip_prefix(MSG_SIG_PREFIX).unwrap())
+            .unwrap();
+        c[0] = 1;
+        let body_len = MSG_SIG_CANONICAL_LEN - MSG_SIG_CHECKSUM_LEN;
+        let ck = shekyl_crypto_hash::cshake256_32(MSG_SIG_CHECKSUM_DOMAIN, &c[..body_len]);
+        c[body_len..].copy_from_slice(&ck[..MSG_SIG_CHECKSUM_LEN]);
+        assert_eq!(
+            verify(&format!("{}{}", MSG_SIG_PREFIX, engine.encode(&c))),
+            Err(MessageSigError::Malformed("unknown layout version"))
         );
 
         // The control that keeps the two assertions above honest: the

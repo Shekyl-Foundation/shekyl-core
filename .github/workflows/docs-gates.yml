@@ -778,6 +778,16 @@ jobs:
         if: '!cancelled()'
         run: python3 -I scripts/kat/spend_signing_hash_oracle.py
 
+      - name: Run the message-signing preimage oracle
+        # NETWORK_IDENTITY.md NI-F2: a message signature's preimage binds the
+        # network's 16-byte id (layout version 2). This rebuilds
+        # docs/test_vectors/MSG_SIGN_PREIMAGE_V2.json from fixed inputs with
+        # the same stdlib sponge (scripts/kat/stdlib_cshake.py), anchored the
+        # same way, and requires the pinned file to equal it; exit 1 on a
+        # mismatch, 2 when the file has no case (rule 47).
+        if: '!cancelled()'
+        run: python3 -I scripts/kat/msg_sign_preimage_oracle.py
+
       - name: Run clatter production-graph gate
         # clatter is an independent implementation of the RPC channel's
         # handshake pattern, in the workspace as a test-only cross-check
