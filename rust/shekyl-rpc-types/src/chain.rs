@@ -237,14 +237,11 @@ pub const CORE_RPC_VERSION_MAJOR: u32 = 3;
 /// 3.65: `mining_status.speed` is the hash count over its window of
 /// complete seconds. A whole-hash quotient read `0` for a miner below
 /// one hash a second. `get_version` gains nothing.
-/// 3.66: two changes, both of which leave `get_version` alone. Chain
-/// sync's cutover (CS-5 §7): `sync_info` carries the sync owner's view
-/// under its own names (`height`, `target_height` as a count, `state`,
-/// `stalled`, and `peers[]`), and `spans` and `overview` are gone.
-/// `get_connections` takes `height` and `state` from that view. A bounded
-/// connection over an inherited list cap, or asking for `fill_pow_hash`,
-/// is `OverResourceBound` (-32003) with the bound named. The four caps
-/// stay 1000, 1000, 100 and 5000.
+/// 3.66: a bounded connection over an inherited list cap, or asking for
+/// `fill_pow_hash`, is `OverResourceBound` (-32003) with the bound named.
+/// The four caps stay 1000, 1000, 100 and 5000. `calc_pow` and
+/// `get_coinbase_tx_sum` stay refused to a bounded caller until their
+/// costs are set. `get_version` gains nothing.
 /// 3.67: `calc_pow` and `get_coinbase_tx_sum` are served to a bounded
 /// caller. `calc_pow` hashes a blob no longer than the hashing-blob
 /// format (`MAX_POW_BLOB_SIZE`) and pays one hash from the shared budget.
@@ -253,7 +250,15 @@ pub const CORE_RPC_VERSION_MAJOR: u32 = 3;
 /// for more than one hash, or one hash while the budget is empty, is
 /// `OverResourceBound`. A bounded `get_coinbase_tx_sum` waits for the one
 /// coinbase-read permit. `get_version` gains nothing.
-pub const CORE_RPC_VERSION_MINOR: u32 = 67;
+/// 3.68: chain sync's cutover (CS-5 §7). `sync_info` carries the sync
+/// owner's view under its own names: `height`, `target_height` (now always
+/// a count), `state`, `stalled`, and `peers[]` with `connection_id`,
+/// `address`, `claimed_height`, `mode`, `header_request`, `body_requests`
+/// and `rate`. `spans` and `overview`, which rendered the deleted block
+/// queue, are gone, and a 3.67 reader refuses the reply. `get_connections`
+/// takes `height` (the claim's count) and `state` (the session's mode, or
+/// null) from the view. `get_version` gains nothing.
+pub const CORE_RPC_VERSION_MINOR: u32 = 68;
 /// `MAKE_CORE_RPC_VERSION(major, minor)` = `(major << 16) | minor`.
 pub const CORE_RPC_VERSION: u32 = (CORE_RPC_VERSION_MAJOR << 16) | CORE_RPC_VERSION_MINOR;
 
@@ -714,14 +719,16 @@ mod tests {
         // full body under `archived`, and gives `get_blocks_by_height.bin`
         // its `prune` switch (SB-Q2, PDM-Q10). Both branches had written
         // 64, so `mining_status.speed` carrying the hash count over its
-        // window took the next minor, as 3.44 did. 3.66 is chain sync's
-        // `sync_info` and a bounded connection's `OverResourceBound`.
+        // window took the next minor, as 3.44 did. 3.66 makes a bounded
+        // connection's list cap and `fill_pow_hash` `OverResourceBound`.
         // 3.67 serves `calc_pow` and `get_coinbase_tx_sum` to a bounded
         // caller, within the hash budget and the one coinbase-read permit.
-        assert_eq!(CORE_RPC_VERSION, 196_675);
-        assert_eq!(CORE_RPC_VERSION, (3 << 16) | 67);
+        // 3.68 is chain sync's cutover: `sync_info` is the sync owner's view
+        // (CS-5 §7); it had written 66, and took the minor after both.
+        assert_eq!(CORE_RPC_VERSION, 196_676);
+        assert_eq!(CORE_RPC_VERSION, (3 << 16) | 68);
         assert_eq!(CORE_RPC_VERSION_MAJOR, 3);
-        assert_eq!(CORE_RPC_VERSION_MINOR, 67);
+        assert_eq!(CORE_RPC_VERSION_MINOR, 68);
     }
 
     #[test]

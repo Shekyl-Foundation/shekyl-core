@@ -1138,7 +1138,7 @@ fn average_kib(total: u64, seconds: u64) -> u64 {
 /// means the clock moved backwards, and C++'s unsigned wrap turned that into
 /// an idle time of some hundreds of years; zero is the honest answer.
 ///
-/// `session` is chain sync's row for the connection (3.66): the claim's
+/// `session` is chain sync's row for the connection (3.68): the claim's
 /// count and the session's mode. A connection chain sync does not hold,
 /// such as one before its handshake, has neither.
 #[deny(clippy::arithmetic_side_effects)]
@@ -1261,7 +1261,7 @@ pub fn get_peer_list(
     }))
 }
 
-/// `sync_info` (JSON-RPC, admin-only): chain sync's view (3.66). Whether
+/// `sync_info` (JSON-RPC, admin-only): chain sync's view (3.68). Whether
 /// the node is syncing, toward what, from whom and how fast, and whether it
 /// is stuck.
 ///
@@ -1912,10 +1912,10 @@ pub(crate) mod tests {
         );
 
         let mut ours: serde_json::Value = serde_json::to_value(&out).unwrap();
-        // Head of the `get_version` chain (`_v44` = 3.67). A bump that
+        // Head of the `get_version` chain (`_v45` = 3.68). A bump that
         // forgets this include fails on `version` below.
         let mut oracle: serde_json::Value = serde_json::from_str(include_str!(
-            "../../shekyl-rpc-types/tests/vectors/rpc/get_version_synced_v44.json"
+            "../../shekyl-rpc-types/tests/vectors/rpc/get_version_synced_v45.json"
         ))
         .unwrap();
         for moving in ["consensus_constants_digest", "genesis_hash"] {
@@ -3131,7 +3131,7 @@ pub(crate) mod tests {
         );
     }
 
-    /// `sync_info` is chain sync's view (3.66): the chain's height, the
+    /// `sync_info` is chain sync's view (3.68): the chain's height, the
     /// view's target, state and stall, and one row per session the board
     /// still holds, with its address from the board.
     #[test]

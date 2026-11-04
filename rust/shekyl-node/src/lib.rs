@@ -84,8 +84,7 @@ use shekyl_chain_rules::{AdmissionPolicy, FakechainSchedule, GenesisPin, RuleSet
 use shekyl_chain_store::apply_policy::ApplyPolicy;
 use shekyl_chain_store::pool::PoolOpen;
 use shekyl_chain_store::store::{ChainStore, CutShort, Horizons, SnapshotView};
-use shekyl_chain_sync::Requesting;
-use shekyl_chain_sync::SyncState;
+use shekyl_chain_sync::{Requesting, SyncState};
 use shekyl_chain_sync_runtime::executor::Executor;
 use shekyl_chain_sync_runtime::owner::OwnerParts;
 use shekyl_daemon_config::sections::{DaemonConfig, Dev};

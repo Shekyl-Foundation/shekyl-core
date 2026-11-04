@@ -14,8 +14,13 @@ name: cs2-long-run
 #   honest peers, through the owner, the entry and the store.
 # Every step builds `--release`: a test build leaves all but RandomX
 # unoptimised, and the figure would measure the debug model. The rate
-# floor and the spans in flight are measured after the cutover, on
-# regtest over a real Tor path, not here.
+# floor and the spans in flight were measured after the cutover (CS-5,
+# #1237, 2026-11-03), on a regtest fleet over clearnet and the managed
+# Tor, not here; the values are in `P2P_3_CHAIN_SYNC_BRIEF.md`'s
+# constants table, by host role. This workflow has never run: the
+# aarch64 self-hosted runner it names does not exist, so the floor
+# device's row in that table is derived from the floor device's
+# light-mode hash rate, not measured.
 
 on:
   workflow_dispatch:

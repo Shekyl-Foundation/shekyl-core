@@ -953,7 +953,7 @@ fn print_net_stats(src: &Source, now: u64) -> Result<String, String> {
     ))
 }
 
-/// `sync_info`: chain sync's view (3.66).
+/// `sync_info`: chain sync's view (3.68).
 #[deny(clippy::arithmetic_side_effects)]
 fn sync_info(src: &Source) -> Result<String, String> {
     let reply: shekyl_rpc_types::P2pReply<shekyl_rpc_types::SyncInfoResponse> =

@@ -463,7 +463,7 @@ with the FFI shim as today's only implementation:
 | --- | --- | --- |
 | `InfoChainFacts` | above | DRS-E's store implementation reads the same set; `database_size` and `free_space` are the chain store's on-disk size and the volume's free space, whatever the store |
 | `PoolFacts` | the count of entries this node has broadcast; the count of entries it holds and has not yet broadcast | The broadcast count is read for every caller. The not-yet-broadcast count is made only with the host axis (RK-D24), and then both are counted under one hold of the pool's lock, so they are one pool state (`InfoFacts::pool_counts`, RK-Q10) |
-| `PeerFacts` | per-connector, per-direction session counts (feeding Health's `has_peers` and Status's two counts); peerlist sizes; per-connector socket counts | **Session counts from the seam board**, the one store; no subtraction. **Every read returns `Result<_, FactsFault>`, never a bare `u64`** (below). Whether `daemon-rpc` reads the hub directly or through new exports is an implementation detail for rule 25. **As built (commit 7, then RK-Q3's commit):** one export, `shekyl_seam_session_counts`, returns the handshaken rows in each direction from **one** copy of the board, and `InfoFacts::sessions` reads it. **A session is a handshaken row, for the counts as for `has_peers` (RK-Q3, ruled by Rick 2026-10-12; RK-Q4's filter).** `has_peers` is not stored: it is whether either count is non-zero, so in any reply that shows Status, `has_peers == (outgoing_connections_count + incoming_connections_count > 0)`, and a test holds every such reply to it. This commit first counted any row, handshake finished or not; that was changed before merge for three reasons. Peers' per-connector socket counts already report transport sockets, dials in flight included, so the session counts should not count sockets a second time. One reply should define a connection once, and any-row counts allowed `has_peers: false` beside a non-zero count. And a pre-handshake inbound row costs an outsider almost nothing, so counting it let anyone inflate this node's reported connectivity. It is made for every caller of an online node, because Health needs it; Status's two counts are projected from the same read and cost no second one. An offline node has no counts: its parts carry the state offline (2026-10-14), and the board is not read |
+| `PeerFacts` | per-connector, per-direction session counts (feeding Health's `has_peers` and Status's two counts); peerlist sizes; per-connector socket counts | **Session counts from the seam board**, the one store; no subtraction. **Every read returns `Result<_, FactsFault>`, never a bare `u64`** (below). Whether `daemon-rpc` reads the hub directly or through new exports is an implementation detail for rule 25. **As built (commit 7, then RK-Q3's commit):** one export, `shekyl_seam_session_counts`, returns the handshaken rows in each direction from **one** copy of the board, and `InfoFacts::sessions` reads it (deleted 2026-11-03; the read is `rpc_peerlist_ffi::session_counts`). **A session is a handshaken row, for the counts as for `has_peers` (RK-Q3, ruled by Rick 2026-10-12; RK-Q4's filter).** `has_peers` is not stored: it is whether either count is non-zero, so in any reply that shows Status, `has_peers == (outgoing_connections_count + incoming_connections_count > 0)`, and a test holds every such reply to it. This commit first counted any row, handshake finished or not; that was changed before merge for three reasons. Peers' per-connector socket counts already report transport sockets, dials in flight included, so the session counts should not count sockets a second time. One reply should define a connection once, and any-row counts allowed `has_peers: false` beside a non-zero count. And a pre-handshake inbound row costs an outsider almost nothing, so counting it let anyone inflate this node's reported connectivity. It is made for every caller of an online node, because Health needs it; Status's two counts are projected from the same read and cost no second one. An offline node has no counts: its parts carry the state offline (2026-10-14), and the board is not read |
 | `NodeFacts` | offline, busy syncing, following degraded | Health's, read for every caller |
 | `StatusFacts` | start time, free space, alt-block count, and the store's on-disk size | Read only for a caller who receives Status (RK-D24). The store's size is one of those reads. There is no exception |
 
@@ -540,9 +540,9 @@ two JSON-patch sites (`handlers/json.rs:82-100`, `json_rpc.rs:136-146`) are
 deleted.
 
 `has_peers` is at least one handshaken session on any connector (RK-Q4).
-It is not stored. `shekyl_seam_session_counts` returns the handshaken rows
-in each direction from one copy of the board
-(`rust/shekyl-ffi/src/seam_board_ffi.rs:180-191`), and
+It is not stored. `rpc_peerlist_ffi::session_counts` returns the handshaken
+rows in each direction from one copy of the board
+(`rust/shekyl-ffi/src/rpc_peerlist_ffi.rs:536-541`), and
 `SessionCounts::has_peers` is whether either count is non-zero. The
 any-row export `shekyl_seam_board_count` does not read the handshake flag
 (`seam_board_ffi.rs:71-74`). That count is a dial cap. It is not this
@@ -557,12 +557,12 @@ index that is not a connector or a direction
 (`rust/shekyl-ffi/src/seam_ffi.rs:521-531`). Read through either, a daemon
 whose hub is not up would report `has_peers = false` — the false
 `DaemonPeerless` of §3.1, rebuilt one layer down (RK-D23: that `0` is not
-an answer). The session export can say so. It returns
-`SHEKYL_SEAM_COUNT_ERR_NO_HUB` and writes nothing. The Rust read
-(`rpc_peerlist_ffi::session_counts`) is `None` for that absence, and
-`InfoFacts::sessions` maps it to `FactsFault::HubAbsent`. Zero sessions is
-`Ok`. `has_peers` is read from that result, never from an export that
-answers a missing hub with `0`.
+an answer). The Rust read
+(`rpc_peerlist_ffi::session_counts`,
+`rust/shekyl-ffi/src/rpc_peerlist_ffi.rs:536-541`) is `None` for that
+absence, and `InfoFacts::sessions` maps it to `FactsFault::HubAbsent`.
+Zero sessions is `Ok`. `has_peers` is read from that result, never from an
+export that answers a missing hub with `0`.
 
 **Commit 4's plan: the type lands at parity; the refusal does not.** The
 C++ handler answered a missing hub with zero counts and status OK, so a
@@ -598,10 +598,16 @@ everyone's. So the refusal was new in commit 7, not an arm removed. The
 Status counts and the Peers socket counts still crossed from C++ and
 still read a missing hub as `0`; they were unreachable in that state,
 because the Health read refused first. RK-Q3 replaced that export.
-`shekyl_seam_session_counts` returns the handshaken count in each
+`shekyl_seam_session_counts` returned the handshaken count in each
 direction from one snapshot, `sessions` is the trait method, and Status's
 two counts are that snapshot. The total is not stored. It is the two
 directions, and `has_peers` is whether either is non-zero.
+
+**Correction, 2026-11-03.** Nothing calls `shekyl_seam_session_counts`.
+The daemon reads `rpc_peerlist_ffi::session_counts`
+(`rust/shekyl-ffi/src/rpc_peerlist_ffi.rs:536-541`), which is `None` when
+no hub is bound. The export, its header struct, and the layout pair are
+deleted.
 
 **An offline node is not a missing hub (found in review of commit 7,
 2026-10-10).** A daemon started `--offline` returns from p2p

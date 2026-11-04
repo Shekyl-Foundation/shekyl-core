@@ -106,6 +106,36 @@ where
         }
     }
 
+    /// Whether a draw could run now: the latch is unset, no check runs,
+    /// and a candidate waits.
+    fn draw_waits(&self) -> bool {
+        !self.alarm
+            && self.evidence_holder().is_none()
+            && self.peers.values().any(|state| {
+                !state.gates.evidence_spent && state.run.as_ref().is_some_and(Run::is_candidate)
+            })
+    }
+
+    /// After a header response: a wake for the draw it did not run, when
+    /// one would run and none is armed ([`Command::ArmDraw`]). At the
+    /// session's declared transit from now.
+    pub(crate) fn arm_draw(&mut self, session: K, now: Instant, out: &mut Vec<Command<K>>) {
+        if self.draw_wake.is_some() || !self.draw_waits() {
+            return;
+        }
+        let Some(transit) = self.peers.get(&session).map(|peer| peer.transit) else {
+            return;
+        };
+        let id = self.next_id;
+        self.next_id = self.next_id.saturating_add(1);
+        self.draw_wake = Some(id);
+        out.push(Command::ArmDraw {
+            session,
+            id,
+            deadline: now.checked_add(transit).unwrap_or(now),
+        });
+    }
+
     /// One evidence check, drawn uniformly from the waiting candidates.
     /// Nothing is drawn while the latch is set, or while a check runs.
     pub(crate) fn start_evidence(

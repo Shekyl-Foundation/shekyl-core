@@ -877,9 +877,19 @@ pub struct Door {
     spans: mpsc::UnboundedSender<Vec<Accepted>>,
     room: Arc<crate::room::Room>,
     admission: Arc<Admission>,
+    seeds: tokio::sync::watch::Receiver<Option<SeedPair>>,
 }
 
 impl Door {
+    /// The seed window as last pinned and published: the pair the
+    /// lookup-only longhash answers from. `None` until the first pair is
+    /// pinned. A caller whose proof found a seed absent waits on this for
+    /// the slots to change, and reads it to see whether they already have.
+    #[must_use]
+    pub fn seeds(&self) -> tokio::sync::watch::Receiver<Option<SeedPair>> {
+        self.seeds.clone()
+    }
+
     /// Seats a sync caller can take now. Zero when the door is closed.
     #[must_use]
     pub fn room(&self) -> usize {
@@ -1292,6 +1302,7 @@ where
             spans: spans_tx,
             room: crate::room::Room::new(config.room.get()),
             admission,
+            seeds: shared.seeds.subscribe(),
         };
         let loop_shared = Arc::clone(&shared);
         let loop_door = door.clone();
@@ -1528,6 +1539,8 @@ mod span;
 mod window;
 
 pub use window::Reservation;
+
+pub use crate::cache_window::SeedPair;
 pub(crate) use window::{
     divide_pool_faults, install_window, record_store_read, record_window_stop, with_pool,
     PoolDivision,

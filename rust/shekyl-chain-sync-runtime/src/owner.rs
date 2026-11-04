@@ -55,7 +55,7 @@ use std::sync::Arc;
 use std::time::{Duration, Instant};
 
 use shekyl_chain_ingest::service::{
-    Alarm, ArrivalTag, BoundArrival as EntryArrival, Door, Refusal, Reply, SessionId,
+    Alarm, ArrivalTag, BoundArrival as EntryArrival, Door, Refusal, Reply, SeedPair, SessionId,
 };
 use shekyl_chain_ingest::{ChainRules, TipChanged};
 use shekyl_chain_rules::Tip;
@@ -249,9 +249,24 @@ struct Published {
 
 /// What the owner's own spawned work reports back.
 enum Input {
-    Proven { job: Job, results: Vec<Proved> },
-    Entry { tag: u64, reply: Reply },
-    Served { session: Session, served: Served },
+    Proven {
+        job: Job,
+        results: Vec<Proved>,
+    },
+    Entry {
+        tag: u64,
+        reply: Reply,
+    },
+    Served {
+        session: Session,
+        served: Served,
+    },
+    /// The seed window already holds the seed a proof found absent
+    /// (`Command::SeedNotHeld`): the model is told the slots changed, after
+    /// the command's own batch and whether or not the watch said so.
+    Seeds {
+        pair: Option<SeedPair>,
+    },
 }
 
 /// An offer waiting on the entry.
@@ -359,6 +374,14 @@ struct Owner<C: Clock + Clone, R> {
     /// handshake's reply refuses anything else.
     opened: HashSet<Session>,
     seats: Option<usize>,
+    /// The seed window's published pair, read when a proof found a seed
+    /// absent (`Command::SeedNotHeld`). The loop waits on its own
+    /// receiver of the same watch.
+    seeds: watch::Receiver<Option<SeedPair>>,
+    /// The pair the model was last told of. The attendant republishes the
+    /// window at every tip; the model hears `Event::Seeds` when the pair
+    /// differs.
+    seen_seeds: Option<SeedPair>,
     state_tx: watch::Sender<SyncState>,
     published: Published,
 }
@@ -402,6 +425,8 @@ where
     let base = (Instant::now(), timer.clock().now());
     let timer = Arc::new(timer);
     let wakes = Arc::clone(&timer);
+    let mut seeds = door.seeds();
+    let seen_seeds = *seeds.borrow_and_update();
     let mut owner = Owner {
         sync: Model::new(rules.trust(), schedule)
             .with_requesting(requesting)
@@ -425,6 +450,8 @@ where
         headers_sent: HashMap::new(),
         seat_waiting: HashMap::new(),
         seats: None,
+        seeds: seeds.clone(),
+        seen_seeds,
         state_tx,
         published,
     };
@@ -462,6 +489,13 @@ where
                 }
                 let set = latch.borrow_and_update().is_some();
                 owner.latch(set);
+            },
+            changed = seeds.changed() => {
+                if changed.is_err() {
+                    break;
+                }
+                let pair = *seeds.borrow_and_update();
+                owner.seeds_published(pair);
             },
             routed_one = routed.recv() => {
                 let Some(routed_one) = routed_one else {
@@ -854,6 +888,12 @@ where
                 });
                 self.room();
             }
+            Input::Seeds { pair } => {
+                // Not deduplicated: the loop may have passed this pair on
+                // before the gate it opens was closed.
+                self.seen_seeds = pair;
+                self.event(Event::Seeds);
+            }
             Input::Served { session, served } => {
                 if let Some(serving) = self.serving.get_mut(&session) {
                     serving.busy = false;
@@ -952,6 +992,17 @@ where
     fn latch(&mut self, set: bool) {
         self.event(Event::Latch { set });
         self.published.alarm_tx.send_replace(self.sync.alarm());
+    }
+
+    /// The seed window published `pair`. The model hears of it when it
+    /// differs from the pair it was last told of: the attendant reinstalls
+    /// the window at every tip, and the pair moves only at an epoch edge.
+    fn seeds_published(&mut self, pair: Option<SeedPair>) {
+        if self.seen_seeds == pair {
+            return;
+        }
+        self.seen_seeds = pair;
+        self.event(Event::Seeds);
     }
 
     /// Report the door's room when it moved.
@@ -1084,6 +1135,11 @@ where
                     session,
                     id,
                     deadline,
+                }
+                | Command::ArmDraw {
+                    session,
+                    id,
+                    deadline,
                 } => self.arm(deadline, session, id),
                 Command::RequestBodies {
                     session,
@@ -1123,6 +1179,24 @@ where
                 }
                 Command::HeadersSpent { session, cause } => {
                     tracing::debug!(%session, ?cause, "a session's headers from H* yielded nothing");
+                }
+                Command::SeedNotHeld { session, seed } => {
+                    // The lookup ran off the owner's task. A pair that holds
+                    // the seed now was published between the lookup and
+                    // this batch, and the loop may already have passed its
+                    // change on before the model closed the gate: tell the
+                    // model again, after this batch, whatever the loop saw.
+                    let pair = *self.seeds.borrow();
+                    let held_now = pair.is_some_and(|pair| pair.holds(&seed));
+                    tracing::debug!(
+                        %session,
+                        ?seed,
+                        held_now,
+                        "a session's headers hash under a seed the window does not hold"
+                    );
+                    if held_now {
+                        let _gone = self.inputs.send(Input::Seeds { pair });
+                    }
                 }
                 Command::RaiseAlarm { fork_at, tip, work } => {
                     // The latch watch carries the write back as `Latch`.

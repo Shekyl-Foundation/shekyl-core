@@ -3,12 +3,14 @@
 // All rights reserved.
 // BSD-3-Clause
 
-//! A response from `H*` that yields nothing, and a parent that reaches
-//! `T` after its children. Both were seen on the rehearsal fleet on
-//! 2026-11-02 as one node asking the same peer for the same headers
-//! every millisecond: the children sat in `T` under a parent main had
-//! popped, the parent came back as a tip over them, nothing heavier was
-//! reachable, and every answer was already held.
+//! A response from `H*` that yields nothing, and children whose parent
+//! main popped. Both were seen on the rehearsal fleet on 2026-11-02 as
+//! one node asking the same peer for the same headers every millisecond:
+//! the children sat in `T` under a parent main had popped, the parent
+//! came back as a tip over them, nothing heavier was reachable, and every
+//! answer was already held. Since 2026-11-03 the children leave `T` with
+//! their anchor (`HeaderTree::drop_orphans`) and are served again above
+//! the parent.
 
 #![cfg(test)]
 
@@ -291,11 +293,18 @@ fn an_answer_already_held_with_more_continues_from_its_last_header() {
 }
 
 /// `T` holds `h+1` and `h+2` above a block `h` main has connected. Main
-/// pops `h`; the two are unreachable, and `H*` is main's tip. A peer
-/// serves `h` again. It is their parent, not a tip over them: `H*` is
-/// `h+2`, and the node does not ask from `h` for headers it holds.
+/// pops `h`: their anchor is off main, so the two leave `T` with it, and
+/// `H*` is main's tip. A peer serves `h` again: it is the one header in
+/// `T` and `H*`. The peer then serves `h+1` and `h+2` above it, and `H*`
+/// is `h+2`.
+///
+/// Until 2026-11-03 the two stayed in `T` as an orphaned branch and `h`,
+/// served again, adopted them. That held only while the page stopped at
+/// `h`: a page that went on to `h+1` met a held header after a new one
+/// and closed the session, every time
+/// (`switch_orphan_tests`).
 #[test]
-fn a_parent_served_after_its_children_adopts_them() {
+fn children_of_a_popped_block_leave_t_and_are_served_again_above_it() {
     let main = chain_of(8);
     let (pows, hashes) = three_above(&main);
     let mut sync: Model = Sync::new(Trust::UNPINNED, target_one);
@@ -330,27 +339,42 @@ fn a_parent_served_after_its_children_adopts_them() {
     assert!(!sync.contains_header(hashes[0]));
     assert_eq!(sync.selected().hash, hashes[2]);
 
-    // Main pops `h`. The children's anchor is off main; `H*` is the tip.
+    // Main pops `h`. The children's anchor is off main: they leave `T`,
+    // and `H*` is the tip.
     main.with_view(|view| {
         let tip = view.tip().expect("main answers").expect("a tip");
         drive(&mut sync, &view, Event::Tip { tip });
         assert_eq!(sync.selected().hash, tip.hash);
+        assert_eq!(sync.header_count(), 0, "the orphaned branch left T");
 
-        // A peer serves `h` from main's tip.
+        // A peer serves `h` from main's tip: the one header in `T`.
         open_claim(&mut sync, &view, 2);
         let out = drive(
             &mut sync,
             &view,
             Event::Headers {
                 session: 2,
-                bytes: response(&pows[..1], false),
+                bytes: response(&pows[..1], true),
+            },
+        );
+        assert_eq!(sync.header_count(), 1);
+        assert_eq!(sync.selected().hash, hashes[0], "{out:?}");
+        assert_eq!(
+            headers_asked(&out, 2),
+            vec![vec![*hashes[0].as_bytes()]],
+            "the peer is asked on from h: {out:?}"
+        );
+
+        // It serves `h+1` and `h+2` above `h`, which are new again.
+        let out = drive(
+            &mut sync,
+            &view,
+            Event::Headers {
+                session: 2,
+                bytes: response(&pows[1..], false),
             },
         );
         assert_eq!(sync.header_count(), 3);
-        assert_eq!(
-            sync.selected().hash,
-            hashes[2],
-            "the parent was made a tip over its children: {out:?}"
-        );
+        assert_eq!(sync.selected().hash, hashes[2], "{out:?}");
     });
 }
