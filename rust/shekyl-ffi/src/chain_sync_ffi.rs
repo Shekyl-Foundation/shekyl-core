@@ -29,21 +29,41 @@ struct Attach {
 
 /// The slot the node leaves its owner in.
 enum Slot {
-    /// No node in this process: a test of the seam or the C++ handler.
-    /// A bind builds an unattached router.
+    /// No owner installed: a bind would run the seam without chain sync,
+    /// so it is refused ([`Refused::NoOwner`]).
     Empty,
     /// The node's owner, waiting for the seam's bind.
     Left(Attach),
     /// The daemon's bind took the owner. A later bind would run the seam
-    /// without chain sync, so it is refused ([`SecondBind`]).
+    /// without chain sync, so it is refused ([`Refused::SecondBind`]).
     Taken,
 }
 
 static ATTACH: Mutex<Slot> = Mutex::new(Slot::Empty);
 
-/// A bind after the daemon's bind had already taken the node's owner.
+/// Why a bind found no owner to attach the router to. Either way the seam
+/// would run without chain sync, so the bind is refused and the daemon
+/// does not start.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub struct SecondBind;
+pub enum Refused {
+    /// No node installed its owner before the bind.
+    NoOwner,
+    /// The daemon's bind already took the node's owner.
+    SecondBind,
+}
+
+impl Refused {
+    /// The cause, as the bind logs it.
+    #[must_use]
+    pub const fn cause(self) -> &'static str {
+        match self {
+            Self::NoOwner => "the seam was bound before the node installed its chain-sync owner",
+            Self::SecondBind => {
+                "the seam was bound a second time after chain sync attached to the first binding"
+            }
+        }
+    }
+}
 
 /// Chain sync's published state, as the node holds it.
 static STATE: Mutex<Option<watch::Receiver<SyncState>>> = Mutex::new(None);
@@ -96,23 +116,49 @@ pub extern "C" fn shekyl_node_is_synchronized() -> u8 {
     u8::from(synced)
 }
 
-/// What a bind finds in the slot.
-pub(crate) type Taken = Option<(mpsc::UnboundedSender<Routed>, oneshot::Sender<Arc<Hub>>)>;
+/// The owner's ends a test's stand-in keeps, so the router it binds stays
+/// attached: the router's receiver and the hub one-shot's receiver. Held,
+/// not read.
+#[cfg(test)]
+pub(crate) struct TestOwner {
+    _routed: mpsc::UnboundedReceiver<Routed>,
+    _hub: oneshot::Receiver<Arc<Hub>>,
+}
+
+/// For this crate's tests that bind the seam: install a stand-in for the
+/// node's owner the way the node does ([`install`]), so the bind builds
+/// the production router, attached. Any slot left by an earlier test is
+/// emptied first. Test-only: the shipped archive has no way to install an
+/// owner but the node's.
+#[cfg(test)]
+pub(crate) fn install_test_owner() -> TestOwner {
+    uninstall();
+    let (router, routed) = mpsc::unbounded_channel();
+    let (hub_tx, hub) = oneshot::channel();
+    install(router, hub_tx, watch::channel(SyncState::NoView).1);
+    TestOwner {
+        _routed: routed,
+        _hub: hub,
+    }
+}
+
+/// What a bind takes from the slot: the owner's router sender and its hub
+/// one-shot.
+pub(crate) type Taken = (mpsc::UnboundedSender<Routed>, oneshot::Sender<Arc<Hub>>);
 
 /// Take what the node left, once. The production seam is bound once per
-/// process (`zone_server.h`'s `bind_seam`). `Ok(None)` is a process with no
-/// node (a test's bind, which builds an unattached router). A bind after
-/// the node's owner was taken is [`SecondBind`]: it would run the seam
-/// without chain sync.
-pub(crate) fn take() -> Result<Taken, SecondBind> {
+/// process (`zone_server.h`'s `bind_seam`), after the node installed its
+/// owner. With no owner, or with the owner already taken, the seam would
+/// run without chain sync: [`Refused`].
+pub(crate) fn take() -> Result<Taken, Refused> {
     let mut slot = ATTACH.lock().unwrap_or_else(PoisonError::into_inner);
     match std::mem::replace(&mut *slot, Slot::Taken) {
         Slot::Empty => {
             *slot = Slot::Empty;
-            Ok(None)
+            Err(Refused::NoOwner)
         }
-        Slot::Left(attach) => Ok(Some((attach.router, attach.hub))),
-        Slot::Taken => Err(SecondBind),
+        Slot::Left(attach) => Ok((attach.router, attach.hub)),
+        Slot::Taken => Err(Refused::SecondBind),
     }
 }
 

@@ -181,9 +181,8 @@ mod tests {
     use crate::inbound_ceiling_ffi::{ShekylInboundCeiling, SHEKYL_INBOUND_CEILING_UNLIMITED};
     use crate::seam_ffi::{
         seam_bind_lock, shekyl_seam_bind, shekyl_seam_close, shekyl_seam_handler_armed,
-        shekyl_seam_handler_gone, shekyl_seam_install_loopback, shekyl_seam_open, shekyl_seam_reap,
-        ShekylSeamAddress, ShekylSeamObserved, ADDR_IPV4, POST_ESTABLISHED,
-        SHEKYL_CONNECTOR_CLEARNET, SHEKYL_CONNECTOR_TOR,
+        shekyl_seam_handler_gone, shekyl_seam_reap, ShekylSeamObserved, ADDR_IPV4,
+        POST_ESTABLISHED, SHEKYL_CONNECTOR_CLEARNET, SHEKYL_CONNECTOR_TOR,
     };
     use crate::zone_ffi::shekyl_zone_session_established;
 
@@ -235,20 +234,6 @@ mod tests {
         }
     }
 
-    fn doc_address() -> ShekylSeamAddress {
-        let mut addr = ShekylSeamAddress {
-            connector: u8::try_from(SHEKYL_CONNECTOR_CLEARNET).expect("connector fits"),
-            address_type: ADDR_IPV4,
-            zone_only: 0,
-            _pad: 0,
-            port: DOC_PORT,
-            len: u16::try_from(DOC_OCTETS.len()).expect("ipv4 len"),
-            bytes: [0; shekyl_seam::TOR_HOST_MAX],
-        };
-        addr.bytes[..DOC_OCTETS.len()].copy_from_slice(&DOC_OCTETS);
-        addr
-    }
-
     fn visit(seen: &mut Seen) -> i32 {
         seen.rows.clear();
         seen.pointer_was_null = false;
@@ -296,14 +281,15 @@ mod tests {
 
         let ceiling = unlimited();
         let bound = unsafe {
-            shekyl_seam_bind(
+            crate::seam_ffi::bind_attached(
                 Arc::as_ptr(&slot).cast_mut().cast::<c_void>(),
                 Some(note_established),
             )
         };
         assert_eq!(bound, 0);
         assert_eq!(unsafe { shekyl_seam_set_ceiling(&raw const ceiling) }, 0);
-        assert_eq!(shekyl_seam_install_loopback(), 0);
+        let hub = crate::seam_ffi::hub().expect("bound");
+        hub.install_loopback(64 * 1024, crate::zone_ffi::connector_tables);
         assert_eq!(session_counts(), Some((0, 0)), "a hub with no rows");
 
         let mut seen = Seen {
@@ -318,25 +304,33 @@ mod tests {
             0
         );
 
-        let addr = doc_address();
-        let opened = unsafe { shekyl_seam_open(&raw const addr, 0) };
-        assert_ne!(opened.id, 0, "cause {}", opened.cause_kind);
+        // The daemon's dialer opens sessions on the hub; this test does the
+        // same, with the harness's loopback dialer.
+        let endpoint = shekyl_seam::Endpoint::Clearnet {
+            ip: std::net::IpAddr::V4(std::net::Ipv4Addr::from(DOC_OCTETS)),
+            port: DOC_PORT,
+            direction: shekyl_seam::Direction::Outbound,
+        };
+        let attached = hub.connect(&endpoint).expect("the loopback dial opens");
+        let opened_id = attached.id;
+        hub.drive(opened_id, attached.session);
+        let opened_id = opened_id.get();
 
         assert_eq!(visit(&mut seen), 0);
         assert!(!seen.pointer_was_null);
         assert_eq!(seen.rows.len(), 1);
         let row = seen.rows[0];
-        assert_eq!(row.id, opened.id);
+        assert_eq!(row.id, opened_id);
         assert_eq!(row.established, 0);
-        assert_eq!(shekyl_seam_session_established(opened.id), 0);
+        assert_eq!(shekyl_seam_session_established(opened_id), 0);
         assert_eq!(
-            shekyl_seam_session_connector(opened.id),
+            shekyl_seam_session_connector(opened_id),
             i32::try_from(SHEKYL_CONNECTOR_CLEARNET).expect("connector fits")
         );
         assert_eq!(shekyl_seam_session_established(0), NO_ROW);
         assert_eq!(shekyl_seam_session_connector(0), NO_ROW);
         assert_eq!(
-            shekyl_seam_session_connector(opened.id.wrapping_add(1)),
+            shekyl_seam_session_connector(opened_id.wrapping_add(1)),
             NO_ROW
         );
         assert_doc_endpoint(&row);
@@ -368,7 +362,7 @@ mod tests {
              above) and is not a session"
         );
 
-        shekyl_zone_session_established(opened.id);
+        shekyl_zone_session_established(opened_id);
         assert_eq!(
             session_counts(),
             Some((1, 0)),
@@ -376,11 +370,11 @@ mod tests {
         );
         assert_eq!(visit(&mut seen), 0);
         assert_eq!(seen.rows.len(), 1);
-        assert_eq!(seen.rows[0].id, opened.id);
+        assert_eq!(seen.rows[0].id, opened_id);
         assert_eq!(seen.rows[0].established, 1);
-        assert_eq!(shekyl_seam_session_established(opened.id), 1);
+        assert_eq!(shekyl_seam_session_established(opened_id), 1);
         assert_eq!(
-            shekyl_seam_session_connector(opened.id),
+            shekyl_seam_session_connector(opened_id),
             i32::try_from(SHEKYL_CONNECTOR_CLEARNET).expect("connector fits")
         );
         assert_doc_endpoint(&seen.rows[0]);
@@ -389,14 +383,14 @@ mod tests {
             1
         );
 
-        shekyl_seam_close(opened.id);
+        shekyl_seam_close(opened_id);
         assert_eq!(
             session_counts(),
             Some((0, 0)),
             "a closed session is not one"
         );
-        assert_eq!(shekyl_seam_session_established(opened.id), NO_ROW);
-        assert_eq!(shekyl_seam_session_connector(opened.id), NO_ROW);
+        assert_eq!(shekyl_seam_session_established(opened_id), NO_ROW);
+        assert_eq!(shekyl_seam_session_connector(opened_id), NO_ROW);
         assert_eq!(
             shekyl_seam_board_count(SHEKYL_CONNECTOR_CLEARNET, SHEKYL_DIRECTION_OUTBOUND),
             0
@@ -405,8 +399,8 @@ mod tests {
         assert!(seen.pointer_was_null);
         assert!(seen.rows.is_empty());
 
-        shekyl_seam_handler_gone(opened.id);
-        shekyl_seam_reap(opened.id);
+        shekyl_seam_handler_gone(opened_id);
+        shekyl_seam_reap(opened_id);
         unsafe {
             shekyl_seam_bind(std::ptr::null_mut(), None);
         }

@@ -121,7 +121,7 @@ fn the_production_dial_path_ends_with_the_connectors_own_row() {
         held: 0,
     };
     let bound = unsafe {
-        shekyl_seam_bind(
+        crate::seam_ffi::bind_attached(
             std::ptr::addr_of_mut!(executor).cast::<c_void>(),
             Some(discard),
         )

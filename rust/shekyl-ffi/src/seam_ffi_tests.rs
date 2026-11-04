@@ -35,21 +35,33 @@ fn unbind() {
 fn bind() {
     let mut ctx = 0u8;
     assert_eq!(
-        unsafe { shekyl_seam_bind((&raw mut ctx).cast::<c_void>(), Some(no_post)) },
+        unsafe { super::bind_attached((&raw mut ctx).cast::<c_void>(), Some(no_post)) },
         0
     );
 }
 
-/// The daemon's router is attached (CS-5 §2): the bind takes what the
-/// node's chain-sync owner left, attaches the router to the owner's
-/// sender, and sends the owner the hub it minted. The owner is taken once:
-/// a second bind, before or after a clear, is refused, because it would
-/// run the seam without chain sync, and the binding in place is kept. The
-/// node's uninstall empties the slot, and a process with no node binds an
-/// unattached router.
+/// The router is attached (CS-5 §2): the bind takes what the node's
+/// chain-sync owner left, attaches the router to the owner's sender, and
+/// sends the owner the hub it minted. With no owner to attach to, the seam
+/// would run without chain sync, so the bind is refused and nothing is
+/// bound: before the node installed its owner, and after the daemon's bind
+/// took it, before or after a clear. The refused bind keeps the binding in
+/// place.
 #[test]
-fn a_bind_attaches_the_router_to_the_nodes_owner_and_sends_it_the_hub() {
+fn a_bind_attaches_the_router_to_the_nodes_owner_and_any_other_is_refused() {
     let _seam = seam_bind_lock().lock();
+    let mut ctx = 0u8;
+    let bind_raw =
+        |ctx: &mut u8| unsafe { shekyl_seam_bind((&raw mut *ctx).cast::<c_void>(), Some(no_post)) };
+    unbind();
+    crate::chain_sync_ffi::uninstall();
+    assert_eq!(
+        bind_raw(&mut ctx),
+        -1,
+        "a bind with no owner ran the seam without chain sync"
+    );
+    assert!(super::hub().is_none(), "the refused bind left a hub");
+
     let (router_tx, routed) = tokio::sync::mpsc::unbounded_channel();
     let (hub_tx, mut hub_rx) = tokio::sync::oneshot::channel();
     crate::chain_sync_ffi::install(
@@ -57,15 +69,17 @@ fn a_bind_attaches_the_router_to_the_nodes_owner_and_sends_it_the_hub() {
         hub_tx,
         tokio::sync::watch::channel(shekyl_chain_sync::SyncState::NoView).1,
     );
-    bind();
+    assert_eq!(bind_raw(&mut ctx), 0, "the bind with the node's owner");
     let hub = hub_rx.try_recv().expect("the bind sent the owner its hub");
     assert!(
         !routed.is_closed(),
         "the router holds the owner's sender: it is attached"
     );
-    let mut ctx = 0u8;
-    let second = unsafe { shekyl_seam_bind((&raw mut ctx).cast::<c_void>(), Some(no_post)) };
-    assert_eq!(second, -1, "a second bind ran the seam without chain sync");
+    assert_eq!(
+        bind_raw(&mut ctx),
+        -1,
+        "a second bind ran the seam without chain sync"
+    );
     assert!(
         !routed.is_closed(),
         "the refused bind replaced the attached router"
@@ -73,18 +87,12 @@ fn a_bind_attaches_the_router_to_the_nodes_owner_and_sends_it_the_hub() {
     drop(hub);
     unbind();
     assert!(routed.is_closed(), "the attached router went with its hub");
-    let after_clear = unsafe { shekyl_seam_bind((&raw mut ctx).cast::<c_void>(), Some(no_post)) };
     assert_eq!(
-        after_clear, -1,
+        bind_raw(&mut ctx),
+        -1,
         "a rebind after a clear is still a second bind"
     );
     crate::chain_sync_ffi::uninstall();
-    bind();
-    assert!(
-        matches!(crate::chain_sync_ffi::take(), Ok(None)),
-        "no node: the bind is unattached and the slot stays empty"
-    );
-    unbind();
 }
 
 /// The ban path (DX-Q3, Q11) under a bound hub: a ban closes a live

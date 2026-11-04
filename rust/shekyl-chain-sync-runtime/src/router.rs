@@ -6,11 +6,10 @@
 //! The seam's post sink (CS-3 §4.2): the Rust Levin router.
 //!
 //! The hub hands every [`Post`] to one sink, under its table lock, and the
-//! sink must not call back into the hub. The daemon's router is attached to
-//! the node's sync owner ([`Router::attached`]), once, when the seam binds,
-//! before any session exists. A bind in a process with no node (a test of
-//! the seam or the C++ handler) builds [`Router::unattached`], which
-//! forwards every post unchanged, byte for byte, to the C++ handler.
+//! sink must not call back into the hub. The router is attached to the
+//! node's sync owner ([`Router::attached`]), once, when the seam binds,
+//! before any session exists. There is no router without an owner: a bind
+//! with no owner is refused, and the daemon does not start.
 //!
 //! With an owner attached, each session's delivered bytes are split into
 //! Levin buckets by reading the 29-byte bucket header and nothing else.
@@ -138,29 +137,18 @@ pub enum Routed {
 /// The router (module docs).
 pub struct Router {
     forward: Forward,
-    owner: Option<mpsc::UnboundedSender<Routed>>,
+    owner: mpsc::UnboundedSender<Routed>,
     splits: Mutex<HashMap<SocketId, Split>>,
 }
 
 impl Router {
-    /// A router for a process with no node: every post goes to `forward`
-    /// unchanged (module docs). The daemon's bind never builds one.
-    #[must_use]
-    pub fn unattached(forward: Forward) -> Self {
-        Self {
-            forward,
-            owner: None,
-            splits: Mutex::new(HashMap::new()),
-        }
-    }
-
     /// A router that splits every session it sees established and routes
     /// 2011–2014 to `owner`. Build it before the first session exists.
     #[must_use]
     pub fn attached(forward: Forward, owner: mpsc::UnboundedSender<Routed>) -> Self {
         Self {
             forward,
-            owner: Some(owner),
+            owner,
             splits: Mutex::new(HashMap::new()),
         }
     }
@@ -174,10 +162,7 @@ impl Router {
 
     /// Handle one post (module docs). Never calls into the hub.
     pub fn post(&self, post: Post) {
-        let Some(owner) = self.owner.as_ref() else {
-            (self.forward)(post);
-            return;
-        };
+        let owner = &self.owner;
         match post {
             Post::Established { id, endpoint } => {
                 self.splits().insert(id, Split::default());

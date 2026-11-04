@@ -67,7 +67,6 @@ GROUPS = [
             "ShekylStemTallyRow": "ShekylStemTallyRow",
             "ShekylSeamAddress": "shekyl_seam_address",
             "ShekylSeamObserved": "shekyl_seam_observed",
-            "ShekylSeamOpenResult": "shekyl_seam_open_result",
             "ShekylSeamBoardRow": "shekyl_seam_board_row",
             "ShekylSeamHandshakeResult": "shekyl_seam_handshake_result",
             "ShekylRpcPeerFacts": "shekyl_rpc_peer_facts",

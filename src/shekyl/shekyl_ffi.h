@@ -2644,43 +2644,30 @@ struct shekyl_seam_observed {
   std::uint8_t bytes[SHEKYL_SEAM_HOST_MAX];
 };
 
-struct shekyl_seam_open_result {
-  std::uint64_t id;
-  std::uint8_t cause_kind;
-  std::uint8_t _pad;
-  std::uint16_t reply_code;
-};
-static_assert(sizeof(shekyl_seam_open_result) == 16, "seam open result");
-
 using shekyl_seam_post_fn = void (*)(void* ctx, std::uint64_t id, std::uint32_t kind,
     const shekyl_seam_observed* observed, const std::uint8_t* bytes, std::size_t len,
     const shekyl_close_cause* cause);
 
 /// Install `post`. A null `post` clears the seam. The previous binding is
 /// closed and its harness threads are joined before the next one is
-/// published. Returns 0 when installed or cleared, -1 when the daemon's
-/// bind already took the node's chain-sync owner (a second bind would run
-/// the seam without chain sync; the binding in place is kept).
+/// published. Returns 0 when installed or cleared, -1 when there is no
+/// chain-sync owner to attach to: none was installed, or the daemon's bind
+/// already took it. The seam would run without chain sync, so the bind is
+/// refused, the binding in place is kept, and the zone's start fails.
 int shekyl_seam_bind(void* ctx, shekyl_seam_post_fn post);
 /// Replace the inbound bound on a bound seam. 0 on success, -1 otherwise.
 int shekyl_seam_set_ceiling(const shekyl_inbound_ceiling* ceiling);
-/// Install the in-memory harness dialer. Zone bind does not call this.
-int shekyl_seam_install_loopback(void);
-shekyl_seam_open_result shekyl_seam_open(const shekyl_seam_address* addr, std::uint8_t inbound);
 /// `armed` nonzero: the handler exists. Zero: arm failed, record local close.
 void shekyl_seam_handler_armed(std::uint64_t id, int armed);
-int shekyl_seam_deliver(std::uint64_t id, const std::uint8_t* bytes, std::size_t len);
 void shekyl_seam_delivery_finished(std::uint64_t id, int accepted);
 void shekyl_seam_handler_gone(std::uint64_t id);
 void shekyl_seam_reap(std::uint64_t id);
-int shekyl_seam_send(std::uint64_t id, const std::uint8_t* bytes, std::size_t len);
-/// Same send. `*found` is 1 when the registry held `id`. `*cause_kind`
-/// is the close code, or 0 when there is none. Returns 1 when accepted.
+/// Copy one whole message into the byte cap. `*found` is 1 when the
+/// registry held `id`. `*cause_kind` is the close code, or 0 when there is
+/// none. Returns 1 when accepted.
 int shekyl_seam_send_report(std::uint64_t id, const std::uint8_t* bytes, std::size_t len,
     int* found, std::uint8_t* cause_kind);
 void shekyl_seam_close(std::uint64_t id);
-std::uint64_t shekyl_seam_socket_count(std::uint32_t connector, std::uint32_t direction);
-std::uint64_t shekyl_seam_inbound_held(void);
 
 /// One row of the published seam board. `endpoint` is the address, the
 /// connector, and the direction observed at admission. `established` is 1

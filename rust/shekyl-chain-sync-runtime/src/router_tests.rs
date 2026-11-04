@@ -150,26 +150,6 @@ fn socket(raw: u64) -> SocketId {
 }
 
 #[test]
-fn unattached_forwards_every_post_unchanged() {
-    let (forward, seen) = recorder();
-    let router = Router::unattached(forward);
-    let id = socket(7);
-    let bytes = sync_bucket(SyncCommand::RequestHeaders, b"p");
-    router.post(Post::Established {
-        id,
-        endpoint: endpoint(),
-    });
-    router.post(Post::Deliver {
-        id,
-        connector: endpoint().connector(),
-        bytes: bytes.clone(),
-    });
-    let seen = seen.lock().expect("unpoisoned");
-    assert_eq!(seen.len(), 2);
-    assert!(matches!(&seen[1], Post::Deliver { bytes: b, .. } if *b == bytes));
-}
-
-#[test]
 fn attached_routes_sync_and_forwards_one_post_per_chunk() {
     let (forward, seen) = recorder();
     let (tx, mut rx) = mpsc::unbounded_channel();
@@ -381,57 +361,6 @@ fn a_partial_sync_bucket_is_not_handed_to_cpp_when_the_owner_leaves() {
         !seen.iter().any(|post| matches!(post, Post::Deliver { .. })),
         "a chain-sync bucket reached the handler: {seen:?}"
     );
-}
-
-/// An unattached router changes nothing: every post reaches the C++
-/// handler unchanged, including chain sync's own commands and the messages
-/// the claim tap copies. That is a bind in a process with no node, such as
-/// a test of the seam; the daemon's router is attached
-/// (`shekyl-ffi`'s `a_bind_attaches_the_router_to_the_nodes_owner_and_sends_it_the_hub`).
-#[test]
-fn a_router_with_no_owner_changes_nothing() {
-    let (forward, seen) = recorder();
-    let sink = Router::unattached(forward).into_sink();
-    let id = socket(11);
-    let connector = endpoint().connector();
-    let sync = SyncPayload {
-        current_height: 3,
-        cumulative_difficulty: 3,
-        cumulative_difficulty_top64: 0,
-        top_id: [1; 32],
-    };
-    let mut posts = vec![
-        Post::Established {
-            id,
-            endpoint: endpoint(),
-        },
-        Post::HandshakeResult {
-            id,
-            connector,
-            sync,
-        },
-    ];
-    for command in SyncCommand::ALL {
-        posts.push(Post::Deliver {
-            id,
-            connector,
-            bytes: sync_bucket(command, b"payload"),
-        });
-    }
-    posts.push(Post::Deliver {
-        id,
-        connector,
-        bytes: invoke(COMMAND_HANDSHAKE, b"a handshake"),
-    });
-    posts.push(Post::Deliver {
-        id,
-        connector,
-        bytes: other_bucket(b"relay"),
-    });
-    for post in posts.clone() {
-        sink(post);
-    }
-    assert_eq!(*seen.lock().expect("unpoisoned"), posts);
 }
 
 /// An attached router's claim tap (CS-Q10): a handshake request and both
