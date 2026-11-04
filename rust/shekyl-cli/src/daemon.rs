@@ -14,15 +14,16 @@ use std::fmt;
 use std::sync::{Arc, OnceLock};
 use std::time::Duration;
 
-use shekyl_rpc_client::RpcError;
-use shekyl_rpc_transport::SyncDaemon;
-
 use shekyl_rpc_transport::network_posture::{host_of, is_loopback_host};
+use shekyl_rpc_transport::{JsonRpcError, PostFault, SyncDaemon, TransportFault};
 use shekyl_rpc_types::mining::{MinerThreads, MiningStatusResponse, StartMiningRequest};
-use shekyl_rpc_types::{GetInfoResponse, RpcStatus};
+use shekyl_rpc_types::{
+    core_rpc_version_string, DaemonNetwork, GetInfoResponse, IdentityExpectation, IdentityMismatch,
+    RpcStatus,
+};
 
 /// Errors from the daemon RPC client with differentiated failure modes.
-#[derive(Debug)]
+#[derive(Clone, Debug)]
 pub enum DaemonError {
     NotConfigured,
     ConnectionRefused {
@@ -36,11 +37,11 @@ pub enum DaemonError {
     SocksFailure(String),
     TlsFailure(String),
     MalformedResponse(String),
-    /// A JSON-RPC refusal: the error class and the diagnostic code.
-    RpcError {
-        class: String,
-        diagnostic: String,
-    },
+    /// The identity handshake refused this daemon. The line is
+    /// [`identity_line`].
+    Identity(String),
+    /// A JSON-RPC refusal. The operator line is [`shekyl_rpc_types::errors::RpcError::report`].
+    Refusal(shekyl_rpc_types::errors::RpcError),
     /// Path-RPC status `BUSY` — `/start_mining` is `CHECK_CORE_READY`
     /// (`is_synchronized`); a syncing daemon will not mine.
     Busy,
@@ -77,7 +78,8 @@ impl fmt::Display for DaemonError {
             Self::MalformedResponse(detail) => {
                 write!(f, "Daemon returned a malformed response: {detail}")
             }
-            Self::RpcError { class, diagnostic } => write!(f, "{class} {diagnostic}"),
+            Self::Identity(line) => write!(f, "{line}"),
+            Self::Refusal(refusal) => write!(f, "{}", refusal.report()),
             Self::Busy => write!(
                 f,
                 "The daemon is still syncing and will not start mining until it is caught up."
@@ -104,7 +106,13 @@ pub struct DaemonClient {
     /// See [`DaemonError::ConnectionRefused`]: attached to every refused
     /// connection this client reports.
     down_hint: Option<String>,
+    /// The network this shell is on. The handshake requires the daemon to
+    /// report the same one.
+    network: DaemonNetwork,
     rpc: OnceLock<Arc<SyncDaemon>>,
+    /// The handshake, computed once and reused (RK-Q6). `version` does not
+    /// consult it.
+    identity: OnceLock<Result<(), DaemonError>>,
 }
 
 /// Normalize a daemon address to the URL form the transports expect: a
@@ -142,11 +150,13 @@ impl DaemonClient {
     ///   The transport passes it to `SyncDaemon`. An `https://` daemon uses
     ///   the system root store (RT-W12 removes that arm).
     /// - `down_hint`: recovery copy attached to refused connections (the
-    ///   caller knows the network and whether the endpoint is loopback).
+    ///   caller knows whether the endpoint is loopback).
+    /// - `network`: this shell's network. One client has one.
     pub fn new(
         daemon_address: &str,
         proxy: Option<&str>,
         down_hint: Option<String>,
+        network: DaemonNetwork,
     ) -> Result<Self, DaemonError> {
         if daemon_address.is_empty() {
             return Err(DaemonError::NotConfigured);
@@ -156,19 +166,26 @@ impl DaemonClient {
             url: daemon_url(daemon_address),
             proxy: proxy.map(str::to_owned),
             down_hint,
+            network,
             rpc: OnceLock::new(),
+            identity: OnceLock::new(),
         })
     }
 
-    /// The shared client, connected on the first call. Views, `tx show`,
-    /// mining, the shard reads and the startup check all post through it.
-    pub fn transport(&self) -> Result<Arc<SyncDaemon>, DaemonError> {
+    /// The network this client handshakes against.
+    #[must_use]
+    pub fn network(&self) -> DaemonNetwork {
+        self.network
+    }
+
+    /// The shared connection, opened on the first call. No handshake.
+    fn connect(&self) -> Result<Arc<SyncDaemon>, DaemonError> {
         if let Some(existing) = self.rpc.get() {
             return Ok(Arc::clone(existing));
         }
         let rpc = Arc::new(
             SyncDaemon::connect(self.url.clone(), self.proxy.clone(), DAEMON_TIMEOUT)
-                .map_err(|error| classify_transport(&error))?,
+                .map_err(|error| self.error_of_post(error))?,
         );
         // A concurrent first request may have stored one. Either client
         // speaks to the same daemon.
@@ -180,8 +197,57 @@ impl DaemonClient {
         }
     }
 
-    fn rpc(&self) -> Result<Arc<SyncDaemon>, DaemonError> {
-        self.transport()
+    /// The handshake, once. A later request reuses the verdict.
+    ///
+    /// A connection failure is not cached: the daemon may be started
+    /// between two commands. An identity refusal is cached, because asking
+    /// again cannot succeed against the same daemon.
+    fn ensure_identity(&self) -> Result<(), DaemonError> {
+        if let Some(cached) = self.identity.get() {
+            return cached.clone();
+        }
+        let verdict = match self.handshake() {
+            Ok(()) => Ok(()),
+            Err(error @ DaemonError::Identity(_)) => Err(error),
+            Err(other) => return Err(other),
+        };
+        match self.identity.set(verdict.clone()) {
+            Ok(()) => verdict,
+            Err(_) => self.identity.get().expect("the verdict was stored").clone(),
+        }
+    }
+
+    fn handshake(&self) -> Result<(), DaemonError> {
+        let rpc = self.connect()?;
+        let result = match Self::read_version(&rpc) {
+            Ok(result) => result,
+            Err(JsonRpcError::Malformed(detail)) => {
+                return Err(DaemonError::Identity(format!(
+                    "{} (evidence: {detail})",
+                    identity_line(&IdentityMismatch::unreadable(), self.url())
+                )));
+            }
+            Err(other) => return Err(self.error_of_json_rpc(other)),
+        };
+        IdentityExpectation::exact(self.network)
+            .read(&result)
+            .map(|_| ())
+            .map_err(|refusal| {
+                let message = identity_line(&refusal.mismatch, self.url());
+                DaemonError::Identity(match refusal.evidence {
+                    Some(evidence) => format!("{message} (evidence: {evidence})"),
+                    None => message,
+                })
+            })
+    }
+
+    /// `get_version`'s `result`, with no identity check. The handshake and
+    /// `version` are the two readers; a daemon `version` is willing to
+    /// describe is one the handshake would refuse.
+    fn read_version(rpc: &SyncDaemon) -> Result<Value, JsonRpcError> {
+        let method = posted_json("get_version")
+            .map_err(|error| JsonRpcError::Malformed(error.to_string()))?;
+        rpc.json_rpc(method, &serde_json::json!({}))
     }
 
     /// The SOCKS proxy, when the client was built with one.
@@ -205,28 +271,42 @@ impl DaemonClient {
         }
     }
 
+    /// POST `body` to `path` after the handshake.
+    pub(crate) fn post(&self, path: &str, body: Vec<u8>) -> Result<Vec<u8>, DaemonError> {
+        self.ensure_identity()?;
+        self.post_unchecked(path, body)
+    }
+
+    /// POST `body` to `path` without the handshake. `version` reads
+    /// `/get_info` through this: a daemon it is describing is one the
+    /// handshake would refuse.
+    pub(crate) fn post_unchecked(&self, path: &str, body: Vec<u8>) -> Result<Vec<u8>, DaemonError> {
+        self.connect()?
+            .post(path, body)
+            .map_err(|error| self.error_of_post(error))
+    }
+
     /// POST JSON to `path` (a daemon route, with or without a leading `/`).
     fn post_json(&self, path: &str, body: &Value) -> Result<Value, DaemonError> {
         let bytes = serde_json::to_vec(body)
             .map_err(|error| DaemonError::MalformedResponse(error.to_string()))?;
-        let raw = self
-            .rpc()?
-            .post(path, bytes)
-            .map_err(|error| self.with_down_hint(classify_transport(&error)))?;
+        let raw = self.post(path, bytes)?;
         serde_json::from_slice(&raw)
             .map_err(|error| DaemonError::MalformedResponse(error.to_string()))
     }
 
     /// Call a JSON-RPC method on the daemon. `method` is the table's name
-    /// ([`posted_json`]). The envelope is [`SyncDaemon::json_rpc`].
-    fn json_rpc<Reply: serde::de::DeserializeOwned>(
+    /// ([`posted_json`]). The envelope is [`SyncDaemon::json_rpc`]. The
+    /// handshake runs first.
+    pub(crate) fn json_rpc<Reply: serde::de::DeserializeOwned>(
         &self,
         method: &str,
         params: &impl serde::Serialize,
     ) -> Result<Reply, DaemonError> {
-        self.rpc()?
+        self.ensure_identity()?;
+        self.connect()?
             .json_rpc(method, params)
-            .map_err(|error| self.with_down_hint(json_rpc_error(error)))
+            .map_err(|error| self.error_of_json_rpc(error))
     }
 
     /// Fetch daemon info (`get_info`). Used by `chain_health` and mining gates.
@@ -238,14 +318,15 @@ impl DaemonClient {
         self.json_rpc(posted_json("get_info")?, &serde_json::json!({}))
     }
 
-    /// `get_version`'s `result`, undecoded. Used by the mining gates.
+    /// `get_version`'s `result`, undecoded, with no identity check.
     ///
     /// Undecoded because reading it is `shekyl_rpc_types`' (`RK-D25`): the
-    /// caller hands it to [`shekyl_rpc_types::IdentityExpectation::read`],
-    /// which reads the version before anything else. It is where a daemon
+    /// handshake hands it to [`IdentityExpectation::read`], and `version`
+    /// to [`shekyl_rpc_types::daemon_rpc_version`]. It is where a daemon
     /// names its network; `get_info` stopped repeating it at 3.54 (RK-Q6).
     pub fn get_version_result(&self) -> Result<Value, DaemonError> {
-        self.json_rpc::<serde_json::Value>(posted_json("get_version")?, &serde_json::json!({}))
+        let rpc = self.connect()?;
+        Self::read_version(&rpc).map_err(|error| self.error_of_json_rpc(error))
     }
 
     /// Operator coverage list. Empty params; the daemon orders the rows.
@@ -338,26 +419,79 @@ pub(crate) fn posted_rest(path: &str) -> Result<&'static str, DaemonError> {
         .ok_or_else(|| DaemonError::Other(format!("{path} is not a daemon method")))
 }
 
-fn json_rpc_error(error: shekyl_rpc_transport::JsonRpcError) -> DaemonError {
-    match error {
-        shekyl_rpc_transport::JsonRpcError::Transport(error) => classify_transport(&error),
-        shekyl_rpc_transport::JsonRpcError::Refusal(refusal) => DaemonError::RpcError {
-            class: format!("{:?}", refusal.class),
-            diagnostic: refusal.diagnostic.code,
-        },
-        shekyl_rpc_transport::JsonRpcError::Malformed(detail) => {
-            DaemonError::MalformedResponse(detail)
+/// The shell's wording of an identity refusal, one sentence per axis.
+///
+/// The wallet words the same verdict its own way. The axes are compared
+/// once, in [`IdentityExpectation::read`]. `url` is the daemon this shell
+/// reached.
+pub(crate) fn identity_line(mismatch: &IdentityMismatch, url: &str) -> String {
+    match *mismatch {
+        IdentityMismatch::Wire { ours, theirs } => {
+            let older = if theirs < ours {
+                "daemon"
+            } else {
+                "this build"
+            };
+            format!(
+                "refusing to render: RPC contract mismatch. This build is {}, the daemon at \
+                 {url} is {} — the {older} is the older one; update it.",
+                core_rpc_version_string(ours),
+                core_rpc_version_string(theirs),
+            )
         }
+        IdentityMismatch::WireUnreadable { ours } => format!(
+            "refusing to render: the daemon at {url}'s `get_version` does not match the RPC \
+             contract this build was compiled against, so the two are on different RPC \
+             versions. This build is {}. The reply could not be read, so the daemon's \
+             version cannot be named here; align the two builds.",
+            core_rpc_version_string(ours),
+        ),
+        IdentityMismatch::Rules { ours, theirs } => format!(
+            "refusing to render: consensus-constant mismatch. This build's digest is {ours}, \
+             the daemon at {url} reports {theirs}. The RPC contract matches, so neither side \
+             is a stale release — one tree's config/ differs from the other, which is a \
+             different rule set rather than a version skew. Compare \
+             config/consensus_constants.json and config/economics_params.json between the two \
+             builds.",
+        ),
+        IdentityMismatch::Network { ours, theirs } => format!(
+            "refusing to render: network mismatch. This CLI is on {ours}, the daemon at {url} \
+             reports {theirs}."
+        ),
+        IdentityMismatch::Genesis {
+            ours,
+            theirs,
+            network,
+        } => format!(
+            "refusing to render: genesis mismatch. The daemon at {url} starts at {theirs}, \
+             this build's {network} genesis is {ours}. Whatever else agrees, that is a \
+             different chain."
+        ),
+    }
+}
+
+impl DaemonClient {
+    fn error_of_json_rpc(&self, error: JsonRpcError) -> DaemonError {
+        match error {
+            JsonRpcError::Transport(fault) => self.error_of_post(fault),
+            JsonRpcError::Refusal(refusal) => DaemonError::Refusal(refusal),
+            JsonRpcError::Malformed(detail) => DaemonError::MalformedResponse(detail),
+        }
+    }
+
+    fn error_of_post(&self, fault: PostFault) -> DaemonError {
+        let error = match fault {
+            PostFault::Connection(fault) => from_transport(fault),
+            PostFault::Protocol(error) => DaemonError::Other(error.to_string()),
+        };
+        self.with_down_hint(error)
     }
 }
 
 /// A JSON-RPC `error` object, as its class and diagnostic code.
 fn refusal_of(error: &Value) -> DaemonError {
     match shekyl_rpc_types::errors::read_error_object(error) {
-        Some(refusal) => DaemonError::RpcError {
-            class: format!("{:?}", refusal.class),
-            diagnostic: refusal.diagnostic.code,
-        },
+        Some(refusal) => DaemonError::Refusal(refusal),
         None => {
             let code = error.get("code").and_then(Value::as_i64).unwrap_or(-1);
             DaemonError::Refused(format!("unclassified {code}"))
@@ -397,31 +531,21 @@ fn classify_path_status(status: &str) -> Result<(), DaemonError> {
     }
 }
 
-fn classify_transport(err: &RpcError) -> DaemonError {
-    // The transport folds a bad proxy and a TLS-connector failure into
-    // `ConnectionError`'s text (`HttpError`'s own wording). Those are the
-    // two faults the operator can act on by name; everything else that
-    // failed to connect is a refused connection.
-    let text = err.to_string();
-    if text.contains("invalid --proxy") || text.contains("socks:") {
-        return DaemonError::SocksFailure(text);
-    }
-    if text.contains("TLS") || text.contains("certificate") {
-        return DaemonError::TlsFailure(text);
-    }
-    match err {
-        RpcError::ConnectionError(detail) => DaemonError::ConnectionRefused {
-            detail: detail.clone(),
-            hint: None,
-        },
-        other => DaemonError::Other(other.to_string()),
+fn from_transport(fault: TransportFault) -> DaemonError {
+    match fault {
+        TransportFault::Proxy(detail) => DaemonError::SocksFailure(detail),
+        TransportFault::Tls(detail) => DaemonError::TlsFailure(detail),
+        TransportFault::Unreachable(detail) => {
+            DaemonError::ConnectionRefused { detail, hint: None }
+        }
+        TransportFault::Runtime(detail) => DaemonError::Other(detail),
     }
 }
 
 #[cfg(test)]
 mod tests {
     use super::{
-        classify_path_body, classify_path_status, classify_transport, is_loopback_endpoint,
+        classify_path_body, classify_path_status, from_transport, is_loopback_endpoint,
         DaemonError, GetInfoResponse,
     };
 
@@ -483,11 +607,10 @@ mod tests {
             }
         });
         match classify_path_body(parsed) {
-            Err(DaemonError::RpcError { class, diagnostic }) => {
-                assert_eq!(class, "OutsideTheGrant");
-                assert_eq!(diagnostic, "rpc.grant");
+            Err(DaemonError::Refusal(refusal)) => {
+                assert_eq!(refusal.report(), "OutsideTheGrant rpc.grant");
             }
-            other => panic!("expected RpcError, got {other:?}"),
+            other => panic!("expected a refusal, got {other:?}"),
         }
     }
 
@@ -575,25 +698,22 @@ mod tests {
         assert!(info.health.synchronized);
     }
 
-    /// A proxy that will not parse, and a TLS connector that will not
-    /// build, are the faults the transport names in the connection error.
-    /// A refused socket stays a refused connection.
+    /// A proxy fault, a TLS-connector fault, and an unreachable daemon stay
+    /// three errors. The variant is the classification; the sentence is not.
     #[test]
     fn a_named_transport_fault_keeps_its_name() {
-        use shekyl_rpc_client::RpcError;
-        let proxy = classify_transport(&RpcError::ConnectionError(
+        use shekyl_rpc_transport::TransportFault;
+        let proxy = from_transport(TransportFault::Proxy(
             "invalid --proxy for the daemon transport: missing port".into(),
         ));
         assert!(matches!(proxy, DaemonError::SocksFailure(_)), "{proxy}");
-        let socks = classify_transport(&RpcError::ConnectionError(
-            "connection error (socks: refused)".into(),
-        ));
+        let socks = from_transport(TransportFault::Proxy("socks: refused".into()));
         assert!(matches!(socks, DaemonError::SocksFailure(_)), "{socks}");
-        let tls = classify_transport(&RpcError::ConnectionError(
+        let tls = from_transport(TransportFault::Tls(
             "TLS connector unavailable: no roots".into(),
         ));
         assert!(matches!(tls, DaemonError::TlsFailure(_)), "{tls}");
-        let refused = classify_transport(&RpcError::ConnectionError("connection refused".into()));
+        let refused = from_transport(TransportFault::Unreachable("connection refused".into()));
         assert!(
             matches!(refused, DaemonError::ConnectionRefused { .. }),
             "{refused}"

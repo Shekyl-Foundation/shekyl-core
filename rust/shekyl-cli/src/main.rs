@@ -543,11 +543,13 @@ fn run_repl_command(
     // No daemon endpoint, no daemon client — the REPL always resolves one,
     // so this reads as the total form of "dial what was resolved" rather
     // than as a case that happens here.
+    let network = parse_network(cli.network_name())?;
     let daemon_client = endpoints.daemon().and_then(|daemon| {
         match daemon::DaemonClient::new(
             &daemon.address,
             cli.proxy.as_deref(),
             daemon_down_hint(cli, &daemon.address),
+            shekyl_rpc_types::DaemonNetwork::from(network),
         ) {
             Ok(dc) => Some(dc),
             Err(daemon::DaemonError::NotConfigured) => None,
@@ -633,13 +635,7 @@ fn run_repl_command(
         }
     }
 
-    commands::run(
-        rpc,
-        daemon_client.as_ref(),
-        parse_network(cli.network_name())?,
-        *presentation,
-        source,
-    )
+    commands::run(rpc, daemon_client.as_ref(), network, *presentation, source)
 }
 
 #[cfg(test)]

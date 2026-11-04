@@ -113,6 +113,20 @@ impl ErrorClass {
     pub fn of_wire_code(code: i64) -> Option<Self> {
         Self::of_code(code).or_else(|| Self::of_legacy_code(code))
     }
+
+    /// The name a person reads. This is the contract; [`Debug`] is not.
+    #[must_use]
+    pub const fn name(self) -> &'static str {
+        match self {
+            Self::BadParams => "BadParams",
+            Self::RefusedByMethod => "RefusedByMethod",
+            Self::OutsideTheGrant => "OutsideTheGrant",
+            Self::OverResourceBound => "OverResourceBound",
+            Self::NotReady => "NotReady",
+            Self::StoreFault => "StoreFault",
+            Self::Internal => "Internal",
+        }
+    }
 }
 
 /// The typed diagnostic an error's `data` carries.
@@ -162,14 +176,13 @@ impl RpcError {
         Self { class, diagnostic }
     }
 
-    /// The line a person reads: the class and the diagnostic's code.
-    /// The English rendering follows, and is never what a caller matches.
+    /// The line a person reads: the class's name and the diagnostic's code.
+    ///
+    /// The English rendering stays on [`Diagnostic::message`]. It is for a
+    /// log, never for this line, and never what a caller matches.
     #[must_use]
     pub fn report(&self) -> String {
-        format!(
-            "{:?} {}: {}",
-            self.class, self.diagnostic.code, self.diagnostic.message
-        )
+        format!("{} {}", self.class.name(), self.diagnostic.code)
     }
 }
 
@@ -256,6 +269,18 @@ mod tests {
             Some(ErrorClass::OutsideTheGrant)
         );
         assert_eq!(ErrorClass::of_wire_code(-9), Some(ErrorClass::NotReady));
+    }
+
+    /// The operator line is the class name and the code. The English
+    /// rendering is not part of it, so a caller cannot match on prose.
+    #[test]
+    fn the_operator_line_is_the_class_and_the_code() {
+        let refusal = RpcError::new(
+            ErrorClass::OutsideTheGrant,
+            Diagnostic::new("rpc.grant", "english the operator must not see"),
+        );
+        assert_eq!(refusal.report(), "OutsideTheGrant rpc.grant");
+        assert_eq!(refusal.class.name(), "OutsideTheGrant");
     }
 
     /// `option_set` carries `data` as a list of configuration refusals.

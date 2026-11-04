@@ -11,7 +11,6 @@
 //! time, see [`crate::resolve`]); commands whose native surface is designed
 //! but not yet landed answer with a RESERVED message naming what gates them.
 
-use shekyl_rpc_types::DaemonNetwork;
 use shekyl_wallet_rpc::Network;
 
 mod balance;
@@ -135,7 +134,6 @@ pub fn run(
 
     loop {
         let prompt = crate::session::prompt(network.as_str(), rpc.open_wallet_name().as_deref());
-        let daemon_network = DaemonNetwork::from(network);
         let resolved = match next_line(&mut reader, &presentation, &rpc, &prompt) {
             Line::Prompt(raw) => {
                 let line = raw.trim();
@@ -285,7 +283,7 @@ pub fn run(
             ResolvedCommand::ShowTransfer { txid, body } => present(
                 &presentation,
                 "tx show",
-                crate::tx_show::command(&rpc, daemon_client, daemon_network, &txid, body),
+                crate::tx_show::command(&rpc, daemon_client, &txid, body),
                 crate::tx_show::show,
             ),
             ResolvedCommand::GetTxNote { txid } => present(
@@ -447,26 +445,26 @@ pub fn run(
             ResolvedCommand::Daemon(view) => present(
                 &presentation,
                 view.label(),
-                daemon_view::command(daemon_client, daemon_network, &view),
+                daemon_view::command(daemon_client, &view),
                 |text| println!("{text}"),
             ),
 
             ResolvedCommand::MineStart { threads } => present(
                 &presentation,
                 "mine start",
-                mine::cmd_mine_start(daemon_client, daemon_network, threads),
+                mine::cmd_mine_start(daemon_client, threads),
                 mine::show_mine_start,
             ),
             ResolvedCommand::MineStop => present(
                 &presentation,
                 "mine stop",
-                mine::cmd_mine_stop(daemon_client, daemon_network),
+                mine::cmd_mine_stop(daemon_client),
                 mine::show_mine_stop,
             ),
             ResolvedCommand::MineStatus => present(
                 &presentation,
                 "mine status",
-                mine::cmd_mine_status(daemon_client, daemon_network),
+                mine::cmd_mine_status(daemon_client),
                 mine::show_mine_status,
             ),
 
@@ -543,7 +541,7 @@ pub fn run(
             ResolvedCommand::Version => present(
                 &presentation,
                 "version",
-                Ok(cmd_version(&rpc, daemon_client, daemon_network)),
+                Ok(cmd_version(&rpc, daemon_client)),
                 show_version,
             ),
             ResolvedCommand::Wallet => present(
@@ -710,26 +708,16 @@ fn version_report(
     }
 }
 
-fn cmd_version(
-    rpc: &RpcSession,
-    daemon: Option<&crate::daemon::DaemonClient>,
-    network: DaemonNetwork,
-) -> VersionReport {
+fn cmd_version(rpc: &RpcSession, daemon: Option<&crate::daemon::DaemonClient>) -> VersionReport {
     let response = match rpc.call("get_version", serde_json::json!({})) {
         Ok(val) => Ok(val),
         Err(error) => Err(format!("wallet RPC unreachable: {error}")),
     };
     let mut report = version_report(shekyl_version::VERSION_FULL, response);
     if let Some(daemon) = daemon {
-        match daemon.transport() {
-            Ok(transport) => {
-                let source = crate::console::Source::new(transport, network.to_cryptonote());
-                match crate::console::daemon_software_version(&source) {
-                    Ok(version) => report.daemon_version = Some(version),
-                    Err(error) => report.daemon_error = Some(error),
-                }
-            }
-            Err(error) => report.daemon_error = Some(error.to_string()),
+        match crate::console::daemon_software_version(daemon) {
+            Ok(version) => report.daemon_version = Some(version),
+            Err(error) => report.daemon_error = Some(error),
         }
     }
     report

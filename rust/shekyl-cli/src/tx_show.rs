@@ -10,19 +10,12 @@
 //! bytes from the daemon. A failed wallet read stops the command.
 
 use serde_json::Value;
-use shekyl_rpc_types::DaemonNetwork;
 
 use crate::commands::{format_amount_str, format_height, unspendable_reason_text};
-use crate::console::{self, Source, TxRender};
+use crate::console::{self, TxAnswer};
 use crate::daemon::{DaemonClient, DaemonError};
 use crate::outcome::{failed, refusal, CommandResult};
 use crate::rpc_client::RpcSession;
-
-/// The daemon a show may ask, when one is configured.
-pub(crate) struct DaemonEndpoint<'a> {
-    pub client: &'a DaemonClient,
-    pub network: DaemonNetwork,
-}
 
 /// One show. `wallet_records` is `None` when no wallet is open, and empty
 /// when the open wallet does not hold the id.
@@ -30,14 +23,13 @@ pub(crate) struct TxShow<'a> {
     pub id: &'a str,
     pub wallet_records: Option<&'a str>,
     pub body: bool,
-    pub daemon: Option<&'a DaemonEndpoint<'a>>,
+    pub daemon: Option<&'a DaemonClient>,
 }
 
 /// `tx show <id> [--body]`.
 pub(crate) fn command(
     rpc: &RpcSession,
     daemon: Option<&DaemonClient>,
-    network: DaemonNetwork,
     id: &str,
     body: bool,
 ) -> CommandResult<String> {
@@ -47,12 +39,11 @@ pub(crate) fn command(
     } else {
         None
     };
-    let endpoint = daemon.map(|daemon| endpoint_for(daemon, network));
     report(&TxShow {
         id: &id,
         wallet_records: wallet_records.as_deref(),
         body,
-        daemon: endpoint.as_ref(),
+        daemon,
     })
     .map_err(refusal)
 }
@@ -79,7 +70,7 @@ pub(crate) fn report(show: &TxShow<'_>) -> Result<String, String> {
                 DaemonError::NotConfigured
             ));
         };
-        return match fetch(daemon, &id, true) {
+        return match fetch(daemon, &id) {
             Ok(render) => Ok(held_with_body(records, &id, &render)),
             Err(detail) => Ok(format!(
                 "{records}\n\nThe serialized bytes could not be fetched from the daemon: {detail}"
@@ -89,9 +80,9 @@ pub(crate) fn report(show: &TxShow<'_>) -> Result<String, String> {
     let Some(daemon) = show.daemon else {
         return Err(not_configured(show.wallet_records.is_some(), &id));
     };
-    match fetch(daemon, &id, show.body) {
-        Ok(TxRender::Shown { text, .. }) => Ok(text),
-        Ok(TxRender::Unknown) => Err(neither(show.wallet_records.is_some(), &id)),
+    match fetch(daemon, &id) {
+        Ok(TxAnswer::NotHeld) => Err(neither(show.wallet_records.is_some(), &id)),
+        Ok(answer) => console::render_transaction(answer, &id, show.body),
         Err(detail) => Err(format!(
             "{} The daemon could not be asked: {detail}",
             wallet_clause(show.wallet_records.is_some(), &id)
@@ -163,13 +154,11 @@ fn format_record(row: &Value) -> String {
     lines.join("\n")
 }
 
-fn held_with_body(records: &str, id: &str, render: &TxRender) -> String {
-    let section = match render {
-        TxRender::Unknown => format!("The daemon has no serialized bytes for {id}."),
-        TxRender::Shown {
-            body: Some(body), ..
-        } => body.clone(),
-        TxRender::Shown { text, body: None } => text.clone(),
+fn held_with_body(records: &str, id: &str, answer: &TxAnswer) -> String {
+    let section = match answer {
+        TxAnswer::NotHeld => format!("The daemon has no serialized bytes for {id}."),
+        TxAnswer::Narrative(text) => text.clone(),
+        TxAnswer::Held { body, .. } => console::encode_body(body),
     };
     format!("{records}\n\n{section}")
 }
@@ -198,31 +187,8 @@ fn not_configured(wallet_open: bool, id: &str) -> String {
     )
 }
 
-/// The daemon endpoint `command` builds.
-pub(crate) fn endpoint_for<'a>(
-    daemon: &'a DaemonClient,
-    network: DaemonNetwork,
-) -> DaemonEndpoint<'a> {
-    DaemonEndpoint {
-        client: daemon,
-        network,
-    }
-}
-
-fn fetch(daemon: &DaemonEndpoint<'_>, id: &str, body: bool) -> Result<TxRender, String> {
-    let rpc = daemon
-        .client
-        .transport()
-        .map_err(|error| with_hint(daemon, &error.to_string()))?;
-    let source = Source::new(rpc, daemon.network.to_cryptonote());
-    console::show_transaction(&source, id, body)
-}
-
-fn with_hint(daemon: &DaemonEndpoint<'_>, detail: &str) -> String {
-    match daemon.client.down_hint() {
-        Some(hint) => format!("{detail}\n{hint}"),
-        None => detail.to_owned(),
-    }
+fn fetch(daemon: &DaemonClient, id: &str) -> Result<TxAnswer, String> {
+    console::transaction(daemon, id)
 }
 
 fn canonical_id(id: &str) -> Result<String, String> {
@@ -290,16 +256,17 @@ mod tests {
     #[test]
     fn the_bytes_are_the_body_not_the_daemons_narrative() {
         let records = "wallet holds it";
+        let body = b"raw body bytes";
         let text = held_with_body(
             records,
             &id(),
-            &TxRender::Shown {
+            &TxAnswer::Held {
                 text: "view".to_owned(),
-                body: Some("abcd".repeat(20)),
+                body: body.to_vec(),
             },
         );
         assert!(text.starts_with(records), "{text}");
-        assert!(text.contains(&"abcd".repeat(20)), "{text}");
+        assert!(text.contains(&console::encode_body(body)), "{text}");
         assert!(
             !text.contains("view"),
             "the bytes, not the daemon's narrative: {text}"

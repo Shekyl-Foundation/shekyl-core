@@ -15,9 +15,8 @@ use shekyl_rpc_types::pool::{GetTransactionPoolStatsResponse, TxpoolStats};
 use shekyl_rpc_types::{core_rpc_version_string, daemon_rpc_version, CORE_RPC_VERSION};
 use shekyl_units::AtomicUnits;
 
-use super::identity::get_version_result;
 use super::info::{decode_get_info_ok, fetch_get_info};
-use super::Source;
+use crate::daemon::DaemonClient;
 
 /// `diff`: the tip, the two difficulties, and the network hash rate.
 ///
@@ -25,8 +24,8 @@ use super::Source;
 /// every other command here computes it; the C++ divided by the reply's
 /// `target` member, which is the same constant.
 #[deny(clippy::arithmetic_side_effects)]
-pub(super) fn show_difficulty(src: &Source) -> Result<String, String> {
-    let info = fetch_get_info(src)?;
+pub(super) fn show_difficulty(daemon: &DaemonClient) -> Result<String, String> {
+    let info = fetch_get_info(daemon)?;
     let target = u128::from(shekyl_economics::economic_params().daa_target_seconds);
     let hash_rate = info
         .chain
@@ -66,19 +65,20 @@ const VERSION_UNAVAILABLE: &str = "The daemon software version is not available.
 /// and that is reported as such, and as a failure, as the C++ did. An empty
 /// version is not that: the reply type refuses a shown Status whose version
 /// is empty, so one never reaches this function.
-pub(super) fn version(src: &Source) -> Result<String, String> {
-    let result = get_version_result(src.rpc())?;
+pub(super) fn version(daemon: &DaemonClient) -> Result<String, String> {
+    let result = daemon
+        .get_version_result()
+        .map_err(|error| error.to_string())?;
     let theirs = daemon_rpc_version(&result)
         .map_err(|unreadable| format!("the daemon's RPC version cannot be read: {unreadable}"))?;
     if theirs != CORE_RPC_VERSION {
         return Err(rpc_version_difference(CORE_RPC_VERSION, theirs));
     }
-    let raw = src
-        .rpc()
-        .post(
-            crate::daemon::posted_rest("/get_info").map_err(|error| error.to_string())?,
-            b"{}".to_vec(),
-        )
+    // `/get_info` without the handshake: this word exists to name a daemon
+    // the handshake would refuse.
+    let path = crate::daemon::posted_rest("/get_info").map_err(|error| error.to_string())?;
+    let raw = daemon
+        .post_unchecked(path, b"{}".to_vec())
         .map_err(|error| error.to_string())?;
     let info = decode_get_info_ok(&raw)?;
     info.node
@@ -104,10 +104,13 @@ fn rpc_version_difference(ours: u32, theirs: u32) -> String {
 
 /// `/get_transaction_pool_stats`'s `pool_stats`. The pool does not record
 /// when a transaction arrived (S7), so there is no age and no histogram.
-fn fetch_pool_stats(src: &Source) -> Result<TxpoolStats, String> {
-    let raw = super::rest_post(src, "/get_transaction_pool_stats", b"{}".to_vec())?;
-    let reply: GetTransactionPoolStatsResponse = serde_json::from_slice(&raw)
-        .map_err(|e| format!("malformed get_transaction_pool_stats reply: {e}"))?;
+fn fetch_pool_stats(daemon: &DaemonClient) -> Result<TxpoolStats, String> {
+    let raw = super::rest_post(daemon, "/get_transaction_pool_stats", b"{}".to_vec())?;
+    // A grant or method refusal has no `status`. The shared decoder names
+    // the class and the diagnostic code; a bare `from_slice` would call
+    // that reply malformed.
+    let reply =
+        super::decode_reply::<GetTransactionPoolStatsResponse>(&raw, "get_transaction_pool_stats")?;
     if reply.status.is_ok() {
         Ok(reply.pool_stats)
     } else {
@@ -124,9 +127,9 @@ fn money(atomic: u64) -> String {
 /// Two reads: the pool's statistics, and `get_info` for the block weight
 /// limit the backlog estimate is measured against.
 #[deny(clippy::arithmetic_side_effects)]
-pub(super) fn print_transaction_pool_stats(src: &Source) -> Result<String, String> {
-    let stats = fetch_pool_stats(src)?;
-    let info = fetch_get_info(src)?;
+pub(super) fn print_transaction_pool_stats(daemon: &DaemonClient) -> Result<String, String> {
+    let stats = fetch_pool_stats(daemon)?;
+    let info = fetch_get_info(daemon)?;
     Ok(render_pool_stats(&stats, info.chain.block_weight_limit))
 }
 

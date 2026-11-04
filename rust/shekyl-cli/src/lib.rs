@@ -8,8 +8,7 @@
 
 pub mod catalog;
 pub mod commands;
-// The remaining §13 words are this module's callers. `tx show` is the first.
-#[allow(dead_code)]
+/// The daemon's words (`INPUT_GRAMMAR.md` §13) render here.
 pub(crate) mod console;
 pub mod daemon;
 pub mod display;

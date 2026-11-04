@@ -6,7 +6,7 @@
 //! `show_status`.
 
 use super::info::{fetch_get_info, network_label};
-use super::Source;
+use crate::daemon::{DaemonClient, DaemonError};
 use shekyl_rpc_types::mining::{MineSpeed, MiningStatusResponse};
 
 /// Where [`mining_speed`] leaves raw hashes and starts a metric prefix.
@@ -25,46 +25,36 @@ enum MiningReadout {
     /// mining.
     Ready(MiningLine),
     Syncing,
-    /// The remote daemon would not say. A view listener answers
-    /// `/mining_status` with a grant refusal, and a daemon that does not
-    /// serve the route answers an empty body. Only reachable on the remote
-    /// arm; see [`fetch_mining_status`].
+    /// The daemon would not say. A view listener answers `/mining_status`
+    /// with a grant refusal, and a daemon that does not serve the route
+    /// answers an empty body. See [`fetch_mining_status`].
     Unavailable,
 }
 
-/// Fetch `/mining_status`, and treat a failure differently on each arm.
+/// Fetch `/mining_status`.
 ///
-/// **The asymmetry is carried on purpose.** In-process the console *is* the
-/// host, so a `/mining_status` that will not answer is a fault in this
-/// daemon and the command says so. Remotely the daemon may be a view
-/// listener: `/mining_status` is `mining-control`, and the stamp answers a
-/// grant refusal (HTTP 200, the JSON-RPC error object) where an absent
-/// route used to be an empty 404. Either is an ordinary posture, not a
-/// failure, and the status line says "mining info unavailable" rather than
-/// refusing to print the seven other things it knows. Unifying the arms
-/// would either turn a view listener into an error or hide a real local
-/// fault.
-fn fetch_mining_status(src: &Source) -> Result<MiningReadout, String> {
-    // A view listener answers `/mining_status` (`mining-control`) with a
-    // grant refusal. An absent route is an empty body. Either is an
-    // ordinary posture: the status line says mining info is unavailable
-    // and still prints everything else it knows. A daemon that is not
-    // answering at all is the same line, not a hung command.
-    src.ensure_identity()?;
-    let raw = match super::rest_post(src, "/mining_status", b"{}".to_vec()) {
+/// The handshake inside [`DaemonClient::post`] is a refusal of the whole
+/// command: a daemon on another network is not a daemon whose height this
+/// line may print. A view listener answers `/mining_status`
+/// (`mining-control`) with a grant refusal, an absent route is an empty
+/// body, and a daemon that is not answering is the same. Any of those is
+/// an ordinary posture: the status line says mining info is unavailable
+/// and still prints everything else it knows.
+fn fetch_mining_status(daemon: &DaemonClient) -> Result<MiningReadout, String> {
+    let path = crate::daemon::posted_rest("/mining_status").map_err(|error| error.to_string())?;
+    let raw = match daemon.post(path, b"{}".to_vec()) {
+        Err(DaemonError::Identity(line)) => return Err(line),
         Ok(raw) if raw.is_empty() => return Ok(MiningReadout::Unavailable),
-        Ok(raw) => {
-            if shekyl_rpc_types::errors::read_refusal(&raw).is_some_and(|error| {
-                error.class == shekyl_rpc_types::errors::ErrorClass::OutsideTheGrant
-            }) {
-                return Ok(MiningReadout::Unavailable);
-            }
-            String::from_utf8_lossy(&raw).into_owned()
-        }
+        Ok(raw) => raw,
         Err(_) => return Ok(MiningReadout::Unavailable),
     };
+    if shekyl_rpc_types::errors::read_refusal(&raw)
+        .is_some_and(|error| error.class == shekyl_rpc_types::errors::ErrorClass::OutsideTheGrant)
+    {
+        return Ok(MiningReadout::Unavailable);
+    }
     let reply: MiningStatusResponse =
-        serde_json::from_str(&raw).map_err(|e| format!("malformed mining_status reply: {e}"))?;
+        serde_json::from_slice(&raw).map_err(|e| format!("malformed mining_status reply: {e}"))?;
     if reply.status.kind() == shekyl_rpc_types::StatusKind::Busy {
         return Ok(MiningReadout::Syncing);
     }
@@ -139,9 +129,9 @@ pub(super) fn sync_percentage(height: u64, target_height: u64) -> f64 {
 
 /// `status` / `show_status`.
 #[deny(clippy::arithmetic_side_effects)]
-pub(super) fn show_status(src: &Source, now: u64) -> Result<String, String> {
-    let info = fetch_get_info(src)?;
-    let mining = fetch_mining_status(src)?;
+pub(super) fn show_status(daemon: &DaemonClient, now: u64) -> Result<String, String> {
+    let info = fetch_get_info(daemon)?;
+    let mining = fetch_mining_status(daemon)?;
     let target = shekyl_economics::economic_params().daa_target_seconds;
 
     let height = info.health.height;
@@ -154,7 +144,8 @@ pub(super) fn show_status(src: &Source, now: u64) -> Result<String, String> {
         .map_or(height, |target| target.max(height));
     // `get_info` does not name the network (RK-Q6). Remote, this is what
     // the handshake before the request above already read; no second call.
-    let network = network_label(src.network()?);
+    // The handshake already required the daemon to report this network.
+    let network = network_label(daemon.network());
     // Status is a part a daemon may withhold, and a restricted one does.
     // A withheld part is not a node with no connections and no uptime: the
     // line says the counts were not disclosed and leaves the uptime off.

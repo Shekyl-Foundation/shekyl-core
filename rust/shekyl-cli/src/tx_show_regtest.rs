@@ -18,7 +18,7 @@ use shekyl_rpc_client::Rpc;
 use shekyl_rpc_transport::HttpRpc;
 use shekyl_rpc_types::{DaemonNetwork, GetBlockRequest, GetBlockResponse};
 
-use super::{report, DaemonEndpoint, TxShow};
+use super::{report, TxShow};
 
 #[test]
 #[ignore = "needs SHEKYLD_BIN built from this tree; spawns a regtest daemon"]
@@ -36,16 +36,12 @@ fn tx_show_reads_the_wallet_or_the_daemon() {
 
     let records = format!("wallet holds {}", found.held);
     let client = daemon.client();
-    let endpoint = DaemonEndpoint {
-        client: &client,
-        network: DaemonNetwork::Fakechain,
-    };
     let held_at = daemon.marks();
     let held = report(&TxShow {
         id: &found.held,
         wallet_records: Some(&records),
         body: false,
-        daemon: Some(&endpoint),
+        daemon: Some(&client),
     })
     .expect("the wallet's record");
     let held_delta = daemon.delta_after_mark(&held_at, Duration::from_secs(1));
@@ -60,7 +56,7 @@ fn tx_show_reads_the_wallet_or_the_daemon() {
         id: &found.genesis,
         wallet_records: Some(""),
         body: false,
-        daemon: Some(&endpoint),
+        daemon: Some(&client),
     })
     .unwrap_or_else(|error| panic!("the daemon's view: {error}"));
     let foreign_delta = daemon.delta_until(&foreign_at, &request_line(transactions_method()));
@@ -84,7 +80,7 @@ fn tx_show_reads_the_wallet_or_the_daemon() {
         id: &found.held,
         wallet_records: Some(&records),
         body: true,
-        daemon: Some(&endpoint),
+        daemon: Some(&client),
     })
     .expect("the bytes");
     let body_delta = daemon.delta_until(&body_at, &request_line(transactions_method()));
@@ -132,16 +128,12 @@ fn a_failed_wallet_read_does_not_ask_the_daemon() {
         crate::rpc_client::RpcSession::connect(&format!("http://127.0.0.1:{port}"), None, false)
             .expect("the dead socket still constructs a session");
     session.set_open("wallet");
-    let client = crate::daemon::DaemonClient::new(&daemon.url, None, None).expect("daemon client");
+    let client =
+        crate::daemon::DaemonClient::new(&daemon.url, None, None, DaemonNetwork::Fakechain)
+            .expect("daemon client");
     let at = daemon.marks();
-    let error = super::command(
-        &session,
-        Some(&client),
-        DaemonNetwork::Mainnet,
-        &"ab".repeat(32),
-        false,
-    )
-    .expect_err("the wallet read fails");
+    let error = super::command(&session, Some(&client), &"ab".repeat(32), false)
+        .expect_err("the wallet read fails");
     let delta = daemon.delta_after_mark(&at, Duration::from_secs(1));
     assert!(
         error
@@ -158,9 +150,10 @@ fn a_failed_wallet_read_does_not_ask_the_daemon() {
 
 /// The §13 words against a difficulty-1 regtest daemon, with blocks mined.
 ///
-/// The CLI cannot name fakechain, so the renderer is built with
-/// `DaemonNetwork::Fakechain`. A mainnet `Source` is refused before it
-/// renders: the handshake is `get_version`, and `get_height` is not asked.
+/// The CLI cannot name fakechain, so the client is
+/// `DaemonNetwork::Fakechain`. A second client bound to mainnet is refused
+/// before it renders: the handshake is `get_version`, and `get_height` is
+/// not asked.
 /// `daemon stop` is last, and the process exits.
 #[test]
 #[ignore = "needs SHEKYLD_BIN built from this tree; spawns a regtest daemon"]
@@ -181,8 +174,7 @@ fn section_13_words_answer_a_regtest_daemon() {
     drop(runtime);
 
     let client = daemon.client();
-    let transport = client.transport().expect("the session's client");
-    let mined: shekyl_rpc_types::mining::GenerateBlocksResponse = transport
+    let mined: shekyl_rpc_types::mining::GenerateBlocksResponse = client
         .json_rpc(
             crate::daemon::posted_json("generateblocks").expect("generateblocks"),
             &shekyl_rpc_types::mining::GenerateBlocksRequest { count: 3 },
@@ -190,18 +182,14 @@ fn section_13_words_answer_a_regtest_daemon() {
         .expect("mine three blocks");
     let height = mined.height.to_string();
 
-    let source = crate::console::Source::new(
-        client.transport().expect("the same client"),
-        DaemonNetwork::Fakechain.to_cryptonote(),
-    );
-    let shown = crate::console::execute(&source, &View::ChainHeight).expect("chain height");
+    let shown = crate::console::execute(&client, &View::ChainHeight).expect("chain height");
     assert_eq!(
         shown.trim(),
         height,
         "chain height is the mined height: {shown}"
     );
 
-    let headers = crate::console::execute(&source, &View::BlockHeaderList { from: 1, to: 3 })
+    let headers = crate::console::execute(&client, &View::BlockHeaderList { from: 1, to: 3 })
         .expect("block header list");
     let header_count = headers.matches("height:").count();
     assert_eq!(header_count, 3, "three headers:\n{headers}");
@@ -219,7 +207,7 @@ fn section_13_words_answer_a_regtest_daemon() {
     // split rather than as one number. The fee leg is zero: the blocks
     // list no transactions.
     let miner = shekyl_units::AtomicUnits::checked_sum(rewards).expect("the reward sum");
-    let sum = crate::console::execute(&source, &View::ChainCoinbaseSum { from: 1, to: 3 })
+    let sum = crate::console::execute(&client, &View::ChainCoinbaseSum { from: 1, to: 3 })
         .expect("coinbase sum");
     assert!(
         sum.contains("fee: 0.000000000 SKL"),
@@ -246,9 +234,9 @@ fn section_13_words_answer_a_regtest_daemon() {
     );
 
     let stats =
-        crate::console::execute(&source, &View::ChainStats { last: 3 }).expect("chain stats");
+        crate::console::execute(&client, &View::ChainStats { last: 3 }).expect("chain stats");
     assert!(stats.contains("Last 3:"), "{stats}");
-    let alt = crate::console::execute(&source, &View::ChainAlt).expect("chain alt");
+    let alt = crate::console::execute(&client, &View::ChainAlt).expect("chain alt");
     assert!(alt.contains("0 alternate chains found:"), "{alt}");
 
     for view in [
@@ -259,16 +247,16 @@ fn section_13_words_answer_a_regtest_daemon() {
         },
         View::PeerConnections,
     ] {
-        let text = crate::console::execute(&source, &view)
+        let text = crate::console::execute(&client, &view)
             .unwrap_or_else(|error| panic!("{}: {error}", view.label()));
         assert!(text.contains("P2P: offline"), "{}:\n{text}", view.label());
     }
-    let net = crate::console::execute(&source, &View::P2pStats).expect("p2p stats");
+    let net = crate::console::execute(&client, &View::P2pStats).expect("p2p stats");
     assert!(net.contains("Received") && net.contains("Sent"), "{net}");
 
     let host = "203.0.113.9";
     let added = crate::console::execute(
-        &source,
+        &client,
         &View::BanAdd {
             ip: host.to_owned(),
             duration: Some(30),
@@ -277,17 +265,17 @@ fn section_13_words_answer_a_regtest_daemon() {
     .expect("ban add");
     assert!(added.contains(host) && added.contains("30 s"), "{added}");
     let shown_ban = crate::console::execute(
-        &source,
+        &client,
         &View::BanShow {
             ip: host.to_owned(),
         },
     )
     .expect("ban show");
     assert!(shown_ban.contains("banned"), "{shown_ban}");
-    let listed = crate::console::execute(&source, &View::BanList).expect("ban list");
+    let listed = crate::console::execute(&client, &View::BanList).expect("ban list");
     assert!(listed.contains(host), "{listed}");
     let lifted = crate::console::execute(
-        &source,
+        &client,
         &View::BanRemove {
             ip: host.to_owned(),
         },
@@ -296,7 +284,7 @@ fn section_13_words_answer_a_regtest_daemon() {
     assert!(lifted.contains("lifted"), "{lifted}");
 
     let before = crate::console::execute(
-        &source,
+        &client,
         &View::OptionShow {
             name: Some("log-level".to_owned()),
         },
@@ -304,7 +292,7 @@ fn section_13_words_answer_a_regtest_daemon() {
     .expect("option show");
     assert!(before.contains("log-level"), "{before}");
     let set = crate::console::execute(
-        &source,
+        &client,
         &View::OptionSet {
             name: "log-level".to_owned(),
             value: "debug".to_owned(),
@@ -313,7 +301,7 @@ fn section_13_words_answer_a_regtest_daemon() {
     .expect("option set");
     assert!(set.contains("debug"), "{set}");
     let after = crate::console::execute(
-        &source,
+        &client,
         &View::OptionShow {
             name: Some("log-level".to_owned()),
         },
@@ -322,7 +310,7 @@ fn section_13_words_answer_a_regtest_daemon() {
     assert!(after.contains("debug"), "{after}");
 
     let startup = crate::console::execute(
-        &source,
+        &client,
         &View::OptionSet {
             name: "data-dir".to_owned(),
             value: "/tmp/shekyl-not-runtime".to_owned(),
@@ -335,12 +323,8 @@ fn section_13_words_answer_a_regtest_daemon() {
     );
 
     let view = daemon.view_client();
-    let restricted = crate::console::Source::new(
-        view.transport().expect("view client"),
-        DaemonNetwork::Fakechain.to_cryptonote(),
-    );
     let grant = crate::console::execute(
-        &restricted,
+        &view,
         &View::OptionSet {
             name: "log-level".to_owned(),
             value: "info".to_owned(),
@@ -350,10 +334,10 @@ fn section_13_words_answer_a_regtest_daemon() {
     assert!(grant.contains("OutsideTheGrant"), "{grant}");
 
     let flushed =
-        crate::console::execute(&source, &View::TxpoolFlush { id: None }).expect("txpool flush");
+        crate::console::execute(&client, &View::TxpoolFlush { id: None }).expect("txpool flush");
     assert!(flushed.contains("flushed the pool"), "{flushed}");
     let relay = crate::console::execute(
-        &source,
+        &client,
         &View::TxRelay {
             hash: "cd".repeat(32),
         },
@@ -362,20 +346,15 @@ fn section_13_words_answer_a_regtest_daemon() {
     assert!(!relay.is_empty(), "{relay}");
 
     let started =
-        crate::commands::mine::cmd_mine_start(Some(&client), DaemonNetwork::Fakechain, Some(1))
-            .expect("mine start");
+        crate::commands::mine::cmd_mine_start(Some(&client), Some(1)).expect("mine start");
     assert_eq!(started["started"], true, "{started}");
-    let mining = crate::commands::mine::cmd_mine_status(Some(&client), DaemonNetwork::Fakechain)
-        .expect("mine status");
+    let mining = crate::commands::mine::cmd_mine_status(Some(&client)).expect("mine status");
     assert_eq!(mining["active"], true, "{mining}");
-    crate::commands::mine::cmd_mine_stop(Some(&client), DaemonNetwork::Fakechain)
-        .expect("mine stop");
+    crate::commands::mine::cmd_mine_stop(Some(&client)).expect("mine stop");
 
     let marks = daemon.marks();
-    let wrong = crate::console::Source::new(
-        client.transport().expect("still the session's client"),
-        DaemonNetwork::Mainnet.to_cryptonote(),
-    );
+    let wrong = crate::daemon::DaemonClient::new(&daemon.url, None, None, DaemonNetwork::Mainnet)
+        .expect("a mainnet client of the same daemon");
     let mismatch = crate::console::execute(&wrong, &View::ChainHeight).expect_err("wrong network");
     assert!(mismatch.contains("network mismatch"), "{mismatch}");
     let asked = daemon.delta_since(&marks);
@@ -384,7 +363,7 @@ fn section_13_words_answer_a_regtest_daemon() {
         "a wrong network is refused before rendering:\n{asked}"
     );
 
-    crate::console::execute(&source, &View::DaemonStop).expect("daemon stop");
+    crate::console::execute(&client, &View::DaemonStop).expect("daemon stop");
     daemon.wait_exit();
 }
 
@@ -534,11 +513,13 @@ impl Regtest {
     }
 
     fn client(&self) -> crate::daemon::DaemonClient {
-        crate::daemon::DaemonClient::new(&self.url, None, None).expect("daemon client")
+        crate::daemon::DaemonClient::new(&self.url, None, None, DaemonNetwork::Fakechain)
+            .expect("daemon client")
     }
 
     fn view_client(&self) -> crate::daemon::DaemonClient {
-        crate::daemon::DaemonClient::new(&self.view_url, None, None).expect("view client")
+        crate::daemon::DaemonClient::new(&self.view_url, None, None, DaemonNetwork::Fakechain)
+            .expect("view client")
     }
 
     fn wait_exit(&mut self) {

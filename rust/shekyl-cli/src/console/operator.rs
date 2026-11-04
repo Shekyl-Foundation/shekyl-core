@@ -8,7 +8,8 @@
 //! Each post uses the method table's name. A refusal is the error class
 //! and the diagnostic code (`json_rpc_result`).
 
-use super::{native_json_rpc, require_ok, rest_post, Source};
+use super::{native_json_rpc, require_ok, rest_post};
+use crate::daemon::DaemonClient;
 use shekyl_rpc_types::bans::{
     BannedRequest, BannedResponse, GetBansResponse, SetBan, SetBansRequest,
 };
@@ -21,7 +22,7 @@ use shekyl_rpc_types::pool::{
 use shekyl_rpc_types::{GetCoinbaseTxSumRequest, GetCoinbaseTxSumResponse, HashHex};
 use shekyl_units::AtomicUnits;
 
-pub(super) fn chain_coinbase_sum(src: &Source, from: u64, to: u64) -> Result<String, String> {
+pub(super) fn chain_coinbase_sum(src: &DaemonClient, from: u64, to: u64) -> Result<String, String> {
     let count = to.saturating_sub(from).saturating_add(1);
     let reply: GetCoinbaseTxSumResponse = native_json_rpc(
         src,
@@ -39,7 +40,7 @@ pub(super) fn chain_coinbase_sum(src: &Source, from: u64, to: u64) -> Result<Str
     ))
 }
 
-pub(super) fn tx_relay(src: &Source, hash: &str) -> Result<String, String> {
+pub(super) fn tx_relay(src: &DaemonClient, hash: &str) -> Result<String, String> {
     let reply: StatusOnlyResponse = native_json_rpc(
         src,
         "relay_tx",
@@ -51,7 +52,7 @@ pub(super) fn tx_relay(src: &Source, hash: &str) -> Result<String, String> {
     Ok(format!("relayed {hash}"))
 }
 
-pub(super) fn txpool_list(src: &Source, short: bool) -> Result<String, String> {
+pub(super) fn txpool_list(src: &DaemonClient, short: bool) -> Result<String, String> {
     if short {
         let body = rest_post(src, "/get_transaction_pool_hashes", b"{}".to_vec())?;
         let reply: GetTransactionPoolHashesResponse =
@@ -88,7 +89,7 @@ pub(super) fn txpool_list(src: &Source, short: bool) -> Result<String, String> {
         .join("\n"))
 }
 
-pub(super) fn txpool_flush(src: &Source, id: Option<&str>) -> Result<String, String> {
+pub(super) fn txpool_flush(src: &DaemonClient, id: Option<&str>) -> Result<String, String> {
     let txids = match id {
         Some(hash) => vec![HashHex::from_hex(hash).map_err(|error| error.to_string())?],
         None => Vec::new(),
@@ -102,7 +103,7 @@ pub(super) fn txpool_flush(src: &Source, id: Option<&str>) -> Result<String, Str
     })
 }
 
-pub(super) fn ban_list(src: &Source) -> Result<String, String> {
+pub(super) fn ban_list(src: &DaemonClient) -> Result<String, String> {
     let reply: GetBansResponse = native_json_rpc(src, "get_bans", &serde_json::json!({}))?;
     require_ok(&reply.status)?;
     if reply.bans.is_empty() {
@@ -122,7 +123,11 @@ pub(super) fn ban_list(src: &Source) -> Result<String, String> {
         .join("\n"))
 }
 
-pub(super) fn ban_add(src: &Source, ip: &str, duration: Option<u64>) -> Result<String, String> {
+pub(super) fn ban_add(
+    src: &DaemonClient,
+    ip: &str,
+    duration: Option<u64>,
+) -> Result<String, String> {
     let reply: StatusOnlyResponse = native_json_rpc(
         src,
         "set_bans",
@@ -141,7 +146,7 @@ pub(super) fn ban_add(src: &Source, ip: &str, duration: Option<u64>) -> Result<S
     })
 }
 
-pub(super) fn ban_remove(src: &Source, ip: &str) -> Result<String, String> {
+pub(super) fn ban_remove(src: &DaemonClient, ip: &str) -> Result<String, String> {
     let reply: StatusOnlyResponse = native_json_rpc(
         src,
         "set_bans",
@@ -157,7 +162,7 @@ pub(super) fn ban_remove(src: &Source, ip: &str) -> Result<String, String> {
     Ok(format!("lifted the ban on {ip}"))
 }
 
-pub(super) fn ban_show(src: &Source, ip: &str) -> Result<String, String> {
+pub(super) fn ban_show(src: &DaemonClient, ip: &str) -> Result<String, String> {
     let reply: BannedResponse = native_json_rpc(
         src,
         "banned",
@@ -207,7 +212,7 @@ fn render_options(reply: &OptionsResponse) -> String {
         .join("\n")
 }
 
-pub(super) fn option_set(src: &Source, name: &str, value: &str) -> Result<String, String> {
+pub(super) fn option_set(src: &DaemonClient, name: &str, value: &str) -> Result<String, String> {
     let reply: OptionsResponse = native_json_rpc(
         src,
         "option_set",
@@ -221,13 +226,13 @@ pub(super) fn option_set(src: &Source, name: &str, value: &str) -> Result<String
     Ok(render_options(&reply))
 }
 
-pub(super) fn option_show(src: &Source, name: Option<&str>) -> Result<String, String> {
+pub(super) fn option_show(src: &DaemonClient, name: Option<&str>) -> Result<String, String> {
     let names = name.map(|name| vec![name.to_owned()]);
     let reply: OptionsResponse = native_json_rpc(src, "option_show", &OptionShowRequest { names })?;
     Ok(render_options(&reply))
 }
 
-pub(super) fn daemon_stop(src: &Source) -> Result<String, String> {
+pub(super) fn daemon_stop(src: &DaemonClient) -> Result<String, String> {
     let body = rest_post(src, "/stop_daemon", b"{}".to_vec())?;
     let reply: StatusOnlyResponse = super::decode_reply(&body, "stop_daemon")?;
     require_ok(&reply.status)?;

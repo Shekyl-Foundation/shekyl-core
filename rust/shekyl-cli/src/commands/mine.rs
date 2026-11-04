@@ -27,10 +27,7 @@ use shekyl_rpc_types::mining::MineSpeed;
 use crate::daemon::{DaemonClient, DaemonError};
 use crate::display::short_address;
 use crate::outcome::{failed, refusal, CommandFailed, CommandResult};
-use shekyl_rpc_types::{
-    core_rpc_version_string, DaemonNetwork, GetInfoResponse, IdentityExpectation, IdentityMismatch,
-    IdentityRefusal,
-};
+use shekyl_rpc_types::GetInfoResponse;
 
 /// The wallet-convenience default thread count: `min(available cores, 4)`.
 /// Not a tuned miner — operators who care pass a count or drive `shekyld`
@@ -48,23 +45,14 @@ fn default_threads() -> u64 {
 ///
 /// No wallet check. The shell does not supply a payout address (IG-Q21);
 /// the daemon mines to its `mine-address`.
-fn gate(
-    daemon: Option<&DaemonClient>,
-    network: DaemonNetwork,
-) -> Result<(&DaemonClient, GetInfoResponse), CommandFailed> {
+fn gate(daemon: Option<&DaemonClient>) -> Result<(&DaemonClient, GetInfoResponse), CommandFailed> {
     let Some(dc) = daemon else {
         return Err(refusal(DaemonError::NotConfigured.to_string()));
     };
 
-    // F2 — the daemon's identity, read before anything else is asked of
-    // it. A refused connection carries the F1 "start shekyld" hint via
-    // DaemonClient.
-    let version = dc
-        .get_version_result()
-        .map_err(|e| refusal(e.to_string()))?;
-    identity_gate(network, dc.url(), &version)?;
-
-    // One get_info answers F3 and the sync fields.
+    // F2 and the sync fields are one `get_info`. The handshake inside it
+    // refuses a daemon on another network before mining is asked. A refused
+    // connection carries the F1 "start shekyld" hint via DaemonClient.
     let info = dc.get_info().map_err(|e| refusal(e.to_string()))?;
 
     // F3 — restricted listener: admin RPCs are not served there.
@@ -76,67 +64,6 @@ fn gate(
     }
 
     Ok((dc, info))
-}
-
-/// F2 — the daemon must be this CLI's network: a testnet wallet pointing at
-/// a mainnet daemon would mine (and pay out) on the wrong network.
-///
-/// `version` is `get_version`'s `result`, which is where a daemon names its
-/// network (`get_info` repeated it until 3.54, RK-Q6). It is read by the one
-/// reader of that reply, [`IdentityExpectation::read`], so the gate refuses
-/// on the same four axes every other client does: the RPC version, the
-/// consensus rules, the network and the genesis block. A network that is
-/// omitted or unknown does not decode, so there is no empty case to skip.
-/// A `--regtest` daemon reports `fakechain`, which no CLI network is, and
-/// is refused as it always was.
-fn identity_gate(network: DaemonNetwork, url: &str, version: &Value) -> Result<(), CommandFailed> {
-    IdentityExpectation::exact(network)
-        .read(version)
-        .map(|_| ())
-        .map_err(|IdentityRefusal { mismatch, .. }| refusal(identity_message(&mismatch, url)))
-}
-
-/// This CLI's wording of an identity refusal, one sentence per axis. The
-/// wallet and the console word the same verdict their own way; the axes are
-/// compared once, in [`IdentityExpectation::read`]. What failed to parse in
-/// an unreadable reply is the daemon's own text and is not repeated here.
-fn identity_message(mismatch: &IdentityMismatch, url: &str) -> String {
-    match *mismatch {
-        IdentityMismatch::Network { ours, theirs } => format!(
-            "Network mismatch: this CLI is on {ours} but the daemon at {url} reports {theirs}.\n\
-             Restart shekyl-cli or shekyld so both use the same \
-             --testnet/--stagenet flag."
-        ),
-        IdentityMismatch::Wire { ours, theirs } => {
-            let older = if theirs < ours {
-                "daemon"
-            } else {
-                "shekyl-cli"
-            };
-            format!(
-                "Version mismatch: this shekyl-cli speaks RPC {} but the daemon at {url} \
-                 speaks {}.\nThe {older} is the older one; update it.",
-                core_rpc_version_string(ours),
-                core_rpc_version_string(theirs),
-            )
-        }
-        IdentityMismatch::WireUnreadable { ours } => format!(
-            "Version mismatch: the daemon at {url} did not answer `get_version` in a form \
-             this shekyl-cli (RPC {}) can read, so the two are on different versions.\n\
-             Update whichever is older.",
-            core_rpc_version_string(ours),
-        ),
-        IdentityMismatch::Rules { .. } => format!(
-            "Rules mismatch: the daemon at {url} was built with different consensus \
-             settings from this shekyl-cli.\nUse a shekyl-cli and shekyld from the same \
-             release."
-        ),
-        IdentityMismatch::Genesis { network, .. } => format!(
-            "Chain mismatch: the daemon at {url} is on a different {network} chain from \
-             the one this shekyl-cli was built for.\nUse a shekyl-cli and shekyld from \
-             the same release."
-        ),
-    }
 }
 
 /// Reminder, not a refusal. Mining on a daemon that is not on this machine
@@ -171,12 +98,8 @@ produce blocks this network accepts.";
 ///
 /// The daemon pays its `mine-address`. The shell sends only the thread
 /// count, and does not require an open wallet (IG-Q21).
-pub fn cmd_mine_start(
-    daemon: Option<&DaemonClient>,
-    network: DaemonNetwork,
-    threads: Option<u64>,
-) -> CommandResult {
-    let (dc, info) = gate(daemon, network)?;
+pub fn cmd_mine_start(daemon: Option<&DaemonClient>, threads: Option<u64>) -> CommandResult {
+    let (dc, info) = gate(daemon)?;
     remind_if_remote(dc);
 
     // F6 — already mining: relay the daemon's state, no error tone.
@@ -245,8 +168,8 @@ pub(crate) fn show_mine_start(val: &Value) {
 }
 
 /// `mine stop` — stop mining on the daemon.
-pub fn cmd_mine_stop(daemon: Option<&DaemonClient>, network: DaemonNetwork) -> CommandResult {
-    let (dc, _info) = gate(daemon, network)?;
+pub fn cmd_mine_stop(daemon: Option<&DaemonClient>) -> CommandResult {
+    let (dc, _info) = gate(daemon)?;
 
     match dc.mining_status() {
         Ok(status) if !status.active => return Ok(json!({"stopped": false, "idle": true})),
@@ -271,8 +194,8 @@ pub(crate) fn show_mine_stop(val: &Value) {
 /// `mine status` — the daemon's mining state. The daemon's `pow_algorithm`
 /// string is deliberately not rendered (CU-3: operators do not need a
 /// protocol-algorithm name; the daemon now always reports RandomX).
-pub fn cmd_mine_status(daemon: Option<&DaemonClient>, network: DaemonNetwork) -> CommandResult {
-    let (dc, _info) = gate(daemon, network)?;
+pub fn cmd_mine_status(daemon: Option<&DaemonClient>) -> CommandResult {
+    let (dc, _info) = gate(daemon)?;
 
     match dc.mining_status() {
         Ok(status) => Ok(json!({
@@ -315,10 +238,11 @@ pub(crate) fn show_mine_status(val: &Value) {
 
 #[cfg(test)]
 mod tests {
-    use super::{identity_gate, BUILT_IN_MINER_NOTICE};
+    use super::BUILT_IN_MINER_NOTICE;
+    use crate::daemon::identity_line;
     use shekyl_rpc_types::{
-        genesis_hash_for, DaemonNetwork, GetVersionResponse, HashHex, Nullable, RpcStatus,
-        CONSENSUS_CONSTANTS_DIGEST_HASH, CORE_RPC_VERSION,
+        genesis_hash_for, DaemonNetwork, GetVersionResponse, HashHex, IdentityExpectation,
+        Nullable, RpcStatus, CONSENSUS_CONSTANTS_DIGEST_HASH, CORE_RPC_VERSION,
     };
 
     const URL: &str = "http://127.0.0.1:12029";
@@ -345,8 +269,9 @@ mod tests {
             DaemonNetwork::Testnet,
             DaemonNetwork::Stagenet,
         ] {
-            identity_gate(network, URL, &version_reply(network))
-                .unwrap_or_else(|e| panic!("{network}: {}", e.message));
+            IdentityExpectation::exact(network)
+                .read(&version_reply(network))
+                .unwrap_or_else(|error| panic!("{network}: {error:?}"));
         }
     }
 
@@ -354,19 +279,16 @@ mod tests {
     /// refused, and the refusal names both networks and the endpoint.
     #[test]
     fn the_gate_refuses_a_daemon_on_another_network() {
-        let refused = identity_gate(
-            DaemonNetwork::Testnet,
-            URL,
-            &version_reply(DaemonNetwork::Mainnet),
-        )
-        .expect_err("a mainnet daemon is not a testnet daemon");
+        let refused = IdentityExpectation::exact(DaemonNetwork::Testnet)
+            .read(&version_reply(DaemonNetwork::Mainnet))
+            .expect_err("a mainnet daemon is not a testnet daemon");
+        let line = identity_line(&refused.mismatch, URL);
         assert!(
-            refused.message.starts_with("Network mismatch:")
-                && refused.message.contains("this CLI is on testnet")
-                && refused.message.contains("reports mainnet")
-                && refused.message.contains(URL),
-            "{}",
-            refused.message
+            line.contains("network mismatch")
+                && line.contains("This CLI is on testnet")
+                && line.contains("reports mainnet")
+                && line.contains(URL),
+            "{line}"
         );
     }
 
@@ -375,17 +297,11 @@ mod tests {
     /// `get_info`.
     #[test]
     fn the_gate_refuses_a_fakechain_daemon() {
-        let refused = identity_gate(
-            DaemonNetwork::Mainnet,
-            URL,
-            &version_reply(DaemonNetwork::Fakechain),
-        )
-        .expect_err("a fakechain daemon is not a mainnet daemon");
-        assert!(
-            refused.message.contains("reports fakechain"),
-            "{}",
-            refused.message
-        );
+        let refused = IdentityExpectation::exact(DaemonNetwork::Mainnet)
+            .read(&version_reply(DaemonNetwork::Fakechain))
+            .expect_err("a fakechain daemon is not a mainnet daemon");
+        let line = identity_line(&refused.mismatch, URL);
+        assert!(line.contains("reports fakechain"), "{line}");
     }
 
     /// The reply has no network to compare unless it is this build's reply:
@@ -394,13 +310,13 @@ mod tests {
     fn the_gate_refuses_a_daemon_on_another_rpc_version() {
         let mut reply = version_reply(DaemonNetwork::Testnet);
         reply["version"] = (CORE_RPC_VERSION - 1).into();
-        let refused =
-            identity_gate(DaemonNetwork::Testnet, URL, &reply).expect_err("an older daemon");
+        let refused = IdentityExpectation::exact(DaemonNetwork::Testnet)
+            .read(&reply)
+            .expect_err("an older daemon");
+        let line = identity_line(&refused.mismatch, URL);
         assert!(
-            refused.message.starts_with("Version mismatch:")
-                && refused.message.contains("The daemon is the older one"),
-            "{}",
-            refused.message
+            line.contains("RPC contract mismatch") && line.contains("the daemon is the older one"),
+            "{line}"
         );
     }
 
@@ -409,17 +325,15 @@ mod tests {
     fn the_gate_refuses_a_reply_without_a_network() {
         let mut reply = version_reply(DaemonNetwork::Testnet);
         reply.as_object_mut().expect("object").remove("nettype");
-        let refused =
-            identity_gate(DaemonNetwork::Testnet, URL, &reply).expect_err("no network named");
+        let refused = IdentityExpectation::exact(DaemonNetwork::Testnet)
+            .read(&reply)
+            .expect_err("no network named");
+        let line = identity_line(&refused.mismatch, URL);
+        assert!(line.contains("does not match the RPC contract"), "{line}");
+        assert!(line.contains("cannot be named here"), "{line}");
         assert!(
-            refused.message.starts_with("Version mismatch:"),
-            "{}",
-            refused.message
-        );
-        assert!(
-            !refused.message.contains("nettype"),
-            "the daemon's own text is not repeated: {}",
-            refused.message
+            !line.contains("nettype"),
+            "the daemon's own text is not repeated: {line}"
         );
     }
 
@@ -442,8 +356,13 @@ mod tests {
     /// A loopback daemon is the silent default: no reminder.
     #[test]
     fn a_loopback_daemon_is_not_reminded() {
-        let daemon = crate::daemon::DaemonClient::new("http://127.0.0.1:18081", None, None)
-            .expect("loopback parses");
+        let daemon = crate::daemon::DaemonClient::new(
+            "http://127.0.0.1:18081",
+            None,
+            None,
+            DaemonNetwork::Mainnet,
+        )
+        .expect("loopback parses");
         assert!(super::remote_mining_note(&daemon).is_none());
     }
 
@@ -457,8 +376,13 @@ mod tests {
     /// is open.
     #[test]
     fn a_remote_daemon_is_reminded_and_mining_still_starts() {
-        let remote = crate::daemon::DaemonClient::new("http://203.0.113.5:18081", None, None)
-            .expect("remote address parses");
+        let remote = crate::daemon::DaemonClient::new(
+            "http://203.0.113.5:18081",
+            None,
+            None,
+            DaemonNetwork::Mainnet,
+        )
+        .expect("remote address parses");
         let note = super::remote_mining_note(&remote).expect("a remote daemon is reminded");
         assert_eq!(
             note,
@@ -475,11 +399,15 @@ mod tests {
             ),
             ("/start_mining", r#"{"status":"OK"}"#.to_owned()),
         ]);
-        let daemon = crate::daemon::DaemonClient::new(&format!("http://{address}"), None, None)
-            .expect("the route server parses");
+        let daemon = crate::daemon::DaemonClient::new(
+            &format!("http://{address}"),
+            None,
+            None,
+            DaemonNetwork::Mainnet,
+        )
+        .expect("the route server parses");
 
-        let result = super::cmd_mine_start(Some(&daemon), DaemonNetwork::Mainnet, Some(1))
-            .expect("mining starts");
+        let result = super::cmd_mine_start(Some(&daemon), Some(1)).expect("mining starts");
         assert_eq!(result["started"], true);
         let asked = log.lock().expect("log");
         assert!(

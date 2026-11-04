@@ -20,12 +20,12 @@
 
 use shekyl_rpc_types::{GetInfoResponse, RestErrorEnvelope};
 
-use super::Source;
+use crate::daemon::DaemonClient;
 
 /// One `POST /get_info` to the daemon the operator named. The listener
 /// answers with what that listener discloses.
-pub(super) fn fetch_get_info(src: &Source) -> Result<GetInfoResponse, String> {
-    let raw = super::rest_post(src, "/get_info", b"{}".to_vec())?;
+pub(super) fn fetch_get_info(daemon: &DaemonClient) -> Result<GetInfoResponse, String> {
+    let raw = super::rest_post(daemon, "/get_info", b"{}".to_vec())?;
     decode_get_info_ok(&raw)
 }
 

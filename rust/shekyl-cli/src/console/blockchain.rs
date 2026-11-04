@@ -8,13 +8,14 @@
 use super::info::fetch_get_info;
 use super::{
     human_readable_timestamp, native_json_rpc, require_ok, trimmed, wide_difficulty_decimal,
-    wide_difficulty_value, Source,
+    wide_difficulty_value,
 };
+use crate::daemon::DaemonClient;
 use shekyl_units::AtomicUnits;
 
 /// Fetch `get_block_headers_range` — native here, over `/json_rpc` remotely.
 fn fetch_block_headers_range(
-    src: &Source,
+    src: &DaemonClient,
     start_height: u64,
     end_height: u64,
 ) -> Result<Vec<shekyl_rpc_types::BlockHeader>, String> {
@@ -36,7 +37,11 @@ fn fetch_block_headers_range(
 /// Both ends are heights. A start after the end is refused by the grammar
 /// before this function is called.
 #[deny(clippy::arithmetic_side_effects)]
-pub(super) fn print_blockchain_info(src: &Source, from: u64, to: u64) -> Result<String, String> {
+pub(super) fn print_blockchain_info(
+    src: &DaemonClient,
+    from: u64,
+    to: u64,
+) -> Result<String, String> {
     let headers = fetch_block_headers_range(src, from, to)?;
     Ok(headers
         .iter()
@@ -75,7 +80,9 @@ fn render_blockchain_info_entry(h: &shekyl_rpc_types::BlockHeader) -> String {
 }
 
 /// Fetch `get_fee_estimate` — native here, over `/json_rpc` remotely.
-fn fetch_fee_estimate(src: &Source) -> Result<shekyl_rpc_types::GetFeeEstimateResponse, String> {
+fn fetch_fee_estimate(
+    src: &DaemonClient,
+) -> Result<shekyl_rpc_types::GetFeeEstimateResponse, String> {
     let request = shekyl_rpc_types::GetFeeEstimateRequest::default();
     let reply: shekyl_rpc_types::GetFeeEstimateResponse =
         native_json_rpc(src, "get_fee_estimate", &request)?;
@@ -114,7 +121,10 @@ pub(super) fn median(values: &mut [u64]) -> u64 {
 /// literal and the command makes two calls, `get_info` and
 /// `get_fee_estimate`, before it reads any header.
 #[deny(clippy::arithmetic_side_effects)]
-pub(super) fn print_blockchain_dynamic_stats(src: &Source, nblocks: u64) -> Result<String, String> {
+pub(super) fn print_blockchain_dynamic_stats(
+    src: &DaemonClient,
+    nblocks: u64,
+) -> Result<String, String> {
     let info = fetch_get_info(src)?;
     let height = info.health.height;
     let fees = fetch_fee_estimate(src)?;
