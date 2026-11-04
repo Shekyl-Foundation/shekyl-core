@@ -27,12 +27,13 @@ cpp_compat = true
 usize_is_size_t = true
 no_includes = true
 
+# #[repr(C, align(N))] is otherwise "incompatible" and the struct is omitted
+# from the generated header (ShekylDaemonSnapshot, align 8, the lease's first
+# member). alignas is the C++ annotation of that alignment.
+[layout]
+aligned_n = "alignas"
+
 [parse]
 parse_deps = false
 
-# A `#[repr(C, align(N))]` struct is otherwise an opaque forward declaration
-# (`struct X;`), which the layout limb reads as missing. The snapshot is
-# `align(8)` since 7938c51f16; `body_of` reads the `alignas(N)` form.
-[layout]
-aligned_n = "alignas"
 [export]

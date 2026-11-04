@@ -8,7 +8,7 @@
 #
 # Two triggers, three jobs:
 #
-#   pull_request → dev
+#   pull_request (any base; a retarget re-runs it)
 #     - capture-pr:       runs the Rust gungraun harness on the PR
 #                         head, uploads `shekyl_rust_v0.json` as an
 #                         artifact.
@@ -57,7 +57,7 @@ on:
   # queue): a PR-comment comparator whose jobs are gated on the PR
   # payload; there is no group to compare against or comment on.
   pull_request:
-    branches: [dev]
+    types: [opened, synchronize, reopened, edited]
     # The whole Rust workspace, not a list of benched crates (BA-Q8, ruled
     # 2026-10-05). A bench's cost depends on its dependency closure, not on
     # its own crate: `relay_admission_verify_iai` lives in `shekyl-ffi` and
@@ -85,7 +85,7 @@ on:
 # queue out ALL runners (measured: ~80% of CI wait). `github.ref` is
 # unique per PR (refs/pull/N/merge), so only same-PR runs supersede.
 concurrency:
-  group: benchmarks-${{ github.ref }}
+  group: benchmarks-${{ github.ref }}${{ github.event.action == 'edited' && !contains(toJSON(github.event.changes), '"base":') && '-edited' || '' }}
   cancel-in-progress: true
 
 permissions:
@@ -106,7 +106,7 @@ jobs:
     # downstream `compare` / `profile-on-fail` jobs are still
     # gated on `pull_request` (no baseline diff is meaningful for
     # a manual capture), so dispatch only runs `capture-pr`.
-    if: github.event_name == 'pull_request' || github.event_name == 'workflow_dispatch'
+    if: (github.event.action != 'edited' || contains(toJSON(github.event.changes), '"base":')) && (github.event_name == 'pull_request' || github.event_name == 'workflow_dispatch')
     runs-on: ubuntu-latest
     timeout-minutes: 45
     steps:
@@ -167,7 +167,7 @@ jobs:
 
   compare:
     name: compare & post PR comment
-    if: github.event_name == 'pull_request'
+    if: (github.event.action != 'edited' || contains(toJSON(github.event.changes), '"base":')) && (github.event_name == 'pull_request')
     needs: capture-pr
     runs-on: ubuntu-latest
     timeout-minutes: 5
@@ -317,7 +317,7 @@ jobs:
 
   profile-on-fail:
     name: samply profile (fail only)
-    if: github.event_name == 'pull_request' && needs.compare.outputs.has_fail == 'true'
+    if: (github.event.action != 'edited' || contains(toJSON(github.event.changes), '"base":')) && (github.event_name == 'pull_request' && needs.compare.outputs.has_fail == 'true')
     needs: compare
     runs-on: ubuntu-latest
     timeout-minutes: 15
@@ -395,7 +395,7 @@ jobs:
 
   update-baseline:
     name: update bench-baseline branch
-    if: github.event_name == 'push' && github.ref == 'refs/heads/dev'
+    if: (github.event.action != 'edited' || contains(toJSON(github.event.changes), '"base":')) && (github.event_name == 'push' && github.ref == 'refs/heads/dev')
     runs-on: ubuntu-latest
     timeout-minutes: 45
     permissions:
