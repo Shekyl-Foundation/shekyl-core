@@ -15,7 +15,7 @@ use shekyl_draw_rng::RelayRng;
 use shekyl_types::{BlockCount, BlockHeight};
 
 use super::fork_depth;
-use crate::model::{draw_one, Command, HashClass, Sync};
+use crate::model::{draw_one, AlarmWrite, Command, Evidence, HashClass, Sync};
 use crate::peer::Run;
 
 impl<K, R> Sync<K, R>
@@ -23,8 +23,19 @@ where
     K: Copy + Ord + std::hash::Hash + std::fmt::Debug,
     R: Fn(BlockHeight) -> RuleSet,
 {
+    /// Ask for the latch write with `evidence`. It is in flight until the
+    /// latch watch reports it set or the owner reports it refused.
+    pub(crate) fn raise_alarm(&mut self, evidence: Evidence, out: &mut Vec<Command<K>>) {
+        out.push(Command::RaiseAlarm {
+            fork_at: evidence.fork_at,
+            tip: evidence.tip,
+            work: evidence.work,
+        });
+        self.alarm_write = AlarmWrite::InFlight(evidence);
+    }
+
     pub(crate) fn alarm_from_tree(&mut self, out: &mut Vec<Command<K>>) {
-        if self.alarm_sent {
+        if self.alarm_write != AlarmWrite::Idle {
             return;
         }
         let Some(local) = self.local else {
@@ -48,8 +59,7 @@ where
         let Some((tip, work, fork_at)) = past_cap else {
             return;
         };
-        out.push(Command::RaiseAlarm { fork_at, tip, work });
-        self.alarm_sent = true;
+        self.raise_alarm(Evidence { fork_at, tip, work }, out);
         self.tree.mark_invalid(tip);
     }
 
@@ -72,13 +82,13 @@ where
             .local
             .map(|l| l.work)
             .unwrap_or(CumulativeDifficulty::ZERO);
-        if work > local && !self.alarm_sent {
-            out.push(Command::RaiseAlarm {
+        if work > local && self.alarm_write == AlarmWrite::Idle {
+            let evidence = Evidence {
                 fork_at: run.chain.parent_height,
                 tip: run.chain.checked[run.chain.proven - 1].hash,
                 work,
-            });
-            self.alarm_sent = true;
+            };
+            self.raise_alarm(evidence, out);
             self.drop_run(session);
         }
     }

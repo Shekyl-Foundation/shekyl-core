@@ -541,3 +541,70 @@ fn a_body_deadline_is_the_body_budget_at_the_rate_floor() {
     let secs = BODIES_RESPONSE_BYTES / SYNC_RATE_FLOOR;
     assert_eq!(deadline, now + transit + Duration::from_secs(secs));
 }
+
+/// **A refused latch write is retried until the latch is set** (the CS-5
+/// tune-up). The write keeps its evidence through a refusal: the model
+/// asks for a retry `ALARM_RETRY` later, raises the same evidence again
+/// when it fires, and is done only when the latch watch reports the latch
+/// set. A refusal or a retry after that asks for nothing.
+#[test]
+fn a_refused_latch_write_is_retried_until_the_latch_is_set() {
+    use super::{AlarmWrite, Evidence, ALARM_RETRY};
+    let mut sync = Sync::new(Trust::UNPINNED, issued);
+    let evidence = Evidence {
+        fork_at: BlockHeight::from_raw(3),
+        tip: BlockHash::from_bytes([7; 32]),
+        work: CumulativeDifficulty::from_raw(99),
+    };
+    let mut out = Vec::new();
+    sync.raise_alarm(evidence, &mut out);
+    assert!(matches!(out.as_slice(), [Command::RaiseAlarm { .. }]));
+    let now = Instant::now();
+    let step = |sync: &mut Sync<u8, _>, event: Event<u8>| {
+        let mut out = Vec::new();
+        sync.handle(event, &Empty, now, &mut NoDraw, &mut out)
+            .expect("the view answers");
+        out
+    };
+
+    let refused = step(&mut sync, Event::AlarmRefused);
+    assert!(
+        matches!(refused.as_slice(), [Command::ArmAlarmRetry { deadline }] if *deadline == now + ALARM_RETRY),
+        "a refusal did not arm the retry: {refused:?}"
+    );
+    assert!(!sync.alarm, "a refused write set the latch");
+
+    let retried = step(&mut sync, Event::AlarmRetry);
+    assert!(
+        matches!(
+            retried.as_slice(),
+            [Command::RaiseAlarm { fork_at, tip, work }]
+                if *fork_at == evidence.fork_at && *tip == evidence.tip && *work == evidence.work
+        ),
+        "the retry did not raise the same evidence: {retried:?}"
+    );
+
+    let written = step(&mut sync, Event::Latch { set: true });
+    assert!(
+        sync.alarm,
+        "the latch is not set after the successful write"
+    );
+    assert_eq!(sync.alarm_write, AlarmWrite::Written);
+    assert!(
+        !written.iter().any(|command| matches!(
+            command,
+            Command::RaiseAlarm { .. } | Command::ArmAlarmRetry { .. }
+        )),
+        "{written:?}"
+    );
+    for event in [Event::AlarmRefused, Event::AlarmRetry] {
+        let after = step(&mut sync, event);
+        assert!(
+            !after.iter().any(|command| matches!(
+                command,
+                Command::RaiseAlarm { .. } | Command::ArmAlarmRetry { .. }
+            )),
+            "a written latch was asked for again: {after:?}"
+        );
+    }
+}

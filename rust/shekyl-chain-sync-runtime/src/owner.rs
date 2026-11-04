@@ -295,9 +295,29 @@ struct Published {
 
 /// What the owner's own spawned work reports back.
 enum Input {
-    Proven { job: Job, results: Vec<Proved> },
-    Entry { tag: u64, reply: Reply },
-    Served { session: Session, served: Served },
+    Proven {
+        job: Job,
+        results: Vec<Proved>,
+    },
+    Entry {
+        tag: u64,
+        reply: Reply,
+    },
+    Served {
+        session: Session,
+        served: Served,
+    },
+    /// The latch write a `RaiseAlarm` asked for was refused.
+    AlarmRefused,
+}
+
+/// What a deadline on the owner's timer wakes.
+#[derive(Clone, Copy, Debug)]
+enum Wake {
+    /// A request's or a draw's deadline: [`Event::Deadline`].
+    Request(Session, u64),
+    /// A refused latch write's retry: [`Event::AlarmRetry`].
+    AlarmRetry,
 }
 
 /// An offer waiting on the entry.
@@ -378,8 +398,8 @@ struct Owner<C: Clock + Clone, R> {
     rng: R,
     pool_hashes: Arc<dyn Fn() -> Vec<[u8; HASH_SIZE]> + Send + Sync>,
     inputs: mpsc::UnboundedSender<Input>,
-    /// Engine ticks to the (session, request) pairs due then.
-    deadlines: BTreeMap<Tick, Vec<(Session, u64)>>,
+    /// Engine ticks to the wakes due then.
+    deadlines: BTreeMap<Tick, Vec<Wake>>,
     armed: Option<Tick>,
     /// The engine clock's origin, read once at start.
     base: (Instant, Tick),
@@ -929,6 +949,7 @@ where
                 });
                 self.room();
             }
+            Input::AlarmRefused => self.event(Event::AlarmRefused),
             Input::Served { session, served } => {
                 if let Some(serving) = self.serving.get_mut(&session) {
                     serving.busy = false;
@@ -1057,11 +1078,12 @@ where
     }
 
     fn arm(&mut self, deadline: Instant, session: Session, request: u64) {
+        self.arm_wake(deadline, Wake::Request(session, request));
+    }
+
+    fn arm_wake(&mut self, deadline: Instant, wake: Wake) {
         let tick = self.tick_of(deadline);
-        self.deadlines
-            .entry(tick)
-            .or_default()
-            .push((session, request));
+        self.deadlines.entry(tick).or_default().push(wake);
         self.rearm();
     }
 
@@ -1087,8 +1109,13 @@ where
             .deadlines
             .split_off(&Tick::new(now.get().saturating_add(1)));
         let due = std::mem::replace(&mut self.deadlines, later);
-        for (session, request) in due.into_values().flatten() {
-            self.event(Event::Deadline { session, request });
+        for wake in due.into_values().flatten() {
+            match wake {
+                Wake::Request(session, request) => {
+                    self.event(Event::Deadline { session, request });
+                }
+                Wake::AlarmRetry => self.event(Event::AlarmRetry),
+            }
         }
         self.rearm();
     }
@@ -1236,15 +1263,20 @@ where
                     }
                 }
                 Command::RaiseAlarm { fork_at, tip, work } => {
-                    // The latch watch carries the write back as `Latch`.
+                    // The latch watch carries the write back as `Latch`; a
+                    // refusal comes back as `AlarmRefused`, and the model
+                    // retries it.
                     let alarm = self.alarm.clone();
+                    let inputs = self.inputs.clone();
                     tokio::spawn(async move {
                         let evidence = FollowingDegraded { fork_at, tip, work };
                         if let Err(err) = alarm.raise(evidence).await {
-                            tracing::error!(?err, "the latch could not be written");
+                            tracing::error!(?err, "the latch could not be written; it is retried");
+                            let _gone = inputs.send(Input::AlarmRefused);
                         }
                     });
                 }
+                Command::ArmAlarmRetry { deadline } => self.arm_wake(deadline, Wake::AlarmRetry),
                 Command::RequestComplement { session } => {
                     let request = GetTxpoolComplement {
                         hashes: (self.pool_hashes)(),
