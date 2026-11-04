@@ -974,19 +974,22 @@ mod tests {
     /// How long a connect from a `dial_socket` takes to be refused, and what
     /// it ends with.
     #[cfg(windows)]
+    /// `direct`'s socket, refused by a port this test holds bound and not
+    /// listening. The port stays ours through the connect, so a parallel test
+    /// cannot accept it, including between Windows' SYN retries.
     async fn refused_after(direct: bool) -> (std::io::ErrorKind, Duration) {
-        let port = {
-            let listener =
-                std::net::TcpListener::bind((std::net::Ipv4Addr::LOCALHOST, 0)).expect("bind");
-            listener.local_addr().expect("addr").port()
-        };
-        let target = SocketAddr::from((std::net::Ipv4Addr::LOCALHOST, port));
+        let refusing = TcpSocket::new_v4().expect("socket");
+        refusing
+            .bind(SocketAddr::from((Ipv4Addr::LOCALHOST, 0)))
+            .expect("bind");
+        let target = refusing.local_addr().expect("addr");
         let started = Instant::now();
         let err = dial_socket(target, direct)
             .expect("a socket")
             .connect(target)
             .await
             .expect_err("nothing listens");
+        drop(refusing);
         (err.kind(), started.elapsed())
     }
 
