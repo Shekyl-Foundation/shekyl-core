@@ -2727,17 +2727,11 @@ constexpr int SHEKYL_PEERLIST_NO_SESSION = 3;
 constexpr int SHEKYL_PEERLIST_NO_HUB = 4;
 /// BAD_ARGUMENT: a null pointer with a non-zero count; nothing was admitted.
 constexpr int SHEKYL_PEERLIST_BAD_ARGUMENT = 5;
-/// The outbound handshake's result, posted by the Rust dialer as kind
-/// SHEKYL_SEAM_HANDSHAKE after `established` and ahead of any frame. Rust
-/// has already accepted the kept dial. The strand reads these fields and
-/// does not answer; it does not parse a Levin response. A confirm dial
-/// is not posted.
-struct shekyl_seam_handshake_result {
-  std::uint64_t current_height;
-  std::uint64_t cumulative_difficulty;
-  std::uint64_t cumulative_difficulty_top64;
-  std::uint8_t top_id[32];
-};
+/// Kind SHEKYL_SEAM_HANDSHAKE is posted by the Rust dialer after
+/// `established` and ahead of any frame, with no bytes: Rust has already
+/// accepted the kept dial, and the strand only learns that the session is
+/// established. The peer's sync payload is chain sync's. A confirm dial is
+/// not posted.
 /// The inbound handshake's nonce check, erasing what it finds. 0 is a
 /// peer's handshake. Any other code is this node's own dial, which the
 /// caller drops: 1 a peer dial of ours, 2 the managed Tor's probe of its

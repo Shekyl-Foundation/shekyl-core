@@ -113,9 +113,10 @@ constexpr const std::chrono::milliseconds LEVIN_DEFAULT_TIMEOUT_PRECONFIGURED{0}
     virtual int invoke(int command, const epee::span<const uint8_t> in_buff, byte_stream& buff_out, t_connection_context& context)=0;
     virtual int notify(int command, const epee::span<const uint8_t> in_buff, t_connection_context& context)=0;
     virtual void callback(t_connection_context& context){};
-    /// The Rust dialer kept an outbound session: the handler reads the
-    /// peer's sync payload and flags. Nothing is accepted or refused here.
-    virtual void on_outbound_handshake(t_connection_context& context, const shekyl_seam_handshake_result& result){ (void)context; (void)result; };
+    /// The Rust dialer kept an outbound session, which is now established.
+    /// Nothing is accepted or refused here; the peer's sync payload is
+    /// chain sync's.
+    virtual void on_outbound_handshake(t_connection_context& context){ (void)context; };
 
     virtual void on_connection_new(t_connection_context& context){};
     virtual void on_connection_close(t_connection_context& context){};

@@ -41,7 +41,8 @@ pub(crate) const POST_ESTABLISHED: u32 = 1;
 const POST_DELIVER: u32 = 2;
 /// `closed`.
 const POST_CLOSED: u32 = 3;
-/// The outbound handshake's result: `bytes` is one [`ShekylSeamHandshakeResult`].
+/// A kept dial's handshake completed. No bytes: the C++ relay reads only
+/// that the session is established; the peer's claim is chain sync's.
 pub(crate) const POST_HANDSHAKE: u32 = 4;
 
 /// Clearnet. Matches [`ConnectorId::Clearnet`].
@@ -82,37 +83,6 @@ pub struct ShekylSeamAddress {
     pub len: u16,
     pub bytes: [u8; TOR_HOST_MAX],
 }
-
-/// What a kept dial's handshake notification carries. The strand reads
-/// these fields and does not answer. Only a kept dial is posted.
-#[repr(C)]
-#[derive(Clone, Copy)]
-pub struct ShekylSeamHandshakeResult {
-    /// The peer's `CORE_SYNC_DATA`.
-    pub current_height: u64,
-    pub cumulative_difficulty: u64,
-    pub cumulative_difficulty_top64: u64,
-    pub top_id: [u8; 32],
-}
-
-impl ShekylSeamHandshakeResult {
-    /// The struct's bytes in its C layout, written field by field so the
-    /// post carries no padding read from the stack.
-    fn to_bytes(self) -> [u8; 56] {
-        let mut out = [0u8; 56];
-        out[0..8].copy_from_slice(&self.current_height.to_ne_bytes());
-        out[8..16].copy_from_slice(&self.cumulative_difficulty.to_ne_bytes());
-        out[16..24].copy_from_slice(&self.cumulative_difficulty_top64.to_ne_bytes());
-        out[24..56].copy_from_slice(&self.top_id);
-        out
-    }
-}
-
-const _: () = {
-    assert!(std::mem::size_of::<ShekylSeamHandshakeResult>() == 56);
-    assert!(std::mem::offset_of!(ShekylSeamHandshakeResult, current_height) == 0);
-    assert!(std::mem::offset_of!(ShekylSeamHandshakeResult, top_id) == 24);
-};
 
 /// What `established` carries upward.
 #[repr(C)]
@@ -666,27 +636,18 @@ fn post_one(bound: &Bound, item: Post) {
         // Chain sync's owner's: the router keeps it, and the strand does
         // not read it.
         Post::Opened { .. } => {}
-        Post::HandshakeResult {
-            id,
-            connector,
-            sync,
-        } => {
+        // The C++ relay hears that the kept dial's session is established.
+        // The peer's claim is the router's, for chain sync's owner.
+        Post::HandshakeResult { id, connector, .. } => {
             let observed = routing_c(connector);
-            let result = ShekylSeamHandshakeResult {
-                current_height: sync.current_height,
-                cumulative_difficulty: sync.cumulative_difficulty,
-                cumulative_difficulty_top64: sync.cumulative_difficulty_top64,
-                top_id: sync.top_id,
-            };
-            let bytes = result.to_bytes();
             unsafe {
                 (bound.post)(
                     bound.ctx.get(),
                     id.get(),
                     POST_HANDSHAKE,
                     &raw const observed,
-                    bytes.as_ptr(),
-                    bytes.len(),
+                    std::ptr::null(),
+                    0,
                     std::ptr::null(),
                 );
             }

@@ -46,63 +46,6 @@ namespace cryptonote
   /************************************************************************/
   /*                                                                      */
   /************************************************************************/
-  struct tx_blob_entry
-  {
-    blobdata blob;
-    crypto::hash prunable_hash;
-    BEGIN_KV_SERIALIZE_MAP()
-      KV_SERIALIZE(blob)
-      KV_SERIALIZE_VAL_POD_AS_BLOB(prunable_hash)
-    END_KV_SERIALIZE_MAP()
-
-    tx_blob_entry(const blobdata &bd = {}, const crypto::hash &h = crypto::null_hash): blob(bd), prunable_hash(h) {}
-  };
-  struct block_complete_entry
-  {
-    bool pruned;
-    blobdata block;
-    uint64_t block_weight;
-    std::vector<tx_blob_entry> txs;
-    // Credit-wire attestation witness (ARCHIVAL_CREDIT_WIRE.md §3, credit-wire
-    // CW-2): the opaque Rust-canonical witness bytes for this block, committed by
-    // the mined attestation_root header field and stored in a prunable side table.
-    // Carried independently of `pruned` (a block's witness has nothing to do with
-    // its tx pruning), absent-and-empty on old peers. Never interpreted here.
-    blobdata attestation_witness;
-    BEGIN_KV_SERIALIZE_MAP()
-      KV_SERIALIZE_OPT(pruned, false)
-      KV_SERIALIZE(block)
-      KV_SERIALIZE_OPT(block_weight, (uint64_t)0)
-      if (this_ref.pruned)
-      {
-        KV_SERIALIZE(txs)
-      }
-      else
-      {
-        std::vector<blobdata> txs;
-        if (is_store)
-        {
-          txs.reserve(this_ref.txs.size());
-          for (const auto &e: this_ref.txs) txs.push_back(e.blob);
-        }
-        epee::serialization::selector<is_store>::serialize(txs, stg, hparent_section, "txs");
-        if (!is_store)
-        {
-          block_complete_entry &self = const_cast<block_complete_entry&>(this_ref);
-          self.txs.clear();
-          self.txs.reserve(txs.size());
-          for (auto &e: txs) self.txs.push_back({std::move(e), crypto::null_hash});
-        }
-      }
-      KV_SERIALIZE_OPT(attestation_witness, blobdata{})
-    END_KV_SERIALIZE_MAP()
-
-    block_complete_entry(): pruned(false), block_weight(0) {}
-  };
-
-  /************************************************************************/
-  /*                                                                      */
-  /************************************************************************/
   struct NOTIFY_NEW_TRANSACTIONS
   {
     const static int ID = BC_COMMANDS_POOL_BASE + 2;

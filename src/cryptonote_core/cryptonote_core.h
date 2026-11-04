@@ -165,11 +165,6 @@ namespace cryptonote
      std::time_t get_start_time() const;
 
      /**
-      * @brief the handler's stop hook; the one stop path is the entry's (DX-Q6)
-      */
-     void stop();
-
-     /**
       * @brief get the network type we're on
       *
       * @return which network are we on?

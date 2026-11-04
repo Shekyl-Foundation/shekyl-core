@@ -421,17 +421,12 @@ private:
     }
     else if (kind == SHEKYL_SEAM_HANDSHAKE && link)
     {
-      // A notification for a kept dial. Rust already recorded
-      // SessionAccepted; nothing waits for a reply. A confirm dial is
-      // finished in Rust and is not posted. The peer's claim is chain
-      // sync's, from the hub's HandshakeResult; the session's
-      // establishment is all this posts onward.
-      shekyl_seam_handshake_result result{};
-      if (bytes.size() == sizeof(result) && m_config->commands_handler())
-      {
-        std::memcpy(&result, bytes.data(), sizeof(result));
-        m_config->commands_handler()->on_outbound_handshake(link->context_mut(), result);
-      }
+      // A notification for a kept dial, with no bytes. Rust already
+      // recorded SessionAccepted; nothing waits for a reply. A confirm dial
+      // is finished in Rust and is not posted. The peer's claim is chain
+      // sync's; the session's establishment is all this posts onward.
+      if (m_config->commands_handler())
+        m_config->commands_handler()->on_outbound_handshake(link->context_mut());
     }
     else if (kind == SHEKYL_SEAM_CLOSED && link)
     {

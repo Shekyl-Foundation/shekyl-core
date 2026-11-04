@@ -28,7 +28,7 @@
 //
 // Negative-controlled at introduction (TSR-F1, PR #1092), each injected into
 // a header, a Rust source or the manifest and observed to fail the gate. In
-// shekyl_seam_handshake_result: current_height and cumulative_difficulty
+// shekyl_seam_handshake_result (since deleted with its payload): current_height and cumulative_difficulty
 // swapped (one width, so the size agrees) -> member-name compare;
 // support_flags widened to uint64_t -> size and type; _pad dropped, top_id
 // renamed, and a member only the header has carved out of _pad -> each the

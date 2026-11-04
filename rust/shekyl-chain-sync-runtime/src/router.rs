@@ -51,8 +51,9 @@
 //!   C++ handler, which no longer reads chain sync's messages.
 //!
 //! [`Post::Closed`] goes to the owner as well as onward, and
-//! [`Post::HandshakeResult`] goes to the owner as a claim and onward too,
-//! so the C++ handler keeps its own copy. [`Post::Established`] is the
+//! [`Post::HandshakeResult`] goes to the owner as a claim, and onward as
+//! the signal that a kept dial's session is established; its payload does
+//! not cross to C++. [`Post::Established`] is the
 //! handler's alone: a channel is attached before its Levin handshake.
 //! [`Post::Opened`] is the owner's alone: the handshake has completed,
 //! and only then may the owner speak to the peer.
