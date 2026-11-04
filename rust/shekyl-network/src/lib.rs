@@ -121,6 +121,13 @@ impl Network {
         self.row().ports
     }
 
+    /// The seed hosts a node admits at start (the dialer's compiled
+    /// seeds); empty where the network has none.
+    #[must_use]
+    pub const fn seeds(self) -> &'static [Seed] {
+        self.row().seeds
+    }
+
     /// The subdirectory of the daemon's root its default data directory
     /// is; `None` for the root itself.
     #[must_use]
@@ -222,8 +229,25 @@ pub struct Row {
     pub permits: &'static [Lever],
     /// The staging flags this network accepts: test networks only.
     pub staging: &'static [Staging],
+    /// The seed hosts a node admits at start; empty where there are none.
+    pub seeds: &'static [Seed],
     /// The genesis.
     pub genesis: &'static Genesis,
+}
+
+/// One Foundation seed host on a network's row: its clearnet address and,
+/// where the network runs one, its v3 onion (with `.onion`). Both are
+/// dialed on the row's p2p port. The address and the onion are one entry,
+/// so replacing either keeps the pair.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct Seed {
+    /// The host's IPv4 octets.
+    pub ipv4: [u8; 4],
+    /// The host's onion on this network, if it runs one.
+    pub onion: Option<&'static str>,
+    /// Where the host sits; a dial does not read it. It keeps the entry
+    /// recognizable when an address is replaced.
+    pub place: &'static str,
 }
 
 /// A network's Bech32m address prefixes (human-readable parts).
@@ -364,6 +388,76 @@ impl Staging {
     }
 }
 
+/// Mainnet's seeds: the six Foundation hosts' clearnet addresses. Mainnet
+/// runs no hidden service.
+const MAINNET_SEEDS: [Seed; 6] = [
+    Seed {
+        ipv4: [134, 199, 166, 22],
+        onion: None,
+        place: "Sydney",
+    },
+    Seed {
+        ipv4: [45, 77, 147, 65],
+        onion: None,
+        place: "US East",
+    },
+    Seed {
+        ipv4: [45, 76, 171, 128],
+        onion: None,
+        place: "US West",
+    },
+    Seed {
+        ipv4: [45, 77, 66, 189],
+        onion: None,
+        place: "EU Frankfurt",
+    },
+    Seed {
+        ipv4: [139, 162, 71, 114],
+        onion: None,
+        place: "Tokyo",
+    },
+    Seed {
+        ipv4: [104, 64, 59, 31],
+        onion: None,
+        place: "Brazil",
+    },
+];
+
+/// Testnet's seeds: the same six hosts, each with its testnet onion, the
+/// canonical Tor bootstrap (Q12-R1).
+const TESTNET_SEEDS: [Seed; 6] = [
+    Seed {
+        ipv4: [134, 199, 166, 22],
+        onion: Some("aghoxa757l2wqribeto2hv2rk3wjwcwdqzvu5hjkqdjcm24nuhaszjqd.onion"),
+        place: "Sydney",
+    },
+    Seed {
+        ipv4: [45, 77, 147, 65],
+        onion: Some("23dkgevx7qnhrx2wmhmjvhsz2mpp54xomkujcvhuhm3ajgdciwztypad.onion"),
+        place: "US East",
+    },
+    Seed {
+        ipv4: [45, 76, 171, 128],
+        onion: Some("nqkfnallpz5kaoxkj2y6bmeifk4helrwp5z2fdtayo3rfzbx4q7z2tqd.onion"),
+        place: "US West",
+    },
+    Seed {
+        ipv4: [45, 77, 66, 189],
+        onion: Some("aks2vbpjb5ojfyqcataqedodws7ardjxczy76bqwmlv55mgfunsxoiyd.onion"),
+        place: "EU Frankfurt",
+    },
+    Seed {
+        ipv4: [139, 162, 71, 114],
+        onion: Some("e2fafquqkf4jodx6rwh2akgyu2gy3spxcyc2ustnuqw46vrk2xe365qd.onion"),
+        place: "Tokyo",
+    },
+    Seed {
+        ipv4: [104, 64, 59, 31],
+        onion: Some("mjgznic6uwrccelrq6fqjmmv2f7gaskd3nxcs76hjrrfc4tse7wioqqd.onion"),
+        place: "Brazil",
+    },
+];
+
 const STAGED: &[Staging] = &[Staging::ClearnetEncrypt, Staging::RelayCover];
 
 const ROWS: [Row; 4] = [
@@ -384,6 +478,7 @@ const ROWS: [Row; 4] = [
         subdirectory: None,
         permits: &[],
         staging: &[],
+        seeds: &MAINNET_SEEDS,
         genesis: &genesis::MAINNET,
     },
     Row {
@@ -403,6 +498,7 @@ const ROWS: [Row; 4] = [
         subdirectory: Some("testnet"),
         permits: &[],
         staging: STAGED,
+        seeds: &TESTNET_SEEDS,
         genesis: &genesis::TESTNET,
     },
     Row {
@@ -422,6 +518,7 @@ const ROWS: [Row; 4] = [
         subdirectory: Some("stagenet"),
         permits: &[],
         staging: STAGED,
+        seeds: &[],
         genesis: &genesis::STAGENET,
     },
     Row {
@@ -441,6 +538,7 @@ const ROWS: [Row; 4] = [
         subdirectory: Some("regtest"),
         permits: &Lever::ALL,
         staging: STAGED,
+        seeds: &[],
         genesis: &genesis::REGTEST,
     },
 ];

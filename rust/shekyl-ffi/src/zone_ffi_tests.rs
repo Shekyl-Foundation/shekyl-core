@@ -364,7 +364,7 @@ fn a_tor_only_start_admits_the_compiled_onion_seeds() {
 
     let dialer = crate::dialer_ffi::dialer().expect("the dialer exists");
     let shared = dialer.shared();
-    let onions: Vec<_> = shekyl_dialer::seeds(shekyl_dialer::SeedNetwork::Testnet)
+    let onions: Vec<_> = shekyl_dialer::seeds(shekyl_address::Network::Testnet)
         .into_iter()
         .filter(|address| {
             shekyl_peerlist::Peerlist::connector_of(address) == Some(ConnectorId::Tor)

@@ -30,7 +30,7 @@ use shekyl_daemon_config::sections::P2p;
 /// The probe's handshake. The managed-Tor driver names it here, and does
 /// not depend on the dialer crate.
 pub use shekyl_dialer::ProbeHandshake;
-use shekyl_dialer::{seeds, Dialer, LoadError, NonceTake, SeedNetwork};
+use shekyl_dialer::{seeds, Dialer, LoadError, NonceTake};
 use shekyl_options::PeerEndpoint;
 use shekyl_peerlist::Peerlist;
 use std::net::SocketAddr;
@@ -61,10 +61,10 @@ static LOOPS: Mutex<[Option<DedicatedThread>; ConnectorId::COUNT]> =
 /// The core's latest published tip. `None` until the first publish.
 static TIP: Mutex<Option<SyncPayload>> = Mutex::new(None);
 
-/// Which network's seeds to admit. `None` until
-/// [`shekyl_dialer_note_network`], and `None` for stagenet and regtest,
-/// which have no compiled seeds.
-static NETWORK: Mutex<SeedNetwork> = Mutex::new(SeedNetwork::None);
+/// The network whose seeds to admit: `None` until
+/// [`shekyl_dialer_note_network`]. Its row's seed list may be empty
+/// (stagenet, regtest).
+static NETWORK: Mutex<Option<Network>> = Mutex::new(None);
 
 pub(crate) fn dialer() -> Option<Arc<Dialer>> {
     DIALER.lock().expect("dialer").clone()
@@ -124,16 +124,11 @@ pub(crate) fn set_network_id(network_id: [u8; 16]) {
     }
 }
 
-/// The daemon's chosen network, mapped onto the seed list that network
-/// admits. Stagenet and regtest admit none. An id derivation must not
-/// call this: [`crate::network_id_ffi::shekyl_network_id`] is pure.
+/// The daemon's chosen network, whose row's seeds the dialer admits. An id
+/// derivation must not call this:
+/// [`crate::network_id_ffi::shekyl_network_id`] is pure.
 pub(crate) fn note_network(network: Network) {
-    let seeds_of = match network {
-        Network::Mainnet => SeedNetwork::Mainnet,
-        Network::Testnet => SeedNetwork::Testnet,
-        Network::Stagenet | Network::Regtest => SeedNetwork::None,
-    };
-    *NETWORK.lock().expect("network") = seeds_of;
+    *NETWORK.lock().expect("network") = Some(network);
 }
 
 /// Records the network this process dials. `nettype` is
@@ -223,7 +218,7 @@ pub(crate) fn start_connector(connector: ConnectorId, engine: &Handle<MonotonicC
 fn admit_compiled_seeds(dialer: &Dialer, connector: ConnectorId) {
     let network = *NETWORK.lock().expect("network");
     let now = dialer.hub().now();
-    for seed in seeds(network) {
+    for seed in network.map(seeds).unwrap_or_default() {
         if Peerlist::connector_of(&seed) != Some(connector) {
             continue;
         }

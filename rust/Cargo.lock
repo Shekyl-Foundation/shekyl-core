@@ -4389,6 +4389,7 @@ dependencies = [
  "shekyl-dialer",
  "shekyl-draw-rng",
  "shekyl-levin",
+ "shekyl-network",
  "shekyl-onion-v3",
  "shekyl-peer-policy",
  "shekyl-peerlist",

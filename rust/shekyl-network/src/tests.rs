@@ -116,3 +116,25 @@ fn a_permit_is_the_rows_permission() {
         }
     }
 }
+
+/// The seeds are the row's: mainnet and testnet share six hosts, testnet
+/// pairs each with its onion, and stagenet and regtest have none.
+#[test]
+fn the_seed_lists_are_the_rows() {
+    let main = Network::Mainnet.seeds();
+    let test = Network::Testnet.seeds();
+    assert_eq!(main.len(), 6);
+    assert_eq!(test.len(), 6);
+    for (m, t) in main.iter().zip(test) {
+        assert_eq!((m.ipv4, m.place), (t.ipv4, t.place));
+        assert_eq!(m.onion, None);
+        let onion = t.onion.expect("testnet pairs each host with its onion");
+        assert!(onion.ends_with(".onion") && onion.len() == 62, "{onion}");
+    }
+    let mut places: Vec<_> = main.iter().map(|s| s.place).collect();
+    places.sort_unstable();
+    places.dedup();
+    assert_eq!(places.len(), 6, "six distinct hosts");
+    assert!(Network::Stagenet.seeds().is_empty());
+    assert!(Network::Regtest.seeds().is_empty());
+}
