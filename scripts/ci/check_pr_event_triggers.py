@@ -18,7 +18,7 @@ What a passing `pull_request` trigger is:
 * a mapping, with no `branches` or `branches-ignore`
 * `types` exactly `[opened, synchronize, reopened, edited]`
 * every job carries
-  `(github.event.action != 'edited' || github.event.changes.base.ref.from)`
+  `(github.event.action != 'edited' || contains(toJSON(github.event.changes), 'base'))`
   so a title edit runs nothing and a base change runs the job
 
 A job whose name interpolates `matrix.*` cannot carry it on the job `if`:
@@ -53,13 +53,13 @@ WORKFLOWS = os.path.join(ROOT, ".github", "workflows")
 # naming `types` replaces that default, so dropping one of them is silent.
 TYPES = ["opened", "synchronize", "reopened", "edited"]
 
-# `changes.base` is an object when the base changed and absent otherwise.
-# Comparing that object with `!= null` does not come out true (the retarget
-# of #1269 skipped every job), so the condition uses the old ref, which is
-# a string only then. A non-empty string is truthy; an absent one is not.
+# `github.event.changes` is absent except on `edited`. Indexing it fails the
+# `if` on a push, so every job skips. `toJSON` of an absent value stays
+# defined, and that JSON contains `base` only when the base changed.
+# Comparing the object with `!= null` also did not come out true.
 CLAUSE_RE = re.compile(
     r"\(\s*github\.event\.action\s*!=\s*'edited'\s*\|\|\s*"
-    r"github\.event\.changes\.base\.ref\.from\s*\)"
+    r"contains\(toJSON\(github\.event\.changes\),\s*'base'\)\s*\)"
 )
 
 # Kept in step with check_matrix_job_gating.ALLOWED. A row here that is not
@@ -124,7 +124,7 @@ def _steps_lack_clause(filename: str, jid: str, job: dict) -> list[str]:
             out.append(
                 f"{filename}: job `{jid}` step {index} is missing the retarget "
                 "condition `(github.event.action != 'edited' || "
-                "github.event.changes.base.ref.from)`"
+                "contains(toJSON(github.event.changes), 'base'))`"
             )
     return out
 
@@ -183,7 +183,7 @@ def problems_in(filename: str, doc: object) -> list[str]:
 
 def _clause() -> str:
     return (
-        "(github.event.action != 'edited' || github.event.changes.base.ref.from)"
+        "(github.event.action != 'edited' || contains(toJSON(github.event.changes), 'base'))"
     )
 
 
@@ -274,7 +274,7 @@ jobs:
   archive:
     name: source archive
     if: >-
-      (github.event.action != 'edited' || github.event.changes.base.ref.from)
+      (github.event.action != 'edited' || contains(toJSON(github.event.changes), 'base'))
       && (
       (github.event_name == 'push'))
     runs-on: ubuntu-latest
