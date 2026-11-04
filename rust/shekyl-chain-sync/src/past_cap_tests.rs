@@ -26,7 +26,7 @@ use crate::{Command, PeerClaim};
 fn the_latch_plans_no_evidence_hash() {
     let rules = cap(1);
     let main = chain_of(8);
-    let mut sync = Sync::new(Trust::UNANCHORED, move |_| rules);
+    let mut sync = Sync::new(Trust::UNPINNED, move |_| rules);
     main.with_view(|view| {
         let tip = view.tip().unwrap().unwrap();
         let mut out = Vec::new();
@@ -82,7 +82,7 @@ fn a_past_cap_run_holds_only_its_window() {
     let rules = cap(1);
     let main = chain_of(400);
     let window = N_USIZE.max(MTP_WINDOW_USIZE).saturating_add(8);
-    let mut sync = Sync::new(Trust::UNANCHORED, move |_| rules);
+    let mut sync = Sync::new(Trust::UNPINNED, move |_| rules);
     main.with_view(|raw| {
         let view = UnitWork(raw);
         let tip = view.tip().unwrap().unwrap();
@@ -146,7 +146,7 @@ fn the_evidence_draw_is_uniform_over_the_waiting_candidates() {
     let mut blobs = Vec::new();
     let mut parent = prefix[0].hash;
     let mut timestamp = prefix[0].header.timestamp;
-    let mut scratch = Sync::new(Trust::UNANCHORED, move |_| rules);
+    let mut scratch = Sync::new(Trust::UNPINNED, move |_| rules);
     main.with_view(|raw| {
         let view = UnitWork(raw);
         let tip = view.tip().unwrap().unwrap();
@@ -185,7 +185,7 @@ fn the_evidence_draw_is_uniform_over_the_waiting_candidates() {
     let mut hits = [0u32; 2];
     let trials = 80u64;
     for seed in 0..trials {
-        let mut sync = Sync::new(Trust::UNANCHORED, move |_| rules);
+        let mut sync = Sync::new(Trust::UNPINNED, move |_| rules);
         let mut rng = SplitMix64::new(seed.wrapping_mul(0x9E37_79B9_7F4A_7C15));
         main.with_view(|raw| {
             let view = UnitWork(raw);
@@ -330,7 +330,7 @@ fn a_bind_failure_closes_and_an_unavailable_block_does_not() {
     let rules = cap(64);
     let main = chain_of(21);
     let mut block = candidate_on(&main, Vec::new()).block;
-    let mut sync = Sync::new(Trust::UNANCHORED, move |_| rules);
+    let mut sync = Sync::new(Trust::UNPINNED, move |_| rules);
     main.with_view(|view| {
         let tip = view.tip().unwrap().unwrap();
         let mut out = Vec::new();
@@ -443,7 +443,7 @@ fn a_bind_failure_closes_and_an_unavailable_block_does_not() {
 /// Two honest sessions extend one frontier with one header request.
 #[test]
 fn one_header_request_extends_the_frontier() {
-    let mut sync = Sync::new(Trust::UNANCHORED, |_: BlockHeight| RuleSet::GENESIS);
+    let mut sync = Sync::new(Trust::UNPINNED, |_: BlockHeight| RuleSet::GENESIS);
     let main = chain_of(4);
     main.with_view(|view| {
         let tip = view.tip().unwrap().unwrap();
@@ -523,7 +523,7 @@ fn an_evidence_refetch_after_a_whole_fork_response_is_proven() {
     }
     .store()
     .expect("the response encodes");
-    let mut sync = Sync::new(Trust::UNANCHORED, move |_| rules);
+    let mut sync = Sync::new(Trust::UNPINNED, move |_| rules);
     main.with_view(|raw| {
         let view = UnitWork(raw);
         let tip = view.tip().unwrap().unwrap();
@@ -647,7 +647,7 @@ fn a_page_during_an_evidence_check_does_not_end_it() {
     }
     .store()
     .expect("the response encodes");
-    let mut sync = Sync::new(Trust::UNANCHORED, move |_| rules);
+    let mut sync = Sync::new(Trust::UNPINNED, move |_| rules);
     main.with_view(|raw| {
         let view = UnitWork(raw);
         let tip = view.tip().unwrap().unwrap();
@@ -776,7 +776,7 @@ fn an_evidence_candidate_is_drawn_when_nothing_else_arrives() {
     let mut block = candidate_on(&main, Vec::new()).block;
     let mut parent = prefix[0].hash;
     let mut timestamp = prefix[0].header.timestamp;
-    let mut sync = Sync::new(Trust::UNANCHORED, move |_| rules);
+    let mut sync = Sync::new(Trust::UNPINNED, move |_| rules);
     main.with_view(|raw| {
         let view = UnitWork(raw);
         let tip = view.tip().unwrap().unwrap();

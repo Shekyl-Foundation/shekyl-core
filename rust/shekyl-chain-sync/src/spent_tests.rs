@@ -88,7 +88,7 @@ fn headers_asked(out: &[Command<u8>], session: u8) -> Vec<Vec<[u8; 32]>> {
 /// Session 1 serves the three headers into `T` and leaves; `H*` is the
 /// third. Session 2 is open with a claim above it and has been asked.
 fn primed(main: &MockChain, pows: &[Vec<u8>]) -> Model {
-    let mut sync: Model = Sync::new(Trust::UNANCHORED, target_one);
+    let mut sync: Model = Sync::new(Trust::UNPINNED, target_one);
     main.with_view(|view| {
         let tip = view.tip().expect("main answers").expect("a tip");
         drive(&mut sync, &view, Event::Tip { tip });
@@ -307,7 +307,7 @@ fn an_answer_already_held_with_more_continues_from_its_last_header() {
 fn children_of_a_popped_block_leave_t_and_are_served_again_above_it() {
     let main = chain_of(8);
     let (pows, hashes) = three_above(&main);
-    let mut sync: Model = Sync::new(Trust::UNANCHORED, target_one);
+    let mut sync: Model = Sync::new(Trust::UNPINNED, target_one);
     main.with_view(|view| {
         let tip = view.tip().expect("main answers").expect("a tip");
         drive(&mut sync, &view, Event::Tip { tip });

@@ -8,7 +8,7 @@
 //!
 //! What a connection may ask for is its grant set; whether it is the host's
 //! administrator decides host-only data and the armed levers; whether it is
-//! bounded decides what one request may cost. All three are one value,
+//! bounded is what the handlers' caps read. All three are one value,
 //! [`Authority`], stamped on every request as a request extension
 //! ([`stamp`]), and every gate reads it:
 //!
@@ -33,7 +33,7 @@ use axum::response::{IntoResponse, Response};
 use axum::Json;
 use shekyl_rpc_types::errors::{Diagnostic, ErrorClass, RpcError};
 use shekyl_rpc_types::methods::{
-    admit_armed, caller_bounded, rest_path, Cost, Grant, GrantSet, Method, Policy, Preset,
+    admit_armed, caller_bounded, rest_path, Grant, GrantSet, Method, Policy, Preset,
 };
 
 use crate::info::Disclosure;
@@ -45,9 +45,6 @@ pub mod codes {
     pub const OUTSIDE_THE_GRANT: &str = "rpc.grant.outside";
     /// The method is served only to the host's administrator.
     pub const HOST_ONLY: &str = "rpc.grant.host_only";
-    /// No resource bound is set for the method yet, and the caller is
-    /// bounded.
-    pub const NO_BOUND_YET: &str = "rpc.bound.unset";
 }
 
 /// What one connection may do.
@@ -125,9 +122,10 @@ impl Authority {
     /// - [`ErrorClass::OutsideTheGrant`] when the row's grant is not held,
     ///   when host-only data or an armed lever is asked for by anyone but the
     ///   host's administrator, or when an armed lever is asked for with the
-    ///   switch off;
-    /// - [`ErrorClass::OverResourceBound`] when the row has no bound yet and
-    ///   the caller is bounded.
+    ///   switch off.
+    ///
+    /// A request over a handler's bound is that handler's refusal. Admit
+    /// decides who may call the row.
     pub fn admit(self, row: &Method) -> Result<(), RpcError> {
         let host_only = || {
             RpcError::new(
@@ -173,16 +171,6 @@ impl Authority {
                 admit_armed(row, self.armed)?;
             }
         }
-        if row.cost == Cost::Unbounded && self.bounded() {
-            return Err(RpcError::new(
-                ErrorClass::OverResourceBound,
-                Diagnostic::new(
-                    codes::NO_BOUND_YET,
-                    format!("{} has no resource bound for this connection yet", row.name),
-                )
-                .param("method", row.name),
-            ));
-        }
         Ok(())
     }
 }
@@ -190,12 +178,7 @@ impl Authority {
 /// The JSON-RPC error object a refusal is on every surface (RW-Q3).
 #[must_use]
 pub fn refusal(id: serde_json::Value, error: &RpcError) -> JsonRpcResponse {
-    JsonRpcResponse::error_with_data(
-        id,
-        error.class.code(),
-        error.diagnostic.message.clone(),
-        serde_json::to_value(&error.diagnostic).ok(),
-    )
+    crate::methods::RpcRefusal::of_error(error).to_json_rpc(id)
 }
 
 /// The message of a grant refusal, when `raw` is that envelope.
@@ -288,16 +271,10 @@ mod tests {
     }
 
     #[test]
-    fn an_unbounded_row_is_refused_to_a_bounded_caller() {
+    fn calc_pow_and_the_coinbase_sum_are_admitted_on_the_view_listener() {
         let view = Authority::VIEW_LISTENER;
         for name in ["calc_pow", "get_coinbase_tx_sum"] {
-            let refused = view.admit(row(name)).expect_err(name);
-            assert_eq!(refused.class, ErrorClass::OverResourceBound, "{name}");
-            assert_eq!(refused.diagnostic.code, codes::NO_BOUND_YET, "{name}");
-            assert!(
-                Authority::admin_listener(false).admit(row(name)).is_ok(),
-                "{name}"
-            );
+            assert!(view.admit(row(name)).is_ok(), "{name}");
         }
     }
 
@@ -313,7 +290,9 @@ mod tests {
 
     /// The view listener's method set, written out (RT-O33: it keeps today's
     /// set, less `/get_alt_blocks_hashes`, which §6.1 moves to `status`).
-    /// Written from the specification, not from the table.
+    /// `calc_pow` and `get_coinbase_tx_sum` are on it: they are bounded
+    /// reads, paid from the hash budget and the coinbase permit, not
+    /// admin-gated. Written from the specification, not from the table.
     #[test]
     fn the_view_listener_serves_exactly_its_specified_set() {
         let specified: &[&str] = &[
@@ -325,6 +304,8 @@ mod tests {
             "get_last_block_header",
             "get_block_header_by_hash",
             "get_block_headers_range",
+            "calc_pow",
+            "get_coinbase_tx_sum",
             "get_fee_estimate",
             "option_show",
             "get_info",

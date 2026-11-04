@@ -313,49 +313,6 @@ impl Message<ReceiptKeyIsBuilt> for StakeEngine {
     }
 }
 
-/// The read-only handle on the actor's body store.
-///
-/// The writer stays on the actor (`WSS-Q1`(a)). The reader still holds the
-/// store key and decrypts on the serve path, so this is not `WSS-Q13`.
-pub(crate) struct ServingBodies;
-
-impl Message<ServingBodies> for StakeEngine {
-    type Reply = Result<shekyl_p_store::BodyStoreReader, StakeEngineError>;
-
-    async fn handle(
-        &mut self,
-        _msg: ServingBodies,
-        _ctx: &mut Context<Self, Self::Reply>,
-    ) -> Self::Reply {
-        Ok(self.body_store.reader())
-    }
-}
-
-/// Erase body-store rows the pin-release gate has cleared (`WSS-Q8`).
-///
-/// The writer stays on this actor. The serving host asks; it does not
-/// hold the store key.
-pub(crate) struct EraseReleasedShards {
-    pub shard_ids: Vec<u64>,
-}
-
-impl Message<EraseReleasedShards> for StakeEngine {
-    type Reply = Result<(), String>;
-
-    async fn handle(
-        &mut self,
-        msg: EraseReleasedShards,
-        _ctx: &mut Context<Self, Self::Reply>,
-    ) -> Self::Reply {
-        for id in msg.shard_ids {
-            self.body_store
-                .erase_shard(shekyl_types::ShardId::from_raw(id))
-                .map_err(|e| e.to_string())?;
-        }
-        Ok(())
-    }
-}
-
 /// Report the public identity of the currently-active persona, or `None` when
 /// idle. Inspection only — never the secret bundle.
 pub(crate) struct ActivePersona;

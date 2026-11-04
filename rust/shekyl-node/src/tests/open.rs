@@ -111,11 +111,11 @@ fn stop_closes_the_store_withdraws_the_board_and_a_second_stop_is_a_no_op() {
     let rules =
         ChainRules::new(Chain::Regtest, None, FakechainSchedule::PRODUCTION).expect("rules");
     let horizons = Horizons::under(&rules.in_force(BlockHeight::ZERO)).expect("horizons");
-    let (store, _cut) = ChainStore::with_release(
+    let (store, _cut) = ChainStore::with_genesis(
         dir.path().join("chain.db"),
         ApplyPolicy::Full,
         horizons,
-        &ReleaseAnchors::EMPTY,
+        &GenesisPin::NONE,
     )
     .expect("the store closed, so it opens again");
     let snap = store.begin_read().expect("read");
@@ -146,7 +146,7 @@ fn a_pow_hash_in_flight_does_not_hold_the_facts_lock() {
     use std::time::{Duration, Instant};
 
     use shekyl_daemon_rpc::chain_facts::ChainFacts;
-    use shekyl_daemon_rpc::read_facts::{ChainReadFacts, PowSeed};
+    use shekyl_daemon_rpc::read_facts::{ChainReadFacts, PowAdmission, PowSeed};
     use shekyl_hash_budget::Class;
 
     /// The hash thread has not reached `acquire`.
@@ -157,8 +157,9 @@ fn a_pow_hash_in_flight_does_not_hold_the_facts_lock() {
     let dir = tempfile::tempdir().expect("temp");
     let node = open_at(dir.path(), Arc::new(|| {}));
     let budget = node.budget();
-    // Every free permit. `pow_hash` then waits in `acquire` instead of
-    // hashing, which is the wait a chain read must not share.
+    // Every free permit. `hash_admitted` then waits in `acquire` instead
+    // of hashing, which is the wait a chain read must not share. The
+    // admission is the lookup and takes no permit.
     let held: Vec<_> = (0..budget.permits())
         .map_while(|_| budget.try_acquire(Class::Chain))
         .collect();
@@ -168,15 +169,17 @@ fn a_pow_hash_in_flight_does_not_hold_the_facts_lock() {
     );
     let hashing = {
         let chain = Arc::clone(&node.handles().chain);
-        std::thread::spawn(move || {
-            ChainReadFacts::pow_hash(&*chain, &[], PowSeed::Given(BlockHash::NULL))
-        })
+        let admitted = match ChainReadFacts::admit_pow(&*chain, PowSeed::Given(BlockHash::NULL)) {
+            Ok(PowAdmission::Admitted(admitted)) => admitted,
+            other => panic!("the null seed is held at open: {other:?}"),
+        };
+        std::thread::spawn(move || ChainReadFacts::hash_admitted(&*chain, &[], &admitted))
     };
     let entered = Instant::now();
     while budget.waiting(Class::CalcPow) == 0 {
         if hashing.is_finished() {
             let finished = hashing.join().expect("pow thread");
-            panic!("pow_hash finished without waiting for a permit: {finished:?}");
+            panic!("hash_admitted finished without waiting for a permit: {finished:?}");
         }
         assert!(
             entered.elapsed() < ENTER_BOUND,
@@ -224,18 +227,52 @@ fn the_stop_handle_asks_the_latch_and_the_absent_one_does_not() {
     );
     node.stop();
 }
-/// A chain file at another layout is removed and a fresh store holds
-/// genesis. A file that is not a store is refused and left in place.
-/// Red edit: refuse the version mismatch, or wipe a corrupt header.
+/// A chain file at a newer layout is refused and left byte for byte: an
+/// older binary over a newer node's data must not destroy it (S3). A
+/// chain file at an older layout is removed and a fresh store holds
+/// genesis: the pre-genesis alpha wipe, temporary (FOLLOWUPS, trigger:
+/// before mainnet genesis). A file that is not a store is refused and
+/// left in place. Red edits: wipe the newer layout, refuse the older one,
+/// or wipe a corrupt header.
 #[test]
-fn a_foreign_chain_file_is_replaced_and_a_corrupt_one_is_kept() {
-    use shekyl_chain_store::codec::SCHEMA_VERSION;
+fn a_newer_chain_file_is_refused_an_older_one_replaced_and_a_corrupt_one_kept() {
+    use shekyl_chain_store::codec::{SchemaVersion, SCHEMA_VERSION};
     let dir = tempfile::tempdir().expect("temp");
     let node = open_at(dir.path(), Arc::new(|| {}));
     node.stop();
     let chain = dir.path().join("chain.db");
-    put_chain_version(&chain, SCHEMA_VERSION.get() + 1);
-    let node = open_at(dir.path(), Arc::new(|| {}));
+    let config = config_at(dir.path());
+    let open = || {
+        Node::open(OpenArgs {
+            config: &config,
+            version: "test".to_owned(),
+            protocol_version: 1,
+            release_build: false,
+            request_stop: Arc::new(|| {}),
+        })
+    };
+
+    let newer = SchemaVersion::new(SCHEMA_VERSION.get() + 1);
+    put_chain_version(&chain, newer.get());
+    let before = std::fs::read(&chain).expect("the newer file");
+    match open() {
+        Err(OpenError::NewerChainLayout { found, expected }) => {
+            assert_eq!((found, expected), (newer, SCHEMA_VERSION));
+        }
+        Err(other) => panic!("a newer layout is its own refusal, got {other}"),
+        Ok(node) => {
+            node.stop();
+            panic!("a newer layout opened");
+        }
+    }
+    assert_eq!(
+        std::fs::read(&chain).expect("still there"),
+        before,
+        "a newer layout is left as it was"
+    );
+
+    put_chain_version(&chain, SCHEMA_VERSION.get() - 1);
+    let node = open().expect("an older layout is replaced");
     assert_eq!(
         node.handles()
             .chain
@@ -245,22 +282,62 @@ fn a_foreign_chain_file_is_replaced_and_a_corrupt_one_is_kept() {
         Some(genesis_hash())
     );
     node.stop();
-    put_chain_version(&chain, SCHEMA_VERSION.get());
+
     let garbage = b"not a chain store";
     std::fs::write(&chain, garbage).expect("overwrite");
-    let config = config_at(dir.path());
-    let opened = Node::open(OpenArgs {
-        config: &config,
-        version: "test".to_owned(),
-        protocol_version: 1,
-        release_build: false,
-        request_stop: Arc::new(|| {}),
-    });
     assert!(
-        opened.is_err(),
+        open().is_err(),
         "a corrupt chain file is not a layout mismatch"
     );
     assert_eq!(std::fs::read(&chain).expect("still there"), garbage);
+}
+/// A regtest node refuses a store whose block 0 is another network's, and
+/// leaves it as it was: the genesis pin covers regtest, judged on the
+/// read-only open (S1, design review 2026-11-03). The network marker sits
+/// above this check in the daemon and can be copied with a store; the pin
+/// is what the store itself says. Red edit: leave regtest unpinned at open.
+#[test]
+fn a_regtest_node_refuses_a_testnet_store_and_leaves_it_unwritten() {
+    use shekyl_chain_store::store::{StoreCannot, StoreError};
+    let dir = tempfile::tempdir().expect("temp");
+    let testnet = config_on(dir.path(), "testnet", &[]);
+    let open_on = |config: &DaemonConfig| {
+        Node::open(OpenArgs {
+            config,
+            version: "test".to_owned(),
+            protocol_version: 1,
+            release_build: false,
+            request_stop: Arc::new(|| {}),
+        })
+    };
+    open_on(&testnet).expect("a testnet node opens").stop();
+    let chain = dir.path().join("chain.db");
+    let before = std::fs::read(&chain).expect("the testnet store");
+    let modified = std::fs::metadata(&chain)
+        .and_then(|meta| meta.modified())
+        .expect("mtime");
+    match open_on(&config_at(dir.path())) {
+        Err(OpenError::Store(StoreError::Cannot(StoreCannot::ForeignGenesis(conflict)))) => {
+            assert_eq!(conflict.expected, genesis_hash());
+            assert_eq!(
+                conflict.recorded,
+                BlockHash::from_bytes(shekyl_rpc_types::genesis_hash_for(DaemonNetwork::Testnet))
+            );
+        }
+        Err(other) => panic!("another network's store is a genesis refusal, got {other}"),
+        Ok(node) => {
+            node.stop();
+            panic!("a regtest node opened a testnet store");
+        }
+    }
+    assert_eq!(std::fs::read(&chain).expect("still there"), before);
+    assert_eq!(
+        std::fs::metadata(&chain)
+            .and_then(|meta| meta.modified())
+            .expect("mtime"),
+        modified,
+        "a refused store keeps its modification time"
+    );
 }
 /// A pool file at another version is recreated and the node starts. A
 /// pool file that is not a pool file is refused and kept. Red edit:

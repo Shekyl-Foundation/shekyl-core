@@ -24,6 +24,14 @@
 //!    same way a parked body does, so the posted job lists the newly
 //!    shown body without waiting for the next tip.
 //!
+//! **One posting.** Each post writes one record: the job and the bodies it
+//! listed, under the generation the board minted for it. The board keeps
+//! the newest job, which is what a worker mines. The posting watch says
+//! the record changed and keeps no earlier value. The found-block sink
+//! reads the bodies from the record, by that generation. The last
+//! [`KEPT_JOBS`] generations stay: a found block can still name one
+//! of them.
+//!
 //! **The found-block sink.** A found block enters through the service's
 //! one door as a local arrival. A full window waits for the reserved seat
 //! instead of dropping the block. A closed door drops it. The service
@@ -40,7 +48,7 @@ use shekyl_chain_rules::{
 use shekyl_chain_store::store::{SnapshotView, StoreError};
 use shekyl_chain_sync::SyncState;
 use shekyl_mempool::{stateless, Admission, PoolFault};
-use shekyl_miner::{FoundInbox, Generation, JobBoard};
+use shekyl_miner::{FoundInbox, Generation, Job, JobBoard};
 use shekyl_types::TxHash;
 use shekyl_wire::Transaction;
 use tokio::sync::watch;
@@ -285,16 +293,38 @@ pub struct JobSeat {
     pub witness: Arc<shekyl_bundle_producer::WitnessRing>,
 }
 
-/// Jobs kept for the found-block sink: a found block's generation names
-/// the bodies it was built with. A miner finds for the newest posting, so
-/// only the last few are ever asked for.
+/// Jobs kept for the found-block sink. A miner finds for the newest
+/// posting, so only the last few generations are ever asked for. The same
+/// bound is how many posted jobs a reader of the record can still see.
 const KEPT_JOBS: usize = 8;
 
 /// The found-block sink's thread. Short enough for a platform thread name.
 const FOUND_SINK_THREAD: &str = "shekyl-found";
 
-/// Each posted generation's listed bodies.
-pub(crate) type Postings = Arc<Mutex<BTreeMap<Generation, Vec<Transaction>>>>;
+/// One posting: the job the board minted `generation` for, and the bodies
+/// that job listed. The sink needs the bodies. A reader of what was posted
+/// needs the job. They are one record, written together.
+pub(crate) struct KeptPosting {
+    /// The job.
+    pub(crate) job: Job,
+    /// The bodies it listed, in the block's order.
+    pub(crate) bodies: Vec<Transaction>,
+}
+
+/// The postings still kept, by generation. The service owns the map. The
+/// follower writes it and the sink reads it.
+pub(crate) type Postings = Arc<Mutex<BTreeMap<Generation, KeptPosting>>>;
+
+/// The jobs [`Postings`] still holds, oldest generation first.
+#[cfg(test)]
+pub(crate) fn kept_jobs(postings: &Postings) -> Vec<(Generation, Job)> {
+    postings
+        .lock()
+        .unwrap_or_else(PoisonError::into_inner)
+        .iter()
+        .map(|(generation, kept)| (*generation, kept.job.clone()))
+        .collect()
+}
 
 /// Withdraws the miner's job on every way out, including a panic, and
 /// says so.
@@ -345,7 +375,7 @@ pub(crate) async fn follow<S>(
     S: Substrate + Send + Sync + 'static,
     S::Fault: core::fmt::Debug + Send + 'static,
 {
-    let postings: Postings = Arc::new(Mutex::new(BTreeMap::new()));
+    let postings = shared.postings();
     let (mut seat, sink) = match job {
         Some(JobSeat {
             board,
@@ -749,13 +779,20 @@ where
     if !produced.evicted.is_empty() {
         tracing::debug!("CEN-M10 evicted {:?}", produced.evicted);
     }
-    // The sink reads the body list by generation. The insert happens
-    // before `publish` returns, so a block the miner finds on this job
-    // cannot observe an empty list. `publish` takes the board's lock, not
-    // this one; the sink takes this one and not the board's.
+    // The sink reads the body list by generation, and a reader of what was
+    // posted reads the job, from this one insert. It happens before
+    // `publish` returns, so a block the miner finds on this job cannot
+    // observe an empty list. `publish` takes the board's lock, not this
+    // one; the sink takes this one and not the board's.
     let mut kept = postings.lock().unwrap_or_else(PoisonError::into_inner);
-    let generation = seat.board.publish(produced.job);
-    kept.insert(generation, produced.transactions);
+    let generation = seat.board.publish(produced.job.clone());
+    kept.insert(
+        generation,
+        KeptPosting {
+            job: produced.job,
+            bodies: produced.transactions,
+        },
+    );
     while kept.len() > KEPT_JOBS {
         kept.pop_first();
     }
@@ -886,12 +923,26 @@ pub(crate) fn spawn_sink(
         .spawn(move || {
             let _done = SignalDone(Some(done));
             while let Some(found) = found.recv() {
-                let bodies = postings
-                    .lock()
-                    .unwrap_or_else(PoisonError::into_inner)
-                    .get(&found.generation)
-                    .cloned()
-                    .unwrap_or_default();
+                let bodies = {
+                    let kept = postings.lock().unwrap_or_else(PoisonError::into_inner);
+                    match kept.get(&found.generation) {
+                        Some(kept) => {
+                            // Height and parent are this posting's tip. A
+                            // block that names another is logged; the door
+                            // judges the block, with this posting's bodies.
+                            if found.height != kept.job.height
+                                || found.block.header.previous != kept.job.block.header.previous
+                            {
+                                tracing::error!(
+                                    generation = found.generation.to_raw(),
+                                    "a block this node mined names a generation built for another tip"
+                                );
+                            }
+                            kept.bodies.clone()
+                        }
+                        None => Vec::new(),
+                    }
+                };
                 // The local-arrival entry waits out a full window. A closed
                 // door answers `Stopped`. Anything else is this node's own
                 // block not joining the chain, and it is said once.

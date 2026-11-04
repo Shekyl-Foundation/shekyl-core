@@ -32,7 +32,7 @@ fn a_header_run_survives_an_announce() {
     let rules = fixed(1, 64);
     let main = chain_of(8);
     let mut block = candidate_on(&main, Vec::new()).block;
-    let mut sync = Sync::new(Trust::UNANCHORED, move |_| rules);
+    let mut sync = Sync::new(Trust::UNPINNED, move |_| rules);
     main.with_view(|view| {
         let tip = view.tip().expect("main answers").expect("a tip");
         let mut out = Vec::new();
@@ -182,7 +182,7 @@ fn header_requests(out: &[Command<u8>]) -> HeaderAsks {
 fn unplaced_announcements(heavier: bool) -> (HeaderAsks, HeaderAsks) {
     let rules = fixed(1, 64);
     let main = chain_of(8);
-    let mut sync = Sync::new(Trust::UNANCHORED, move |_| rules);
+    let mut sync = Sync::new(Trust::UNPINNED, move |_| rules);
     let mut first = Vec::new();
     let mut second = Vec::new();
     main.with_view(|view| {

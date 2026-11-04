@@ -218,7 +218,7 @@ mod tests {
                 .map(shekyl_operator_alarm::RaisedAlarm::alarm)
         }
 
-        let (_tmp, engine) = crate::engine::test_support::staker_engine(3, 11);
+        let (_tmp, engine) = crate::engine::test_support::staker_engine(3, 11).await;
         let arc = Arc::new(RwLock::new(engine));
         let leg_on = |alarms: &Arc<OperatorAlarms>| PendingOutcomeLeg {
             engine: Arc::downgrade(&arc),

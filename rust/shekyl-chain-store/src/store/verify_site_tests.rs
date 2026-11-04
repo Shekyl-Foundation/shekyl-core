@@ -68,7 +68,7 @@ fn validate_verifies_no_proof_and_no_signature_and_form_verifies_both() {
             "the token carries what the proof was verified against"
         );
 
-        let valid = match validate(formed, &view, &RuleSet::GENESIS, &Trust::UNANCHORED) {
+        let valid = match validate(formed, &view, &RuleSet::GENESIS, &Trust::UNPINNED) {
             Ok(Ok(valid)) => valid,
             other => panic!("the spend connects: {other:?}"),
         };

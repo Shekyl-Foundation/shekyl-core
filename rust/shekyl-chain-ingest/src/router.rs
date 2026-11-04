@@ -35,7 +35,7 @@
 
 use shekyl_chain_rules::{
     seed_height, target_claim, AtHeight, Candidate, Corrupt, Fault, HeaderRecord, HeaderView,
-    InvalidBlock, PerHeightRecord, ReferenceClaims, RuleSet, Target, Trust, ViewRead,
+    InvalidBlock, PerHeightRecord, ReferenceClaims, RuleSet, Target, ViewRead,
 };
 use shekyl_chain_store::store::{
     AltCannot, AltChain, AltView, ChainStore, ReadSnapshot, StoreCannot, StoreError,
@@ -284,7 +284,6 @@ pub(crate) fn claim_alt(
     store: &ChainStore,
     rules: ChainRules,
     candidate: &Candidate,
-    trust: &Trust,
 ) -> Result<ClaimedAlt, ClaimStop> {
     let snap = store.begin_read()?;
     let window = match cache_window::seeds_on(&snap, rules) {
@@ -320,7 +319,7 @@ pub(crate) fn claim_alt(
             }
         },
     };
-    let outcome = cache_window::spend(&fork, &seed, side, height, &rule_set, trust, &window);
+    let outcome = cache_window::spend(&fork, &seed, side, height, &rule_set, &window);
     let prepare = match outcome {
         AltSpend::Hash => false,
         AltSpend::Prepare => true,

@@ -2,7 +2,7 @@
 
 **Families (registered in `IMPLEMENTATION_INDEX.md` §2, rule 94):** **`CS-Q`** (questions, ruled here) and **`CS-F`** (findings). Grep surface: `rg -n -e '\bCS-[QF]'`, because the serve-credit findings family `SCS-F` contains `CS-F` as a substring. `CSR-` is a separate family.
 **Ground:** `dev` at `24961a9a8` (2026-10-19), after #1101 (DRS-X Round 0), #1088 (the daemon-config cutover) and #1102 (the Rust pool); DRS-X PR 2 (#1123, open) read at `e3180b665` for the door's `BeyondCap`. The handler is 2,669 + 228 lines; `block_queue` is 651 (`.h` 115 + `.cpp` 536); `cryptonote_protocol_defs.h` is 300.
-**Status:** **CS-5, the cutover, is implemented (2026-11-01, #1237):** live sessions sync through the Rust owner, which the node owns and the seam's bind attaches; the C++ handler keeps RD's transaction routes only; `sync_info` is the owner's view (3.66); 2003, 2004, 2006 and 2007 are retired (§ CS-5 below). CS-1 implemented (2026-10-21); CS-2 model and its §5 harness are in `shekyl-chain-sync` (2026-10-22); CS-3 implemented (2026-10-23): the runtime half and CS-Q11's loopback harness. CS-4 (pre-cutover, pure Rust): the inbound claim tap, the relay, the state handle's publisher and the cutover's deletion table. The cutover follows the DRS-X flip. Round 0 RULED, Rick 2026-10-18: CS-Q1…CS-Q12 as recommended, with four amendments: the complement request is chain sync's (CS-Q1, CS-Q10); `Synced` reads verified headers only (CS-Q2 step 8); the long-run slot is paid for in PoW and goes to the most verified work (CS-Q2 step 3); `following_degraded` gets a Rust producer (§A, coupling 4). Three corrections to CS-Q2 and CS-Q3, confirmed 2026-10-19 (Rick): a body, with its attestation witness, is bound to its header before the offer, so a substituted body or witness never invalidates an honest header (CEN-G2, CEN-B4); `Synced` waits for PDM-Q5's backward fill, with `Following` until then; and the body form is per transaction. The objects response follows PWD-B3's continuation (Rick, 2026-10-20): every requested block is sent, deferred by the budget, or marked unavailable, and only an unmarked shortfall closes the session (CS-Q3.2). Ruled 2026-10-19 (Rick), from DRS-X PR 2's design review: `following_degraded` is set by ingest's three refusals and by the sync owner, all through the connector, its one writer (§A items 7 and coupling 4); header PoW follows the earned-seed rule; and a past-cap branch is checked as evidence under `Class::Evidence` (CS-Q2 step 3). **Amended 2026-10-22 (Rick):** CS-Q2 step 1 refuses a block count of 0, or cumulative work below that count. **CS-1 is implemented (2026-10-21):** `form_header`, `judge_header`, `judge_header_cheap` and `bind_body` in `shekyl-chain-rules`; `PowBlob` and `BlockBody` in `shekyl-wire`; commands 2011–2014 in `shekyl-levin`, not admitted at ingress; the handler files are shrink-frozen (CS-Q9). CS-2, the sync model, is in `shekyl-chain-sync` (2026-10-22): the branch view, runs, the long-run slot, bodies, entry outcomes and close causes. **CS-3 is implemented (2026-10-23),** in `shekyl-chain-sync-runtime`, layered over the pure model in `shekyl-chain-sync` (Rick, 2026-10-23: ingest and the node depend on the model, the runtime on them): the router (the seam's post sink, attached to the node's owner since CS-5), the sync owner on its `chain-sync` row, the executor with `Class::Evidence`, serving 2011–2014 from the store, `Door::offer_bound` (formed with `form_judged`), the latch through the connector (`RaiseAlarm`, `WatchLatch`), and CS-Q11's loopback harness in `shekyl-p2p-harness` (`sync`).
+**Status:** **CS-5, the cutover, is implemented (2026-11-01, #1237):** live sessions sync through the Rust owner, which the node owns and the seam's bind attaches; the C++ handler keeps RD's transaction routes only; `sync_info` is the owner's view (3.68); 2003, 2004, 2006 and 2007 are retired (§ CS-5 below). CS-1 implemented (2026-10-21); CS-2 model and its §5 harness are in `shekyl-chain-sync` (2026-10-22); CS-3 implemented (2026-10-23): the runtime half and CS-Q11's loopback harness. CS-4 (pre-cutover, pure Rust): the inbound claim tap, the relay, the state handle's publisher and the cutover's deletion table. The cutover follows the DRS-X flip. Round 0 RULED, Rick 2026-10-18: CS-Q1…CS-Q12 as recommended, with four amendments: the complement request is chain sync's (CS-Q1, CS-Q10); `Synced` reads verified headers only (CS-Q2 step 8); the long-run slot is paid for in PoW and goes to the most verified work (CS-Q2 step 3); `following_degraded` gets a Rust producer (§A, coupling 4). Three corrections to CS-Q2 and CS-Q3, confirmed 2026-10-19 (Rick): a body, with its attestation witness, is bound to its header before the offer, so a substituted body or witness never invalidates an honest header (CEN-G2, CEN-B4); `Synced` waits for PDM-Q5's backward fill, with `Following` until then; and the body form is per transaction. The objects response follows PWD-B3's continuation (Rick, 2026-10-20): every requested block is sent, deferred by the budget, or marked unavailable, and only an unmarked shortfall closes the session (CS-Q3.2). Ruled 2026-10-19 (Rick), from DRS-X PR 2's design review: `following_degraded` is set by ingest's three refusals and by the sync owner, all through the connector, its one writer (§A items 7 and coupling 4); header PoW follows the earned-seed rule; and a past-cap branch is checked as evidence under `Class::Evidence` (CS-Q2 step 3). **Amended 2026-10-22 (Rick):** CS-Q2 step 1 refuses a block count of 0, or cumulative work below that count. **CS-1 is implemented (2026-10-21):** `form_header`, `judge_header`, `judge_header_cheap` and `bind_body` in `shekyl-chain-rules`; `PowBlob` and `BlockBody` in `shekyl-wire`; commands 2011–2014 in `shekyl-levin`, not admitted at ingress; the handler files are shrink-frozen (CS-Q9). CS-2, the sync model, is in `shekyl-chain-sync` (2026-10-22): the branch view, runs, the long-run slot, bodies, entry outcomes and close causes. **CS-3 is implemented (2026-10-23),** in `shekyl-chain-sync-runtime`, layered over the pure model in `shekyl-chain-sync` (Rick, 2026-10-23: ingest and the node depend on the model, the runtime on them): the router (the seam's post sink, attached to the node's owner since CS-5), the sync owner on its `chain-sync` row, the executor with `Class::Evidence`, serving 2011–2014 from the store, `Door::offer_bound` (formed with `form_judged`), the latch through the connector (`RaiseAlarm`, `WatchLatch`), and CS-Q11's loopback harness in `shekyl-p2p-harness` (`sync`).
 **Parent:** [`P2P_3_IMPLEMENTATION_ROUND.md`](P2P_3_IMPLEMENTATION_ROUND.md) §4.2, row **CS**. [`DRS_X_STORE_FLIP.md`](DRS_X_STORE_FLIP.md) carries §A below as chain sync's Round 0 requirement.
 
 ## Constants (CS-1)
@@ -124,8 +124,9 @@ fix to its PR 2 (`:330`). §A records the couplings that remain.
     (`shekyl-wire/src/block.rs:322-356`).
   - Difficulty is `lwma1_next` over timestamps and cumulative
     difficulties only.
-  - `ReleaseAnchors` is a genesis hash plus a static table of
-    `(height, hash)` anchors (`shekyl-chain-rules/src/anchors.rs:114`).
+  - `GenesisPin` is each network's genesis hash and nothing above it
+    (`shekyl-chain-rules/src/genesis_pin.rs`; S1, 2026-11-03: no coded
+    checkpoints).
   - So a header chain can be checked for linkage, PoW, difficulty,
     timestamps and anchors without any bodies.
 - **CS-F7. Validation runs on the p2p I/O pool.**
@@ -347,7 +348,7 @@ ingest deciding forks.**
      cost.** Any failure closes the session.
      - linkage;
      - timestamp rules (MTP from the chain, FTL against the local clock);
-     - `ReleaseAnchors` (CEN-E1);
+     - the genesis pin (`GenesisPin`, CEN-E1);
      - each header's difficulty from `lwma1_next`, which needs only the
        chain's timestamps and work.
      - Headers that pass are added to the session's run. So the run's
@@ -1733,7 +1734,7 @@ increments?
 **Ruled (Rick, 2026-10-18): as written.**
 - **Now, pure Rust, no FFI:**
   - (1) the header-chain verifier (over `shekyl-difficulty`, RandomX and
-    `ReleaseAnchors`), tested against the captured chains;
+    `GenesisPin`), tested against the captured chains;
   - (2) the sync model as a crate with property tests (CS-Q11);
   - (3) the new payload types in `shekyl-levin` with KATs.
 - **The cutover's horizon.** The cutover follows the DRS-X flip, whose
@@ -1953,7 +1954,7 @@ it decided beyond the rows above:
   session with no header run is `idle`. The rate is the last response's
   bytes over the time since its request was sent. The owner publishes
   the view on a watch after every event; `sync_info` renders it and
-  `get_connections` joins it to the board (3.66).
+  `get_connections` joins it to the board (3.68).
 - **Our own blocks.** The model relays a new tip it neither accepted nor
   still awaits from the entry, from the tip event, to every session
   (`Command::Relay::from` is `None`). The first tip observed relays

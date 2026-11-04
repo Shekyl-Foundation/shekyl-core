@@ -410,6 +410,14 @@ jobs:
         if: '!cancelled()'
         run: python3 scripts/bench/test_rt_p5_classes.py
 
+      - name: Run RT-W10 summary tests
+        # `scripts/bench/rt_w10_summary.py` derives the bounded-request
+        # caps from the shape registered in
+        # `docs/benchmarks/rt_w10_request_cost_20261102.md`. The control
+        # is a complete fixture whose caps the test computes itself.
+        if: '!cancelled()'
+        run: python3 scripts/bench/test_rt_w10_summary.py
+
       - name: Run RT-P6 summary tests
         # `scripts/bench/rt_p6_summary.py` loads a run only when it has the
         # shape registered in

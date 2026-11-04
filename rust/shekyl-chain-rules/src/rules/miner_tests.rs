@@ -63,13 +63,8 @@ fn judge_on(chain: &MockChain, candidate: Candidate) -> Verdict<()> {
         Err(Faulted) => unreachable!("the default MockSubstrate never faults"),
     };
     chain.with_view(|view| {
-        judged(validate(
-            formed,
-            &view,
-            &RuleSet::GENESIS,
-            &Trust::UNANCHORED,
-        ))
-        .map(|_valid: ChainValid<_>| ())
+        judged(validate(formed, &view, &RuleSet::GENESIS, &Trust::UNPINNED))
+            .map(|_valid: ChainValid<_>| ())
     })
 }
 
@@ -424,14 +419,9 @@ fn cen_f11_genesis_takes_the_configured_emission_and_recomputes_nothing() {
     assert_eq!(emission.tx_volume, TxVolume::window(0, 0));
     let formed = formed_on(&MockChain::default(), candidate(Vec::new()));
     let coverage = MockChain::default().with_view(|view| {
-        *judged(validate(
-            formed,
-            &view,
-            &RuleSet::GENESIS,
-            &Trust::UNANCHORED,
-        ))
-        .expect("genesis fixture")
-        .coverage()
+        *judged(validate(formed, &view, &RuleSet::GENESIS, &Trust::UNPINNED))
+            .expect("genesis fixture")
+            .coverage()
     });
     for row in [CenRow::F11, CenRow::F13, CenRow::F15, CenRow::F20] {
         assert!(coverage.contains(row), "{row} recorded at genesis");
@@ -649,7 +639,7 @@ fn cen_f20_a_decreasing_prefix_sum_is_a_corrupt_view() {
     let candidate = candidate_on(&chain, Vec::new());
     let formed = formed_on(&chain, candidate);
     chain.with_view(|view| {
-        let fault = validate(formed, &view, &RuleSet::GENESIS, &Trust::UNANCHORED)
+        let fault = validate(formed, &view, &RuleSet::GENESIS, &Trust::UNPINNED)
             .expect_err("a decreasing prefix sum faults");
         assert!(
             matches!(fault, Fault::Corrupt(Corrupt::TxCountNotMonotone { .. })),
@@ -879,7 +869,7 @@ fn same_body_row(chain: &MockChain, candidate: Candidate, row: CenRow) {
     .expect("mock")
     .unwrap_or_else(|refused| panic!("{row:?}: the header was refused: {refused}"));
     chain.with_view(|view| {
-        let judged = match judge_header(&formed, &view, &RuleSet::GENESIS, &Trust::UNANCHORED)
+        let judged = match judge_header(&formed, &view, &RuleSet::GENESIS, &Trust::UNPINNED)
             .expect("view")
         {
             Ok(judged) => judged,

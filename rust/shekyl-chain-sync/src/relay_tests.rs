@@ -35,7 +35,7 @@ fn a_shorter_heavier_replacement_is_not_beneath_the_tip_already_seen() {
     // Closed, with no session open: synced, so the relay judges `beneath`
     // alone, which is this test's subject.
     let mut sync: Sync<u8, _> =
-        Sync::new(Trust::UNANCHORED, move |_| rules).with_declaration(crate::Declaration::Closed);
+        Sync::new(Trust::UNPINNED, move |_| rules).with_declaration(crate::Declaration::Closed);
     sync.local = Some(crate::model::Local {
         hash: BlockHash::from_bytes([1; 32]),
         height: Some(BlockHeight::from_raw(20)),
@@ -143,7 +143,7 @@ fn a_node_behind_relays_nothing() {
 fn a_tip_no_session_supplied_relays_to_every_session() {
     let below = chain_of(8);
     let above = chain_of(9);
-    let mut sync = Sync::new(Trust::UNANCHORED, target_one as fn(BlockHeight) -> RuleSet);
+    let mut sync = Sync::new(Trust::UNPINNED, target_one as fn(BlockHeight) -> RuleSet);
     below.with_view(|view| {
         let tip = view.tip().expect("main answers").expect("a tip");
         let out = drive(&mut sync, &view, Event::Tip { tip });
@@ -225,7 +225,7 @@ fn with_requests_off_nothing_is_asked_and_a_mined_tip_still_relays() {
     for requesting in [Requesting::On, Requesting::Off] {
         let below = chain_of(8);
         let above = chain_of(9);
-        let mut sync = Sync::new(Trust::UNANCHORED, target_one as fn(BlockHeight) -> RuleSet)
+        let mut sync = Sync::new(Trust::UNPINNED, target_one as fn(BlockHeight) -> RuleSet)
             .with_requesting(requesting);
         let mut out = Vec::new();
         below.with_view(|view| {
@@ -386,7 +386,7 @@ where
 {
     let main = chain_of(8);
     let mut block = candidate_on(&main, Vec::new()).block;
-    let mut sync = Sync::new(Trust::UNANCHORED, target_one as fn(BlockHeight) -> RuleSet);
+    let mut sync = Sync::new(Trust::UNPINNED, target_one as fn(BlockHeight) -> RuleSet);
     main.with_view(|view| {
         let tip = view.tip().expect("main answers").expect("a tip");
         drive(&mut sync, &view, Event::Tip { tip });

@@ -6,7 +6,7 @@
 //! Shared C2-R1b vectors for the ruled fork-choice comparison and the
 //! CEN-D5 alt-window selection
 //! (`docs/design/CONSENSUS_C2_R1_REORG.md` §4b, ratified 2026-09-03),
-//! consumed from `docs/test_vectors/FORK_CHOICE_V1.json`.
+//! consumed from `docs/test_vectors/FORK_CHOICE_V2.json`.
 //!
 //! There is one implementation of each rule —
 //! [`shekyl_difficulty::fork_choice`] and
@@ -18,13 +18,13 @@ use shekyl_difficulty::{alt_window_plan, fork_choice, CumulativeDifficulty, Fork
 
 const VECTOR_PATH: &str = concat!(
     env!("CARGO_MANIFEST_DIR"),
-    "/../../docs/test_vectors/FORK_CHOICE_V1.json"
+    "/../../docs/test_vectors/FORK_CHOICE_V2.json"
 );
 
 fn load_vectors() -> serde_json::Value {
     let raw = std::fs::read_to_string(VECTOR_PATH)
         .unwrap_or_else(|e| panic!("missing fork-choice vectors at {VECTOR_PATH}: {e}"));
-    serde_json::from_str(&raw).expect("FORK_CHOICE_V1.json is not valid JSON")
+    serde_json::from_str(&raw).expect("FORK_CHOICE_V2.json is not valid JSON")
 }
 
 fn u64_field(case: &serde_json::Value, key: &str) -> u64 {
@@ -49,14 +49,10 @@ fn fork_choice_cases_pin_the_rule() {
         let verdict = fork_choice(
             CumulativeDifficulty::from_raw(u128_of(case, "current_lo", "current_hi")),
             CumulativeDifficulty::from_raw(u128_of(case, "alternative_lo", "alternative_hi")),
-            case["checkpoint_match"]
-                .as_bool()
-                .expect("checkpoint_match"),
         );
         let expected = match u64_field(case, "verdict") {
             0 => ForkChoiceVerdict::KeepCurrent,
             1 => ForkChoiceVerdict::Switch,
-            2 => ForkChoiceVerdict::ForcedSwitch,
             other => panic!("{name}: unknown expected verdict {other}"),
         };
         assert_eq!(verdict, expected, "case {name}");

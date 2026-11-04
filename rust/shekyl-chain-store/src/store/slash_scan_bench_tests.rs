@@ -425,7 +425,7 @@ fn issue(store: &ChainStore, epoch: u64, personas: u64, plan: Plan) {
         .expect("read");
     store
         .regtest_issue_draws(
-            Trust::UNANCHORED,
+            Trust::UNPINNED,
             epoch,
             &draws,
             folded(digest, epoch, &draws),

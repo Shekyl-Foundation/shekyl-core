@@ -833,22 +833,22 @@ async fn ingest_pre_pass_reorg_rolls_back_and_resumes_from_cursor() {
     }
 }
 
-/// CT-5a §3.3 (R1-Q4 / O3) respawn happy-path KAT through the engine ingest
-/// entry point. A fail-stopped curve-tree actor is healed by
-/// [`Engine::ingest_scan_result_with_respawn`]: the first attempt sees the
-/// dead actor (classified `recoverable_by_respawn`), the engine respawns it
-/// (drop + reopen — cursor resumes from the persisted store tip, no genesis
-/// replay), and the retry ingests the new range. The witness that the
-/// respawn-and-retry actually progressed — rather than merely reopening — is
-/// the post-heal tip advancing past the pre-kill tip.
+/// CT-5a §3.3 (O3) recovery happy-path KAT through the engine ingest entry
+/// point. A poisoned curve-tree client is healed by
+/// [`Engine::ingest_scan_result_with_recovery`]: the first attempt sees the
+/// poison (classified `recoverable_by_rebuild`), the actor rebuilds the
+/// client in place over the store it owns (cursor resumes from the persisted
+/// store tip, no genesis replay), and the retry ingests the new range. The
+/// witness that the rebuild-and-retry actually progressed is the post-heal
+/// tip advancing past the pre-poison tip.
 ///
 /// The bounded-retry-then-surface escalation for a deterministically-corrupt
 /// store (O3-sub) is CT-5d, not exercised here (this fixture's store is
-/// clean, so one respawn heals it). Leaves are empty (the merge-path empty-
+/// clean, so one rebuild heals it). Leaves are empty (the merge-path empty-
 /// leaf shape); behavioral leaf/root correctness is the CT-2-oracle KAT
 /// (commit 6) / Tier-B completeness (CT-5c).
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn ingest_pre_pass_respawns_after_actor_fail_stop() {
+async fn ingest_pre_pass_rebuilds_a_poisoned_client_in_place() {
     const MASTER_SEED: [u8; 32] = [
         0x9d, 0x42, 0x1f, 0x88, 0x10, 0x20, 0x30, 0x40, 0x50, 0x60, 0x70, 0x80, 0x90, 0xa0, 0xb0,
         0xc0, 0xd0, 0xe0, 0xf0, 0x0a, 0x1b, 0x2c, 0x3d, 0x4e, 0x5f, 0x6a, 0x7b, 0x8c, 0x9d, 0xae,
@@ -880,7 +880,7 @@ async fn ingest_pre_pass_respawns_after_actor_fail_stop() {
         .collect();
     {
         let g = arc.read().await;
-        g.ingest_scan_result_with_respawn(&mut forward)
+        g.ingest_scan_result_with_recovery(&mut forward)
             .await
             .expect("forward feed ingests genesis-through-tip");
         assert_eq!(
@@ -893,28 +893,29 @@ async fn ingest_pre_pass_respawns_after_actor_fail_stop() {
         );
     }
 
-    // Simulate a fail-stop of the curve-tree actor (panic-free): the bare
-    // ingest path now classifies the dead actor as respawn-recoverable.
+    // Poison the client, as a post-commit rollback failure would: the bare
+    // ingest path classifies it as recoverable by an in-place rebuild.
     {
         let g = arc.read().await;
-        g.curve_tree.kill_and_wait_for_test().await;
+        g.curve_tree.poison_for_test().await;
         let err = g
             .ingest_scan_result_into_curve_tree(&mut forward)
             .await
-            .expect_err("a fail-stopped actor fails the bare (no-respawn) ingest");
+            .expect_err("a poisoned client fails the bare (no-recovery) ingest");
         assert!(
             matches!(
                 err,
-                RefreshError::CurveTreeIngest { fault } if fault.recoverable_by_respawn()
+                RefreshError::CurveTreeIngest { fault } if fault.recoverable_by_rebuild()
             ),
-            "a fail-stopped actor is classified respawn-recoverable, got {err:?}",
+            "a poisoned client is classified recoverable by rebuild, got {err:?}",
         );
     }
 
     // Second forward feed: range 6..8 (heights 6, 7), supplied as leaves so
-    // no daemon backfill is needed. Through the respawn-aware wrapper, the
-    // first attempt hits the dead actor, the engine respawns (cursor resumes
-    // from the persisted tip 5), and the retry ingests 6, 7 to tip 7.
+    // no daemon backfill is needed. Through the recovering wrapper, the first
+    // attempt hits the poisoned client, the actor rebuilds it in place
+    // (cursor resumes from the persisted tip 5), and the retry ingests 6, 7
+    // to tip 7.
     let mut forward2 = ScanResult::empty_at(shekyl_types::BlockHeight::from_raw(6), None);
     forward2.processed_height_range =
         shekyl_types::BlockHeight::from_raw(6)..shekyl_types::BlockHeight::from_raw(8);
@@ -931,16 +932,16 @@ async fn ingest_pre_pass_respawns_after_actor_fail_stop() {
         .collect();
     {
         let g = arc.read().await;
-        g.ingest_scan_result_with_respawn(&mut forward2)
+        g.ingest_scan_result_with_recovery(&mut forward2)
             .await
-            .expect("respawn-and-retry heals the fail-stop and ingests the new range");
+            .expect("rebuild-and-retry heals the poison and ingests the new range");
         assert_eq!(
             g.curve_tree
                 .ingested_tip_height()
                 .await
                 .expect("cursor read"),
             Some(shekyl_curve_tree::BlockHeight::from_raw(7)),
-            "post-respawn the tree resumed from persisted tip 5 and ingested \
+            "post-rebuild the tree resumed from persisted tip 5 and ingested \
              6, 7 to tip 7 — the heal progressed, it did not merely reopen",
         );
     }
@@ -994,7 +995,7 @@ async fn ingest_rejects_header_root_mismatch() {
     // §3.3 / O5 (the lying-daemon defense, CT-5b's load-bearing KAT). A
     // daemon serving leaves that do not reconstruct to the consensus
     // header-committed root it claims is the inconsistent liar. The
-    // ingest-time verify must reject it *terminally* — a respawn re-derives
+    // ingest-time verify must reject it *terminally* — a rebuild re-derives
     // the same root, so it is not recoverable — and the refresh pre-pass
     // returning `Err` means the ledger merge never runs (O2: the ledger
     // never advances past tree state the wallet cannot reproduce).

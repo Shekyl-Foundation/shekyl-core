@@ -63,7 +63,7 @@ fn a_page_that_reserves_main_and_t_is_judged_above_the_last_header_held() {
     let rules = fixed(1, 64);
     let fixture = chain_of(8);
     let mut block = candidate_on(&fixture, Vec::new()).block;
-    let mut sync = Sync::new(Trust::UNANCHORED, move |_| rules);
+    let mut sync = Sync::new(Trust::UNPINNED, move |_| rules);
     let wall = Timestamp::from_raw(u64::MAX / 4);
     sync.set_wall(wall);
     let substrate = MockSubstrate {

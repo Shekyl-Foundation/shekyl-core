@@ -66,7 +66,7 @@ pub mod types;
 pub use assemble::PathRootFault;
 pub use client::{
     BlockLeaves, CaptureReconciliation, ClientError, CurveTreeClient, ExpectedOutput,
-    OwnedRegistration, OwnershipSync, RawOutput, TxLeafInputs, WriterRecovery,
+    OwnedRegistration, OwnershipSync, RawOutput, TxLeafInputs,
 };
 pub use reference::{
     blocks_until_in_tree, drained_through, in_tree_at_reference, proof_expired, proof_submittable,
@@ -81,8 +81,8 @@ pub use segment::{
 };
 pub use store::{
     mixed_composition_root, recompute_segment_r_k, CapturedChunk, FrozenSegmentBody,
-    FrozenSegmentRecord, LeafStore, MixedRootError, PostureDeclaration, SegmentPin, ServingReader,
-    StoreError, StoreOpenFault,
+    FrozenSegmentRecord, LeafStore, MixedRootError, PostureDeclaration, SegmentPin, StoreError,
+    StoreOpenFault,
 };
 pub use types::{
     AssembleInput, AssembledPath, BlockHash, BlockHeight, ChunkLeaf, CommitmentBytes,

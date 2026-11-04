@@ -27,6 +27,7 @@ use shekyl_chain_rules::{relay_floor_at, AtHeight, Substrate};
 use shekyl_chain_store::apply_policy::ApplyPolicy;
 use shekyl_chain_store::store::{ChainStore, SnapshotView};
 use shekyl_daemon_rpc::chain_facts::{BlockLookup, ChainFacts, FactsFault};
+
 use shekyl_daemon_rpc::info::{get_info, Disclosure};
 use shekyl_daemon_rpc::info_facts::{
     InfoPeersFacts, PeerFacts, PoolCounts, PoolScope, PoolState, SessionCounts,
@@ -376,7 +377,7 @@ async fn a_scenario_chains_headers_and_blocks_are_the_mined_blocks() {
             )
         );
         assert_eq!(
-            get_last_block_header(&facts, false, false)
+            get_last_block_header(&facts, false)
                 .expect("tip")
                 .block_header
                 .hash,
@@ -458,11 +459,9 @@ async fn a_scenario_chains_headers_and_blocks_are_the_mined_blocks() {
         .expect("an unknown hash is a slot, not a refusal");
         assert_eq!(unknown.block_headers[0].block_header, None);
 
-        // A restricted caller asking for the PoW is refused, not blanked.
-        assert!(matches!(
-            get_last_block_header(&facts, true, true),
-            Err(RpcFault::Refused(_))
-        ));
+        // The recorded hash is a store read.
+        let paid = get_last_block_header(&facts, true).expect("the recorded hash");
+        assert!(paid.block_header.pow_hash.is_some());
         drop(facts);
         drop(store);
     })

@@ -213,7 +213,7 @@ pub fn judge_on(chain: &MockChain, candidate: Candidate) -> Verdict<()> {
             formed,
             &view,
             &RuleSet::GENESIS,
-            &crate::trust::Trust::UNANCHORED,
+            &crate::trust::Trust::UNPINNED,
         ))
         .map(|_valid| ())
     })
