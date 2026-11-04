@@ -980,7 +980,7 @@ mod tests {
     async fn refused_after(direct: bool) -> (std::io::ErrorKind, Duration) {
         let refusing = TcpSocket::new_v4().expect("socket");
         refusing
-            .bind(SocketAddr::from((Ipv4Addr::LOCALHOST, 0)))
+            .bind(SocketAddr::from((std::net::Ipv4Addr::LOCALHOST, 0)))
             .expect("bind");
         let target = refusing.local_addr().expect("addr");
         let started = Instant::now();
