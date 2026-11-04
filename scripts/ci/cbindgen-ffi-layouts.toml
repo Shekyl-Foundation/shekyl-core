@@ -30,4 +30,9 @@ no_includes = true
 [parse]
 parse_deps = false
 
+# A `#[repr(C, align(N))]` struct is otherwise an opaque forward declaration
+# (`struct X;`), which the layout limb reads as missing. The snapshot is
+# `align(8)` since 7938c51f16; `body_of` reads the `alignas(N)` form.
+[layout]
+aligned_n = "alignas"
 [export]
