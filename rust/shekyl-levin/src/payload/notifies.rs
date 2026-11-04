@@ -6,8 +6,8 @@
 //! Cryptonote notify maps 2002–2004 / 2006–2010 (`cryptonote_protocol_defs.h`).
 //!
 //! 2011–2014 are the chain-sync commands ([`super::sync`]). They are named
-//! here, beside the ids they follow, and they are not admitted at ingress:
-//! no handler exists until the cutover.
+//! here, beside the ids they follow. The C++ ingress does not admit them:
+//! the router hands them to chain sync's owner.
 
 use shekyl_portable_storage::{Section, Value};
 
