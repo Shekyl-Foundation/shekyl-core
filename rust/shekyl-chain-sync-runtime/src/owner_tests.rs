@@ -253,13 +253,22 @@ fn a_session_holds_one_waiting_request_of_each_kind() {
 
 /// The node keeps its sender, so the owner's exit cannot close the watch.
 /// The task publishes `NoView` instead, which is what facts and the
-/// follower would have read from a closed watch.
+/// follower would have read from a closed watch. The same guard reports
+/// how the task ended: the cause an exit set, or a panic when none did.
 #[test]
-fn an_owner_exit_publishes_no_view_while_the_node_keeps_its_sender() {
+fn an_owner_exit_publishes_no_view_and_reports_how_it_ended() {
     let (node, seen) = tokio::sync::watch::channel(SyncState::Synced);
-    let owner = node.clone();
-    let live = super::EndsAsNoView { state: owner };
+    let (ended_tx, ended) = tokio::sync::watch::channel(None);
+    let (stop_tx, stop) = tokio::sync::watch::channel(false);
+    let mut live = super::EndGuard {
+        state: node.clone(),
+        ended: ended_tx.clone(),
+        stop: stop.clone(),
+        how: super::Ended::Failed(super::PANICKED),
+    };
     assert_eq!(*node.borrow(), SyncState::Synced);
+    assert_eq!(*ended.borrow(), None, "a running owner has not ended");
+    live.how = super::Ended::Failed(super::ROUTER_CLOSED);
     drop(live);
     assert_eq!(*node.borrow(), SyncState::NoView);
     assert_eq!(*seen.borrow(), SyncState::NoView);
@@ -267,4 +276,30 @@ fn an_owner_exit_publishes_no_view_while_the_node_keeps_its_sender() {
         seen.has_changed().is_ok(),
         "the node's sender was dropped with the owner"
     );
+    assert_eq!(
+        *ended.borrow(),
+        Some(super::Ended::Failed(super::ROUTER_CLOSED))
+    );
+    // An unwind runs the guard with no exit's cause set: a panic.
+    let unwound = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+        let _guard = super::EndGuard {
+            state: node.clone(),
+            ended: ended_tx.clone(),
+            stop: stop.clone(),
+            how: super::Ended::Failed(super::PANICKED),
+        };
+        panic!("the owner's task");
+    }));
+    assert!(unwound.is_err());
+    assert_eq!(*ended.borrow(), Some(super::Ended::Failed(super::PANICKED)));
+    // A task cancelled after a stop was asked (the owner's runtime shut
+    // down under it) ended by the stop, not by a failure.
+    stop_tx.send_replace(true);
+    drop(super::EndGuard {
+        state: node.clone(),
+        ended: ended_tx,
+        stop,
+        how: super::Ended::Failed(super::PANICKED),
+    });
+    assert_eq!(*ended.borrow(), Some(super::Ended::Stopped));
 }

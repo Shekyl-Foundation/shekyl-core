@@ -151,9 +151,18 @@ pub struct Running {
     state: watch::Receiver<SyncState>,
     alarm: watch::Receiver<bool>,
     view: watch::Receiver<SyncView<SocketId>>,
+    ended: watch::Receiver<Option<Ended>>,
 }
 
 impl Running {
+    /// How the owner's task ended, once it has: `None` while it runs. The
+    /// value stays after the task, so a reader that looks late still sees
+    /// the cause.
+    #[must_use]
+    pub fn ended(&self) -> watch::Receiver<Option<Ended>> {
+        self.ended.clone()
+    }
+
     /// The published sync state (CS-Q2 step 8's consumers read this).
     #[must_use]
     pub fn state(&self) -> watch::Receiver<SyncState> {
@@ -212,10 +221,11 @@ where
     let (alarm_tx, alarm) = watch::channel(false);
     let (view_tx, view) = watch::channel(SyncView::empty());
     let (stop_tx, stop_rx) = watch::channel(false);
+    let (ended_tx, ended) = watch::channel(None);
     let executor = Arc::clone(&parts.executor);
     // The owner's log lines carry the span it was started in.
     let published = Published { alarm_tx, view_tx };
-    pool.spawn(run(parts, published, stop_rx).instrument(tracing::Span::current()));
+    pool.spawn(run(parts, published, stop_rx, ended_tx).instrument(tracing::Span::current()));
     Ok(Running {
         pool,
         executor,
@@ -223,22 +233,57 @@ where
         state,
         alarm,
         view,
+        ended,
     })
 }
 
-/// Publishes [`SyncState::NoView`] when the owner task ends.
-///
-/// The node keeps its own sender, so the watch does not close and the
-/// facts' and the follower's closed-watch reading never fires. Without
-/// this publish they would keep the last state, including `Synced`,
-/// after the owner is gone.
-struct EndsAsNoView {
-    state: watch::Sender<SyncState>,
+/// How the owner's task ended ([`Running::ended`]).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Ended {
+    /// [`Running::stop`] asked it to.
+    Stopped,
+    /// It ended on its own, and the cause names what closed under it. A
+    /// daemon whose owner ends this way never syncs again, so the daemon
+    /// stops with this cause.
+    Failed(&'static str),
 }
 
-impl Drop for EndsAsNoView {
+/// The cause a task end carries when no exit set one: only an unwind
+/// leaves the task without setting its cause.
+const PANICKED: &str = "the sync owner's task panicked";
+/// The router's sender went: the seam's hub was dropped.
+const ROUTER_CLOSED: &str = "the router closed";
+/// The process timing engine went.
+const ENGINE_CLOSED: &str = "the timing engine closed";
+
+/// Reports the owner task's end, however it ends: a stop, a closed input
+/// and a panic alike.
+///
+/// It publishes [`SyncState::NoView`]. The node keeps its own sender, so
+/// the watch does not close and the facts' and the follower's
+/// closed-watch reading never fires; without this publish they would keep
+/// the last state, including `Synced`, after the owner is gone. It also
+/// sends [`Ended`] on [`Running::ended`]: each exit sets `how` first, and
+/// an unwind leaves [`PANICKED`]. Once a stop was asked, the end is
+/// [`Ended::Stopped`] whatever `how` says: [`Running::stop`] shuts the
+/// owner's runtime down, which can cancel the task before it reads the
+/// request.
+struct EndGuard {
+    state: watch::Sender<SyncState>,
+    ended: watch::Sender<Option<Ended>>,
+    stop: watch::Receiver<bool>,
+    how: Ended,
+}
+
+impl Drop for EndGuard {
     fn drop(&mut self) {
         self.state.send_replace(SyncState::NoView);
+        let how = if *self.stop.borrow() {
+            Ended::Stopped
+        } else {
+            self.how
+        };
+        self.ended.send_replace(Some(how));
     }
 }
 
@@ -361,8 +406,12 @@ struct Owner<C: Clock + Clone, R> {
     published: Published,
 }
 
-async fn run<C, R>(parts: OwnerParts<C, R>, published: Published, mut stop: watch::Receiver<bool>)
-where
+async fn run<C, R>(
+    parts: OwnerParts<C, R>,
+    published: Published,
+    mut stop: watch::Receiver<bool>,
+    ended: watch::Sender<Option<Ended>>,
+) where
     C: Clock + Clone + Send + Sync + 'static,
     R: RelayRng + Send + 'static,
 {
@@ -383,13 +432,23 @@ where
         mut routed,
         state: state_tx,
     } = parts;
+    // Dropped with the task: every exit below sets `how` first.
+    let mut end = EndGuard {
+        state: state_tx.clone(),
+        ended,
+        stop: stop.clone(),
+        how: Ended::Failed(PANICKED),
+    };
     let hub = tokio::select! {
         biased;
-        _ = stop.wait_for(|stop| *stop) => return,
+        _ = stop.wait_for(|stop| *stop) => {
+            end.how = Ended::Stopped;
+            return;
+        }
         hub = hub => match hub {
             Ok(hub) => hub,
             Err(_) => {
-                tracing::info!("the seam was never bound: chain sync does not start");
+                end.how = Ended::Failed("the seam never bound, so chain sync never started");
                 return;
             }
         },
@@ -428,10 +487,6 @@ where
         state_tx,
         published,
     };
-    // Dropped with the task: stop, a closed watch, and a panic alike.
-    let _exit = EndsAsNoView {
-        state: owner.state_tx.clone(),
-    };
     // The fill does not exist yet: the frontier is genesis (§4.7).
     owner.event(Event::Fill {
         frontier: BlockHeight::ZERO,
@@ -443,7 +498,10 @@ where
     loop {
         tokio::select! {
             biased;
-            _ = stop.wait_for(|stop| *stop) => break,
+            _ = stop.wait_for(|stop| *stop) => {
+                end.how = Ended::Stopped;
+                break;
+            }
             input = input_rx.recv() => {
                 if let Some(input) = input {
                     owner.input(input);
@@ -451,6 +509,7 @@ where
             },
             changed = tips.changed() => {
                 if changed.is_err() {
+                    end.how = Ended::Failed("the connector's tip watch closed");
                     break;
                 }
                 let tip = *tips.borrow_and_update();
@@ -458,6 +517,7 @@ where
             },
             changed = latch.changed() => {
                 if changed.is_err() {
+                    end.how = Ended::Failed("the latch watch closed");
                     break;
                 }
                 let set = latch.borrow_and_update().is_some();
@@ -465,6 +525,7 @@ where
             },
             changed = seeds.changed() => {
                 if changed.is_err() {
+                    end.how = Ended::Failed("the seed watch closed");
                     break;
                 }
                 let pair = *seeds.borrow_and_update();
@@ -472,6 +533,7 @@ where
             },
             routed_one = routed.recv() => {
                 let Some(routed_one) = routed_one else {
+                    end.how = Ended::Failed(ROUTER_CLOSED);
                     break;
                 };
                 owner.routed(routed_one);
@@ -495,17 +557,22 @@ where
                             pump_local(&mut owner, &mut input_rx, &mut tips, &mut latch);
                         }
                         if closed {
+                            end.how = Ended::Failed(ROUTER_CLOSED);
                             break;
                         }
                         owner.deadlines_due();
                     }
-                    None => break,
+                    None => {
+                        end.how = Ended::Failed(ENGINE_CLOSED);
+                        break;
+                    }
                 }
             },
             wake = wakes.wait_wake_async() => match wake {
                 Ok(_) => owner.deadlines_due(),
                 Err(err) => {
                     tracing::info!(?err, "the timing engine closed: chain sync stops");
+                    end.how = Ended::Failed(ENGINE_CLOSED);
                     break;
                 }
             },
