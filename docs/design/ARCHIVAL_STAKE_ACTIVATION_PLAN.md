@@ -207,11 +207,11 @@ with the seed live**, in this order:
 
 ### 5.2 SA-DQ-2 — derive-equivalence (already structural)
 
-`derive_archival_p_keys` (`archival_p.rs:369`) is a **pure function** of `(seed, net, fmt, slot)`
-— no RNG/time/IO — **fixed-vector KAT-pinned** (`kat_archival_p_derive_v1_vectors`,
-`tests/kat_archival_p_derive_v1.rs:330`, a CI-run `#[test]`: derived output asserted `==`
-`expected.out_hex` per `(seed,net,fmt,slot)` at `:180`, over a corpus-hash-pinned `vectors.json`
-`:338-342`, with a `--ignored` regenerator — a real input→output KAT that catches an algorithm
+`derive_archival_p_keys` (`archival_p.rs:701`) is a **pure function** of `(seed, net, slot)`
+— no RNG/time/IO — **fixed-vector KAT-pinned** (`kat_archival_p_derive_v2_vectors`,
+`tests/kat_archival_p_derive_v2.rs:430`, a CI-run `#[test]`: derived output asserted `==`
+`expected.out_hex` per `(seed,net,slot)`, over a corpus-hash-pinned `vectors.json`, with a
+`--ignored` regenerator — a real input→output KAT that catches an algorithm
 change, not just a determinism/property test), and `spawn_stake_engine_if_staker` (`lifecycle.rs:934`)
 is its **sole production caller**. So bootstrap-derive ≡ post-reopen-derive is guaranteed by
 construction. **Enforcement-point-with-the-type:** the bootstrap calls this one primitive (never a
