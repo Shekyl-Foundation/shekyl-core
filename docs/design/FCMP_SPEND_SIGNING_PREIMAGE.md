@@ -58,10 +58,10 @@ signed_hash(i) = cSHAKE256-32(S = "shekyl/fcmp-spend-signing-v1",
 
 `network_id` is the 16-byte genesis-derived id of the network the spend is
 for (`NETWORK_IDENTITY.md` NI-Q4, NI-R10): a signature is valid on one
-network by construction. The C++ assembly signed `keccak256(payload(i))`;
-the payload bytes are unchanged, and the KAT (`pqc_signing_preimage_kat.rs`)
-keeps its captured payloads and pins each hash per network against
-`scripts/kat/spend_signing_hash_oracle.py`.
+network by construction. The KAT (`pqc_signing_preimage_kat.rs`)
+pins the captured payload bytes, and each hash per network against
+`scripts/kat/spend_signing_hash_oracle.py`, which computes the hashes on a stdlib
+sponge (`scripts/kat/stdlib_cshake.py`) that shares no code with the Rust.
 
 - **prefix_blob** = `serialize(transaction_prefix)` — see §1.2. *Includes the tx version.*
 - **ct_base_blob** = `CtSigBase::serialize_ctsig_base(inputs, outputs)` — see §1.3.

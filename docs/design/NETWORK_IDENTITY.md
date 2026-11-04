@@ -83,7 +83,7 @@ signed_hash(i) = cSHAKE256-32(S = "shekyl/fcmp-spend-signing-v1", X = network_id
 
 **Message signing (NI-F2, NI-Q9).** The preimage's network field is the 16-byte id, where it was the network's one-byte code. Message signing is post-genesis, so there is no circularity (the reason key derivation stays on the name, NI-R10). The field's width changes what a signature attests, so the payload layout version is 2 and a layout-1 signature is refused by name; the envelope prefix and the canonical length do not change, as the id is hashed and never carried (`WALLET_MESSAGE_SIGNING.md` SM-R-3, amended 2026-11-04). There was no pinned preimage vector before; `docs/test_vectors/MSG_SIGN_PREIMAGE_V2.json` pins four cases on every network, rebuilt by `scripts/kat/msg_sign_preimage_oracle.py` on the same stdlib sponge as the spend oracle (`scripts/kat/stdlib_cshake.py`).
 
-**The audit (NI-Q9).** Every production row of [`CRYPTO_DOMAIN_REGISTRY.tsv`](CRYPTO_DOMAIN_REGISTRY.tsv) is classed: it binds the network (its input carries the id, the name, or something only one chain produces: a genesis-chained header, a block hash, a txid, a tree root, a key derived under the name); it cannot cross networks (local, or bound to a chain object checked elsewhere); or it is replayable. The table is [Appendix A](#appendix-a-the-domain-registry-audit-ni-q9): of 131 rows, 52 bind the network, 79 cannot cross, and none is replayable. Three groups hold their class only through a one-byte code or through their neighbours' proofs; they are raised for a ruling in §A.8 and are not changed here.
+**The audit (NI-Q9).** Every production row of [`CRYPTO_DOMAIN_REGISTRY.tsv`](CRYPTO_DOMAIN_REGISTRY.tsv) is classed: it binds the network (its input carries the id, the name, or something only one chain produces: a genesis-chained header, a block hash, a txid, a tree root, a key derived under the name); it cannot cross networks (local, or bound to a chain object checked elsewhere); or it is replayable. The table is [Appendix A](#appendix-a-the-domain-registry-audit-ni-q9): of 131 rows, 52 bind the network, 79 cannot cross, and none is replayable. Three groups hold their class only through a one-byte code or through their neighbours' proofs; they are raised for a ruling as NI-F11…F13 (§7, §A.8) and are not changed here.
 
 ### 2.5 Regtest is a network, not an exception (NI-Q8)
 
@@ -144,7 +144,7 @@ Regtest is a row in the table: its own genesis, address prefixes, ports, difficu
 | NI-Q6 | The pool seal. | OPEN (PR 4): records the network id; the chain store needs no field. |
 | NI-Q7 | The marker file. | OPEN (PR 4): daemon-config's call (DC-Q15, IG-Q17); recommendation: a label, trusted for nothing. |
 | NI-Q8 | Regtest as an ordinary network. | BUILDING (PR 1): §2.5; corpus re-captured through #1244's path. The address byte is persisted in wallet files and multisig addresses (NI-F5), so the wallet-file codec takes rule 42's version bump; an older file is refused with a reason, never reinterpreted. |
-| NI-Q9 | The domain-registry audit. | BUILT (PR 2, #1266, Appendix A): 131 rows, 52 bound to the network, 79 unable to cross, none replayable; three groups raised for a ruling (§A.8). NI-F2: message signing binds the genesis-derived id at layout version 2, with a new preimage vector and its oracle; key derivation's label is the network's name, ruled by NI-R10 (genesis pays keys derived before the id exists). |
+| NI-Q9 | The domain-registry audit. | BUILT (PR 2, #1266, Appendix A): 131 rows, 52 bound to the network, 79 unable to cross, none replayable; three groups raised for a ruling (NI-F11…F13, §A.8). NI-F2: message signing binds the genesis-derived id at layout version 2, with a new preimage vector and its oracle; key derivation's label is the network's name, ruled by NI-R10 (genesis pays keys derived before the id exists). |
 | NI-Q10 | Compatibility at the handshake, replacing genesis rotation. | SHAPE RULED 2026-11-03 (§3); OPEN (PR 3): what the rules digest covers per step, and the frozen-tuple gate shrinks or goes. |
 | NI-Q11 | Regtest's levers. | RULED 2026-11-03 (NI-R6, NI-R8); BUILDING (PR 1). |
 | NI-Q12 | Seed format. | RULED 2026-11-03 (NI-R7, NI-R10); BUILDING (PR 1): BIP39, 24 words, on every network; one derivation from the 32 entropy bytes (NI-F8), salted by the network's name. |
@@ -190,6 +190,9 @@ Guards that compare a configured network with a recorded one (the marker, the mi
 - **NI-F8 — at `8f2b68dbbf`: the seed format is a derivation input, and NI-R7 removes it.** 24 words is already the only length (`SHEKYL_MNEMONIC_WORD_COUNT`, `shekyl-crypto-pq/src/bip39.rs`); a BIP39 passphrase is accepted, opt-in; and a BIP39 wallet derives from the PBKDF2 output (`mnemonic_to_pbkdf2_seed`). `SeedFormat` (`Bip39` / `Raw32`, `shekyl-crypto-pq/src/account.rs`) is bound into the derivation salt (`salt_label`) and the wallet-file AAD. Once derivation takes the 32 entropy bytes on every network, a phrase and a harness's fixed key are the same input, so the format leaves the salt and the AAD: one derivation per network, and the words are how the 32 bytes are shown. PR 1 re-records the derivation KATs (mainnet's included), deletes the passphrase and the PBKDF2 path, and folds the AAD change into the same wallet-file version bump as NI-F5.
 - **NI-F9 — at `8f2b68dbbf`: key derivation can't bind the genesis-derived network id.** RULED: NI-R10. The genesis pays its recipients' addresses, the addresses come out of key derivation, and the network id is a hash of the genesis. Derivation bound to that id would need the genesis before the genesis exists. Derivation binds the network's name, the row's tag `shekyl/<network>` (NI-R10).
 - **NI-F10 — at `8f2b68dbbf`: the public networks' genesis recipients are derived addresses, and NI-R7 moves them.** RULED: NI-R11. `config/genesis_recipients.{mainnet,testnet,stagenet}.json` hold addresses the custodians derived from their seeds (`geblock wallets`, `shekyl-genesis-tool/src/wallets.rs`) under today's derivation. NI-R7 changes the derivation (the format leaves the salt; the words give the 32 entropy bytes, not PBKDF2's output), so the same seeds give different addresses, and a genesis rebuilt from today's files would pay addresses no wallet can spend. Every change to key derivation, including NI-R10's name, therefore lands in PR 1, before the one regeneration, or PR 2 forces a second regenesis.
+- **NI-F11 — at `5cb6cdba7a`: the emission auth message binds no network on its own.** RAISED. It signs `signable_tx_hash`, a prefix hash with no `reference_block`; its binding is the transaction's proofs, and an emission may have no fee input. Appendix A §A.8 item 1.
+- **NI-F12 — at `5cb6cdba7a`: the SAL and FROST transcripts bind no network on their own.** RAISED. They hash the same prefix hash; their binding is the membership proof and, since NI-Q4, the network-bound spend signature on the same input. Appendix A §A.8 item 2.
+- **NI-F13 — at `5cb6cdba7a`: three rows separate networks by `Network::code()`, not by the id or the name.** RAISED. The multisig address fingerprint, the reserve proof and its DLEQ; a reserve proof carries no txid or height. Appendix A §A.8 item 3.
 
 ## 8. Shape and order
 
@@ -213,7 +216,7 @@ Guards that compare a configured network with a recorded one (the marker, the mi
 - **B, cannot cross networks:** it is local to one process, file or group, or it is bound to a chain object that a check elsewhere holds to this network.
 - **C, replayable:** none.
 
-**Counts:** A = 52, B = 79, C = 0. Three A rows bind only the one-byte `Network::code()` (decision 3). Four B rows (decision 1) and four more (decision 2) are B only through other checks on the same transaction. These are raised for a ruling in §A.8 and are not changed in this PR.
+**Counts:** A = 52, B = 79, C = 0. Three A rows bind only the one-byte `Network::code()` (NI-F13). Four B rows (NI-F11) and four more (NI-F12) are B only through other checks on the same transaction. These are raised for a ruling in §A.8 and are not changed in this PR.
 
 | Mechanism | Rows | A | B |
 |---|---|---|---|
@@ -230,7 +233,7 @@ Guards that compare a configured network with a recorded one (the marker, the mi
 | Domain | Where | What it hashes | Class | Why |
 |---|---|---|---|---|
 | shekyl/genesis-txkey-v2 | `rust/shekyl-genesis-tool/src/txkey.rs` | genesis tx secret from the network name and the recipients | A | the preimage starts with `net.name()` |
-| shekyl/multisig-address-v1 | `rust/shekyl-address/src/multisig_address.rs` | multisig group fingerprint over the canonical payload | A, code only (decision 3) | the payload carries `Network::code()` |
+| shekyl/multisig-address-v1 | `rust/shekyl-address/src/multisig_address.rs` | multisig group fingerprint over the canonical payload | A, code only (NI-F13) | the payload carries `Network::code()` |
 | shekyl/ek-bind-v1 | `rust/shekyl-address/src/address.rs` | an address's tag over its ML-KEM key | B | lives inside the address; the HRP carries the network and decode checks it |
 | shekyl/archival-serve-challenge-leaf-v2 | `rust/shekyl-archival-retention/src/challenge.rs` | challenge leaf index | A | the input includes `prev_block_hash` |
 | shekyl/archival-serve-challenge-fire-v1 | `rust/shekyl-archival-retention/src/challenge.rs` | beacon fire height | A | the input includes `block_hash_at_seal` |
@@ -255,8 +258,8 @@ Guards that compare a configured network with a recorded one (the marker, the mi
 | shekyl/archival-drawable-epoch-v2 | `rust/shekyl-archival-retention/src/drawable_epoch.rs` | digest of an epoch snapshot | B | a local store check; no consensus rule reads it |
 | shekyl/p-store-aead-v1 | `rust/shekyl-p-store/src/store.rs` | P's body-store file key from file_kek | B | local file |
 | shekyl/p-store-slot-v1 | `rust/shekyl-p-store/src/store.rs` | P's per-shard table slot | B | local |
-| shekyl/archival-emission-auth-backing-v2 | `rust/shekyl-archival-retention/src/emission_wire.rs` | 64-byte emission auth message (persona, holdings, epochs, work, reward commits, `signable_tx_hash`) | B (decision 1) | the message carries no network id and no chain object; bound only through the same transaction's proofs |
-| shekyl/archival-emission-auth-claim-v2 | `rust/shekyl-archival-retention/src/emission_wire.rs` | the same message under the claim role | B (decision 1) | the message carries no network id and no chain object; bound only through the same transaction's proofs |
+| shekyl/archival-emission-auth-backing-v2 | `rust/shekyl-archival-retention/src/emission_wire.rs` | 64-byte emission auth message (persona, holdings, epochs, work, reward commits, `signable_tx_hash`) | B (NI-F11) | the message carries no network id and no chain object; bound only through the same transaction's proofs |
+| shekyl/archival-emission-auth-claim-v2 | `rust/shekyl-archival-retention/src/emission_wire.rs` | the same message under the claim role | B (NI-F11) | the message carries no network id and no chain object; bound only through the same transaction's proofs |
 | shekyl/p-socks-user-v1 | `rust/shekyl-p-transport/src/lib.rs` | Tor SOCKS isolation username from the persona id | B | local to the process |
 | shekyl/output-handle-v1 | `rust/shekyl-crypto-pq/src/handle.rs` | wallet handle for an output position | A | input is view_secret (name-salted) plus tx_hash |
 | shekyl/receive-label-hash-v1 | `rust/shekyl-crypto-pq/src/label.rs` | wallet display fingerprint of a label | B | wallet-local display only |
@@ -266,8 +269,8 @@ Guards that compare a configured network with a recorded one (the marker, the mi
 | shekyl/pqc-auth-tx-v1 | `rust/shekyl-crypto-pq/src/signature.rs` | hybrid spend auth over `signed_hash` | A | signs `signed_hash`, whose input starts with the network id (NI-Q4) |
 | shekyl/pqc-auth-tx-multisig-v1 | `rust/shekyl-crypto-pq/src/signature.rs` | multisig participant auth over the same payload | A | signs the same `signed_hash` |
 | shekyl/fcmp-spend-signing-v1 | `rust/shekyl-wire/src/transaction/signing_preimage.rs` | the hash every hybrid spend signature is over | A | X starts with the network id (NI-Q4) |
-| shekyl/archival-emission-claim-scheme-v1 | `rust/shekyl-crypto-pq/src/signature.rs` | hybrid signature over the emission claim message | B (decision 1) | the message carries no network id and no chain object; bound only through the same transaction's proofs |
-| shekyl/archival-emission-backing-scheme-v1 | `rust/shekyl-crypto-pq/src/signature.rs` | hybrid signature over the emission backing message | B (decision 1) | the message carries no network id and no chain object; bound only through the same transaction's proofs |
+| shekyl/archival-emission-claim-scheme-v1 | `rust/shekyl-crypto-pq/src/signature.rs` | hybrid signature over the emission claim message | B (NI-F11) | the message carries no network id and no chain object; bound only through the same transaction's proofs |
+| shekyl/archival-emission-backing-scheme-v1 | `rust/shekyl-crypto-pq/src/signature.rs` | hybrid signature over the emission backing message | B (NI-F11) | the message carries no network id and no chain object; bound only through the same transaction's proofs |
 | shekyl/archival-attestation-scheme-v3 | `rust/shekyl-crypto-pq/src/signature.rs` | pass countersignature transcript | A | the transcript includes `anchor_hash` |
 | shekyl/archival-serve-credit-scheme-v1 | `rust/shekyl-crypto-pq/src/signature.rs` | serve-credit response signature | A | message includes the tree subroot |
 | shekyl/archival-receipt-scheme-v1 | `rust/shekyl-crypto-pq/src/signature.rs` | serve receipt over the same transcript | A | includes `block_hash(anchor_height)` |
@@ -317,8 +320,8 @@ Guards that compare a configured network with a recorded one (the marker, the mi
 
 | Domain | Where | What it hashes | Class | Why |
 |---|---|---|---|---|
-| Shekyl FROST SAL v1 | `rust/shekyl-fcmp/src/frost_sal.rs` | root of the multisig SAL transcript over `signable_tx_hash` | B (decision 2) | `signable_tx_hash` is the prefix hash, with no chain data; bound by the tx's membership proof and `reference_block` |
-| SpendAuthAndLinkability Multisig | `rust/shekyl-fcmp-proofs/src/sal/multisig.rs` | inherited sub-domain | B (decision 2) | same; frozen |
+| Shekyl FROST SAL v1 | `rust/shekyl-fcmp/src/frost_sal.rs` | root of the multisig SAL transcript over `signable_tx_hash` | B (NI-F12) | `signable_tx_hash` is the prefix hash, with no chain data; bound by the tx's membership proof and `reference_block` |
+| SpendAuthAndLinkability Multisig | `rust/shekyl-fcmp-proofs/src/sal/multisig.rs` | inherited sub-domain | B (NI-F12) | same; frozen |
 | FROST-ED25519-FCMP++-v1 | `rust/shekyl-fcmp-proofs/src/sal/multisig.rs` | ciphersuite CONTEXT | B | constant, used only inside the signing group |
 | Ed25519 Monero T | `rust/shekyl-fcmp-proofs/src/sal/multisig.rs` | ciphersuite ID | B | same |
 
@@ -326,8 +329,8 @@ Guards that compare a configured network with a recorded one (the marker, the mi
 
 | Domain | Where | What it hashes | Class | Why |
 |---|---|---|---|---|
-| Shekyl FCMP++ SAL full v1 | `rust/shekyl-fcmp-proofs/src/sal/mod.rs` | SAL challenge: `signable_tx_hash`, input, L, … | B (decision 2) | prefix hash only; tied to the chain through the FCMP++ proof against the tree at `reference_block` |
-| Shekyl FCMP++ SAL membership-only v1 | `rust/shekyl-fcmp-proofs/src/sal/mod.rs` | membership-only challenge | B (decision 2) | same |
+| Shekyl FCMP++ SAL full v1 | `rust/shekyl-fcmp-proofs/src/sal/mod.rs` | SAL challenge: `signable_tx_hash`, input, L, … | B (NI-F12) | prefix hash only; tied to the chain through the FCMP++ proof against the tree at `reference_block` |
+| Shekyl FCMP++ SAL membership-only v1 | `rust/shekyl-fcmp-proofs/src/sal/mod.rs` | membership-only challenge | B (NI-F12) | same |
 | Shekyl FCMP++ MO nonce {r_o, r_i, r_r_i, r_c, alpha, r_y} v1 (6 rows) | `rust/shekyl-fcmp-proofs/src/sal/membership_only.rs` | hedged prover nonces | B ×6 | prover-internal secrets |
 
 ### A.5 Mechanism 5: Keccak and Schnorr
@@ -336,8 +339,8 @@ Guards that compare a configured network with a recorded one (the marker, the mi
 |---|---|---|---|---|
 | shekyl-outbound-tx-proof-v1 | `rust/shekyl-proofs/src/tx_proof.rs` | Schnorr over txid, address bytes, message, per-output data | A | txid |
 | shekyl-inbound-tx-proof-v1 | `rust/shekyl-proofs/src/tx_proof.rs` | same | A | txid |
-| shekyl-reserve-proof-v1 | `rust/shekyl-proofs/src/reserve_proof.rs` | Schnorr over address bytes, message, per-output data | A, code only (decision 3) | `canonical_address_bytes` carries `Network::code()` (`rust/shekyl-engine-core/src/engine/proofs.rs`); no txid or height |
-| shekyl-reserve-proof-dleq-v1 | `rust/shekyl-proofs/src/dleq.rs` | DLEQ over address bytes, message, output_key | A, code only (decision 3) | the same address bytes |
+| shekyl-reserve-proof-v1 | `rust/shekyl-proofs/src/reserve_proof.rs` | Schnorr over address bytes, message, per-output data | A, code only (NI-F13) | `canonical_address_bytes` carries `Network::code()` (`rust/shekyl-engine-core/src/engine/proofs.rs`); no txid or height |
+| shekyl-reserve-proof-dleq-v1 | `rust/shekyl-proofs/src/dleq.rs` | DLEQ over address bytes, message, output_key | A, code only (NI-F13) | the same address bytes |
 | shekyl/msg-sign-outer-v1 | `rust/shekyl-crypto-pq/src/message_signing.rs` | classical Schnorr over the preimage and σ_pq | A | signs the preimage, which carries the id |
 | `shekyl-subaddr-v1\0` | `rust/shekyl-crypto-pq/src/output_claim.rs` | m_i from view_scalar and index | A | the view scalar is name-salted |
 | Monero Generator T / FCMP++ Generator U / V / Helios / Selene initializers (5 rows) | `rust/shekyl-curve-generators/src/lib.rs` | fixed public generators | B ×5 | public parameters with no message; frozen, so they could never take the id anyway |
@@ -361,9 +364,9 @@ Guards that compare a configured network with a recorded one (the marker, the mi
 
 ### A.8 Raised for a ruling
 
-1. **The emission auths (`archival-emission-auth-{backing,claim}-v2`, `archival-emission-{claim,backing}-scheme-v1`; B).** The signed message holds the persona id and key, holdings, epochs, work claim, reward commitments and `signable_tx_hash`. That hash is the prefix hash with the emission input removed, and the prefix carries no `reference_block`, so the message names no network and no chain object. A replay of a testnet emission on mainnet needs the same persona key bonded on both, which takes an operator who reuses keys on purpose, and fee inputs whose spend signatures verify on mainnet, which NI-Q4 now refuses. The rewards would go to the same destinations. *Recommended:* put the network id at the head of the auth message's input, with a label bump, so the message binds on its own rather than through its neighbours.
-2. **The SAL and FROST transcripts (`Shekyl FROST SAL v1`, `SpendAuthAndLinkability Multisig`, `Shekyl FCMP++ SAL full v1`, `Shekyl FCMP++ SAL membership-only v1`; B).** They hash the same prefix hash. Their chain binding is the FCMP++ membership proof against the tree at `reference_block` and, since NI-Q4, the hybrid signature over the network-bound `signed_hash` on the same input. Two are inherited and frozen. *Recommended:* B, ruled explicitly.
-3. **The rows bound by `Network::code()` (`shekyl/multisig-address-v1`, `shekyl-reserve-proof-v1`, `shekyl-reserve-proof-dleq-v1`).** The code separates the four networks, but it is the enum code NI-F2 moved message signing off, and a reserve proof carries no txid or height. *Recommended:* the reserve proof and its DLEQ bind the network id; the multisig fingerprint binds the network's name tag, since a group's address is fixed before any chain is read.
+1. **NI-F11, the emission auths (`archival-emission-auth-{backing,claim}-v2`, `archival-emission-{claim,backing}-scheme-v1`; B).** The signed message holds the persona id and key, holdings, epochs, work claim, reward commitments and `signable_tx_hash`. That hash is the prefix hash with the emission input removed, and the prefix carries no `reference_block`, so the message names no network and no chain object. A replay of a testnet emission on mainnet needs the same persona key bonded on both, which takes an operator who reuses keys on purpose, and the transaction's proofs to verify on mainnet: the emission input's membership-only backing proof against the curve-tree root at `reference_block` (CEN-J21), and the fee inputs' spend signatures, which NI-Q4 now binds to the network. An emission may carry no fee input (CEN-J21, J26), so the backing proof can be its only binding. The rewards would go to the same destinations. *Recommended:* put the network id at the head of the auth message's input, with a label bump, so the message binds on its own rather than through its neighbours.
+2. **NI-F12, the SAL and FROST transcripts (`Shekyl FROST SAL v1`, `SpendAuthAndLinkability Multisig`, `Shekyl FCMP++ SAL full v1`, `Shekyl FCMP++ SAL membership-only v1`; B).** They hash the same prefix hash. Their chain binding is the FCMP++ membership proof against the tree at `reference_block` and, since NI-Q4, the hybrid signature over the network-bound `signed_hash` on the same input. Two are inherited and frozen. *Recommended:* B, ruled explicitly.
+3. **NI-F13, the rows bound by `Network::code()` (`shekyl/multisig-address-v1`, `shekyl-reserve-proof-v1`, `shekyl-reserve-proof-dleq-v1`).** The code separates the four networks, but it is the enum code NI-F2 moved message signing off, and a reserve proof carries no txid or height. *Recommended:* the reserve proof and its DLEQ bind the network id; the multisig fingerprint binds the network's name tag, since a group's address is fixed before any chain is read.
 
 Also for the ruling: NI-Q4's row read "a cSHAKE customization carrying the network id", and §2.4.1 puts the id in the input instead (`X = network_id ‖ payload`). The same placement is used for message signing.
 
