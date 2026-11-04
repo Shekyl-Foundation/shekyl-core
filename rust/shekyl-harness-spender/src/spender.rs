@@ -95,6 +95,12 @@ pub struct Spender {
 }
 
 impl Spender {
+    /// The network id every spend this spender builds signs under: the
+    /// harness id, because the chains it spends from mine their own genesis
+    /// and are validated under `Trust::UNPINNED` (`NETWORK_IDENTITY.md`
+    /// NI-Q4).
+    pub const NETWORK_ID: shekyl_network::NetworkId = shekyl_network::HARNESS_NETWORK_ID;
+
     /// The tree after every block of `mined`, in order, from genesis.
     #[must_use]
     pub fn over<B: MinedBlock>(mined: &[B]) -> Self {
@@ -794,6 +800,7 @@ impl Spender {
                     extra: bond.map(|b| vec![b.slot_pk.clone()]).unwrap_or_default(),
                 },
             },
+            &Self::NETWORK_ID,
         )
         .expect("the spend opens");
 

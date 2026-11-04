@@ -81,6 +81,7 @@
 //! untested, unreachable battery.
 
 use curve25519_dalek::constants::ED25519_BASEPOINT_COMPRESSED;
+use shekyl_network::NetworkId;
 
 use shekyl_archival_retention::{
     cold_authority_pin, emission_vin_verify_auth, emission_vin_verify_backing,
@@ -139,11 +140,16 @@ const IDENTITY_COMPRESSED: [u8; 32] = {
 pub struct DaemonTxVerifier;
 
 impl TxVerifier for DaemonTxVerifier {
-    fn verify(&self, parsed: &ParsedSubmission, facts: &SubmitFacts) -> Result<(), VerifyReject> {
+    fn verify(
+        &self,
+        parsed: &ParsedSubmission,
+        facts: &SubmitFacts,
+        network: &NetworkId,
+    ) -> Result<(), VerifyReject> {
         match parsed.kind {
-            SubmitTxKind::Spend => verify_spend(parsed, facts),
-            SubmitTxKind::BondPost => verify_bond_post(parsed, facts),
-            SubmitTxKind::Emission => verify_emission(parsed, facts),
+            SubmitTxKind::Spend => verify_spend(parsed, facts, network),
+            SubmitTxKind::BondPost => verify_bond_post(parsed, facts, network),
+            SubmitTxKind::Emission => verify_emission(parsed, facts, network),
             // Unreachable today (the engine's Phase-C fee floor rejects the
             // zero-fee consensus shape first) — see the module docs'
             // reachability section for the SP-T4a reopening criterion
@@ -164,7 +170,11 @@ impl TxVerifier for DaemonTxVerifier {
 }
 
 /// The regular FCMP++ spend battery: O6 → CT balance → Bp+ → FCMP++ → PQC.
-fn verify_spend(parsed: &ParsedSubmission, facts: &SubmitFacts) -> Result<(), VerifyReject> {
+fn verify_spend(
+    parsed: &ParsedSubmission,
+    facts: &SubmitFacts,
+    network: &NetworkId,
+) -> Result<(), VerifyReject> {
     // Phase A guarantees a spend is `Ct::Fcmp` with a prunable proof;
     // stay non-panicking per the §7.6 posture.
     let Ct::Fcmp {
@@ -217,7 +227,7 @@ fn verify_spend(parsed: &ParsedSubmission, facts: &SubmitFacts) -> Result<(), Ve
 
     // ── K13: PQC hybrid auth (per-input scheme validity; MSW-6 dropped the
     // former tx-wide scheme-id agreement — see verify_pqc_auths) ─────────
-    verify_pqc_auths(parsed, pqc_auths)
+    verify_pqc_auths(parsed, pqc_auths, network)
 }
 
 /// The §8.7.1 bond-post battery: the spend legs over the bond-post shape
@@ -232,7 +242,11 @@ fn verify_spend(parsed: &ParsedSubmission, facts: &SubmitFacts) -> Result<(), Ve
 /// (`BondPost::read`/`validate` enforce the exact canonical lengths), so a
 /// `ParsedSubmission` cannot carry a violation — the §8.7.1 BP1 ⚠ resolves
 /// to "wire-covered", recorded there.
-fn verify_bond_post(parsed: &ParsedSubmission, facts: &SubmitFacts) -> Result<(), VerifyReject> {
+fn verify_bond_post(
+    parsed: &ParsedSubmission,
+    facts: &SubmitFacts,
+    network: &NetworkId,
+) -> Result<(), VerifyReject> {
     // Phase A guarantees the bond-post shape is `Ct::Fcmp` with a prunable
     // proof and exactly one bond-post input; stay non-panicking (§7.6).
     let Ct::Fcmp {
@@ -367,7 +381,7 @@ fn verify_bond_post(parsed: &ParsedSubmission, facts: &SubmitFacts) -> Result<()
 
     // ── K13: PQC hybrid auth over EVERY input, the bond-post slot
     // included — exactly the C++ `verify_transaction_pqc_auth` battery ───
-    verify_pqc_auths(parsed, pqc_auths)
+    verify_pqc_auths(parsed, pqc_auths, network)
 }
 
 /// The §8.7.2 emission battery: EV4's mint-balance + Bp+ legs, the E2/E5
@@ -384,7 +398,11 @@ fn verify_bond_post(parsed: &ParsedSubmission, facts: &SubmitFacts) -> Result<()
 /// never builds it (`ClaimFeeInputsRequired`), but the battery admits it:
 /// the fee-subset K12 leg is skipped when there are no fee inputs, exactly
 /// as the C++ oracle skips it — §8.7.2 row E11's note.
-fn verify_emission(parsed: &ParsedSubmission, facts: &SubmitFacts) -> Result<(), VerifyReject> {
+fn verify_emission(
+    parsed: &ParsedSubmission,
+    facts: &SubmitFacts,
+    network: &NetworkId,
+) -> Result<(), VerifyReject> {
     let Ct::Fcmp {
         fee,
         base,
@@ -650,7 +668,7 @@ fn verify_emission(parsed: &ParsedSubmission, facts: &SubmitFacts) -> Result<(),
     }
 
     // ── E12 / K13: PQC hybrid auth over EVERY slot, emission included ───
-    verify_pqc_auths(parsed, pqc_auths)
+    verify_pqc_auths(parsed, pqc_auths, network)
 }
 
 /// §8.7.2 classification rule: the consumed/moved claim slot — record gone
@@ -1072,13 +1090,17 @@ fn verify_fcmp(
 /// Dropped here in lockstep with the C++ battery so the K13 differential holds.
 ///
 /// [`pqc_signing_payload_hashes`]: shekyl_wire::transaction::Transaction::pqc_signing_payload_hashes
-fn verify_pqc_auths(parsed: &ParsedSubmission, pqc_auths: &[PqcAuth]) -> Result<(), VerifyReject> {
+fn verify_pqc_auths(
+    parsed: &ParsedSubmission,
+    pqc_auths: &[PqcAuth],
+    network: &NetworkId,
+) -> Result<(), VerifyReject> {
     // Arity (`:159-163`): one auth per input, non-empty. Structural for a
     // validate()d spend; kept as a loud refusal, not an assumption.
     if pqc_auths.is_empty() || pqc_auths.len() != parsed.tx.prefix.inputs.len() {
         return Err(VerifyReject::malformed("K13: pqc_auths arity != inputs"));
     }
-    let payload_hashes = parsed.tx.pqc_signing_payload_hashes();
+    let payload_hashes = parsed.tx.pqc_signing_payload_hashes(network);
     if payload_hashes.len() != pqc_auths.len() {
         return Err(VerifyReject::malformed(
             "K13: payload-hash arity != pqc_auths",
@@ -1201,7 +1223,10 @@ fn verify_pqc_auth_slot(
 /// safety-critical loop, to save one verify against a transaction that is
 /// about to run an FCMP++ membership proof. Not worth it. For the attack case
 /// the change is strictly negative work: one verify instead of the gather.
-pub(crate) fn verify_debit_slot_possession(parsed: &ParsedSubmission) -> Result<(), VerifyReject> {
+pub(crate) fn verify_debit_slot_possession(
+    parsed: &ParsedSubmission,
+    network: &NetworkId,
+) -> Result<(), VerifyReject> {
     let Ct::Fcmp { pqc_auths, .. } = &parsed.tx.ct else {
         return Err(VerifyReject::malformed("debit pre-gate: ct is not Fcmp"));
     };
@@ -1218,7 +1243,7 @@ pub(crate) fn verify_debit_slot_possession(parsed: &ParsedSubmission) -> Result<
             "debit pre-gate: Phase A stored no bond-post input",
         ));
     };
-    let payload_hashes = parsed.tx.pqc_signing_payload_hashes();
+    let payload_hashes = parsed.tx.pqc_signing_payload_hashes(network);
     if payload_hashes.len() != pqc_auths.len() {
         return Err(VerifyReject::malformed(
             "debit pre-gate: payload-hash arity != pqc_auths",
@@ -1245,7 +1270,7 @@ pub(crate) fn verify_debit_slot_possession(parsed: &ParsedSubmission) -> Result<
     // and the work is bounded by the input count against a transaction about
     // to run an FCMP++ membership proof. For the attack case it is strictly
     // less work, because nothing reaches the gather.
-    verify_pqc_auths(parsed, pqc_auths)?;
+    verify_pqc_auths(parsed, pqc_auths, network)?;
 
     // The vin-only half of UB9, run here for the same reason possession is:
     // it needs no daemon fact, and the gather it precedes performs a

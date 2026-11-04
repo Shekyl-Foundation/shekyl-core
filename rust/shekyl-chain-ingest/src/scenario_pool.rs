@@ -40,6 +40,7 @@ where
         let admissions = match &switched {
             crate::connector::Switched::Done(done) => {
                 let returned = done.returned.clone();
+                let network = self.rules.trust().network_id();
                 let offers = self
                     .read_chain(|view, rule_set| {
                         pool.returned(
@@ -47,6 +48,7 @@ where
                             now,
                             view,
                             rule_set,
+                            &network,
                             &shekyl_chain_rules::AdmissionPolicy::GENESIS,
                         )
                     })

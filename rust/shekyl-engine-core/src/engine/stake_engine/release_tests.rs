@@ -436,7 +436,7 @@ async fn the_exit_authorizes_under_bond_spend_pk_never_the_identity_key() {
     // `pqc_signing_payload_hashes` is the same method the daemon's
     // `verify_pqc_auths` calls, under the same domain — so this is the real
     // check over the real bytes, not a restatement of what the handler did.
-    let payload_hashes = tx.pqc_signing_payload_hashes();
+    let payload_hashes = tx.pqc_signing_payload_hashes(&shekyl_network::HARNESS_NETWORK_ID);
     assert_eq!(payload_hashes.len(), pqc_auths.len());
     let pk = HybridPublicKey::from_canonical_bytes(&auth.hybrid_public_key)
         .expect("the auth slot carries a canonical hybrid public key");

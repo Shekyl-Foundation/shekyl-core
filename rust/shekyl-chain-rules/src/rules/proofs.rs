@@ -22,6 +22,7 @@ use crate::rules::tx_emission_against::J26;
 use crate::rules::{Rule, TxContext};
 use crate::verdict::{InvalidBlock, Locus, Verdict};
 use shekyl_crypto_pq::signature::verify_pqc_auth;
+use shekyl_network::NetworkId;
 use shekyl_types::SigningPayloadHash;
 use shekyl_wire::Ct;
 
@@ -161,7 +162,9 @@ pub(crate) fn judge_proofs(
 /// the PQC signing preimage, `FCMP_SPEND_SIGNING_PREIMAGE.md` §1.1: the
 /// pruned segment ‖ keccak256(prunable) ‖ that input's PQC header ‖
 /// keccak256 of every input's hybrid public key, so neither the proof nor
-/// any input's key can be swapped under a standing signature. **Adopted**
+/// any input's key can be swapped under a standing signature, hashed under
+/// the network id (`NETWORK_IDENTITY.md` NI-Q4), so a signature is valid on
+/// one network. **Adopted**
 /// from the wire, not re-derived: [`shekyl_wire::PqcSigningPreimage`] is the
 /// one derivation the wallet signs over and the daemon verifies against
 /// (through `shekyl_tx_pqc_signing_payload_hashes`; slice 6 Q7 (c)), and it
@@ -192,10 +195,11 @@ impl I17 {
     /// are vacuous on it by construction, not by exemption.
     pub(crate) fn signed_hashes(
         cx: &TxContext<'_>,
+        network: &NetworkId,
         coverage: &mut RuleCoverage,
     ) -> Vec<SigningPayloadHash> {
         coverage.insert(Self::ROW);
-        cx.tx.pqc_signing_payload_hashes()
+        cx.tx.pqc_signing_payload_hashes(network)
     }
 }
 
@@ -279,7 +283,11 @@ impl I18 {
 /// [`super::tx_against::judge_reference`] uses for I10–I12 — the definition
 /// row records at the derivation, the verification row consumes the operand
 /// it yielded.
-pub(crate) fn judge_signatures(cx: &TxContext<'_>, coverage: &mut RuleCoverage) -> Verdict<()> {
-    let signed_hashes = I17::signed_hashes(cx, coverage);
+pub(crate) fn judge_signatures(
+    cx: &TxContext<'_>,
+    network: &NetworkId,
+    coverage: &mut RuleCoverage,
+) -> Verdict<()> {
+    let signed_hashes = I17::signed_hashes(cx, network, coverage);
     I18::check(cx, &signed_hashes, coverage)
 }

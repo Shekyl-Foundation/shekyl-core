@@ -166,6 +166,7 @@ fn admitted(chain: &MockChain, template: Template) -> Vec<CenRow> {
         expected_seed(chain),
         expected_target(chain, &RuleSet::GENESIS),
         &references,
+        &shekyl_chain_rules::HARNESS_NETWORK_ID,
         FormAttempt::FIRST,
     )
     .expect("the default substrate never faults")
@@ -581,6 +582,7 @@ fn the_builders_c1_refusal_is_the_validators() {
         expected_seed(&chain),
         expected_target(&chain, &RuleSet::GENESIS),
         &references,
+        &shekyl_chain_rules::HARNESS_NETWORK_ID,
         FormAttempt::FIRST,
     )
     .expect("no fault")

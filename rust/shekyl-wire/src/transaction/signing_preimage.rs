@@ -19,18 +19,29 @@
 //!
 //! ```text
 //! payload(i)     = pruned ‖ prunable_hash ‖ header(i) ‖ key_hashes
-//! signed_hash(i) = keccak256(payload(i))
+//! signed_hash(i) = cSHAKE256-32(S = SPEND_SIGNING_CUSTOMIZATION,
+//!                               X = network_id ‖ payload(i))
 //! ```
+//!
+//! The network id is the 16-byte genesis-derived id
+//! (`NETWORK_IDENTITY.md` NI-Q4, NI-R10): a signature is valid on exactly
+//! one network by construction. It is a fixed-width prefix of the input;
+//! the customization is one domain string.
 //!
 //! Three of the four components are the transaction's, shared by every
 //! input; only `header(i)` is the signing input's. [`PqcSigningPreimage`]
 //! is therefore a value derived once per transaction, from which each
 //! input's payload is composed.
 
-use shekyl_crypto_hash::keccak256;
+use shekyl_crypto_hash::{cshake256_32, keccak256};
+use shekyl_network::NetworkId;
 use shekyl_types::{PrunableHash, SigningPayloadHash};
 
 use super::{Ct, PqcAuth, Transaction};
+
+/// The cSHAKE customization of the spend signature's hash
+/// (`NETWORK_IDENTITY.md` §2.4.1).
+pub const SPEND_SIGNING_CUSTOMIZATION: &[u8] = b"shekyl/fcmp-spend-signing-v1";
 
 /// A transaction's PQC signing preimage — the components shared by every
 /// input's payload, derived once. `payload(i)` and `signed_hash(i)` are
@@ -107,23 +118,29 @@ impl PqcSigningPreimage {
         payload
     }
 
-    /// `signed_hash(i) = keccak256(payload(i))` — the message the input's
-    /// hybrid signature is made over and verified against, typed so it can
-    /// never be passed where a txid component is expected (RTN-7).
+    /// `signed_hash(i)` on the network whose id is `network_id`: the
+    /// message the input's hybrid signature is made over and verified
+    /// against, typed so it can never be passed where a txid component is
+    /// expected (RTN-7).
     #[must_use]
-    pub fn signed_hash(&self, auth: &PqcAuth) -> SigningPayloadHash {
-        SigningPayloadHash::from_bytes(keccak256(&self.payload(auth)))
+    pub fn signed_hash(&self, network_id: &NetworkId, auth: &PqcAuth) -> SigningPayloadHash {
+        let payload = self.payload(auth);
+        let mut input = Vec::with_capacity(network_id.len() + payload.len());
+        input.extend_from_slice(network_id);
+        input.extend_from_slice(&payload);
+        SigningPayloadHash::from_bytes(cshake256_32(SPEND_SIGNING_CUSTOMIZATION, &input))
     }
 }
 
 impl Transaction {
-    /// Every input's `signed_hash(i)`, in input order — one per `pqc_auths`
+    /// Every input's `signed_hash(i)` on the network whose id is
+    /// `network_id`, in input order — one per `pqc_auths`
     /// entry (`== nvin` for a body [`Transaction::validate`] admits; a
     /// hand-built body with mismatched arity yields one per auth, and the
     /// arity is the validator's to refuse). Empty for a body with no
     /// preimage ([`PqcSigningPreimage::of`]).
     #[must_use]
-    pub fn pqc_signing_payload_hashes(&self) -> Vec<SigningPayloadHash> {
+    pub fn pqc_signing_payload_hashes(&self, network_id: &NetworkId) -> Vec<SigningPayloadHash> {
         let Some(preimage) = PqcSigningPreimage::of(self) else {
             return Vec::new();
         };
@@ -132,7 +149,7 @@ impl Transaction {
         };
         pqc_auths
             .iter()
-            .map(|auth| preimage.signed_hash(auth))
+            .map(|auth| preimage.signed_hash(network_id, auth))
             .collect()
     }
 }

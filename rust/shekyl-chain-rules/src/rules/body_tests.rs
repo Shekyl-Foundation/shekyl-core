@@ -60,6 +60,7 @@ fn form_judges(candidate: Candidate) -> Verdict<RuleCoverage> {
         BlockHash::NULL,
         expected_target(&MockChain::default(), &RuleSet::GENESIS),
         &crate::block::ReferenceClaims::EMPTY,
+        &crate::HARNESS_NETWORK_ID,
         FormAttempt::FIRST,
     ) {
         Ok(Ok(formed)) => Ok(*formed.coverage()),

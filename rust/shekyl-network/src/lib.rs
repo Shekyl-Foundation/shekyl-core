@@ -557,6 +557,13 @@ pub const PREFIX_LEN: usize = 8;
 /// A network id: the derived form of a network (NI-R10).
 pub type NetworkId = [u8; 16];
 
+/// The id a harness chain is judged under: a chain that mines its own
+/// genesis and so has no row (`Trust::UNPINNED` in `shekyl-chain-rules`).
+/// One value, so every harness signer and the trust it is validated under
+/// agree (`NETWORK_IDENTITY.md` NI-Q4). No network's row has this id, and
+/// no release path reads it.
+pub const HARNESS_NETWORK_ID: NetworkId = [0; 16];
+
 /// The id of the chain whose genesis block hash is `genesis_block_hash`:
 /// the first 16 bytes of `cSHAKE256(S = NETWORK_ID_DST, X = genesis hash)`,
 /// digest order. A different genesis is a different network.

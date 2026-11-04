@@ -16,6 +16,7 @@
 //! discardable by ruling (`SPL-Q8`): a pool that loses it loses only the
 //! transactions it held, never a fact the chain needs.
 
+use shekyl_network::NetworkId;
 use std::collections::{BTreeMap, HashMap};
 use std::path::Path;
 
@@ -273,6 +274,7 @@ impl Pool {
         now: UnixSeconds,
         chain: &V,
         rule_set: &RuleSet,
+        network: &NetworkId,
         policy: &AdmissionPolicy,
     ) -> Result<Admission, PoolFault<V::Fault>> {
         self.admit_from(
@@ -282,6 +284,7 @@ impl Pool {
             now,
             chain,
             rule_set,
+            network,
             policy,
         )
     }
@@ -295,6 +298,7 @@ impl Pool {
     /// # Errors
     ///
     /// As [`Pool::admit`].
+    #[allow(clippy::too_many_arguments)] // the chain's claims beside the rule set, the network id among them (NI-Q4)
     pub fn admit_judged<'id, V: ChainView<'id>>(
         &mut self,
         tx: Transaction,
@@ -302,6 +306,7 @@ impl Pool {
         now: UnixSeconds,
         chain: &V,
         rule_set: &RuleSet,
+        network: &NetworkId,
         policy: &AdmissionPolicy,
     ) -> Result<Admission, PoolFault<V::Fault>> {
         self.admit_from(
@@ -311,6 +316,7 @@ impl Pool {
             now,
             chain,
             rule_set,
+            network,
             policy,
         )
     }
@@ -332,6 +338,7 @@ impl Pool {
         now: UnixSeconds,
         chain: &V,
         rule_set: &RuleSet,
+        network: &NetworkId,
         policy: &AdmissionPolicy,
     ) -> Result<Admission, PoolFault<V::Fault>> {
         let txid = tx.txid_parts().hash;
@@ -372,6 +379,7 @@ impl Pool {
             chain,
             &self.key_images,
             rule_set,
+            network,
             policy,
             prior.as_ref(),
         )

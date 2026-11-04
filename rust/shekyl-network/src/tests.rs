@@ -138,3 +138,12 @@ fn the_seed_lists_are_the_rows() {
     assert!(Network::Stagenet.seeds().is_empty());
     assert!(Network::Regtest.seeds().is_empty());
 }
+
+/// No network's row has the harness id, so a harness signature never
+/// verifies on a real network.
+#[test]
+fn no_row_has_the_harness_id() {
+    for net in Network::ALL {
+        assert_ne!(net.network_id(), HARNESS_NETWORK_ID, "{net}");
+    }
+}

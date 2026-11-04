@@ -312,6 +312,7 @@ fn a_block_short_of_its_proof_of_work_is_refused_before_the_batch_runs() {
             crate::harness::expected_seed(&chain),
             claim,
             &crate::block::ReferenceClaims::EMPTY,
+            &crate::HARNESS_NETWORK_ID,
             FormAttempt::FIRST,
         ) {
             Ok(verdict) => verdict.map(|_formed| ()),
@@ -377,6 +378,7 @@ fn form_refuses_a_bad_range_proof_with_no_view_in_scope() {
         BlockHash::NULL,
         expected_target(&MockChain::default(), &RuleSet::GENESIS),
         &crate::block::ReferenceClaims::EMPTY,
+        &crate::HARNESS_NETWORK_ID,
         FormAttempt::FIRST,
     ) {
         Ok(verdict) => verdict.map(|_formed| ()),

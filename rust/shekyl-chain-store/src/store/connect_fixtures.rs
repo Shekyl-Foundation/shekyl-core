@@ -235,6 +235,7 @@ pub(super) fn formed_under<'id, V: HeaderView<'id>>(
             seed,
             expected_target(view, rules)?,
             &references,
+            &shekyl_chain_rules::HARNESS_NETWORK_ID,
             FormAttempt::FIRST,
         ) {
             Ok(Ok(formed)) => formed,

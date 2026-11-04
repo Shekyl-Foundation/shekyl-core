@@ -56,6 +56,7 @@ async fn open_pool(x: &mut Scenario<FreeHash>, path: &std::path::Path) -> Pool {
             shekyl_types::UnixSeconds::from_raw(1),
             view,
             rule_set,
+            &shekyl_network::HARNESS_NETWORK_ID,
             &AdmissionPolicy::GENESIS,
         )
         .expect("open")
@@ -185,6 +186,7 @@ async fn a_returned_spend_the_chain_refuses_is_dropped_and_the_store_keeps_its_b
                 UnixSeconds::from_raw(2),
                 view,
                 rule_set,
+                &shekyl_network::HARNESS_NETWORK_ID,
                 &AdmissionPolicy::GENESIS,
             )
             .expect("no fault")
@@ -266,8 +268,15 @@ async fn an_alternatives_bodies_are_the_stores_and_its_promotion_needs_no_pool()
     );
     let held = x
         .read_chain(|view, rule_set| {
-            pool.admit(stem.clone(), now, view, rule_set, &policy)
-                .expect("no fault")
+            pool.admit(
+                stem.clone(),
+                now,
+                view,
+                rule_set,
+                &shekyl_network::HARNESS_NETWORK_ID,
+                &policy,
+            )
+            .expect("no fault")
         })
         .await;
     assert_eq!(
@@ -290,7 +299,16 @@ async fn an_alternatives_bodies_are_the_stores_and_its_promotion_needs_no_pool()
         .expect("AL1 wrote the bodies");
     assert_eq!(bodies.transactions(), b[0].template.transactions.as_slice());
     let offers = x
-        .read_chain(|view, rule_set| pool.supplement(&bodies, now, view, rule_set, &policy))
+        .read_chain(|view, rule_set| {
+            pool.supplement(
+                &bodies,
+                now,
+                view,
+                rule_set,
+                &shekyl_network::HARNESS_NETWORK_ID,
+                &policy,
+            )
+        })
         .await;
     assert!(offers.faults.is_empty(), "{:?}", offers.faults);
     assert_eq!(offers.admissions.len(), 3);
@@ -525,9 +543,24 @@ async fn a_reconcile_on_the_same_anchor_skips_the_proof_and_an_open_verifies_it(
         .read_chain(|view, rule_set| {
             let policy = AdmissionPolicy::GENESIS;
             let now = UnixSeconds::from_raw(1);
-            let (mut pool, _, _) = Pool::open(&path, now, view, rule_set, &policy).expect("open");
+            let (mut pool, _, _) = Pool::open(
+                &path,
+                now,
+                view,
+                rule_set,
+                &shekyl_network::HARNESS_NETWORK_ID,
+                &policy,
+            )
+            .expect("open");
             let admitted = pool
-                .admit(spend, now, view, rule_set, &policy)
+                .admit(
+                    spend,
+                    now,
+                    view,
+                    rule_set,
+                    &shekyl_network::HARNESS_NETWORK_ID,
+                    &policy,
+                )
                 .expect("no fault");
             assert_eq!(
                 admitted,
@@ -539,14 +572,23 @@ async fn a_reconcile_on_the_same_anchor_skips_the_proof_and_an_open_verifies_it(
 
             // The same anchor: the reconcile verifies no proof.
             let before = probes::fcmp_verifies();
-            let reconciled = pool.reconcile(view, rule_set, &policy).expect("reconcile");
+            let reconciled = pool
+                .reconcile(view, rule_set, &shekyl_network::HARNESS_NETWORK_ID, &policy)
+                .expect("reconcile");
             let same = (probes::fcmp_verifies() - before, reconciled.admitted);
             drop(pool);
 
             // Reopened: no anchor in the file, so the proof is verified.
             let before = probes::fcmp_verifies();
-            let (_, _, reconciled) =
-                Pool::open(&path, now, view, rule_set, &policy).expect("reopen");
+            let (_, _, reconciled) = Pool::open(
+                &path,
+                now,
+                view,
+                rule_set,
+                &shekyl_network::HARNESS_NETWORK_ID,
+                &policy,
+            )
+            .expect("reopen");
             (
                 same,
                 (probes::fcmp_verifies() - before, reconciled.admitted),
@@ -575,6 +617,7 @@ async fn the_door_verifies_exactly_what_the_shared_function_verifies() {
                 view,
                 &KeyImages::default(),
                 rule_set,
+                &shekyl_network::HARNESS_NETWORK_ID,
                 &AdmissionPolicy::GENESIS,
                 None,
             )
@@ -588,8 +631,15 @@ async fn the_door_verifies_exactly_what_the_shared_function_verifies() {
             let claims =
                 ReferenceClaims::for_transaction(view, connecting, &spend).expect("claims");
             let mut coverage = RuleCoverage::EMPTY;
-            judge_slot_stateless(&spend, TxSlot::Lone, rule_set, &claims, &mut coverage)
-                .expect("the shared function admits it");
+            judge_slot_stateless(
+                &spend,
+                TxSlot::Lone,
+                rule_set,
+                &shekyl_network::HARNESS_NETWORK_ID,
+                &claims,
+                &mut coverage,
+            )
+            .expect("the shared function admits it");
             let after_shared = count();
             (
                 (after_door.0 - before.0, after_door.1 - before.1),

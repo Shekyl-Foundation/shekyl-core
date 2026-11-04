@@ -51,6 +51,7 @@ fn judge_under(candidate: Candidate, rule_set: &RuleSet) -> Verdict<()> {
         BlockHash::NULL,
         expected_target(&MockChain::default(), rule_set),
         &crate::block::ReferenceClaims::EMPTY,
+        &crate::HARNESS_NETWORK_ID,
         FormAttempt::FIRST,
     ) {
         Ok(Ok(formed)) => formed,

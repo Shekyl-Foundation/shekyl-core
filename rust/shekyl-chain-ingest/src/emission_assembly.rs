@@ -414,6 +414,7 @@ fn assemble(
                 extra: vec![hybrid_pk_bytes],
             },
         },
+        &shekyl_network::HARNESS_NETWORK_ID,
     )
     .expect("the fee side opens");
     drop(spend_inputs);

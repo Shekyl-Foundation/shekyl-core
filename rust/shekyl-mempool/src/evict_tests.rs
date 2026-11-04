@@ -81,6 +81,7 @@ fn a_full_pool_refuses_at_or_below_its_cheapest_before_the_door() {
                 UnixSeconds::from_raw(1),
                 &view,
                 &RuleSet::GENESIS,
+                &shekyl_chain_rules::HARNESS_NETWORK_ID,
                 &AdmissionPolicy::GENESIS,
             )
             .expect("no fault")

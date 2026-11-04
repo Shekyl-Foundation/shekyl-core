@@ -368,6 +368,7 @@ fn a_target_claim_the_alt_chain_does_not_derive_is_stale_not_a_verdict() {
         expected_seed(&chain),
         wrong,
         &crate::block::ReferenceClaims::EMPTY,
+        &crate::HARNESS_NETWORK_ID,
         FormAttempt::FIRST,
     ) {
         Ok(Ok(formed)) => formed,
@@ -405,6 +406,7 @@ fn a_rule_set_the_token_was_not_formed_under_is_stale_not_a_verdict() {
             expected_seed(&chain),
             expected_target(&chain, &other),
             &crate::block::ReferenceClaims::EMPTY,
+            &crate::HARNESS_NETWORK_ID,
             FormAttempt::FIRST,
         ) {
             Ok(Ok(formed)) => formed,

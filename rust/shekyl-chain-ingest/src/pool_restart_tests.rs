@@ -36,14 +36,22 @@ async fn a_restart_reconciles_the_pool_file_against_the_chain() {
                 shekyl_types::UnixSeconds::from_raw(1),
                 view,
                 rule_set,
+                &shekyl_network::HARNESS_NETWORK_ID,
                 &policy,
             )
             .expect("open");
             assert_eq!(how, PoolOpen::Created);
             for tx in [a.clone(), b] {
                 assert_eq!(
-                    pool.admit(tx, UnixSeconds::from_raw(1), view, rule_set, &policy)
-                        .expect("no fault"),
+                    pool.admit(
+                        tx,
+                        UnixSeconds::from_raw(1),
+                        view,
+                        rule_set,
+                        &shekyl_network::HARNESS_NETWORK_ID,
+                        &policy
+                    )
+                    .expect("no fault"),
                     Admission::Admitted {
                         evicted: Vec::new()
                     }
@@ -64,6 +72,7 @@ async fn a_restart_reconciles_the_pool_file_against_the_chain() {
                 shekyl_types::UnixSeconds::from_raw(1),
                 view,
                 rule_set,
+                &shekyl_network::HARNESS_NETWORK_ID,
                 &policy,
             )
             .expect("open");
@@ -79,6 +88,7 @@ async fn a_restart_reconciles_the_pool_file_against_the_chain() {
                 shekyl_types::UnixSeconds::from_raw(1),
                 view,
                 rule_set,
+                &shekyl_network::HARNESS_NETWORK_ID,
                 &policy,
             )
             .expect("reopen");
@@ -117,18 +127,39 @@ async fn a_stem_phase_entry_survives_a_restart_unpublished_at_its_hour() {
     let (record, unpublished, listed, admitted) = scenario
         .read_chain(|view, rule_set| {
             {
-                let (mut pool, _, _) =
-                    Pool::open(&path, received, view, rule_set, &policy).expect("open");
+                let (mut pool, _, _) = Pool::open(
+                    &path,
+                    received,
+                    view,
+                    rule_set,
+                    &shekyl_network::HARNESS_NETWORK_ID,
+                    &policy,
+                )
+                .expect("open");
                 assert_eq!(
-                    pool.admit(spend.clone(), received, view, rule_set, &policy)
-                        .expect("no fault"),
+                    pool.admit(
+                        spend.clone(),
+                        received,
+                        view,
+                        rule_set,
+                        &shekyl_network::HARNESS_NETWORK_ID,
+                        &policy
+                    )
+                    .expect("no fault"),
                     Admission::Admitted {
                         evicted: Vec::new()
                     }
                 );
             }
-            let (pool, how, reconciled) =
-                Pool::open(&path, later, view, rule_set, &policy).expect("reopen");
+            let (pool, how, reconciled) = Pool::open(
+                &path,
+                later,
+                view,
+                rule_set,
+                &shekyl_network::HARNESS_NETWORK_ID,
+                &policy,
+            )
+            .expect("reopen");
             assert_eq!(how, PoolOpen::Opened);
             let record = pool.relay_view().record(&txid);
             let unpublished = pool.unpublished().any(|(id, _)| id == txid);
@@ -175,10 +206,24 @@ async fn a_blob_without_its_record_is_dropped_at_open_and_the_spend_admitted_aga
     let now = UnixSeconds::from_raw(1_700_000_000);
     let (removed, admitted) = scenario
         .read_chain(|view, rule_set| {
-            let (mut pool, _, reconciled) =
-                Pool::open(&path, now, view, rule_set, &policy).expect("open");
+            let (mut pool, _, reconciled) = Pool::open(
+                &path,
+                now,
+                view,
+                rule_set,
+                &shekyl_network::HARNESS_NETWORK_ID,
+                &policy,
+            )
+            .expect("open");
             let admitted = pool
-                .admit(spend.clone(), now, view, rule_set, &policy)
+                .admit(
+                    spend.clone(),
+                    now,
+                    view,
+                    rule_set,
+                    &shekyl_network::HARNESS_NETWORK_ID,
+                    &policy,
+                )
                 .expect("no fault");
             (reconciled.removed, admitted)
         })
@@ -216,6 +261,7 @@ async fn the_pool_file_can_be_discarded() {
                 shekyl_types::UnixSeconds::from_raw(1),
                 view,
                 rule_set,
+                &shekyl_network::HARNESS_NETWORK_ID,
                 &policy,
             )
             .expect("open");
@@ -224,6 +270,7 @@ async fn the_pool_file_can_be_discarded() {
                 UnixSeconds::from_raw(1),
                 view,
                 rule_set,
+                &shekyl_network::HARNESS_NETWORK_ID,
                 &policy,
             )
             .expect("no fault");
@@ -237,13 +284,21 @@ async fn the_pool_file_can_be_discarded() {
                 shekyl_types::UnixSeconds::from_raw(1),
                 view,
                 rule_set,
+                &shekyl_network::HARNESS_NETWORK_ID,
                 &policy,
             )
             .expect("open");
             assert_eq!(how, PoolOpen::Created, "a fresh file");
             assert!(pool.relay_view().is_empty() && reconciled.removed.is_empty());
-            pool.admit(spend, UnixSeconds::from_raw(2), view, rule_set, &policy)
-                .expect("no fault")
+            pool.admit(
+                spend,
+                UnixSeconds::from_raw(2),
+                view,
+                rule_set,
+                &shekyl_network::HARNESS_NETWORK_ID,
+                &policy,
+            )
+            .expect("no fault")
         })
         .await;
     assert_eq!(
@@ -318,6 +373,7 @@ async fn a_reconcile_removes_an_admitted_entry_the_chain_now_refuses() {
                 shekyl_types::UnixSeconds::from_raw(1_700_000_000),
                 view,
                 rule_set,
+                &shekyl_network::HARNESS_NETWORK_ID,
                 &AdmissionPolicy::GENESIS,
             )
             .expect("open")
@@ -361,8 +417,15 @@ async fn an_open_clamps_a_receive_time_from_the_future() {
     let now = UnixSeconds::from_raw(1_700_000_000);
     let (received, listed) = scenario
         .read_chain(|view, rule_set| {
-            let (pool, _, reconciled) =
-                Pool::open(&path, now, view, rule_set, &AdmissionPolicy::GENESIS).expect("open");
+            let (pool, _, reconciled) = Pool::open(
+                &path,
+                now,
+                view,
+                rule_set,
+                &shekyl_network::HARNESS_NETWORK_ID,
+                &AdmissionPolicy::GENESIS,
+            )
+            .expect("open");
             assert_eq!(reconciled.admitted, vec![txid]);
             let listed = pool.listing().find(|(id, _)| *id == txid).expect("shown").1;
             (

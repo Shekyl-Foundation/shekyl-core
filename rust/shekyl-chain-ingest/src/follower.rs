@@ -567,6 +567,7 @@ where
             Err(PlantFault::Panicked) => return shared.fail(ServiceFault::FollowerEnded),
         }
     };
+    let network = shared.rules().trust().network_id();
     let done = with_pool(shared, move |pool, _, view, rule_set, policy, now| {
         let mut division = PoolDivision::default();
         let mut left = Vec::new();
@@ -577,7 +578,8 @@ where
             if !planted.pending.is_empty() {
                 let bodies: Vec<Transaction> =
                     planted.pending.iter().map(|(tx, _)| tx.clone()).collect();
-                let offers = pool.offer_prepared(planted.pending, now, view, rule_set, policy);
+                let offers =
+                    pool.offer_prepared(planted.pending, now, view, rule_set, &network, policy);
                 for (_, admission) in &offers.admissions {
                     if let Admission::Admitted { evicted } = admission {
                         left.extend(evicted.iter().copied());
@@ -586,7 +588,7 @@ where
                 division = divide_pool_faults(offers.faults, &bodies);
             }
         }
-        let reconciled = match pool.reconcile(view, rule_set, policy) {
+        let reconciled = match pool.reconcile(view, rule_set, &network, policy) {
             Ok(done) => {
                 left.extend(done.removed.into_iter().map(|(id, _)| id));
                 None
@@ -658,14 +660,14 @@ fn plant_blocking(
     let rule_set = rules.in_force(Tip::connecting_height(tip.as_ref()));
     let mut staged = Vec::with_capacity(unverified.len());
     for (txid, tx) in unverified {
-        match stateless(&tx, &view, &rule_set, None) {
+        match stateless(&tx, &view, &rule_set, &rules.trust().network_id(), None) {
             Ok(step1) => staged.push((txid, step1)),
             Err(fault) => return Err(PlantFault::Chain(fault)),
         }
     }
     let mut prepared = Vec::with_capacity(pending.len());
     for tx in pending {
-        match stateless(&tx, &view, &rule_set, None) {
+        match stateless(&tx, &view, &rule_set, &rules.trust().network_id(), None) {
             Ok(step1) => prepared.push((tx, step1)),
             Err(fault) => return Err(PlantFault::Chain(fault)),
         }

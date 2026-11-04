@@ -1595,7 +1595,7 @@ pub use txid::{
 };
 
 mod signing_preimage;
-pub use signing_preimage::PqcSigningPreimage;
+pub use signing_preimage::{PqcSigningPreimage, SPEND_SIGNING_CUSTOMIZATION};
 
 /// A transaction's bytes as the chain store's three segments.
 ///

@@ -47,6 +47,7 @@
 //! every row has landed, so no verdict minted before then can be mistaken
 //! for parity evidence.
 
+use shekyl_network::NetworkId;
 use shekyl_types::BlockHash;
 use shekyl_wire::Transaction;
 
@@ -127,6 +128,9 @@ macro_rules! judge_block {
 /// connect. `validate` verifies all three against the committing view and
 /// returns a [`Stale`] fault, not a refusal, if any moved (a reorg between
 /// the stages, or a rule-set boundary).
+/// `network` is the id of the network the caller runs, read from its
+/// [`Trust`](crate::Trust) (`trust.network_id()`): every input's signature
+/// is over a hash that binds it (CEN-I17, `NETWORK_IDENTITY.md` NI-Q4).
 /// `attempt` is which try this is: a driver starts at
 /// [`FormAttempt::FIRST`] and may only try again with the attempt a `Stale`
 /// hands back (`fault.rs`: the bound is the type).
@@ -139,6 +143,7 @@ macro_rules! judge_block {
 /// Returns `Err(fault)` if the substrate could not answer — the clock, the
 /// verifier — which is not a judgement about the block; `Ok(Err(refused))`
 /// if a stateless rule refused; `Ok(Ok(formed))` otherwise.
+#[allow(clippy::too_many_arguments)] // the caller's claims, the network id among them (NI-Q4), passed as `form` takes every claim
 pub fn form<S: Substrate>(
     candidate: Candidate,
     rule_set: &RuleSet,
@@ -146,6 +151,7 @@ pub fn form<S: Substrate>(
     seed: BlockHash,
     target: Target,
     references: &ReferenceClaims,
+    network: &NetworkId,
     attempt: FormAttempt,
 ) -> Result<Verdict<StructurallyValid>, S::Fault> {
     // Read the clock once, before any rule: every stateless judgement is
@@ -187,7 +193,7 @@ pub fn form<S: Substrate>(
         Ok(facts) => facts,
         Err(refused) => return Ok(Err(refused)),
     };
-    let verified = match slot_rows(&candidate, rule_set, references, &mut coverage) {
+    let verified = match slot_rows(&candidate, rule_set, network, references, &mut coverage) {
         Ok(verified) => verified,
         Err(refused) => return Ok(Err(refused)),
     };
@@ -209,13 +215,20 @@ pub fn form_judged(
     candidate: Candidate,
     judged: &HeaderJudged,
     references: &ReferenceClaims,
+    network: &NetworkId,
 ) -> Verdict<StructurallyValid> {
     if shekyl_wire::identity_of_pow_blob(&candidate.block.pow_blob()) != judged.hash() {
         return Err(InvalidBlock::new(CenRow::B6, Locus::Block));
     }
     let mut coverage = *judged.proof_coverage();
     block_rows(&candidate, &judged.rule_set(), &mut coverage)?;
-    let verified = slot_rows(&candidate, &judged.rule_set(), references, &mut coverage)?;
+    let verified = slot_rows(
+        &candidate,
+        &judged.rule_set(),
+        network,
+        references,
+        &mut coverage,
+    )?;
     Ok(StructurallyValid::new(
         candidate,
         judged.rule_set(),
@@ -247,6 +260,7 @@ fn block_rows(
 fn slot_rows(
     candidate: &Candidate,
     rule_set: &RuleSet,
+    network: &NetworkId,
     references: &ReferenceClaims,
     coverage: &mut RuleCoverage,
 ) -> Verdict<Vec<Option<VerifiedReference>>> {
@@ -258,7 +272,7 @@ fn slot_rows(
         .map(|(n, tx)| (TxSlot::Listed(n), tx));
     let mut verified = Vec::with_capacity(candidate.transactions.len());
     for (slot, tx) in core::iter::once(miner).chain(listed) {
-        match judge_slot_stateless(tx, slot, rule_set, references, coverage) {
+        match judge_slot_stateless(tx, slot, rule_set, network, references, coverage) {
             Ok(reference) => {
                 if slot != TxSlot::Miner {
                     verified.push(reference);
@@ -304,6 +318,7 @@ pub fn judge_slot_stateless(
     tx: &Transaction,
     slot: TxSlot,
     rule_set: &RuleSet,
+    network: &NetworkId,
     references: &ReferenceClaims,
     coverage: &mut RuleCoverage,
 ) -> Verdict<Option<VerifiedReference>> {
@@ -312,7 +327,7 @@ pub fn judge_slot_stateless(
     // coverage; H5/H6 were recorded there).
     let mut scratch = RuleCoverage::EMPTY;
     let cx = rules::TxContext::derive(tx, slot, &mut scratch)?;
-    judge_signatures(&cx, coverage)?;
+    judge_signatures(&cx, network, coverage)?;
     let verified = judge_proofs(&cx, references, coverage)?;
     if slot == TxSlot::Lone {
         H19::verify_lone(tx)?;
@@ -387,6 +402,7 @@ impl StatelessPass {
 pub fn judge_lone_stateless(
     tx: &Transaction,
     rule_set: &RuleSet,
+    network: &NetworkId,
     claims: &ReferenceClaims,
     prior: Option<&StatelessPass>,
 ) -> Verdict<StatelessPass> {
@@ -394,7 +410,7 @@ pub fn judge_lone_stateless(
         return Ok(*pass);
     }
     let mut coverage = RuleCoverage::EMPTY;
-    let proven = judge_slot_stateless(tx, TxSlot::Lone, rule_set, claims, &mut coverage)?;
+    let proven = judge_slot_stateless(tx, TxSlot::Lone, rule_set, network, claims, &mut coverage)?;
     Ok(StatelessPass {
         txid: tx.txid_parts().hash,
         rule_set: *rule_set,

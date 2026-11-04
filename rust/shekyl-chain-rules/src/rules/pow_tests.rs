@@ -37,6 +37,7 @@ fn judge_with(
         seed,
         expected_target(chain, &RuleSet::GENESIS),
         &crate::block::ReferenceClaims::EMPTY,
+        &crate::HARNESS_NETWORK_ID,
         attempt,
     ) {
         Ok(Ok(formed)) => formed,
@@ -129,6 +130,7 @@ fn cen_d2_the_longhash_is_computed_in_form_over_the_pow_blob_under_the_seed() {
         seed,
         expected_target(&chain, &RuleSet::GENESIS),
         &crate::block::ReferenceClaims::EMPTY,
+        &crate::HARNESS_NETWORK_ID,
         FormAttempt::FIRST,
     )
     .expect("no fault")
@@ -161,6 +163,7 @@ fn cen_d2_a_verifier_that_cannot_compute_is_a_fault_not_a_verdict() {
         BlockHash::NULL,
         expected_target(&MockChain::default(), &RuleSet::GENESIS),
         &crate::block::ReferenceClaims::EMPTY,
+        &crate::HARNESS_NETWORK_ID,
         FormAttempt::FIRST,
     );
     assert!(matches!(result, Err(Faulted)), "unproven, not disproven");
@@ -261,6 +264,7 @@ fn cen_d3_records_and_the_pow_rows_cover_on_a_passing_block() {
         seed,
         expected_target(&chain, &RuleSet::GENESIS),
         &crate::block::ReferenceClaims::EMPTY,
+        &crate::HARNESS_NETWORK_ID,
         FormAttempt::FIRST,
     )
     .expect("no fault")

@@ -533,6 +533,7 @@ fn spawn_without_ambient_runtime_panics() {
         BTreeSet::new(),
         None,
         ephemeral_body_store(),
+        shekyl_network::HARNESS_NETWORK_ID,
     );
 }
 

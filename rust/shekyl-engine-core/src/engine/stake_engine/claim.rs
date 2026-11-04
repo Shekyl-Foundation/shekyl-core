@@ -480,6 +480,7 @@ impl Message<AssembleEmissionClaim> for StakeEngine {
                     extra: vec![hybrid_pk_bytes],
                 },
             },
+            &self.network,
         )
         .map_err(|e| BondAssemblyError::build("open spend", e))?;
         drop(spend_inputs); // secrets end here; nothing below needs them

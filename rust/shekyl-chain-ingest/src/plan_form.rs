@@ -183,6 +183,7 @@ where
                             at.seed,
                             at.target,
                             &references,
+                            &rules.trust().network_id(),
                             FormAttempt::FIRST,
                         ) {
                             Ok(Ok(valid)) => formed.push(valid),

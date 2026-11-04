@@ -687,6 +687,7 @@ async fn a_claim_verifies_after_the_epochs_complete_trees_are_released_and_slash
                         UnixSeconds::from_raw(1),
                         &SnapshotView::new(snapshot),
                         rule_set,
+                        &shekyl_network::HARNESS_NETWORK_ID,
                         &AdmissionPolicy::GENESIS,
                     )
                     .expect("open")
@@ -698,6 +699,7 @@ async fn a_claim_verifies_after_the_epochs_complete_trees_are_released_and_slash
                 std::sync::Arc::new(std::sync::Mutex::new(pool)),
                 AdmissionPolicy::GENESIS,
                 || UnixSeconds::from_raw(1),
+                shekyl_network::HARNESS_NETWORK_ID,
             ));
             let reasons: Vec<String> = submitted[..2]
                 .iter()
@@ -721,7 +723,7 @@ async fn a_claim_verifies_after_the_epochs_complete_trees_are_released_and_slash
                         "the expired epoch is its own state, and unread"
                     );
                     DaemonTxVerifier
-                        .verify(&parsed, &facts)
+                        .verify(&parsed, &facts, &shekyl_network::HARNESS_NETWORK_ID)
                         .expect_err("an expired claim is refused")
                         .reason()
                         .to_owned()

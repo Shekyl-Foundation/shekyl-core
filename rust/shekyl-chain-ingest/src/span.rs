@@ -318,6 +318,7 @@ where
             claims.seed,
             claims.target,
             &claims.references,
+            &claims.network,
             FormAttempt::FIRST,
         );
         if matches!(verdict, Ok(Err(_))) {
@@ -344,7 +345,7 @@ where
         if abandon.load(Ordering::Acquire) {
             return None;
         }
-        let verdict = form_judged(candidate, &judged, &claims.references);
+        let verdict = form_judged(candidate, &judged, &claims.references, &claims.network);
         if verdict.is_err() {
             abandon.store(true, Ordering::Release);
         }
@@ -999,6 +1000,7 @@ where
             seed,
             claims.target,
             &claims.references,
+            &claims.network,
             FormAttempt::FIRST,
         );
         drop(permit);
@@ -1207,8 +1209,9 @@ where
         }
     };
     let bodies: Vec<Transaction> = prepared.iter().map(|(tx, _)| tx.clone()).collect();
+    let network = shared.rules().trust().network_id();
     let done = super::with_pool(shared, move |pool, _, view, rule_set, policy, now| {
-        pool.offer_prepared(prepared, now, view, rule_set, policy)
+        pool.offer_prepared(prepared, now, view, rule_set, &network, policy)
     })
     .await;
     let offers = match done {
@@ -1283,7 +1286,7 @@ fn prepare_blocking(
     let rule_set = rules.in_force(Tip::connecting_height(tip.as_ref()));
     let mut prepared = Vec::with_capacity(bodies.len());
     for tx in bodies {
-        match stateless(&tx, &view, &rule_set, None) {
+        match stateless(&tx, &view, &rule_set, &rules.trust().network_id(), None) {
             Ok(step1) => prepared.push((tx, step1)),
             Err(fault) => return Err(PrepFault::Chain(fault)),
         }

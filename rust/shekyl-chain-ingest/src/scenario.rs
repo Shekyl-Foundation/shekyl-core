@@ -373,6 +373,7 @@ where
             seed,
             target,
             &references,
+            &self.rules.trust().network_id(),
             FormAttempt::FIRST,
         )
         .expect("the driver's substrate does not fault");
@@ -496,6 +497,7 @@ where
             mined.seed,
             mined.target,
             &ReferenceClaims::EMPTY,
+            &self.rules.trust().network_id(),
             FormAttempt::FIRST,
         )
         .expect("the driver's substrate does not fault")
@@ -535,6 +537,7 @@ where
             seed,
             target,
             &ReferenceClaims::EMPTY,
+            &self.rules.trust().network_id(),
             FormAttempt::FIRST,
         )
         .expect("the driver's substrate does not fault")
@@ -563,6 +566,7 @@ where
             block.seed,
             block.target,
             &ReferenceClaims::EMPTY,
+            &self.rules.trust().network_id(),
             FormAttempt::FIRST,
         )
         .expect("the driver's substrate does not fault")

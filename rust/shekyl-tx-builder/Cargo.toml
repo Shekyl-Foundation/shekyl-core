@@ -12,6 +12,8 @@ rust-version.workspace = true
 license.workspace = true
 
 [dependencies]
+# The network id each input's signature hash binds (NETWORK_IDENTITY.md NI-Q4).
+shekyl-network = { path = "../shekyl-network" }
 shekyl-fcmp = { path = "../shekyl-fcmp" }
 # `AtomicUnits` amount-newtype (`docs/completed/ATOMIC_UNITS_NEWTYPE.md`).
 # Carries `SpendInput`/`OutputInfo` amounts and validate/sign totals; raw

@@ -442,6 +442,7 @@ fn validated_on(chain: &MockChain, candidate: Candidate) -> Verdict<(Weights, Pa
         expected_seed(chain),
         expected_target(chain, &RuleSet::GENESIS),
         &references,
+        &crate::HARNESS_NETWORK_ID,
         FormAttempt::FIRST,
     ) {
         Ok(Ok(formed)) => formed,

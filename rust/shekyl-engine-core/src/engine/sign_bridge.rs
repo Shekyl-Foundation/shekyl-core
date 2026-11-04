@@ -547,8 +547,8 @@ pub(crate) fn sign_tx(local: &LocalKeys, tx: &TxToSign) -> Result<TxSignatures, 
         &pqc_pubkeys,
     )?;
 
-    let payload_hashes =
-        phase1_payload_hashes(&wire_with_proofs).map_err(|_| KeyEngineError::Primitive {
+    let payload_hashes = phase1_payload_hashes(&wire_with_proofs, &tx.network.network_id())
+        .map_err(|_| KeyEngineError::Primitive {
             detail: "phase1 payload hash failed",
         })?;
 

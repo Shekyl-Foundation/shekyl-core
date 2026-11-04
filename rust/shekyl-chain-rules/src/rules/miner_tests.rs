@@ -56,6 +56,7 @@ fn judge_on(chain: &MockChain, candidate: Candidate) -> Verdict<()> {
         expected_seed(chain),
         expected_target(chain, &RuleSet::GENESIS),
         &references,
+        &crate::HARNESS_NETWORK_ID,
         FormAttempt::FIRST,
     ) {
         Ok(Ok(formed)) => formed,
@@ -773,6 +774,7 @@ fn a_g2_failure_is_refused_before_any_longhash() {
         expected_seed(&chain),
         expected_target(&chain, &RuleSet::GENESIS),
         &expected_references(&chain, &unpaired),
+        &crate::HARNESS_NETWORK_ID,
         FormAttempt::FIRST,
     ) {
         Ok(Err(refused)) => assert_eq!(refused.rule, CenRow::G2),
@@ -852,6 +854,7 @@ fn same_body_row(chain: &MockChain, candidate: Candidate, row: CenRow) {
         seed,
         target,
         &references,
+        &crate::HARNESS_NETWORK_ID,
         FormAttempt::FIRST,
     ) {
         Ok(Err(refused)) => assert_eq!(refused.rule, row, "form"),
@@ -875,7 +878,7 @@ fn same_body_row(chain: &MockChain, candidate: Candidate, row: CenRow) {
             Ok(judged) => judged,
             Err(refused) => panic!("{row:?}: judge_header refused: {refused}"),
         };
-        match form_judged(candidate, &judged, &references) {
+        match form_judged(candidate, &judged, &references, &crate::HARNESS_NETWORK_ID) {
             Err(refused) => assert_eq!(refused.rule, row, "form_judged"),
             Ok(_) => panic!("{row:?}: form_judged accepted"),
         }

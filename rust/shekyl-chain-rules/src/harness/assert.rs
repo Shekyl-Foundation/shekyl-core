@@ -162,6 +162,7 @@ pub fn formed_under(
         seed,
         target,
         references,
+        &crate::HARNESS_NETWORK_ID,
         FormAttempt::FIRST,
     ) {
         Ok(Ok(formed)) => formed,
@@ -202,6 +203,7 @@ pub fn judge_on(chain: &MockChain, candidate: Candidate) -> Verdict<()> {
         expected_seed(chain),
         expected_target(chain, &RuleSet::GENESIS),
         &references,
+        &crate::HARNESS_NETWORK_ID,
         FormAttempt::FIRST,
     ) {
         Ok(Ok(formed)) => formed,

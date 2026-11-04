@@ -563,6 +563,7 @@ mod tests {
             BTreeSet::from([slot(SLOT)]),
             Some(slot(SLOT)),
             ephemeral_body_store(),
+            [0; 16],
         );
         let key = ResidentReceiptKey::new(&stake, slot(SLOT));
         // Not decoded yet, so the pre-flight has nothing to refuse on.

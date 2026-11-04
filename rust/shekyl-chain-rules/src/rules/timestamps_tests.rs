@@ -69,6 +69,7 @@ fn judge_at(chain: &MockChain, candidate: Candidate, clock: u64) -> Verdict<()> 
         expected_seed(chain),
         expected_target(chain, &RuleSet::GENESIS),
         &references,
+        &crate::HARNESS_NETWORK_ID,
         FormAttempt::FIRST,
     ) {
         Ok(Ok(formed)) => formed,
@@ -95,6 +96,7 @@ fn check_alone<R: BlockRule>(chain: &MockChain, candidate: Candidate, clock: u64
         expected_seed(chain),
         expected_target(chain, &RuleSet::GENESIS),
         &references,
+        &crate::HARNESS_NETWORK_ID,
         FormAttempt::FIRST,
     )
     .expect("no fault")
@@ -367,6 +369,7 @@ fn at_genesis_all_three_rows_record_as_applied_and_refuse_nothing() {
         BlockHash::NULL,
         expected_target(&chain, &RuleSet::GENESIS),
         &crate::block::ReferenceClaims::EMPTY,
+        &crate::HARNESS_NETWORK_ID,
         FormAttempt::FIRST,
     )
     .expect("no fault")

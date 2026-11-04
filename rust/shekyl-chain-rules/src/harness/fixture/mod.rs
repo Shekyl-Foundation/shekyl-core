@@ -677,7 +677,7 @@ fn signed_with(mut tx: Transaction, claimant: Option<&Claimant<'_>>) -> Transact
         };
     }
     // Pass 2 — the signatures, over the hashes those keys are part of.
-    let hashes = tx.pqc_signing_payload_hashes();
+    let hashes = tx.pqc_signing_payload_hashes(&crate::HARNESS_NETWORK_ID);
     if hashes.len() != count {
         // No prunable region (the storage-pruned form): nothing to sign over.
         return tx;

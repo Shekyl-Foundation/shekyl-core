@@ -389,6 +389,7 @@ fn form_carries_the_clock_the_seed_the_target_and_the_attempt_it_was_given() {
         seed,
         expected_target(&MockChain::default(), &RuleSet::GENESIS),
         &crate::block::ReferenceClaims::EMPTY,
+        &crate::HARNESS_NETWORK_ID,
         FormAttempt::FIRST,
     )
     .expect("the mock substrate answers")
@@ -474,6 +475,7 @@ fn a_substrate_that_cannot_read_the_clock_is_a_fault_not_a_verdict() {
         shekyl_types::BlockHash::NULL,
         expected_target(&MockChain::default(), &RuleSet::GENESIS),
         &crate::block::ReferenceClaims::EMPTY,
+        &crate::HARNESS_NETWORK_ID,
         FormAttempt::FIRST,
     );
     assert!(matches!(result, Err(Faulted)));
@@ -492,6 +494,7 @@ fn a_rule_set_claim_the_view_stage_refutes_is_stale_with_a_bounded_retry() {
         shekyl_types::BlockHash::NULL,
         expected_target(&MockChain::default(), &admits_two),
         &crate::block::ReferenceClaims::EMPTY,
+        &crate::HARNESS_NETWORK_ID,
         FormAttempt::FIRST,
     )
     .expect("no fault")
@@ -535,6 +538,7 @@ fn a_target_claim_the_view_does_not_derive_is_stale_with_a_bounded_retry() {
         crate::harness::expected_seed(&chain),
         wrong,
         &crate::block::ReferenceClaims::EMPTY,
+        &crate::HARNESS_NETWORK_ID,
         FormAttempt::FIRST,
     )
     .expect("no fault")
@@ -569,6 +573,7 @@ fn the_last_attempt_is_terminal() {
         shekyl_types::BlockHash::NULL,
         expected_target(&MockChain::default(), &admits_two),
         &crate::block::ReferenceClaims::EMPTY,
+        &crate::HARNESS_NETWORK_ID,
         last,
     )
     .expect("no fault")

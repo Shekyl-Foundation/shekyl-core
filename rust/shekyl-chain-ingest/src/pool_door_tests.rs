@@ -77,6 +77,7 @@ async fn door(scenario: &mut Scenario<FreeHash>, tx: &Transaction) -> (Verdict, 
                 view,
                 &KeyImages::default(),
                 rule_set,
+                &shekyl_network::HARNESS_NETWORK_ID,
                 &AdmissionPolicy::GENESIS,
                 None,
             )
@@ -285,6 +286,7 @@ async fn the_pool_holds_one_spender_per_image_refuses_duplicates_and_the_floor()
                 shekyl_types::UnixSeconds::from_raw(1),
                 view,
                 rule_set,
+                &shekyl_network::HARNESS_NETWORK_ID,
                 &policy,
             )
             .expect("open");
@@ -294,6 +296,7 @@ async fn the_pool_holds_one_spender_per_image_refuses_duplicates_and_the_floor()
                     UnixSeconds::from_raw(1),
                     view,
                     rule_set,
+                    &shekyl_network::HARNESS_NETWORK_ID,
                     &policy,
                 )
                 .expect("no fault")
@@ -355,6 +358,7 @@ async fn the_pool_holds_one_spender_per_image_refuses_duplicates_and_the_floor()
                 shekyl_types::UnixSeconds::from_raw(1),
                 view,
                 rule_set,
+                &shekyl_network::HARNESS_NETWORK_ID,
                 &policy,
             )
             .expect("reopen");
@@ -363,8 +367,15 @@ async fn the_pool_holds_one_spender_per_image_refuses_duplicates_and_the_floor()
                 1,
                 "the reconcile at open removes the mined entry"
             );
-            pool.admit(good, UnixSeconds::from_raw(2), view, rule_set, &policy)
-                .expect("no fault")
+            pool.admit(
+                good,
+                UnixSeconds::from_raw(2),
+                view,
+                rule_set,
+                &shekyl_network::HARNESS_NETWORK_ID,
+                &policy,
+            )
+            .expect("no fault")
         })
         .await;
     assert_eq!(mined_dup, Admission::Duplicate(Duplicate::OnChain));
@@ -391,11 +402,19 @@ async fn an_unfluffed_transaction_is_shown_nowhere_until_the_relay_fluffs_it() {
                 shekyl_types::UnixSeconds::from_raw(1),
                 view,
                 rule_set,
+                &shekyl_network::HARNESS_NETWORK_ID,
                 &policy,
             )
             .expect("open");
             let admitted = pool
-                .admit(good, UnixSeconds::from_raw(1), view, rule_set, &policy)
+                .admit(
+                    good,
+                    UnixSeconds::from_raw(1),
+                    view,
+                    rule_set,
+                    &shekyl_network::HARNESS_NETWORK_ID,
+                    &policy,
+                )
                 .expect("no fault");
             assert_eq!(
                 admitted,
@@ -424,6 +443,7 @@ async fn an_unfluffed_transaction_is_shown_nowhere_until_the_relay_fluffs_it() {
                 shekyl_types::UnixSeconds::from_raw(1),
                 view,
                 rule_set,
+                &shekyl_network::HARNESS_NETWORK_ID,
                 &policy,
             )
             .expect("reopen");

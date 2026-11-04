@@ -93,6 +93,7 @@ fn formed(
         seed,
         target,
         &references,
+        &shekyl_network::HARNESS_NETWORK_ID,
         FormAttempt::FIRST,
     )
     .expect("mock substrate forms");

@@ -388,11 +388,37 @@ fn pqc_signing_preimage_matches_the_captured_specification_output() {
         } else {
             assert!(payloads.is_empty(), "{name}: no preimage, no payloads");
         }
-        assert_eq!(
-            tx.pqc_signing_payload_hashes(),
-            hashes,
-            "{name}: signed hashes"
-        );
+        // The hash the production callers take binds the network
+        // (`NETWORK_IDENTITY.md` NI-Q4): pinned per network against
+        // `scripts/kat/spend_signing_hash_oracle.py`, which shares no code
+        // with this crate. The captured `signed_hashes_hex` above are the
+        // C++ assembly's keccak256 of the same payloads, kept as the
+        // capture's own consistency check; no network signs over them now.
+        let mut per_network = Vec::new();
+        for net in shekyl_network::Network::ALL {
+            let pinned: Vec<SigningPayloadHash> = entry["signed_hashes_by_network"][net.name()]
+                .as_array()
+                .unwrap_or_else(|| panic!("{name}: no {net} hashes pinned"))
+                .iter()
+                .map(|h| {
+                    <[u8; 32]>::try_from(hex_bytes(h.as_str().expect("hex"))).expect("32 bytes")
+                })
+                .map(SigningPayloadHash::from_bytes)
+                .collect();
+            assert_eq!(
+                tx.pqc_signing_payload_hashes(&net.network_id()),
+                pinned,
+                "{name}: signed hashes on {net}"
+            );
+            per_network.push(pinned);
+        }
+        if !payloads.is_empty() {
+            for (i, a) in per_network.iter().enumerate() {
+                for b in &per_network[i + 1..] {
+                    assert_ne!(a, b, "{name}: two networks sign over the same hash");
+                }
+            }
+        }
         input_counts.push((name.to_owned(), tx.prefix.inputs.len(), payloads.len()));
     }
     // The shapes the fixture exists for are all here: a single input, several,

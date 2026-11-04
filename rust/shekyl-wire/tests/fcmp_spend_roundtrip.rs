@@ -428,7 +428,7 @@ fn synthetic_spend_pqc_signing_payload_hashes_are_pinned() {
     // (`pqc_signing_preimage_kat.rs`) holds the derivation to the specification's
     // output over real transactions; this pins one synthetic body against drift.
     let tx = synthetic_spend();
-    let hashes = tx.pqc_signing_payload_hashes();
+    let hashes = tx.pqc_signing_payload_hashes(&shekyl_network::HARNESS_NETWORK_ID);
     assert_eq!(hashes.len(), 1, "one PQC signing hash per input");
     assert_eq!(
         hashes[0].to_string(),
@@ -443,7 +443,7 @@ fn synthetic_spend_pqc_signing_payload_hashes_are_pinned() {
     }
     assert_ne!(
         hashes,
-        fee_changed.pqc_signing_payload_hashes(),
+        fee_changed.pqc_signing_payload_hashes(&shekyl_network::HARNESS_NETWORK_ID),
         "fee must be bound into the PQC signing preimage"
     );
 }
@@ -464,7 +464,9 @@ fn pqc_signing_payload_hashes_empty_for_non_spend() {
         pqc_auths.clear();
     }
     assert!(
-        fee_only.pqc_signing_payload_hashes().is_empty(),
+        fee_only
+            .pqc_signing_payload_hashes(&shekyl_network::HARNESS_NETWORK_ID)
+            .is_empty(),
         "fee-only (no prunable) yields no signing hashes"
     );
 
@@ -475,7 +477,9 @@ fn pqc_signing_payload_hashes_empty_for_non_spend() {
         commitments: Vec::new(),
     });
     assert!(
-        null_ct.pqc_signing_payload_hashes().is_empty(),
+        null_ct
+            .pqc_signing_payload_hashes(&shekyl_network::HARNESS_NETWORK_ID)
+            .is_empty(),
         "Null ct yields no signing hashes"
     );
 }

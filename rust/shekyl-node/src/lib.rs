@@ -382,6 +382,7 @@ impl Node {
                 submit_pool,
                 AdmissionPolicy::GENESIS,
                 wall_now,
+                rules.trust().network_id(),
             )
             .retiring(Arc::new({
                 let health = pool_health.clone();
@@ -886,6 +887,7 @@ fn open_pool(
         wall_now(),
         &view,
         &rule_set,
+        &rules.trust().network_id(),
         &AdmissionPolicy::GENESIS,
     )
     .map_err(|error| OpenError::Pool(format!("{error:?}")))?;

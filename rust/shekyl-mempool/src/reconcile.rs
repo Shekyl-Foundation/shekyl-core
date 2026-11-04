@@ -26,6 +26,7 @@
 //! pool after a restart, after a switch and after a connect is the pool the
 //! door would build from the same transactions.
 
+use shekyl_network::NetworkId;
 use std::collections::BTreeMap;
 use std::path::Path;
 
@@ -88,6 +89,7 @@ impl Pool {
         now: UnixSeconds,
         chain: &V,
         rule_set: &RuleSet,
+        network: &NetworkId,
         policy: &AdmissionPolicy,
     ) -> Result<(Self, PoolOpen, Reconciled), PoolFault<V::Fault>> {
         let limits = Limits::at(chain).map_err(PoolFault::Chain)?;
@@ -118,7 +120,7 @@ impl Pool {
             pool.load(txid, Held::of(tx, record, None));
         }
         drop(snapshot);
-        let mut reconciled = pool.reconcile(chain, rule_set, policy)?;
+        let mut reconciled = pool.reconcile(chain, rule_set, network, policy)?;
         if !dropped.is_empty() {
             pool.store()
                 .write(|batch| dropped.iter().try_for_each(|(txid, _)| batch.remove(txid)))?;
@@ -145,6 +147,7 @@ impl Pool {
         &mut self,
         chain: &V,
         rule_set: &RuleSet,
+        network: &NetworkId,
         policy: &AdmissionPolicy,
     ) -> Result<Reconciled, PoolFault<V::Fault>> {
         let tip = chain
@@ -188,6 +191,7 @@ impl Pool {
                     chain,
                     &key_images,
                     rule_set,
+                    network,
                     policy,
                     prior.as_ref(),
                 )

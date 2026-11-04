@@ -404,6 +404,7 @@ fn cen_d7_fakechain_validate_mints_past_n() {
         seed,
         crate::harness::expected_target(&chain, &seven),
         &crate::block::ReferenceClaims::EMPTY,
+        &crate::HARNESS_NETWORK_ID,
         crate::fault::FormAttempt::FIRST,
     )
     .expect("no fault")

@@ -70,6 +70,9 @@ pub(crate) struct BondPostAssembleArgs<'a> {
     pub bond_auth_pk: Vec<u8>,
     /// Failure-site label for vout construction.
     pub output_site: &'static str,
+    /// The id of the network the bond post is for; every input's signature
+    /// hash binds it (`NETWORK_IDENTITY.md` NI-Q4).
+    pub network: shekyl_network::NetworkId,
 }
 
 /// Persona-bound wire bytes plus the spent funding gindexes.
@@ -185,6 +188,7 @@ pub(crate) async fn assemble_signed_bond_post(
                 extra: vec![args.bond_auth_pk],
             },
         },
+        &args.network,
     )
     .map_err(|e| BondAssemblyError::build("open spend", e))?;
     let bond_sig = {

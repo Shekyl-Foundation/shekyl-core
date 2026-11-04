@@ -252,6 +252,8 @@ pub use tree_growth::{
     TreeFrontier, TreeGrowth,
 };
 pub use trust::Trust;
+#[cfg(any(test, feature = "harness"))]
+pub use trust::HARNESS_NETWORK_ID;
 pub use validate::{
     form, form_judged, judge_lone_stateless, judge_slot_stateless, tx_against, tx_form, validate,
     validate_with_memo, StatelessPass,

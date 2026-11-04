@@ -992,6 +992,7 @@ where
         }
         let substrate = Arc::clone(&self.substrate);
         let metrics = Arc::clone(self.metrics);
+        let network = self.rules.trust().network_id();
         self.in_flight.spawn_blocking(move || {
             let started = std::time::Instant::now();
             let verdict = form(
@@ -1001,6 +1002,7 @@ where
                 seed,
                 target,
                 &references,
+                &network,
                 FormAttempt::FIRST,
             );
             metrics.block_formed(started.elapsed());

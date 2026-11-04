@@ -380,7 +380,11 @@ count_pattern() {
 # shekyl/archival-support-draw-v1, both already registered. One
 # #[cfg(test)] site in the same file hashes the economy preimage under
 # the existing draw label to show the support labels are not that label.
-MECH1_EXPECTED=82
+# NI-Q4 (2026-11-04): 82 -> 83. One production site in
+# rust/shekyl-wire/src/transaction/signing_preimage.rs (`signed_hash`)
+# under shekyl/fcmp-spend-signing-v1: the spend signature's hash binds the
+# network id.
+MECH1_EXPECTED=83
 mech1=$(count_pattern 'cshake256_(?:32|64)\(|CShake256Core::new\(')
 if [[ "$mech1" != "$MECH1_EXPECTED" ]]; then
   echo "COUNT DRIFT mech 1 (cSHAKE call sites): found $mech1, pinned $MECH1_EXPECTED." >&2

@@ -259,6 +259,7 @@ pub(super) async fn assemble_drain_tx(
     tree_ctx: TreeContext,
     payment_amount: u64,
     fee: u64,
+    network: &shekyl_network::NetworkId,
 ) -> Result<AssembledDrain, StakeEngineError> {
     // ── Step 0: parameter precondition. A drain moves value OUT of `P` to the
     // principal, so it must pay a nonzero amount there; a zero payment forms no
@@ -465,7 +466,7 @@ pub(super) async fn assemble_drain_tx(
     // ── Step 8: PQC auth completion (fast; inline). One payload hash per spend
     // slot — no `+1` bond slot (the byte-shape difference between a drain and a
     // bond is exactly this: a drain has no identity auth). ──
-    let payload_hashes = phase1_payload_hashes(&wire)
+    let payload_hashes = phase1_payload_hashes(&wire, network)
         .map_err(|e| DrainAssemblyError::build("phase1 payload hash", e))?;
     if payload_hashes.len() != spend_inputs.len() {
         return Err(DrainAssemblyError::build(

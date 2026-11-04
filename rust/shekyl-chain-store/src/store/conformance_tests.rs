@@ -185,6 +185,7 @@ where
         seed,
         target,
         &references,
+        &shekyl_chain_rules::HARNESS_NETWORK_ID,
         FormAttempt::FIRST,
     ) {
         Ok(Ok(formed)) => formed,

@@ -897,6 +897,7 @@ async fn a_reference_or_target_claim_the_switch_cannot_make_is_a_driver_defect()
             at.seed,
             at.target,
             &claims,
+            &shekyl_network::HARNESS_NETWORK_ID,
             shekyl_chain_rules::FormAttempt::FIRST,
         )
         .expect("the free substrate does not fault");

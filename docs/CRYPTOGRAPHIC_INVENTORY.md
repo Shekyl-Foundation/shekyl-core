@@ -135,10 +135,10 @@ one mechanism, so distinctness is an intra-mechanism property; a flat all-pairs 
 would be a category error (and would spuriously flag the legitimate cross-mechanism
 reuse of `b"nonce"`).
 
-**Census (dated snapshot, 2026-11-03, counted from the TSV's production rows): 125 registered rows across the five mechanisms —
-130 including the two micro-buckets.** The `shekyl/`-prefix lens saw ~28 at SA-3b — a severalfold undercount, which is the
+**Census (dated snapshot, 2026-11-04, counted from the TSV's production rows): 126 registered rows across the five mechanisms —
+131 including the two micro-buckets.** The `shekyl/`-prefix lens saw ~28 at SA-3b — a severalfold undercount, which is the
 measure of the blind spot SA-3b closes (SIGNATURE_ALIGNMENT §3.1). (The table below
-sums to 130: the five mechanisms 125, plus the two micro-buckets, 1 + 4.) **This table is a
+sums to 131: the five mechanisms 126, plus the two micro-buckets, 1 + 4.) **This table is a
 snapshot, not the checked copy** — the per-mechanism counts are pinned once, against
 the parsed TSV rows, in `domain_registry.rs::PRODUCTION_PINS`; when the registry
 legitimately changes, that pin fails and this table is refreshed with a new as-of
@@ -217,7 +217,12 @@ consensus rule. The 2026-11-01 refresh replaces it with
 `shekyl/archival-drawable-epoch-v2`, one function and one site: the
 digest now also covers the archive width and the support stream's
 members with their receipt keys (`SO-D12q`), so the encoding changed and
-the version moved with it (rule 30).
+the version moved with it (rule 30). The 2026-11-04 refresh adds one
+mechanism-1 customization, `shekyl/fcmp-spend-signing-v1`: the hash every
+hybrid spend signature is over, `cSHAKE256-32` of the network id and the
+payload, so a signature is valid on one network (`NETWORK_IDENTITY.md`
+NI-Q4). It replaces `keccak256` of the payload, which was not a registry
+row.
 
 The 2026-10-18 refresh removes one mechanism-2 info label,
 `shekyl-archival-p-msg-sign-slh-dsa-192s-v1`: a persona has no address, so
@@ -227,7 +232,7 @@ TSV.
 
 | Mechanism | Entry point | Count | Frozen-inherited |
 |---|---|---|---|
-| 1 — cSHAKE256 customization | `cshake256_*`, `CShake256Core::new` | 55 | 0 |
+| 1 — cSHAKE256 customization | `cshake256_*`, `CShake256Core::new` | 56 | 0 |
 | 2 — HKDF salt + info | `Hkdf::new(Some(salt))`, `.expand(info)` | 7 salts + 37 infos | 0 |
 | 3 — FROST transcript label | `RecommendedTranscript::new`, `.domain_separate`, `Curve::CONTEXT/ID` | 4 | 3 |
 | 4 — Blake2b DST | first `Blake2b512::update`; `sal_dst` tags | 8 | 0 |

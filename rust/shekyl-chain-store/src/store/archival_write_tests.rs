@@ -173,6 +173,7 @@ fn verdict_under<'b, 'id>(
         expected_seed(view)?,
         expected_target(view, rules)?,
         &references,
+        &shekyl_chain_rules::HARNESS_NETWORK_ID,
         FormAttempt::FIRST,
     ) {
         Ok(Ok(formed)) => formed,

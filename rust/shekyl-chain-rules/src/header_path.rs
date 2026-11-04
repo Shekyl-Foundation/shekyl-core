@@ -480,8 +480,13 @@ mod tests {
                     Ok(judged) => judged,
                     Err(refused) => panic!("honest header refused: {refused:?}"),
                 };
-            let from_header = form_judged(input.clone(), &judged, &ReferenceClaims::EMPTY)
-                .expect("the body forms");
+            let from_header = form_judged(
+                input.clone(),
+                &judged,
+                &ReferenceClaims::EMPTY,
+                &crate::HARNESS_NETWORK_ID,
+            )
+            .expect("the body forms");
             let from_bytes = form(
                 input.clone(),
                 &rule_set,
@@ -489,6 +494,7 @@ mod tests {
                 BlockHash::NULL,
                 target,
                 &ReferenceClaims::EMPTY,
+                &crate::HARNESS_NETWORK_ID,
                 FormAttempt::FIRST,
             )
             .expect("mock")
@@ -503,7 +509,12 @@ mod tests {
             assert_eq!(from_header.pow(), from_bytes.pow());
             let mut moved = input;
             moved.block.header.nonce = moved.block.header.nonce.wrapping_add(1);
-            match form_judged(moved, &judged, &ReferenceClaims::EMPTY) {
+            match form_judged(
+                moved,
+                &judged,
+                &ReferenceClaims::EMPTY,
+                &crate::HARNESS_NETWORK_ID,
+            ) {
                 Err(refused) => assert_eq!(refused.rule, CenRow::B6),
                 Ok(_) => panic!("a different preimage formed"),
             }
@@ -561,8 +572,13 @@ mod tests {
                 Err(refused) => panic!("honest header refused: {refused:?}"),
             }
         });
-        let from_header =
-            form_judged(deep_candidate, &judged, &ReferenceClaims::EMPTY).expect("the body forms");
+        let from_header = form_judged(
+            deep_candidate,
+            &judged,
+            &ReferenceClaims::EMPTY,
+            &crate::HARNESS_NETWORK_ID,
+        )
+        .expect("the body forms");
         MockChain::default().with_view(|view| {
             match validate(from_header, &view, &RuleSet::GENESIS, &Trust::UNPINNED) {
                 Err(Fault::Stale(Stale::Seed { claimed, .. })) => {
@@ -602,8 +618,13 @@ mod tests {
                 Err(refused) => panic!("honest header refused: {refused:?}"),
             }
         });
-        let from_header =
-            form_judged(long_candidate, &judged, &ReferenceClaims::EMPTY).expect("the body forms");
+        let from_header = form_judged(
+            long_candidate,
+            &judged,
+            &ReferenceClaims::EMPTY,
+            &crate::HARNESS_NETWORK_ID,
+        )
+        .expect("the body forms");
         judged_on.with_view(|view| {
             match validate(from_header, &view, &RuleSet::GENESIS, &Trust::UNPINNED) {
                 Err(Fault::Stale(Stale::Target {
