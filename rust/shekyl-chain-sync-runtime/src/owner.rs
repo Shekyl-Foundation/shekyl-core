@@ -55,7 +55,7 @@ use std::sync::Arc;
 use std::time::{Duration, Instant};
 
 use shekyl_chain_ingest::service::{
-    Alarm, ArrivalTag, BoundArrival as EntryArrival, Door, Refusal, Reply, SeedPair, SessionId,
+    Alarm, ArrivalTag, BoundArrival as EntryArrival, Door, Reply, SeedPair, SessionId,
 };
 use shekyl_chain_ingest::{ChainRules, TipChanged};
 use shekyl_chain_rules::Tip;
@@ -69,7 +69,6 @@ use shekyl_levin::{
     TimedSyncResponse, HASH_SIZE, NOTIFY_GET_TXPOOL_COMPLEMENT, NOTIFY_NEW_COMPACT_BLOCK,
     NOTIFY_REQUEST_COMPACT_MISSING_TX,
 };
-use shekyl_peer_policy::{Invalidate, SyncReply, SyncReplyAction};
 use shekyl_runtime::{Pool, RuntimeBudget, ThreadName};
 use shekyl_seam::{Hub, SocketId, SyncPayload};
 use shekyl_timing_engine::{Clock, OwnerHandle, Tick};
@@ -80,12 +79,14 @@ use tokio::sync::{mpsc, oneshot, watch};
 use tracing::Instrument;
 
 use crate::executor::Executor;
+use crate::outcome;
 use crate::relay;
 use crate::router::{Routed, Tapped};
 use crate::serve::{
     serve_bodies, serve_headers, serve_missing_txs, MissingTxsRefused, MissingTxsServed,
 };
 use crate::session::Session;
+use crate::transit::{micros, Transit};
 use shekyl_chain_sync::{
     BoundArrival, ClaimError, Command, Declaration, Event, Job, Outcome, PeerClaim, Proved,
     Requesting, Sync as Model, SyncState, SyncView,
@@ -249,24 +250,9 @@ struct Published {
 
 /// What the owner's own spawned work reports back.
 enum Input {
-    Proven {
-        job: Job,
-        results: Vec<Proved>,
-    },
-    Entry {
-        tag: u64,
-        reply: Reply,
-    },
-    Served {
-        session: Session,
-        served: Served,
-    },
-    /// The seed window already holds the seed a proof found absent
-    /// (`Command::SeedNotHeld`): the model is told the slots changed, after
-    /// the command's own batch and whether or not the watch said so.
-    Seeds {
-        pair: Option<SeedPair>,
-    },
+    Proven { job: Job, results: Vec<Proved> },
+    Entry { tag: u64, reply: Reply },
+    Served { session: Session, served: Served },
 }
 
 /// An offer waiting on the entry.
@@ -355,20 +341,9 @@ struct Owner<C: Clock + Clone, R> {
     /// Offered arrivals, by tag.
     offered: HashMap<u64, Offered>,
     serving: HashMap<Session, Serving>,
-    /// Each session's body request in flight: when it was sent and how
-    /// many blocks it named. Its answer is timed from here.
-    bodies_sent: HashMap<Session, (Instant, usize)>,
-    /// Each session's header request in flight: when it was sent. Its
-    /// answer is timed from here. `Event::Headers` carries no request id,
-    /// so the key is the session; a second request sent before the first
-    /// is answered times the answer from the later send. A record only:
-    /// nothing the owner sends or decides reads it.
-    headers_sent: HashMap<Session, Instant>,
-    /// Arrivals the door refused for room, by tag: when the first refusal
-    /// came, and the session that served the body. A span's seat wait is
-    /// read off its tags when the door admits it. A record only, like
-    /// `headers_sent`.
-    seat_waiting: HashMap<u64, (Instant, Session)>,
+    /// Header and body requests in flight, and seat waits. Records the
+    /// profile is timed from. Nothing the owner decides reads them.
+    transit: Transit,
     /// Sessions whose Levin handshake has completed ([`Routed::Opened`]).
     /// The owner sends to no other: a peer still waiting on the
     /// handshake's reply refuses anything else.
@@ -445,10 +420,8 @@ where
         base,
         offered: HashMap::new(),
         serving: HashMap::new(),
+        transit: Transit::default(),
         opened: HashSet::new(),
-        bodies_sent: HashMap::new(),
-        headers_sent: HashMap::new(),
-        seat_waiting: HashMap::new(),
         seats: None,
         seeds: seeds.clone(),
         seen_seeds,
@@ -736,10 +709,7 @@ where
             Routed::Closed { id } => {
                 let session = Session::new(id);
                 self.opened.remove(&session);
-                self.bodies_sent.remove(&session);
-                self.headers_sent.remove(&session);
-                self.seat_waiting
-                    .retain(|_, (_, served_by)| *served_by != session);
+                self.transit.forget_session(session);
                 self.serving.remove(&session);
                 self.door.session_closed(SessionId(session.socket().get()));
                 self.event(Event::SessionClosed { session });
@@ -750,7 +720,7 @@ where
     fn message(&mut self, session: Session, command: SyncCommand, payload: Vec<u8>) {
         match command {
             SyncCommand::ResponseHeaders => {
-                if let Some(sent) = self.headers_sent.remove(&session) {
+                if let Some(sent) = self.transit.take_headers(session) {
                     let transit = sent.elapsed();
                     self.executor
                         .metrics()
@@ -769,7 +739,7 @@ where
                 });
             }
             SyncCommand::ResponseBodies => {
-                if let Some((sent, blocks)) = self.bodies_sent.remove(&session) {
+                if let Some((sent, blocks)) = self.transit.take_bodies(session) {
                     let transit = sent.elapsed();
                     self.executor
                         .metrics()
@@ -835,17 +805,21 @@ where
             let served = match request {
                 ServeRequest::Headers(request) => serve_headers(&store, &request)
                     .map_err(|err| err.to_string())
-                    .and_then(|response| framed(SyncCommand::ResponseHeaders.wire_id(), &response))
+                    .and_then(|response| {
+                        outcome::framed(SyncCommand::ResponseHeaders.wire_id(), &response)
+                    })
                     .map(Served::Send),
                 ServeRequest::Bodies(request) => serve_bodies(&store, &request)
                     .map_err(|err| err.to_string())
-                    .and_then(|response| framed(SyncCommand::ResponseBodies.wire_id(), &response))
+                    .and_then(|response| {
+                        outcome::framed(SyncCommand::ResponseBodies.wire_id(), &response)
+                    })
                     .map(Served::Send),
                 ServeRequest::MissingTxs(request) => serve_missing_txs(&store, &request)
                     .map_err(|err| err.to_string())
                     .and_then(|served| match served {
                         MissingTxsServed::Answer(block) => {
-                            framed(NOTIFY_NEW_COMPACT_BLOCK, &block).map(Served::Send)
+                            outcome::framed(NOTIFY_NEW_COMPACT_BLOCK, &block).map(Served::Send)
                         }
                         MissingTxsServed::LeftMain => Ok(Served::Nothing),
                         MissingTxsServed::Refused(refused) => Ok(Served::Close(refused)),
@@ -862,7 +836,7 @@ where
     fn input(&mut self, input: Input) {
         match input {
             Input::Proven { job, results } => {
-                tracing::trace!(?job, proved = results.len(), last = ?results.last().map(proved_kind), "a prove job answered");
+                tracing::trace!(?job, proved = results.len(), last = ?results.last().map(outcome::proved_kind), "a prove job answered");
                 self.event(Event::Proven { job, results });
             }
             Input::Entry { tag, reply } => {
@@ -884,15 +858,9 @@ where
                 let arrival = offered.map(|offered| offered.hash);
                 self.event(Event::Entry {
                     tag,
-                    outcome: outcome_of(reply, solicited, arrival),
+                    outcome: outcome::of_reply(reply, solicited, arrival),
                 });
                 self.room();
-            }
-            Input::Seeds { pair } => {
-                // Not deduplicated: the loop may have passed this pair on
-                // before the gate it opens was closed.
-                self.seen_seeds = pair;
-                self.event(Event::Seeds);
             }
             Input::Served { session, served } => {
                 if let Some(serving) = self.serving.get_mut(&session) {
@@ -1104,6 +1072,10 @@ where
     }
 
     fn commands(&mut self, out: Vec<Command<Session>>) {
+        // A proof that missed a seed the window now holds tells the model
+        // the slots changed, after this batch. `seeds_published` would see
+        // the pair as already told: the watch fired before the gate closed.
+        let mut release_seed = None;
         for command in out {
             match command {
                 Command::Publish { state } => {
@@ -1126,7 +1098,7 @@ where
                             session,
                             notify(SyncCommand::RequestHeaders.wire_id(), &payload),
                         );
-                        self.headers_sent.insert(session, Instant::now());
+                        self.transit.note_headers(session, Instant::now());
                         self.arm(deadline, session, id);
                     }
                     Err(err) => tracing::error!(%err, "a header request did not encode"),
@@ -1152,8 +1124,8 @@ where
                             session,
                             notify(SyncCommand::RequestBodies.wire_id(), &payload),
                         );
-                        self.bodies_sent
-                            .insert(session, (Instant::now(), request.hashes.len()));
+                        self.transit
+                            .note_bodies(session, Instant::now(), request.hashes.len());
                         self.arm(deadline, session, id);
                     }
                     Err(err) => tracing::error!(%err, "a body request did not encode"),
@@ -1183,19 +1155,17 @@ where
                 Command::SeedNotHeld { session, seed } => {
                     // The lookup ran off the owner's task. A pair that holds
                     // the seed now was published between the lookup and
-                    // this batch, and the loop may already have passed its
-                    // change on before the model closed the gate: tell the
-                    // model again, after this batch, whatever the loop saw.
-                    let pair = *self.seeds.borrow();
-                    let held_now = pair.is_some_and(|pair| pair.holds(&seed));
+                    // this batch, and its change may already have been
+                    // told before the model closed the gate.
+                    let held = self.seeds.borrow().filter(|pair| pair.holds(&seed));
                     tracing::debug!(
                         %session,
                         ?seed,
-                        held_now,
+                        held_now = held.is_some(),
                         "a session's headers hash under a seed the window does not hold"
                     );
-                    if held_now {
-                        let _gone = self.inputs.send(Input::Seeds { pair });
+                    if let Some(pair) = held {
+                        release_seed = Some(pair);
                     }
                 }
                 Command::RaiseAlarm { fork_at, tip, work } => {
@@ -1246,6 +1216,11 @@ where
                 }
             }
         }
+        if let Some(pair) = release_seed {
+            self.seen_seeds = Some(pair);
+            // `Event::Seeds` does not emit `SeedNotHeld`, so this does not recur.
+            self.event(Event::Seeds);
+        }
         self.publish_view();
     }
 
@@ -1294,12 +1269,9 @@ where
                 // among its arrivals to this offer, or none when the door
                 // seated it first time. A record only (CS-5 §10's cap
                 // sweep reads it); nothing below decides on it.
-                let waited = tags
-                    .iter()
-                    .filter_map(|(tag, _, _, _, _)| self.seat_waiting.remove(tag))
-                    .map(|(since, _)| since)
-                    .min()
-                    .map(|since| since.elapsed());
+                let waited = self
+                    .transit
+                    .take_seat_wait(tags.iter().map(|(tag, _, _, _, _)| *tag));
                 self.executor.metrics().seated(waited);
                 if let Some((_, session, _, _, _)) = tags.first() {
                     tracing::debug!(
@@ -1344,11 +1316,11 @@ where
                     .and_then(|max| usize::try_from(max).ok());
                 let now = Instant::now();
                 for (tag, session, solicited, _, bytes) in tags {
-                    let outcome = outcome_of_refusal(refusal, solicited, bytes, max);
+                    let outcome = outcome::of_refusal(refusal, solicited, bytes, max);
                     if outcome == Outcome::NoRoom {
                         // The wait is timed from the first refusal: a
                         // body refused again keeps its first.
-                        self.seat_waiting.entry(tag).or_insert((now, session));
+                        self.transit.note_seat(tag, now, session);
                         // `NoRoom` froze the model's seats at zero until a
                         // `Room`. The sample below is suppressed while the
                         // door's count is the one last reported, and a
@@ -1372,135 +1344,6 @@ where
             }
         }
         self.room();
-    }
-}
-
-/// `d` in microseconds, for a log field.
-fn micros(d: Duration) -> u64 {
-    u64::try_from(d.as_micros()).unwrap_or(u64::MAX)
-}
-
-/// A prove result's kind, for the trace.
-fn proved_kind(proved: &Proved) -> &'static str {
-    match proved {
-        Proved::Formed(_) => "formed",
-        Proved::Refused(_) => "refused",
-        Proved::NotHeld => "not held",
-    }
-}
-
-/// `message` encoded and framed as the notify `command`.
-fn framed(command: u32, message: &impl PortableMap) -> Result<Vec<u8>, String> {
-    message
-        .store()
-        .map(|payload| notify(command, &payload))
-        .map_err(|err| err.to_string())
-}
-
-/// The entry's reply as the model's outcome.
-///
-/// [`SyncReply::action`] is the authority for what the reply means.
-/// `solicited` is a body this node requested. A bound body is; an
-/// announcement is not. `arrival` is the block the offer named, and it is
-/// absent when that offer is already gone. A switch is a connect when
-/// `arrival` is the promoted tip, and [`Outcome::Noted`] otherwise. A
-/// promoted tip that is some other block has no supplier this offer can
-/// name; the model relays it from the tip event.
-/// The outcome the model is told when the door refuses an offer of
-/// `bytes`. No room waits for a seat (`Event::Room`), which the caller
-/// always sends after it ([`Owner::offer`]). An unreadable store does not:
-/// the service stops on that read, and a later seat report must not offer
-/// the body again. A dry bucket is the session's, not the door's: the model
-/// takes the seat back and asks for the body. A bound span is seated as
-/// solicited since 2026-11-02 and takes no token, so the door no longer
-/// answers one `Throttled`; the arm maps the refusal the door's contract
-/// still names (seen 2026-11-02, before that change: a node `behind` with
-/// its target advancing, every offer refused `Throttled` and frozen as
-/// `NoRoom`). A body larger than the door's bound invalidates
-/// its header when this node asked for it, never when it was announced; a
-/// body within the bound that the door still called oversize is offered
-/// again.
-fn outcome_of_refusal(
-    refusal: Refusal,
-    solicited: bool,
-    bytes: usize,
-    max: Option<usize>,
-) -> Outcome {
-    match refusal {
-        Refusal::NoRoom => Outcome::NoRoom,
-        Refusal::Throttled => Outcome::Throttled,
-        Refusal::StoreUnreadable => Outcome::StoreUnreadable,
-        Refusal::Oversize if max.is_some_and(|max| bytes > max) => Outcome::Oversize {
-            invalidate: solicited,
-        },
-        Refusal::Oversize => Outcome::Again,
-    }
-}
-
-fn outcome_of(reply: Reply, solicited: bool, arrival: Option<BlockHash>) -> Outcome {
-    let action = sync_reply(&reply).action(solicited);
-    match (action, reply) {
-        (SyncReplyAction::Advance, Reply::Connected { height, .. }) => {
-            Outcome::Connected { height }
-        }
-        (SyncReplyAction::Invalidate(Invalidate::Refused), Reply::Refused(verdict)) => {
-            Outcome::Refused { verdict }
-        }
-        (
-            SyncReplyAction::Invalidate(Invalidate::PromotionRefused),
-            Reply::PromotionRefused { hash, refused, .. },
-        ) => Outcome::PromotionRefused {
-            verdict: refused,
-            block: hash,
-        },
-        (SyncReplyAction::Relocate, Reply::Unlinked { at }) => Outcome::Unlinked { at },
-        (SyncReplyAction::RequestHeaders, Reply::BeyondCap(_)) => Outcome::BeyondCap,
-        (SyncReplyAction::RequestMissing, Reply::MissingBodies { indices, .. }) => {
-            Outcome::MissingBodies {
-                indices: indices
-                    .into_iter()
-                    .map(|index| u64::try_from(index).unwrap_or(u64::MAX))
-                    .collect(),
-            }
-        }
-        (SyncReplyAction::Again, Reply::Cancelled { .. } | Reply::Stopped) => Outcome::Again,
-        (
-            SyncReplyAction::None,
-            Reply::AlreadyHeld | Reply::Held { .. } | Reply::CannotFollow(_),
-        ) => Outcome::Noted,
-        // The promoted blocks ascend, so the last is main's new tip. It is
-        // a connect only when that tip is the arrival this offer named.
-        (SyncReplyAction::None, Reply::Switched { promoted, .. }) => {
-            match (promoted.last(), arrival) {
-                (Some(&(height, tip)), Some(arrival)) if tip == arrival => {
-                    Outcome::Connected { height }
-                }
-                _ => Outcome::Noted,
-            }
-        }
-        (action, reply) => {
-            tracing::error!(?action, ?reply, "an entry reply and its action disagree");
-            Outcome::Noted
-        }
-    }
-}
-
-/// The peer-policy name of an entry reply. Exhaustive, so a new reply
-/// cannot arrive here unnamed.
-fn sync_reply(reply: &Reply) -> SyncReply {
-    match reply {
-        Reply::Connected { .. } => SyncReply::Connected,
-        Reply::Refused(_) => SyncReply::Refused,
-        Reply::PromotionRefused { .. } => SyncReply::PromotionRefused,
-        Reply::Unlinked { .. } => SyncReply::Unlinked,
-        Reply::AlreadyHeld => SyncReply::AlreadyHeld,
-        Reply::Held { .. } => SyncReply::Held,
-        Reply::Switched { .. } => SyncReply::Switched,
-        Reply::BeyondCap(_) => SyncReply::BeyondCap,
-        Reply::CannotFollow(_) => SyncReply::CannotFollow,
-        Reply::MissingBodies { .. } => SyncReply::MissingBodies,
-        Reply::Cancelled { .. } => SyncReply::Cancelled,
-        Reply::Stopped => SyncReply::Stopped,
     }
 }
 
