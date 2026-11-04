@@ -209,7 +209,7 @@ with the seed live**, in this order:
 
 `derive_archival_p_keys` (`archival_p.rs:701`) is a **pure function** of `(seed, net, slot)`
 — no RNG/time/IO — **fixed-vector KAT-pinned** (`kat_archival_p_derive_v2_vectors`,
-`tests/kat_archival_p_derive_v2.rs:430`, a CI-run `#[test]`: derived output asserted `==`
+`rust/shekyl-crypto-pq/tests/kat_archival_p_derive_v2.rs:430`, a CI-run `#[test]`: derived output asserted `==`
 `expected.out_hex` per `(seed,net,slot)`, over a corpus-hash-pinned `vectors.json`, with a
 `--ignored` regenerator — a real input→output KAT that catches an algorithm
 change, not just a determinism/property test), and `spawn_stake_engine_if_staker` (`lifecycle.rs:934`)
