@@ -133,30 +133,30 @@ Regtest is a row in the table: its own genesis, address prefixes, ports, difficu
 
 ## 6. Census at this ground: where the code branches on the network
 
-Read from the tree at `8f2b68dbbf`, non-test code. **Data** is a value selection that becomes a lookup in the network's row; **alias** treats regtest as mainnet; **divergence** is a different code path. PR 1 turns every data site into a row lookup and deletes every alias and every divergence; regtest's levers become the row's `permits` (NI-R6).
+Read from the tree at `8f2b68dbbf`, non-test code. **Data** is a value selection that becomes a lookup in the network's row; **alias** treats regtest as mainnet; **divergence** is a different code path. PR 1 turns every data site into a row lookup and deletes every alias and every divergence; regtest's levers become the row's `permits` (NI-R6). Two divergences sit in code chain sync's cutover replaces, so #1237 (CS-5) carries them and PR 1 does not edit code about to go; the Disposition column says which.
 
-| Site | Branch | Class | PR 1 |
-| --- | --- | --- | --- |
-| `shekyl-daemon-config/src/network.rs` `address_network`, `p2p_port`, `rpc_port` | regtest → mainnet's prefixes and ports | alias | the row; regtest's own |
-| `shekyl-daemon-config/src/sections/mod.rs`, `shekyl-node/src/lib.rs` | the mining address decoded as mainnet's on regtest | alias | the row |
-| `shekyl-node/src/genesis.rs` `pin_network`, `daemon_network` | which genesis to connect; regtest reported as `Fakechain` | alias | the table |
-| `shekyl-node/src/lib.rs` `genesis_pin_of` | the store pinned to mainnet's genesis on regtest | alias | the table |
-| `shekyl-node/src/lib.rs` `sync_at_open` | regtest opens `Synced`, the others `NoView` | divergence | one rule for every network |
-| `shekyl-node/src/lib.rs` `rules_of`; `shekyl-chain-ingest/src/schedule.rs` `Chain`, `ChainRules`, `in_force` | regtest takes `RuleSet::fakechain`, the others `RuleSchedule::for_network` | divergence | the rule schedule is a row field; fixed difficulty is data in it |
-| `schedule.rs` `trust`; `shekyl-chain-rules/src/rules/genesis.rs` (CEN-E1) | regtest validates `Trust::UNPINNED`, so its block 0 is never checked | divergence | every network pinned from the table |
-| `schedule.rs` `ChainRules::new`; `shekyl-chain-ingest/src/connector.rs`; `corpus.rs` `check_inject`; `shekyl-chain-store/src/store/archival_write.rs` | levers (inject serve credit, issue draws) refused off regtest; the store keys "is regtest" on an unpinned trust | divergence | the row's `permits` (NI-R6) |
-| `shekyl-rpc-types/src/identity.rs` `genesis_hash_for`, `exact_or_fakechain`, `check_tuple`; `shekyl-engine-core/src/engine/daemon/mod.rs` `FakechainPolicy` | a fakechain daemon passes a mainnet wallet's identity check | alias | deleted; exact match only |
-| `shekyl-ffi/src/network_id_ffi.rs` | regtest's network id is mainnet's | alias | the table |
-| `shekyl-daemon-rpc/src/console/info.rs` `network_label` | regtest shown as "mainnet" | alias | the row's name |
-| `shekyl-crypto-pq/src/account.rs` `to_address_network` | regtest → mainnet's prefixes | alias | the row |
-| `shekyl-crypto-pq/src/account.rs` `permitted_seed_format`; `shekyl-wallet-rpc/src/lifecycle.rs`; `shekyl-genesis-tool/src/wallets.rs` | BIP39 on mainnet and stagenet, Raw32 on testnet and regtest, by separate code paths | divergence | BIP39, 24 words, everywhere (NI-R7) |
-| `shekyl-ffi/src/dialer_ffi.rs` `note_network`; `shekyl-dialer/src/seeds.rs` | stagenet and regtest get no seeds; a second copy of the ports | data | the row's seed list, empty where there are none |
-| `shekyl-cli/src/commands/mine.rs` | regtest refused | divergence | all four rows |
-| `shekyl-engine-state/src/safety_constants.rs` `for_network` | per-network wallet constants; no regtest row | data | a row field |
-| `shekyl-engine-core/src/engine/lifecycle/support.rs`, `shekyl-wallet-rpc/src/lifecycle.rs`, `shekyl-genesis-tool/src/wallets.rs` | three copies of address network → derivation network | data | deleted: one type |
-| `src/cryptonote_config.h` `get_config` | `case FAKECHAIN: return mainnet;`, the live C++ handshake id and ports | alias | regtest's own config, its id from the table |
-| `src/cryptonote_basic/cryptonote_basic_impl.cpp` `nettype_to_ffi_network`; `src/cryptonote_basic/account.cpp` | FAKECHAIN → mainnet's address byte | alias | regtest's byte |
-| `src/common/util.cpp` `cumulative_block_sync_weight` | `nettype != MAINNET` returns a block count | divergence | one rule |
+| Site | Branch | Class | PR 1 | Disposition |
+| --- | --- | --- | --- | --- |
+| `shekyl-daemon-config/src/network.rs` `address_network`, `p2p_port`, `rpc_port` | regtest → mainnet's prefixes and ports | alias | the row; regtest's own | Done: the row (`2c8f53a552`, `ed9c440e06`) |
+| `shekyl-daemon-config/src/sections/mod.rs`, `shekyl-node/src/lib.rs` | the mining address decoded as mainnet's on regtest | alias | the row | Done: decoded for the configured network's row |
+| `shekyl-node/src/genesis.rs` `pin_network`, `daemon_network` | which genesis to connect; regtest reported as `Fakechain` | alias | the table | Done: the table (`ed9c440e06`) |
+| `shekyl-node/src/lib.rs` `genesis_pin_of` | the store pinned to mainnet's genesis on regtest | alias | the table | Done: the table (`ed9c440e06`, `4858d33812`) |
+| `shekyl-node/src/lib.rs` `sync_at_open` | regtest opens `Synced`, the others `NoView` | divergence | one rule for every network | #1237 (CS-5): the state at open reads the operator's declaration (offline, closed, open), never the network |
+| `shekyl-node/src/lib.rs` `rules_of`; `shekyl-chain-ingest/src/schedule.rs` `Chain`, `ChainRules`, `in_force` | regtest takes `RuleSet::fakechain`, the others `RuleSchedule::for_network` | divergence | the rule schedule is a row field; fixed difficulty is data in it | Done: one `ChainRules` for every network; levers apply onto the network's own set (`4858d33812`) |
+| `schedule.rs` `trust`; `shekyl-chain-rules/src/rules/genesis.rs` (CEN-E1) | regtest validates `Trust::UNPINNED`, so its block 0 is never checked | divergence | every network pinned from the table | Done: every network pinned; `Trust::UNPINNED` is test and harness only (`4858d33812`) |
+| `schedule.rs` `ChainRules::new`; `shekyl-chain-ingest/src/connector.rs`; `corpus.rs` `check_inject`; `shekyl-chain-store/src/store/archival_write.rs` | levers (inject serve credit, issue draws) refused off regtest; the store keys "is regtest" on an unpinned trust | divergence | the row's `permits` (NI-R6) | Done: `permits`; the store takes a `Permit` (`444f3ac3b3`, `4858d33812`) |
+| `shekyl-rpc-types/src/identity.rs` `genesis_hash_for`, `exact_or_fakechain`, `check_tuple`; `shekyl-engine-core/src/engine/daemon/mod.rs` `FakechainPolicy` | a fakechain daemon passes a mainnet wallet's identity check | alias | deleted; exact match only | Done: deleted; exact match (`ed9c440e06`) |
+| `shekyl-ffi/src/network_id_ffi.rs` | regtest's network id is mainnet's | alias | the table | Done: the table (`ed9c440e06`) |
+| `shekyl-daemon-rpc/src/console/info.rs` `network_label` | regtest shown as "mainnet" | alias | the row's name | Done: the row's name (`08d667da5c`; #1259 moves the console into `shekyl-cli` and carries it there) |
+| `shekyl-crypto-pq/src/account.rs` `to_address_network` | regtest → mainnet's prefixes | alias | the row | Done: one derivation, no address-network mapping (`ec931d5858`) |
+| `shekyl-crypto-pq/src/account.rs` `permitted_seed_format`; `shekyl-wallet-rpc/src/lifecycle.rs`; `shekyl-genesis-tool/src/wallets.rs` | BIP39 on mainnet and stagenet, Raw32 on testnet and regtest, by separate code paths | divergence | BIP39, 24 words, everywhere (NI-R7) | Done: BIP39, 24 words, everywhere (`ec931d5858`) |
+| `shekyl-ffi/src/dialer_ffi.rs` `note_network`; `shekyl-dialer/src/seeds.rs` | stagenet and regtest get no seeds; a second copy of the ports | data | the row's seed list, empty where there are none | Done: the row's seed list (`08d667da5c`) |
+| `shekyl-cli/src/commands/mine.rs` | regtest refused | divergence | all four rows | Done: all four rows (`ed9c440e06`) |
+| `shekyl-engine-state/src/safety_constants.rs` `for_network` | per-network wallet constants; no regtest row | data | a row field | Done: one set, no field differs by network (`cf587414f7`) |
+| `shekyl-engine-core/src/engine/lifecycle/support.rs`, `shekyl-wallet-rpc/src/lifecycle.rs`, `shekyl-genesis-tool/src/wallets.rs` | three copies of address network → derivation network | data | deleted: one type | Done: deleted with `DerivationNetwork` (`ec931d5858`) |
+| `src/cryptonote_config.h` `get_config` | `case FAKECHAIN: return mainnet;`, the live C++ handshake id and ports | alias | regtest's own config, its id from the table | Done: deleted; the daemon reads the table (`ed9c440e06`) |
+| `src/cryptonote_basic/cryptonote_basic_impl.cpp` `nettype_to_ffi_network`; `src/cryptonote_basic/account.cpp` | FAKECHAIN → mainnet's address byte | alias | regtest's byte | Done: deleted with the C++ account (`ec931d5858`) |
+| `src/common/util.cpp` `cumulative_block_sync_weight` | `nettype != MAINNET` returns a block count | divergence | one rule | #1237 (CS-5): its one caller, the C++ sync path, is deleted there, and the function with it |
 
 Guards that compare a configured network with a recorded one (the marker, the miner address, the wallet file's network byte, the recipients file) are equality checks, not branches, and stay.
 
