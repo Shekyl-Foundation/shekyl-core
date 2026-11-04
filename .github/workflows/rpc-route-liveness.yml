@@ -31,6 +31,7 @@ on:
     types: [checks_requested]
     branches: [dev]
   pull_request:
+    types: [opened, synchronize, reopened, edited]
     paths: &paths
       - "rust/shekyl-daemon-rpc/**"
       - "rust/shekyl-rpc-client/**"
@@ -52,6 +53,7 @@ permissions:
 
 jobs:
   rpc-route-liveness:
+    if: (github.event.action != 'edited' || github.event.changes.base != null)
     name: "RK: every served RPC route has a consumer"
     runs-on: ubuntu-latest
     steps:

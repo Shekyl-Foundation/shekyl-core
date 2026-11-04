@@ -32,7 +32,7 @@ on:
     types: [checks_requested]
     branches: [dev]
   pull_request:
-    branches: [dev]
+    types: [opened, synchronize, reopened, edited]
     paths:
       - "docs/**"
       # The gate resolves file:line citations against the tree, so a source
@@ -71,6 +71,7 @@ permissions:
 
 jobs:
   doc-claims:
+    if: (github.event.action != 'edited' || github.event.changes.base != null)
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4

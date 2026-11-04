@@ -32,6 +32,7 @@ on:
       - 'scripts/ci/check_vendored_crypto_manifest.sh'
       - '.github/workflows/vendored-crypto-content.yml'
   pull_request:
+    types: [opened, synchronize, reopened, edited]
     paths: *crypto_paths
 
 # Superseded-run cancellation (house pattern: economics-c2a-prime.yml).
@@ -48,6 +49,7 @@ permissions:
 
 jobs:
   crypto-content:
+    if: (github.event.action != 'edited' || github.event.changes.base != null)
     name: vendored crypto matches manifest
     runs-on: ubuntu-latest
     steps:

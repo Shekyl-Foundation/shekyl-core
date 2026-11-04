@@ -37,7 +37,7 @@ on:
     types: [checks_requested]
     branches: [dev]
   pull_request:
-    branches: [dev]
+    types: [opened, synchronize, reopened, edited]
     paths:
       # Every Rust export is an operand: the gate also checks that each
       # header declaration names one.
@@ -70,6 +70,7 @@ permissions:
 
 jobs:
   check-ffi-signatures:
+    if: (github.event.action != 'edited' || github.event.changes.base != null)
     name: "FFI signature gate"
     runs-on: ubuntu-latest
     steps:

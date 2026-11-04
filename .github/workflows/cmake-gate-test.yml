@@ -25,7 +25,7 @@ on:
     types: [checks_requested]
     branches: [dev]
   pull_request:
-    branches: [dev]
+    types: [opened, synchronize, reopened, edited]
     paths:
       - "CMakeLists.txt"
       - "cmake/**"
@@ -54,6 +54,7 @@ concurrency:
 
 jobs:
   cmake-gate-test:
+    if: (github.event.action != 'edited' || github.event.changes.base != null)
     name: 64-bit-only CMake gate fires on fake 32-bit toolchain
     runs-on: ubuntu-latest
     # Bounded so an unreachable package mirror costs minutes, not the

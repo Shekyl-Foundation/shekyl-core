@@ -60,7 +60,7 @@ on:
     types: [checks_requested]
     branches: [dev]
   pull_request:
-    branches: [dev]
+    types: [opened, synchronize, reopened, edited]
     paths:
       # The gate's subject is every crate whose code can change a byte a
       # `.snap` pins: the codecs themselves (`shekyl-store-codec`, the chain
@@ -95,6 +95,7 @@ permissions:
 
 jobs:
   assert-snapshots:
+    if: (github.event.action != 'edited' || github.event.changes.base != null)
     name: "Assert committed schema snapshots"
     runs-on: ubuntu-latest
     steps:
@@ -154,6 +155,7 @@ jobs:
           cargo test -p shekyl-peerlist address_file::snapshot --no-fail-fast
 
   enforce-version-bump:
+    if: (github.event.action != 'edited' || github.event.changes.base != null)
     name: "Enforce paired block_version bump"
     runs-on: ubuntu-latest
     steps:

@@ -44,7 +44,7 @@ on:
     types: [checks_requested]
     branches: [dev]
   pull_request:
-    branches: [dev]
+    types: [opened, synchronize, reopened, edited]
     paths:
       - "rust/**/Cargo.toml"
       - "rust/Cargo.toml"
@@ -61,6 +61,7 @@ permissions:
 
 jobs:
   no-emit-guard:
+    if: (github.event.action != 'edited' || github.event.changes.base != null)
     name: "GF-7 hooks: dependency-graph + feature containment"
     runs-on: ubuntu-latest
     steps:

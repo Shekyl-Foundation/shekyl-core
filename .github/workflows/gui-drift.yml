@@ -35,6 +35,7 @@ on:
     types: [checks_requested]
     branches: [dev]
   pull_request:
+    types: [opened, synchronize, reopened, edited]
     paths:
       - 'rust/**'
       - '.github/workflows/gui-drift.yml'
@@ -53,6 +54,7 @@ permissions:
 
 jobs:
   wallet-ref:
+    if: (github.event.action != 'edited' || github.event.changes.base != null)
     name: wallet ref
     runs-on: ubuntu-latest
     # `contents: read` cannot call the pulls API. The merge-queue path
@@ -129,6 +131,7 @@ jobs:
           echo "Wallet ref: $REF (candidate: ${CANDIDATE:-<empty>})"
 
   gui-builds-against-core:
+    if: (github.event.action != 'edited' || github.event.changes.base != null)
     name: shekyl-gui-wallet builds against this branch
     needs: wallet-ref
     # The wallet repository owns the recipe (system libraries, toolchain,

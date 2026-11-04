@@ -32,7 +32,7 @@ name: ci/p2p-nnhfs-model
 
 on:
   pull_request:
-    branches: [dev]
+    types: [opened, synchronize, reopened, edited]
     paths:
       - "docs/formal/proverif/**"
       - "rust/shekyl-p2p-transport/src/noise.rs"
@@ -53,6 +53,7 @@ permissions:
 
 jobs:
   model:
+    if: (github.event.action != 'edited' || github.event.changes.base != null)
     name: "NNhfs ProVerif model"
     runs-on: ubuntu-latest
     # The variants take about a second each; the budget is the uncached

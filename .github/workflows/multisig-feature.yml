@@ -42,6 +42,7 @@ on:
     types: [checks_requested]
     branches: [dev]
   pull_request:
+    types: [opened, synchronize, reopened, edited]
     # Rust build/test inputs only. A single anchored list, aliased into
     # `push` below, so the two event triggers cannot drift apart (a new
     # multisig-owning crate added to one but not the other would leave a
@@ -82,6 +83,7 @@ env:
 
 jobs:
   f6-multisig-feature:
+    if: (github.event.action != 'edited' || github.event.changes.base != null)
     name: "F-6: cargo check/clippy/test --features multisig"
     runs-on: ubuntu-latest
     defaults:

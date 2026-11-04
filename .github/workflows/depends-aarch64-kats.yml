@@ -19,6 +19,7 @@ on:
     types: [checks_requested]
     branches: [dev]
   pull_request:
+    types: [opened, synchronize, reopened, edited]
     paths:
       - 'rust/shekyl-archival-retention/**'
       - 'rust/shekyl-standoff/**'
@@ -51,6 +52,7 @@ env:
 
 jobs:
   aarch64-kats:
+    if: (github.event.action != 'edited' || github.event.changes.base != null)
     name: "ARM v8 qemu KATs"
     runs-on: ubuntu-latest
     container:

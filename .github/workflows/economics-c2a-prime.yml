@@ -21,7 +21,7 @@ on:
     types: [checks_requested]
     branches: [dev]
   pull_request:
-    branches: [dev]
+    types: [opened, synchronize, reopened, edited]
     paths: &econ_paths
       - "config/economics_params.json"
       - "cmake/generate_economics_params.py"
@@ -75,6 +75,7 @@ env:
 
 jobs:
   preflight:
+    if: (github.event.action != 'edited' || github.event.changes.base != null)
     name: "Economics C2a′ preflight (oracle constants)"
     runs-on: ubuntu-latest
     timeout-minutes: 5
@@ -88,6 +89,7 @@ jobs:
         run: scripts/ci/run_economics_c2a_prime.sh preflight
 
   build:
+    if: (github.event.action != 'edited' || github.event.changes.base != null)
     name: "Economics C2a′ build (unit_tests)"
     needs: preflight
     runs-on: ubuntu-latest
@@ -198,6 +200,7 @@ jobs:
         DEBIAN_FRONTEND: noninteractive
     steps:
       - name: set apt conf
+        if: (github.event.action != 'edited' || github.event.changes.base != null)
         run: |
           tee -a /etc/apt/apt.conf.d/80-custom << EOF
           Acquire::Retries "3";
@@ -205,8 +208,10 @@ jobs:
           Acquire::ftp::Timeout "120";
           EOF
       - name: update apt
+        if: (github.event.action != 'edited' || github.event.changes.base != null)
         run: apt update
       - name: install runtime dependencies
+        if: (github.event.action != 'edited' || github.event.changes.base != null)
         run: |
           # git is required by the "configure git" step and actions/checkout@v5
           # (submodules: recursive). The build job gets it via APT_INSTALL_LINUX;
@@ -234,24 +239,29 @@ jobs:
         # hardened download-then-run form made it loud (PR #241). See
         # the FOLLOWUPS entry "Economics C2a′ layer gate — stacked
         # silent failures" for the rest of what that green was hiding.
-        if: matrix.needs_rust
+        if: (github.event.action != 'edited' || github.event.changes.base != null) && (matrix.needs_rust)
         run: apt -y install build-essential pkg-config libssl-dev curl ca-certificates
       - name: configure git
+        if: (github.event.action != 'edited' || github.event.changes.base != null)
         run: git config --global --add safe.directory '*'
       - uses: actions/checkout@v5
+        if: (github.event.action != 'edited' || github.event.changes.base != null)
         with:
           submodules: recursive
       - name: install Rust
         # Composite action (.github/actions/install-rust), after
         # checkout — see the build job's step comment.
-        if: matrix.needs_rust
+        if: (github.event.action != 'edited' || github.event.changes.base != null) && (matrix.needs_rust)
         uses: ./.github/actions/install-rust
       - uses: actions/download-artifact@v4
+        if: (github.event.action != 'edited' || github.event.changes.base != null)
         with:
           name: economics-c2a-build
       - name: Unpack build tree
+        if: (github.event.action != 'edited' || github.event.changes.base != null)
         run: tar -xzf economics-c2a-build.tar.gz
       - name: Run C2a′ Layer ${{ matrix.layer }}
+        if: (github.event.action != 'edited' || github.event.changes.base != null)
         id: layer_run
         env:
           CTEST_OUTPUT_ON_FAILURE: ON
@@ -288,7 +298,7 @@ jobs:
           scripts/ci/run_economics_c2a_prime.sh ${{ matrix.subcommand }} \
             2>&1 | tee "economics-c2a-layer${{ matrix.layer }}.log"
       - name: Upload failure diagnostics
-        if: failure()
+        if: (github.event.action != 'edited' || github.event.changes.base != null) && (failure())
         uses: actions/upload-artifact@v4
         with:
           name: economics-c2a-layer${{ matrix.layer }}-failure-${{ github.run_id }}

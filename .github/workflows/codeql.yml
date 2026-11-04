@@ -10,7 +10,7 @@ on:
     types: [checks_requested]
     branches: [main, dev]
   pull_request:
-    branches: [main, dev]
+    types: [opened, synchronize, reopened, edited]
   schedule:
     - cron: "30 4 * * 1"   # Every Monday at 4:30 AM UTC
   workflow_dispatch:
@@ -32,6 +32,7 @@ jobs:
   # decides, and fails closed. The weekly schedule and a manual dispatch
   # carry no base, so they always analyse.
   changes:
+    if: (github.event.action != 'edited' || github.event.changes.base != null)
     name: 'Change scope (codeql)'
     runs-on: ubuntu-latest
     outputs:
@@ -62,7 +63,7 @@ jobs:
   analyze-rust:
     name: Analyze Rust
     needs: changes
-    if: needs.changes.outputs.docs_only != 'true'
+    if: (github.event.action != 'edited' || github.event.changes.base != null) && (needs.changes.outputs.docs_only != 'true')
     runs-on: ubuntu-latest
     timeout-minutes: 45
     permissions:
@@ -102,7 +103,7 @@ jobs:
     # surface whose highs live in Rust. Weekly + dispatch keeps the
     # extractor warm without occupying a PR runner. Reopen onto PR if a
     # real `src/` high appears that buildless-on-schedule would miss.
-    if: github.event_name == 'schedule' || github.event_name == 'workflow_dispatch'
+    if: (github.event.action != 'edited' || github.event.changes.base != null) && (github.event_name == 'schedule' || github.event_name == 'workflow_dispatch')
     runs-on: ubuntu-latest
     timeout-minutes: 30
     permissions:
@@ -150,7 +151,7 @@ jobs:
     # Python on every PR scanned tests/ + contrib scripts that are not
     # the consensus surface. Weekly + dispatch. Reopen onto PR if a
     # production Python entry point grows (none today).
-    if: github.event_name == 'schedule' || github.event_name == 'workflow_dispatch'
+    if: (github.event.action != 'edited' || github.event.changes.base != null) && (github.event_name == 'schedule' || github.event_name == 'workflow_dispatch')
     runs-on: ubuntu-latest
     timeout-minutes: 20
     permissions:
