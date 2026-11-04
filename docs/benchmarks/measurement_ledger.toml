@@ -308,6 +308,7 @@ stale_through = [
   { through = "24ef80f60c", note = "The serve provider reads a held shard through HeldShardSource. A served body asks the body-store actor once to open and once per chunk; the endpoint's blocking thread waits, and the actor does the redb read and the AEAD open. An abandoned request that never opens a shard does not pay that hop. The floor probe's BodyStore source still reads in process. A response's bytes are unchanged. Not re-measured; the rows stay stale from the sealed-body decrypt." },
   { through = "d85697a328", note = "The body-store actor leaves the engine runtime for its own one-worker runtime, sk-body-store, whose threads lower themselves to serving nice before they take work. The redb read and the chunk decrypt of a served body run there for the whole session. The endpoint thread still only waits. Not re-measured; the rows stay stale." },
   { through = "ec931d5858", note = "Only test files and the identity wire-pin fixtures changed: the fixtures were re-recorded because the derived persona keys moved (NI-R7). No serving code changed. Not re-measured." },
+  { through = "a867b6840c", note = "Test fixtures only: the p-fetch and p-serve identity wire pins (src/wire_pin/*.hex) re-recorded because the derivation salt name_id || purpose moved the pinned persona keys. No serve or fetch code changed, no cost moved. Not re-measured." },
 ]
 
 [[path_set]]
@@ -370,6 +371,7 @@ stale_through = [
   { through = "24ef80f60c", note = "The serve provider reads a held shard through HeldShardSource. A served body asks the body-store actor once to open and once per chunk; the endpoint's blocking thread waits, and the actor does the redb read and the AEAD open. One actor round trip per chunk is added on the wallet's serve path. The floor probe's BodyStore source still reads in process, and the fetch client is unchanged. A response's bytes are unchanged. Not re-measured; the rows stay stale." },
   { through = "d85697a328", note = "The body-store actor leaves the engine runtime for its own one-worker runtime, sk-body-store, whose threads lower themselves to serving nice before they take work. The redb read and the chunk decrypt of a served body run there for the whole session. The endpoint thread still only waits, and the fetch client is unchanged. Not re-measured; the rows stay stale." },
   { through = "ec931d5858", note = "Only test files and the identity wire-pin fixtures changed: the fixtures were re-recorded because the derived persona keys moved (NI-R7). No serving or fetch code changed. Not re-measured." },
+  { through = "a867b6840c", note = "Test fixtures only: the p-fetch and p-serve identity wire pins (src/wire_pin/*.hex) re-recorded because the derivation salt name_id || purpose moved the pinned persona keys. No serve or fetch code changed, no cost moved. Not re-measured." },
 ]
 
 [[constant]]
