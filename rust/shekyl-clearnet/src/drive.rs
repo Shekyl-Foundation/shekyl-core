@@ -323,7 +323,7 @@ where
         // is not (`Observed::connect_error`). A socket the system cannot make
         // is read as the connect's own error, as `TcpStream::connect` reported
         // it: an address family this host lacks depends on the destination.
-        let socket = match dial_socket(target) {
+        let socket = match dial_socket(target, proxy.is_none()) {
             Ok(socket) => socket,
             Err(err) => return Err(Observed::connect_error(err.kind(), proxy.is_some())),
         };
@@ -918,25 +918,34 @@ pub fn zero_tally() -> HandshakeTally {
     }
 }
 
-/// The dial socket's SYN retransmissions, where the system lets the dial set
+/// A direct dial's SYN retransmissions, where the system lets the dial set
 /// them (Windows): one resend of a lost SYN, at +1.0 s inside the 1.415 s
-/// dial deadline, as Linux makes, and one retry after a reset, so a refusal
-/// is reported in about 0.5 s. Windows' default retries a refusal for about
-/// 2.0 s, past the deadline, and a refusing peer then ended as the deadline's
-/// timeout instead of its refusal (measured on Windows 11, shekyl-dev
-/// `data/windows-refused-connect/`, 2026-11-03).
+/// direct dial deadline, as Linux makes, and one retry after a reset, so a
+/// refusal is reported in about 0.5 s. Windows' default retries a refusal for
+/// about 2.0 s, past that deadline, and a refusing peer then ended as the
+/// deadline's timeout instead of its refusal (measured on Windows 11,
+/// shekyl-dev `data/windows-refused-connect/`, 2026-11-03). The value is the
+/// direct deadline's: a dial to the operator's proxy runs against the proxied
+/// deadline, the Tor dial's 120 s, which the system's own retries fit inside,
+/// so its socket keeps them.
 #[cfg(windows)]
 const SYN_RETRANSMISSIONS: u8 = 1;
 
-/// The socket for one dial to `target`: the peer, or the operator's proxy.
-fn dial_socket(target: SocketAddr) -> std::io::Result<TcpSocket> {
+/// The socket for one dial to `target`: the peer when `direct`, or the
+/// operator's proxy. Only a direct dial's socket takes
+/// [`SYN_RETRANSMISSIONS`].
+fn dial_socket(target: SocketAddr, direct: bool) -> std::io::Result<TcpSocket> {
     let socket = if target.is_ipv4() {
         TcpSocket::new_v4()?
     } else {
         TcpSocket::new_v6()?
     };
     #[cfg(windows)]
-    cap_syn_retransmissions(&socket);
+    if direct {
+        cap_syn_retransmissions(&socket);
+    }
+    #[cfg(not(windows))]
+    let _ = direct;
     Ok(socket)
 }
 
@@ -962,13 +971,10 @@ mod close_tests;
 mod tests {
     use super::*;
 
-    /// On Windows a refused connect is reported well inside the 1.415 s dial
-    /// deadline: about 0.5 s at the dial socket's cap of one SYN retry, where
-    /// the system's default takes about 2.0 s. Dropping the cap from
-    /// `dial_socket` makes this red on Windows.
+    /// How long a connect from a `dial_socket` takes to be refused, and what
+    /// it ends with.
     #[cfg(windows)]
-    #[tokio::test]
-    async fn a_refused_connect_is_reported_inside_the_dial_deadline() {
+    async fn refused_after(direct: bool) -> (std::io::ErrorKind, Duration) {
         let port = {
             let listener =
                 std::net::TcpListener::bind((std::net::Ipv4Addr::LOCALHOST, 0)).expect("bind");
@@ -976,14 +982,36 @@ mod tests {
         };
         let target = SocketAddr::from((std::net::Ipv4Addr::LOCALHOST, port));
         let started = Instant::now();
-        let err = dial_socket(target)
+        let err = dial_socket(target, direct)
             .expect("a socket")
             .connect(target)
             .await
             .expect_err("nothing listens");
-        let took = started.elapsed();
-        assert_eq!(err.kind(), std::io::ErrorKind::ConnectionRefused);
+        (err.kind(), started.elapsed())
+    }
+
+    /// On Windows a direct dial's refused connect is reported well inside the
+    /// 1.415 s dial deadline: about 0.5 s at the cap of one SYN retry, where
+    /// the system's default takes about 2.0 s. Dropping the cap from
+    /// `dial_socket` makes this red on Windows.
+    #[cfg(windows)]
+    #[tokio::test]
+    async fn a_refused_direct_connect_is_reported_inside_the_dial_deadline() {
+        let (kind, took) = refused_after(true).await;
+        assert_eq!(kind, std::io::ErrorKind::ConnectionRefused);
         assert!(took < Duration::from_secs(1), "refused after {took:?}");
+    }
+
+    /// A dial to the operator's proxy keeps the system's SYN retries: its
+    /// deadline is the proxied one, which they fit inside. On Windows the
+    /// default refusal takes about 2.0 s. Capping the proxy's socket too makes
+    /// this red on Windows.
+    #[cfg(windows)]
+    #[tokio::test]
+    async fn a_proxy_dial_keeps_the_systems_syn_retries() {
+        let (kind, took) = refused_after(false).await;
+        assert_eq!(kind, std::io::ErrorKind::ConnectionRefused);
+        assert!(took >= Duration::from_secs(1), "refused after {took:?}");
     }
 
     #[tokio::test]
