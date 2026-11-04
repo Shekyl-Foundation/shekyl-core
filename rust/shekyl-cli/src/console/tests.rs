@@ -2332,6 +2332,28 @@ fn a_wrong_network_daemon_is_refused_even_though_every_other_axis_agrees() {
     assert!(out.contains("mainnet") && out.contains("testnet"), "{out}");
 }
 
+/// A word that changes the daemon posts nothing until the handshake
+/// agrees. `version` is the exception, and it does not use this path.
+#[test]
+fn a_mutating_word_refuses_a_wrong_network_daemon_before_it_posts() {
+    let (addr, log) = route_server_recording(vec![(
+        "json_rpc:get_version",
+        get_version_but(|r| r.nettype = shekyl_rpc_types::DaemonNetwork::Testnet),
+    )]);
+    let (code, out) = run(&["option", "set", "log-level", "info"], Some(&addr));
+    assert_eq!(code, SHEKYL_DAEMON_CONSOLE_ERR_REQUEST, "{out}");
+    assert!(out.contains("network mismatch"), "{out}");
+    let asked = log.lock().expect("log");
+    assert!(
+        asked.iter().any(|(_, body)| body.contains("get_version")),
+        "the handshake is the request: {asked:?}"
+    );
+    assert!(
+        asked.iter().all(|(_, body)| !body.contains("option_set")),
+        "a refused daemon is not asked to change: {asked:?}"
+    );
+}
+
 #[test]
 fn a_foreign_genesis_daemon_is_refused() {
     let addr = route_server(vec![(
@@ -2772,6 +2794,28 @@ fn txpool_list_prints_each_entry_and_short_prints_hashes() {
             .iter()
             .any(|(path, _)| path == "/get_transaction_pool_hashes"),
         "{out}"
+    );
+
+    let grant = shekyl_rpc_types::errors::ErrorClass::OutsideTheGrant;
+    let refused = serde_json::json!({
+        "jsonrpc": "2.0",
+        "id": 0,
+        "error": {
+            "code": grant.code(),
+            "message": "english the operator must not see",
+            "data": shekyl_rpc_types::errors::Diagnostic::new(
+                "rpc.grant",
+                "english the operator must not see",
+            ),
+        }
+    });
+    let (address, _) = route_server_recording(vec![("/get_transaction_pool", refused.to_string())]);
+    let (code, out) = run(&["txpool", "list"], Some(&address));
+    assert_eq!(code, SHEKYL_DAEMON_CONSOLE_ERR_REQUEST, "{out}");
+    assert!(out.contains("OutsideTheGrant rpc.grant"), "{out}");
+    assert!(
+        !out.contains("missing field"),
+        "a grant refusal is the class, not a decode of the success type: {out}"
     );
 }
 

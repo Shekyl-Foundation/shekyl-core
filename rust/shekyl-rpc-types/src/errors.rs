@@ -6,8 +6,9 @@
 //! The error registry (`RPC_WIRE.md` RW-Q3).
 //!
 //! A failure is only ever the JSON-RPC error object. Its numeric code is a
-//! class a client branches on, and its `data` carries one typed diagnostic:
-//! a stable dotted code, its parameters, and one English rendering (IG-11).
+//! class a client branches on, and its `data` carries one typed diagnostic
+//! (a stable dotted code, its parameters, and one English rendering, IG-11)
+//! or, for a configuration refusal, the list of those diagnostics.
 //!
 //! The registry is closed: a code not here is not one this daemon sends.
 //! Bad params and internal faults take JSON-RPC's own reserved codes; the
@@ -175,8 +176,9 @@ impl RpcError {
 /// Read a JSON-RPC `error` object.
 ///
 /// The class comes from the numeric code ([`ErrorClass::of_wire_code`]).
-/// `data`, when it is a [`Diagnostic`], is the diagnostic. A legacy object
-/// with no `data` still has a class; its diagnostic code is `legacy.<n>`
+/// `data`, when it is a [`Diagnostic`] or a list of configuration
+/// [`crate::options::Refusal`]s, is the diagnostic. A legacy object with no
+/// readable `data` still has a class; its diagnostic code is `legacy.<n>`
 /// and the object's `message` is carried as text, not matched.
 #[must_use]
 pub fn read_error_object(error: &serde_json::Value) -> Option<RpcError> {
@@ -184,8 +186,7 @@ pub fn read_error_object(error: &serde_json::Value) -> Option<RpcError> {
     let class = ErrorClass::of_wire_code(code)?;
     let diagnostic = error
         .get("data")
-        .cloned()
-        .and_then(|data| serde_json::from_value::<Diagnostic>(data).ok())
+        .and_then(diagnostic_from_data)
         .unwrap_or_else(|| {
             let message = error
                 .get("message")
@@ -194,6 +195,32 @@ pub fn read_error_object(error: &serde_json::Value) -> Option<RpcError> {
             Diagnostic::new(format!("legacy.{code}"), message)
         });
     Some(RpcError { class, diagnostic })
+}
+
+/// One diagnostic, or the configuration-refusal list `option_set` carries
+/// in `data`. Every code in the list is kept: a reader that takes only the
+/// object's `message` loses the stable codes.
+fn diagnostic_from_data(data: &serde_json::Value) -> Option<Diagnostic> {
+    if let Ok(one) = serde_json::from_value::<Diagnostic>(data.clone()) {
+        return Some(one);
+    }
+    let refusals = serde_json::from_value::<Vec<crate::options::Refusal>>(data.clone()).ok()?;
+    if refusals.is_empty() {
+        return None;
+    }
+    let code = refusals
+        .iter()
+        .map(|refusal| refusal.code.as_str())
+        .collect::<Vec<_>>()
+        .join(", ");
+    let message = refusals
+        .iter()
+        .map(|refusal| refusal.message.as_str())
+        .collect::<Vec<_>>()
+        .join("; ");
+    let mut diagnostic = Diagnostic::new(code, message);
+    diagnostic.params.clone_from(&refusals[0].params);
+    Some(diagnostic)
 }
 
 /// The refusal in a JSON body, when the body is a JSON-RPC error object.
@@ -229,6 +256,34 @@ mod tests {
             Some(ErrorClass::OutsideTheGrant)
         );
         assert_eq!(ErrorClass::of_wire_code(-9), Some(ErrorClass::NotReady));
+    }
+
+    /// `option_set` carries `data` as a list of configuration refusals.
+    /// Reading that list as one diagnostic loses every stable code.
+    #[test]
+    fn a_configuration_refusal_list_keeps_every_code() {
+        let error = serde_json::json!({
+            "code": crate::CORE_RPC_ERROR_CODE_CONFIG_REFUSED,
+            "message": "english the caller must not match",
+            "data": [{
+                "code": "config.value.range",
+                "option": "data-dir",
+                "source": "runtime",
+                "params": [["name", "data-dir"]],
+                "message": "data-dir cannot change while running"
+            }]
+        });
+        let read = read_error_object(&error).expect("a refusal list is a diagnostic");
+        assert_eq!(read.class, ErrorClass::RefusedByMethod);
+        assert_eq!(read.diagnostic.code, "config.value.range");
+        assert_eq!(
+            read.diagnostic.message,
+            "data-dir cannot change while running"
+        );
+        assert_eq!(
+            read.diagnostic.params,
+            vec![("name".to_owned(), "data-dir".to_owned())]
+        );
     }
 
     /// JSON-RPC 2.0 reserves -32602 and -32603 for these two meanings, and

@@ -49,8 +49,6 @@ GROUPS = [
         "pairs": {
             # The configuration snapshot the C++ remnant reads, and the
             # importer's and core_tests' (daemon_snapshot_ffi.rs, §2.9).
-            "ShekylStringList": "ShekylStringList",
-            "ShekylClientEndpoint": "ShekylClientEndpoint",
             "ShekylDaemonSnapshot": "ShekylDaemonSnapshot",
             "ShekylBuffer": "ShekylBuffer",
             "ShekylPqcKeypair": "ShekylPqcKeypair",
@@ -127,7 +125,10 @@ EXEMPT = {
 CONFIG = "scripts/ci/cbindgen-ffi-layouts.toml"
 BOUNDS_CONFIG = "scripts/ci/cbindgen-ffi-bounds.toml"
 DEFINITION = re.compile(
-    r"^\s*(?:typedef\s+)?struct\s+((?:Shekyl|shekyl_)\w*)\s*(?:\{.*)?$", re.M)
+    r"^\s*(?:typedef\s+)?struct\s+(?:alignas\s*\(\s*\d+\s*\)\s+)?"
+    r"((?:Shekyl|shekyl_)\w*)\s*(?:\{.*)?$",
+    re.M,
+)
 
 
 def fail(message):
@@ -141,7 +142,10 @@ def strip_comments(text):
 
 def body_of(text, name):
     """The member text of struct `name`'s definition, or None."""
-    match = re.search(r"\bstruct\s+" + re.escape(name) + r"\s*\{", text)
+    match = re.search(
+        r"\bstruct\s+(?:alignas\s*\(\s*\d+\s*\)\s+)?" + re.escape(name) + r"\s*\{",
+        text,
+    )
     if match is None:
         return None
     depth, start = 1, match.end()

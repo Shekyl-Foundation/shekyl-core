@@ -72,11 +72,14 @@ impl Source {
     }
 }
 
-/// Decode a REST reply body: the success type, else the daemon's error
-/// envelope (the transport hands the body through whatever the HTTP status
-/// was), else a malformed-reply error. The envelope's reason is what the
-/// operator reads, never "missing field `height`".
+/// Decode a REST reply body: a JSON-RPC refusal first (a grant or a method
+/// refusal has no `status`), then the success type, then the daemon's
+/// status envelope, else a malformed-reply error. The refusal's class and
+/// diagnostic are what the operator reads, never "missing field `status`".
 fn decode_reply<T: serde::de::DeserializeOwned>(body: &[u8], method: &str) -> Result<T, String> {
+    if let Some(refusal) = shekyl_rpc_types::errors::read_refusal(body) {
+        return Err(refusal.report());
+    }
     if let Ok(reply) = serde_json::from_slice::<T>(body) {
         return Ok(reply);
     }
@@ -210,6 +213,10 @@ fn print_block(src: &Source, block: &crate::resolve::BlockRef) -> Result<String,
 
 /// One JSON-RPC call. `method` is a lookup in the method table; the posted
 /// name is the table's, and a missing row is an error.
+///
+/// The identity handshake runs first, the same as [`Source::post_remote`].
+/// `version` does not come through here: it reads `get_version` itself, and
+/// a daemon the handshake would refuse is still one whose version it reports.
 pub(super) fn native_json_rpc<Req, Res>(
     src: &Source,
     method: &str,
@@ -219,6 +226,7 @@ where
     Req: serde::Serialize,
     Res: serde::de::DeserializeOwned,
 {
+    src.ensure_identity()?;
     let method = crate::daemon::posted_json(method).map_err(|error| error.to_string())?;
     src.rpc()
         .json_rpc(method, request)

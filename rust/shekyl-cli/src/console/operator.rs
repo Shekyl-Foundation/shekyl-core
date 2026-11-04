@@ -55,7 +55,7 @@ pub(super) fn txpool_list(src: &Source, short: bool) -> Result<String, String> {
     if short {
         let body = rest_post(src, "/get_transaction_pool_hashes", b"{}".to_vec())?;
         let reply: GetTransactionPoolHashesResponse =
-            serde_json::from_slice(&body).map_err(|error| error.to_string())?;
+            super::decode_reply(&body, "get_transaction_pool_hashes")?;
         require_ok(&reply.status)?;
         if reply.tx_hashes.is_empty() {
             return Ok("The pool is empty.".to_owned());
@@ -68,8 +68,7 @@ pub(super) fn txpool_list(src: &Source, short: bool) -> Result<String, String> {
             .join("\n"));
     }
     let body = rest_post(src, "/get_transaction_pool", b"{}".to_vec())?;
-    let reply: GetTransactionPoolResponse =
-        serde_json::from_slice(&body).map_err(|error| error.to_string())?;
+    let reply: GetTransactionPoolResponse = super::decode_reply(&body, "get_transaction_pool")?;
     require_ok(&reply.status)?;
     if reply.transactions.is_empty() {
         return Ok("The pool is empty.".to_owned());
@@ -230,8 +229,7 @@ pub(super) fn option_show(src: &Source, name: Option<&str>) -> Result<String, St
 
 pub(super) fn daemon_stop(src: &Source) -> Result<String, String> {
     let body = rest_post(src, "/stop_daemon", b"{}".to_vec())?;
-    let reply: StatusOnlyResponse =
-        serde_json::from_slice(&body).map_err(|error| error.to_string())?;
+    let reply: StatusOnlyResponse = super::decode_reply(&body, "stop_daemon")?;
     require_ok(&reply.status)?;
     Ok("The daemon is stopping.".to_owned())
 }

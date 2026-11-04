@@ -59,7 +59,11 @@ def rust_count(source: str) -> int | None:
 
 
 def c_fields(header: str) -> list[str]:
-    m = re.search(r"struct ShekylDaemonSnapshot \{(.*?)\n\};", header, flags=re.S)
+    m = re.search(
+        r"struct(?:\s+alignas\s*\(\s*\d+\s*\))?\s+ShekylDaemonSnapshot\s*\{(.*?)\n\};",
+        header,
+        flags=re.S,
+    )
     if not m:
         return []
     return re.findall(r"^\s*[\w:\s\*]+?\b(\w+);", strip_comments(m.group(1)), flags=re.M)
@@ -206,6 +210,11 @@ def selftest() -> int:
     case("a member missing on one side is refused", RUST_FIXTURE, C_FIXTURE.replace("  bool beta; // a comment\n", ""), read_all, True, [])
     case("no snapshot-typed variable is refused", RUST_FIXTURE, C_FIXTURE, "int main() { return 0; }\n", True, [])
     case("a missing structure is refused", "nothing here\n", C_FIXTURE, read_all, True, [])
+    aligned = C_FIXTURE.replace(
+        "struct ShekylDaemonSnapshot {",
+        "struct alignas(8) ShekylDaemonSnapshot {",
+    )
+    case("an alignas declaration is the same structure", RUST_FIXTURE, aligned, read_all, False, [])
     return 1 if failures else 0
 
 

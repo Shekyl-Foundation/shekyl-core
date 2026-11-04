@@ -398,6 +398,17 @@ fn classify_path_status(status: &str) -> Result<(), DaemonError> {
 }
 
 fn classify_transport(err: &RpcError) -> DaemonError {
+    // The transport folds a bad proxy and a TLS-connector failure into
+    // `ConnectionError`'s text (`HttpError`'s own wording). Those are the
+    // two faults the operator can act on by name; everything else that
+    // failed to connect is a refused connection.
+    let text = err.to_string();
+    if text.contains("invalid --proxy") || text.contains("socks:") {
+        return DaemonError::SocksFailure(text);
+    }
+    if text.contains("TLS") || text.contains("certificate") {
+        return DaemonError::TlsFailure(text);
+    }
     match err {
         RpcError::ConnectionError(detail) => DaemonError::ConnectionRefused {
             detail: detail.clone(),
@@ -410,8 +421,8 @@ fn classify_transport(err: &RpcError) -> DaemonError {
 #[cfg(test)]
 mod tests {
     use super::{
-        classify_path_body, classify_path_status, is_loopback_endpoint, DaemonError,
-        GetInfoResponse,
+        classify_path_body, classify_path_status, classify_transport, is_loopback_endpoint,
+        DaemonError, GetInfoResponse,
     };
 
     #[test]
@@ -562,5 +573,30 @@ mod tests {
             serde_json::from_value(get_info_reply()).expect("complete get_info");
         assert!(!info.restricted);
         assert!(info.health.synchronized);
+    }
+
+    /// A proxy that will not parse, and a TLS connector that will not
+    /// build, are the faults the transport names in the connection error.
+    /// A refused socket stays a refused connection.
+    #[test]
+    fn a_named_transport_fault_keeps_its_name() {
+        use shekyl_rpc_client::RpcError;
+        let proxy = classify_transport(&RpcError::ConnectionError(
+            "invalid --proxy for the daemon transport: missing port".into(),
+        ));
+        assert!(matches!(proxy, DaemonError::SocksFailure(_)), "{proxy}");
+        let socks = classify_transport(&RpcError::ConnectionError(
+            "connection error (socks: refused)".into(),
+        ));
+        assert!(matches!(socks, DaemonError::SocksFailure(_)), "{socks}");
+        let tls = classify_transport(&RpcError::ConnectionError(
+            "TLS connector unavailable: no roots".into(),
+        ));
+        assert!(matches!(tls, DaemonError::TlsFailure(_)), "{tls}");
+        let refused = classify_transport(&RpcError::ConnectionError("connection refused".into()));
+        assert!(
+            matches!(refused, DaemonError::ConnectionRefused { .. }),
+            "{refused}"
+        );
     }
 }
