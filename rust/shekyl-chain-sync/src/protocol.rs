@@ -47,7 +47,7 @@ pub enum Event<K> {
         set: bool,
     },
     /// The latch write a [`Command::RaiseAlarm`] asked for was refused.
-    /// The model retries it after [`ALARM_RETRY`](crate::model::ALARM_RETRY).
+    /// The model retries it after [`ALARM_RETRY`](crate::ALARM_RETRY).
     AlarmRefused,
     /// The retry deadline [`Command::ArmAlarmRetry`] armed has passed.
     AlarmRetry,
