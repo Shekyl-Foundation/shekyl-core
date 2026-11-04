@@ -46,10 +46,7 @@ const LIMIT: Duration = Duration::from_secs(48 * 60 * 60);
 /// Proofs per slot in one timed job.
 const PROOFS_PER_SLOT: usize = 32;
 
-/// The captured corpora, smallest first, each read to its tip. The block
-/// at 98 in `emission-claim`, still the C++ daemon's capture, carries a
-/// transaction kind that is retired, which the reader refuses; the chain
-/// is left out, since its first 97 blocks add nothing the others do not.
+/// The captured corpora, smallest first, each read to its tip.
 const CORPORA: [&str; 5] = [
     "spend-1in-2out",
     "bond-post",

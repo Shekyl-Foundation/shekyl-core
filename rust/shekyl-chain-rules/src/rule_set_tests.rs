@@ -298,7 +298,7 @@ fn the_schedule_is_the_rule_sets_and_fakechain_names_its_own() {
         RuleSet::GENESIS.difficulty(),
         "the cap moves without the target"
     );
-    // The capture schedule the emission-claim vector runs (512/64).
+    // The capture schedule the emission walk runs (512/64).
     let shortened = RuleSet::fakechain(None, pair(512, 64));
     assert_eq!(shortened.settlement_schedule().blocks().get(), 512);
     assert_eq!(shortened.settlement_schedule().epoch_at_height(1025), 2);

@@ -260,29 +260,31 @@ async fn a_low_work_fork_is_never_asked_for() {
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn a_past_cap_heavier_fork_raises_the_alarm_and_the_latch_reads_back() {
     logs();
-    // The corpus with a cap short of its length: 64 blocks. Its reader
-    // refuses a retired transaction at height 98, so the chain is the 98
-    // blocks before it.
-    let corpus = Corpus::open("emission-claim");
-    let steps = corpus.steps_through(97);
+    // The corpus longer than its reorg cap: 762 blocks under a cap of 720.
+    // The fork leaves the chain six blocks past the cap.
+    let corpus = Corpus::open("spend-depth3");
+    let steps = corpus.steps();
     let mut node = Node::start("pastcap", corpus.rules(), &steps, 2, rng()).await;
     let (count, work, _) = node.chain.tip().expect("a chain");
-    let fork_at = count - 1 - 70;
+    let depth = corpus.reorg_cap() + 6;
+    let fork_at = count - 1 - depth;
     let mut chain: Vec<(BlockHash, Vec<u8>)> = (0..=fork_at)
         .map(|height| {
             let block = node.chain.block(height);
             (block.hash(), block.pow_blob())
         })
         .collect();
-    let fork = fork_headers(&node.chain, fork_at, 100);
+    // Heavier: thirty blocks longer than the chain it leaves.
+    let fork_len = depth + 30;
+    let fork = fork_headers(&node.chain, fork_at, fork_len);
     let top = fork.last().expect("a fork").0;
     chain.extend(fork);
-    let fork_work = u128::from(fork_at + 1 + 100);
+    let fork_work = u128::from(fork_at + 1 + fork_len);
     assert!(fork_work > work, "the fork is heavier");
     let (peer, seen) = HeaderChainPeer::new(chain, fork_work);
     let id = node.connect(
         Box::new(peer),
-        Some(claim(fork_at + 1 + 100, fork_work, top)),
+        Some(claim(fork_at + 1 + fork_len, fork_work, top)),
     );
     assert!(
         node.wait(LIMIT, |_| seen.headers() >= 1).await,

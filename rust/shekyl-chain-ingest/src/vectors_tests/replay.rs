@@ -27,7 +27,7 @@ use crate::source::Source;
 use crate::test_support::{open_store_under, tmp};
 use crate::trace::Trace;
 
-use super::{Manifest, UntilRetiredJoin};
+use super::Manifest;
 
 /// Hasher count the captured-chain tests pin, so one chain is the same run
 /// on every host. The host's parallelism would make the width, and the
@@ -65,9 +65,7 @@ pub(crate) fn rules_for(manifest: &Manifest) -> ChainRules {
 /// The store stays at the returned path, under the returned rules, for a
 /// test that reads the chain the run connected. The caller removes it.
 /// `tag` names the store's path: tests run concurrently in one process, so
-/// two replays of one shape must not share a path. The source comes back so
-/// a wrapper that still has to `finish` it — [`UntilRetiredJoin`] is not
-/// part of [`Source`] — can.
+/// two replays of one shape must not share a path.
 pub(crate) async fn replay_open<S, Src>(
     manifest: &Manifest,
     substrate: Arc<S>,
@@ -75,7 +73,7 @@ pub(crate) async fn replay_open<S, Src>(
     tag: &str,
     mut source: Src,
     trace: Arc<Trace>,
-) -> (Result<RunReport, String>, PathBuf, ChainRules, Src)
+) -> (Result<RunReport, String>, PathBuf, ChainRules)
 where
     S: Substrate + Send + Sync + 'static,
     S::Fault: Send + std::fmt::Debug + 'static,
@@ -103,11 +101,11 @@ where
     )
     .await
     .map_err(|e| format!("{e:?}"));
-    (report, path, rules, source)
+    (report, path, rules)
 }
 
 /// [`super::replay_under`] without the cleanup: the committed corpus and
-/// its committed trace, read up to a retired keyless join.
+/// its committed trace.
 pub(crate) async fn replay_keeping_store<S>(
     dir: &std::path::Path,
     manifest: &Manifest,
@@ -121,14 +119,7 @@ where
 {
     let corpus = std::fs::read(dir.join("corpus.e2")).expect("read corpus.e2");
     let trace = std::fs::read(dir.join("trace.e2")).expect("read trace.e2");
-    let source = UntilRetiredJoin::new(
-        CorpusReader::open(std::io::Cursor::new(corpus.as_slice())).expect("open corpus"),
-    );
+    let source = CorpusReader::open(std::io::Cursor::new(corpus.as_slice())).expect("open corpus");
     let trace = Arc::new(Trace::read(std::io::Cursor::new(trace.as_slice())).expect("read trace"));
-    let (report, path, rules, source) =
-        replay_open(manifest, substrate, policy, tag, source, trace).await;
-    if report.is_ok() {
-        source.finish(&manifest.shape);
-    }
-    (report, path, rules)
+    replay_open(manifest, substrate, policy, tag, source, trace).await
 }

@@ -53,8 +53,8 @@
 //! adds events, and it is **Extend-only**: a `Rewind` or an `Inject` from
 //! the inner source is a wrapper fault — a mutation on a fork is the
 //! reorg × mutation cross §3.10 names as out of scope, and a mutation over
-//! an out-of-band write has no family (the one chain carrying an `Inject`
-//! is `emission-claim`, which no mutation targets).
+//! an out-of-band write has no family (no captured chain carries an
+//! `Inject`).
 
 use core::fmt;
 

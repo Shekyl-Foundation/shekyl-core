@@ -4335,9 +4335,7 @@ async fn e2e_emission_claim_accepted_and_applied() {
     // market-excluded (E-2), so its Σwork is zero forever — surfaced by
     // this e2e's first close. A chain this walk captures now carries the
     // fill, the close and the pricing pass before the join, so the Rust
-    // validator admits it whole; the `vectors_tests` `PREDATES` record for
-    // `emission-claim` describes the capture made before the fill existed
-    // and retires with the next capture.
+    // validator admits it whole.
     let market_holdings = shekyl_archival_retention::HoldingsDescriptor {
         kind: shekyl_archival_retention::HoldingsKind::ShardSetCompact,
         shard_ids: shekyl_archival_retention::ShardSet::new(vec![SHARD_ID])

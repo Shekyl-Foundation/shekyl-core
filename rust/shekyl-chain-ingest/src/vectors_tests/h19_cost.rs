@@ -22,7 +22,7 @@ use std::time::Instant;
 
 use shekyl_chain_rules::{BatchOutcome, ListedProofs};
 
-use super::{captured_chains, retired_keyless_join};
+use super::captured_chains;
 use crate::corpus::CorpusReader;
 use crate::source::{IngestEvent, Source};
 
@@ -47,17 +47,10 @@ fn h19_batch_cost_at_the_captured_densities() {
             CorpusReader::open(std::io::Cursor::new(corpus.as_slice())).expect("open corpus");
         let (mut blocks, mut proofs_per_block, mut commitments, mut times) =
             (0usize, Vec::new(), Vec::new(), Vec::new());
-        // A chain carrying a retired keyless JoinMarket is read up to it, as
-        // the replay reads it (`retired_keyless_join`).
-        let stop = retired_keyless_join(&manifest.shape).map(|r| r.at);
         loop {
             let sequenced = match reader.next() {
                 Ok(Some(sequenced)) => sequenced,
                 Ok(None) => break,
-                Err(fault) if stop.is_some() => {
-                    println!("h19-cost {}: read up to {stop:?} ({fault})", manifest.shape);
-                    break;
-                }
                 Err(fault) => panic!("read the corpus: {fault}"),
             };
             let IngestEvent::Extend(candidate) = sequenced.event else {

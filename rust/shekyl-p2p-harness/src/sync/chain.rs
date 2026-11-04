@@ -88,6 +88,12 @@ impl Corpus {
         }
     }
 
+    /// The reorg cap the corpus was mined under, in blocks.
+    #[must_use]
+    pub fn reorg_cap(&self) -> u64 {
+        self.cap
+    }
+
     /// The rules the corpus was mined under.
     #[must_use]
     pub fn rules(&self) -> ChainRules {
@@ -125,9 +131,7 @@ impl Corpus {
         self.steps_through(self.tip_height)
     }
 
-    /// The steps through the block at `last`. A corpus read past a block
-    /// its reader refuses (a retired transaction kind) is read only this
-    /// far.
+    /// The steps through the block at `last`.
     ///
     /// # Panics
     ///

@@ -29,9 +29,8 @@
 //! the record, and those arms are witnessed over redb (the scenario
 //! driver's chain in `scenario_archival_tests`; the store's own
 //! `archival_write_tests` for the claim, whose emission body the driver
-//! does not produce; the `emission-claim` corpus vector for a settled
-//! claim that pays). The same-block pile that stood in for them until the
-//! writer landed is gone with it.
+//! does not produce; a settled claim that pays has a corpus witness again
+//! when SO-D12 4b captures `emission-claim`, `docs/FOLLOWUPS.md`).
 
 use super::*;
 use crate::harness::assert_refused;
