@@ -39,8 +39,12 @@ use crate::DropVerdict;
 
 /// What happened when we tried to take a block.
 ///
-/// Discriminants are the C ABI (`SHEKYL_BLOCK_INGEST_*` in
-/// `src/shekyl/shekyl_ffi.h`). Zero is the value-initialised C++ struct.
+/// Kept, and to be extended, by CS-Q1's ruling
+/// (`P2P_3_CHAIN_SYNC_BRIEF.md`, CS-Q1's disposition table): chain sync's
+/// mapping from an ingest outcome to an action is built on it, under
+/// PWD-B7's tri-state verdict (CS-Q4). No C++ writes it since CS-5
+/// deleted the handler's sync half; the discriminants keep their values,
+/// and zero is the default.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Default)]
 #[repr(u8)]
 pub enum BlockIngest {
