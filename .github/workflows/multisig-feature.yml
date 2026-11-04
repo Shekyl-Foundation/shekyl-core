@@ -83,7 +83,7 @@ env:
 
 jobs:
   f6-multisig-feature:
-    if: (github.event.action != 'edited' || github.event.changes.base != null)
+    if: (github.event.action != 'edited' || github.event.changes.base.ref.from)
     name: "F-6: cargo check/clippy/test --features multisig"
     runs-on: ubuntu-latest
     defaults:

@@ -49,7 +49,7 @@ permissions:
 
 jobs:
   crypto-content:
-    if: (github.event.action != 'edited' || github.event.changes.base != null)
+    if: (github.event.action != 'edited' || github.event.changes.base.ref.from)
     name: vendored crypto matches manifest
     runs-on: ubuntu-latest
     steps:

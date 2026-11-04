@@ -54,7 +54,7 @@ concurrency:
 
 jobs:
   cmake-gate-test:
-    if: (github.event.action != 'edited' || github.event.changes.base != null)
+    if: (github.event.action != 'edited' || github.event.changes.base.ref.from)
     name: 64-bit-only CMake gate fires on fake 32-bit toolchain
     runs-on: ubuntu-latest
     # Bounded so an unreachable package mirror costs minutes, not the

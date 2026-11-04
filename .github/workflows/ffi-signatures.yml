@@ -70,7 +70,7 @@ permissions:
 
 jobs:
   check-ffi-signatures:
-    if: (github.event.action != 'edited' || github.event.changes.base != null)
+    if: (github.event.action != 'edited' || github.event.changes.base.ref.from)
     name: "FFI signature gate"
     runs-on: ubuntu-latest
     steps:

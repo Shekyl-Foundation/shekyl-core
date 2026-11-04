@@ -42,7 +42,7 @@ permissions:
 
 jobs:
   model:
-    if: (github.event.action != 'edited' || github.event.changes.base != null)
+    if: (github.event.action != 'edited' || github.event.changes.base.ref.from)
     name: "RT-P7: hybridXK ProVerif model"
     runs-on: ubuntu-latest
     # One row (a variant and one query) is one ProVerif process. run.py

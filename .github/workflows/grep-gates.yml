@@ -55,7 +55,7 @@ permissions:
 
 jobs:
   grep-gates:
-    if: (github.event.action != 'edited' || github.event.changes.base != null)
+    if: (github.event.action != 'edited' || github.event.changes.base.ref.from)
     name: "Grep gates (bundled)"
     runs-on: ubuntu-latest
     timeout-minutes: 15

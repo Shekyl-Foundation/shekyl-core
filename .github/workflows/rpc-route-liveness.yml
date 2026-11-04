@@ -53,7 +53,7 @@ permissions:
 
 jobs:
   rpc-route-liveness:
-    if: (github.event.action != 'edited' || github.event.changes.base != null)
+    if: (github.event.action != 'edited' || github.event.changes.base.ref.from)
     name: "RK: every served RPC route has a consumer"
     runs-on: ubuntu-latest
     steps:
