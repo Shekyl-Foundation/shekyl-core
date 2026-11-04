@@ -6,12 +6,11 @@
 //! The seam's post sink (CS-3 §4.2): the Rust Levin router.
 //!
 //! The hub hands every [`Post`] to one sink, under its table lock, and the
-//! sink must not call back into the hub. Without a sync owner attached the
-//! router forwards every post unchanged, byte for byte, to the C++ handler:
-//! that is the live daemon until the chain-sync cutover. Attaching an owner
-//! is a decision made once, when the router is built, before any session
-//! exists. A session that began unsplit has no known message boundary, so
-//! splitting cannot start in the middle of one.
+//! sink must not call back into the hub. The daemon's router is attached to
+//! the node's sync owner ([`Router::attached`]), once, when the seam binds,
+//! before any session exists. A bind in a process with no node (a test of
+//! the seam or the C++ handler) builds [`Router::unattached`], which
+//! forwards every post unchanged, byte for byte, to the C++ handler.
 //!
 //! With an owner attached, each session's delivered bytes are split into
 //! Levin buckets by reading the 29-byte bucket header and nothing else.
@@ -46,10 +45,11 @@
 //! - **A malformed bucket header is the transport's refusal, as today:**
 //!   the session's bytes go to the C++ handler raw from there on, and its
 //!   ingress refuses them.
-//! - **The owner leaving** hands the session back as one byte stream. Bytes
-//!   the split has accepted and not yet handed on go ahead of the next
-//!   chunk, and the split is dropped. Framing does not resume in the middle
-//!   of a bucket.
+//! - **The owner leaving ends the daemon:** the node reports the owner's
+//!   end to the stop owner as a fatal cause. Until the stop closes the
+//!   sessions, the router keeps splitting, drops what was the owner's, and
+//!   forwards the handler's bytes as before. Nothing is handed back to the
+//!   C++ handler, which no longer reads chain sync's messages.
 //!
 //! [`Post::Closed`] goes to the owner as well as onward, and
 //! [`Post::HandshakeResult`] goes to the owner as a claim and onward too,
@@ -143,9 +143,10 @@ pub struct Router {
 }
 
 impl Router {
-    /// A router with no owner: every post goes to `forward` unchanged.
+    /// A router for a process with no node: every post goes to `forward`
+    /// unchanged (module docs). The daemon's bind never builds one.
     #[must_use]
-    pub fn pass_through(forward: Forward) -> Self {
+    pub fn unattached(forward: Forward) -> Self {
         Self {
             forward,
             owner: None,
@@ -173,8 +174,8 @@ impl Router {
 
     /// Handle one post (module docs). Never calls into the hub.
     pub fn post(&self, post: Post) {
-        let Some(owner) = self.owner.as_ref().filter(|owner| !owner.is_closed()) else {
-            self.forward_retired(post);
+        let Some(owner) = self.owner.as_ref() else {
+            (self.forward)(post);
             return;
         };
         match post {
@@ -243,25 +244,12 @@ impl Router {
                 if fed.forward.is_empty() {
                     routed.push(Routed::Finished { id });
                 }
-                // A failed send means the owner is gone and every message
-                // queued in this loop goes with it. The handler gets the
-                // bytes still held, which include this chunk, and the split
-                // ends so a later chunk is not cut against that stream.
+                // A failed send means the owner is gone, which ends the
+                // daemon (the node reports it to the stop owner). What was
+                // the owner's is dropped; the handler's bytes still reach it
+                // until the stop closes the session.
                 for item in routed {
-                    if owner.send(item).is_err() {
-                        let raw = {
-                            let mut splits = self.splits();
-                            let raw = splits.get_mut(&id).map(Split::take_raw).unwrap_or_default();
-                            splits.remove(&id);
-                            raw
-                        };
-                        (self.forward)(Post::Deliver {
-                            id,
-                            connector,
-                            bytes: raw,
-                        });
-                        return;
-                    }
+                    let _gone = owner.send(item);
                 }
                 if let Some(split) = self.splits().get_mut(&id) {
                     split.commit();
@@ -274,40 +262,6 @@ impl Router {
                     });
                 }
             }
-        }
-    }
-
-    /// The owner is gone. A session mid-bucket sends the bytes the split
-    /// still holds ahead of this chunk, then stops being split.
-    fn forward_retired(&self, post: Post) {
-        match post {
-            Post::Deliver {
-                id,
-                connector,
-                bytes,
-            } => {
-                let mut raw = self
-                    .splits()
-                    .remove(&id)
-                    .map(|mut split| split.take_raw())
-                    .unwrap_or_default();
-                if !raw.is_empty() {
-                    raw.extend_from_slice(&bytes);
-                }
-                let bytes = if raw.is_empty() { bytes } else { raw };
-                (self.forward)(Post::Deliver {
-                    id,
-                    connector,
-                    bytes,
-                });
-            }
-            Post::Closed { id, connector, end } => {
-                self.splits().remove(&id);
-                (self.forward)(Post::Closed { id, connector, end });
-            }
-            // The owner is gone: nothing opens.
-            Post::Opened { .. } => {}
-            other => (self.forward)(other),
         }
     }
 
@@ -405,9 +359,8 @@ impl Intake {
 ///
 /// `raw` is every byte accepted since the last hand-off, in order. A feed
 /// appends its chunk there and parses. [`Self::commit`] drops what that feed
-/// handed to the handler or the owner. Until then [`Self::take_raw`] is the
-/// stream the handler must see if the owner has gone: the unhanded prefix
-/// and this chunk, once.
+/// handed to the handler or the owner, so a bucket split across chunks is
+/// read from the bytes it still holds.
 #[derive(Debug)]
 pub struct Split {
     raw: Vec<u8>,
@@ -451,7 +404,7 @@ enum State {
 
 impl Split {
     /// Split one delivered chunk. The chunk is kept in [`Self`] until
-    /// [`commit`](Self::commit) or [`take_raw`](Self::take_raw).
+    /// [`commit`](Self::commit).
     #[must_use]
     pub fn feed(&mut self, chunk: &[u8]) -> Fed {
         self.raw.extend_from_slice(chunk);
@@ -597,15 +550,6 @@ impl Split {
             *payload_at -= self.handed;
         }
         self.handed = 0;
-    }
-
-    /// Every byte still held, including the chunk just fed. The caller
-    /// forwards this once and drops the split.
-    pub fn take_raw(&mut self) -> Vec<u8> {
-        self.handed = 0;
-        self.cursor = 0;
-        self.state = State::Header;
-        std::mem::take(&mut self.raw)
     }
 }
 

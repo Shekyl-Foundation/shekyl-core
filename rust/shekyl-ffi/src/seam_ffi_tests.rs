@@ -42,9 +42,11 @@ fn bind() {
 
 /// The daemon's router is attached (CS-5 §2): the bind takes what the
 /// node's chain-sync owner left, attaches the router to the owner's
-/// sender, and sends the owner the hub it minted. The slot is taken once,
-/// so a later bind (a test's rebind after a clear) is pass-through and
-/// leaves nothing behind.
+/// sender, and sends the owner the hub it minted. The owner is taken once:
+/// a second bind, before or after a clear, is refused, because it would
+/// run the seam without chain sync, and the binding in place is kept. The
+/// node's uninstall empties the slot, and a process with no node binds an
+/// unattached router.
 #[test]
 fn a_bind_attaches_the_router_to_the_nodes_owner_and_sends_it_the_hub() {
     let _seam = seam_bind_lock().lock();
@@ -58,18 +60,30 @@ fn a_bind_attaches_the_router_to_the_nodes_owner_and_sends_it_the_hub() {
     bind();
     let hub = hub_rx.try_recv().expect("the bind sent the owner its hub");
     assert!(
-        crate::chain_sync_ffi::take().is_none(),
-        "the bind took the slot"
-    );
-    assert!(
         !routed.is_closed(),
         "the router holds the owner's sender: it is attached"
+    );
+    let mut ctx = 0u8;
+    let second = unsafe { shekyl_seam_bind((&raw mut ctx).cast::<c_void>(), Some(no_post)) };
+    assert_eq!(second, -1, "a second bind ran the seam without chain sync");
+    assert!(
+        !routed.is_closed(),
+        "the refused bind replaced the attached router"
     );
     drop(hub);
     unbind();
     assert!(routed.is_closed(), "the attached router went with its hub");
+    let after_clear = unsafe { shekyl_seam_bind((&raw mut ctx).cast::<c_void>(), Some(no_post)) };
+    assert_eq!(
+        after_clear, -1,
+        "a rebind after a clear is still a second bind"
+    );
+    crate::chain_sync_ffi::uninstall();
     bind();
-    assert!(crate::chain_sync_ffi::take().is_none());
+    assert!(
+        matches!(crate::chain_sync_ffi::take(), Ok(None)),
+        "no node: the bind is unattached and the slot stays empty"
+    );
     unbind();
 }
 

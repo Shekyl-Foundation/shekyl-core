@@ -2656,10 +2656,11 @@ using shekyl_seam_post_fn = void (*)(void* ctx, std::uint64_t id, std::uint32_t 
     const shekyl_seam_observed* observed, const std::uint8_t* bytes, std::size_t len,
     const shekyl_close_cause* cause);
 
-/// Install `post` and `ceiling`. A null `post` clears the seam.
-/// The previous binding is closed and its harness threads are joined
-/// before the next one is published. Returns 0 when installed or
-/// cleared, -1 when `ceiling` is not a decision.
+/// Install `post`. A null `post` clears the seam. The previous binding is
+/// closed and its harness threads are joined before the next one is
+/// published. Returns 0 when installed or cleared, -1 when the daemon's
+/// bind already took the node's chain-sync owner (a second bind would run
+/// the seam without chain sync; the binding in place is kept).
 int shekyl_seam_bind(void* ctx, shekyl_seam_post_fn post);
 /// Replace the inbound bound on a bound seam. 0 on success, -1 otherwise.
 int shekyl_seam_set_ceiling(const shekyl_inbound_ceiling* ceiling);

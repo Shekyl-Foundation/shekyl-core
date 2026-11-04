@@ -150,9 +150,9 @@ fn socket(raw: u64) -> SocketId {
 }
 
 #[test]
-fn pass_through_forwards_every_post_unchanged() {
+fn unattached_forwards_every_post_unchanged() {
     let (forward, seen) = recorder();
-    let router = Router::pass_through(forward);
+    let router = Router::unattached(forward);
     let id = socket(7);
     let bytes = sync_bucket(SyncCommand::RequestHeaders, b"p");
     router.post(Post::Established {
@@ -248,8 +248,12 @@ fn attached_routes_sync_and_forwards_one_post_per_chunk() {
     );
 }
 
+/// With the owner gone the router still splits: chain sync's messages are
+/// dropped, never handed to the C++ handler (which no longer reads them),
+/// and the handler's own buckets still reach it until the stop closes the
+/// session.
 #[test]
-fn a_gone_owner_turns_the_router_back_to_pass_through() {
+fn a_gone_owner_s_messages_are_dropped_and_the_handler_s_bytes_still_flow() {
     let (forward, seen) = recorder();
     let (tx, rx) = mpsc::unbounded_channel();
     let router = Router::attached(forward, tx);
@@ -259,14 +263,22 @@ fn a_gone_owner_turns_the_router_back_to_pass_through() {
         endpoint: endpoint(),
     });
     drop(rx);
-    let bytes = sync_bucket(SyncCommand::RequestHeaders, b"q");
+    let mut chunk = sync_bucket(SyncCommand::RequestHeaders, b"q");
+    chunk.extend_from_slice(&other_bucket(b"tx"));
     router.post(Post::Deliver {
         id,
         connector: endpoint().connector(),
-        bytes: bytes.clone(),
+        bytes: chunk,
     });
     let seen = seen.lock().expect("unpoisoned");
-    assert!(matches!(&seen[1], Post::Deliver { bytes: b, .. } if *b == bytes));
+    let delivers: Vec<_> = seen
+        .iter()
+        .filter_map(|post| match post {
+            Post::Deliver { bytes, .. } => Some(bytes.clone()),
+            _ => None,
+        })
+        .collect();
+    assert_eq!(delivers, vec![other_bucket(b"tx")]);
 }
 
 #[test]
@@ -341,7 +353,7 @@ fn a_cpp_payload_already_handed_on_is_not_sent_twice() {
 }
 
 #[test]
-fn a_partial_sync_bucket_is_handed_to_cpp_whole_when_the_owner_leaves() {
+fn a_partial_sync_bucket_is_not_handed_to_cpp_when_the_owner_leaves() {
     let (forward, seen) = recorder();
     let (tx, rx) = mpsc::unbounded_channel();
     let router = Router::attached(forward, tx);
@@ -365,25 +377,21 @@ fn a_partial_sync_bucket_is_handed_to_cpp_whole_when_the_owner_leaves() {
         bytes: bucket[cut..].to_vec(),
     });
     let seen = seen.lock().expect("unpoisoned");
-    let delivers: Vec<_> = seen
-        .iter()
-        .filter_map(|post| match post {
-            Post::Deliver { bytes, .. } => Some(bytes.clone()),
-            _ => None,
-        })
-        .collect();
-    assert_eq!(delivers, vec![bucket]);
+    assert!(
+        !seen.iter().any(|post| matches!(post, Post::Deliver { .. })),
+        "a chain-sync bucket reached the handler: {seen:?}"
+    );
 }
 
-/// A router with no owner is pass-through: every post reaches the C++
+/// An unattached router changes nothing: every post reaches the C++
 /// handler unchanged, including chain sync's own commands and the messages
-/// the claim tap copies. That is a bind the node left no owner for, such
-/// as a test's rebind; the daemon's router is attached
+/// the claim tap copies. That is a bind in a process with no node, such as
+/// a test of the seam; the daemon's router is attached
 /// (`shekyl-ffi`'s `a_bind_attaches_the_router_to_the_nodes_owner_and_sends_it_the_hub`).
 #[test]
 fn a_router_with_no_owner_changes_nothing() {
     let (forward, seen) = recorder();
-    let sink = Router::pass_through(forward).into_sink();
+    let sink = Router::unattached(forward).into_sink();
     let id = socket(11);
     let connector = endpoint().connector();
     let sync = SyncPayload {

@@ -7,8 +7,9 @@
 //!
 //! C++ calls `open`, `send`, and `close`. Rust calls the bound post, which
 //! only enqueues onto the connection's strand. The hub's post sink is the
-//! chain-sync router (`shekyl_chain_sync_runtime::router`), pass-through here: no
-//! sync owner is attached, so each post is the bound post's, unchanged. The strand calls back when
+//! chain-sync router (`shekyl_chain_sync_runtime::router`): attached to the
+//! node's sync owner in the daemon, and unattached in a process with no
+//! node, where each post is the bound post's, unchanged. The strand calls back when
 //! the handler is armed, when a delivery returns, when `closed` starts,
 //! and when the executor drops the link.
 //!
@@ -364,7 +365,10 @@ pub(crate) fn ceiling_from_abi(ceiling: ShekylInboundCeiling) -> Option<InboundC
 
 /// Install the post callback and the caller's ceiling.
 ///
-/// A null `post` or a null `ctx` clears the seam. Returns 0.
+/// A null `post` or a null `ctx` clears the seam. Returns 0, or -1 when the
+/// daemon's bind already took the node's chain-sync owner: a second bind
+/// would run the seam without chain sync, so it is refused and the binding
+/// in place is kept (CS-5).
 ///
 /// The hub's inbound ceiling is this process's, resolved here from its
 /// descriptor limit and the reservation in the remnant's preparation;
@@ -391,6 +395,14 @@ pub unsafe extern "C" fn shekyl_seam_bind(ctx: *mut c_void, post: Option<PostFn>
         store(None);
         return 0;
     }
+    // The node's chain-sync owner, when it left itself for this bind.
+    let Ok(attach) = crate::chain_sync_ffi::take() else {
+        tracing::error!(
+            target: "p2p",
+            "the seam was bound a second time after chain sync attached to the first binding; refused"
+        );
+        return -1;
+    };
     let ceiling = crate::inbound_ceiling_ffi::configured();
     tracing::info!(target: "p2p", ceiling = ?ceiling, "the inbound ceiling the seam binds with");
     let bound = Bound {
@@ -400,19 +412,17 @@ pub unsafe extern "C" fn shekyl_seam_bind(ctx: *mut c_void, post: Option<PostFn>
     let clock: Arc<dyn Clock + Send + Sync> = process_clock();
     // The table this hub is built on and the store of the hub are one
     // critical section with [`install_process_sockets`].
-    // The node's chain-sync owner, when it left itself for this bind.
-    let attach = crate::chain_sync_ffi::take();
     let hub = {
         let _table = hold_table();
         // The Rust Levin router is the post sink. With the node's owner it
         // is attached: chain sync's messages go to the owner and the rest
-        // reach the C++ handler. Without one (a test's bind) every post
-        // reaches the C++ handler unchanged.
+        // reach the C++ handler. In a process with no node (a test's bind)
+        // it is unattached and every post reaches the C++ handler unchanged.
         let forward: shekyl_chain_sync_runtime::router::Forward =
             Arc::new(move |item: Post| post_one(&bound, item));
         let (sink, hub_tx) = match attach {
             Some((router_tx, hub_tx)) => (Router::attached(forward, router_tx), Some(hub_tx)),
-            None => (Router::pass_through(forward), None),
+            None => (Router::unattached(forward), None),
         };
         let hub = Hub::new(process_sockets(), ceiling, sink.into_sink(), clock);
         // `store` stops the previous hub's dialer; this hub's is built after.
@@ -421,9 +431,9 @@ pub unsafe extern "C" fn shekyl_seam_bind(ctx: *mut c_void, post: Option<PostFn>
     };
     let (hub, hub_tx) = hub;
     if let Some(hub_tx) = hub_tx {
-        // The owner gone already is a node that stopped before its seam
-        // bound; the router then finds its sender closed and hands every
-        // session to the C++ handler.
+        // The owner gone already is a node whose owner ended before its
+        // seam bound. The node reports that end to the stop owner; here it
+        // is only logged.
         if hub_tx.send(Arc::new(hub.clone())).is_err() {
             tracing::info!(target: "p2p", "the chain-sync owner stopped before the seam bound");
         }

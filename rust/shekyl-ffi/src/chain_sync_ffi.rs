@@ -27,7 +27,23 @@ struct Attach {
     hub: oneshot::Sender<Arc<Hub>>,
 }
 
-static ATTACH: Mutex<Option<Attach>> = Mutex::new(None);
+/// The slot the node leaves its owner in.
+enum Slot {
+    /// No node in this process: a test of the seam or the C++ handler.
+    /// A bind builds an unattached router.
+    Empty,
+    /// The node's owner, waiting for the seam's bind.
+    Left(Attach),
+    /// The daemon's bind took the owner. A later bind would run the seam
+    /// without chain sync, so it is refused ([`SecondBind`]).
+    Taken,
+}
+
+static ATTACH: Mutex<Slot> = Mutex::new(Slot::Empty);
+
+/// A bind after the daemon's bind had already taken the node's owner.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct SecondBind;
 
 /// Chain sync's published state, as the node holds it.
 static STATE: Mutex<Option<watch::Receiver<SyncState>>> = Mutex::new(None);
@@ -48,15 +64,16 @@ pub fn install(
     hub: oneshot::Sender<Arc<Hub>>,
     state: watch::Receiver<SyncState>,
 ) {
-    *ATTACH.lock().unwrap_or_else(PoisonError::into_inner) = Some(Attach { router, hub });
+    *ATTACH.lock().unwrap_or_else(PoisonError::into_inner) = Slot::Left(Attach { router, hub });
     *STATE.lock().unwrap_or_else(PoisonError::into_inner) = Some(state);
 }
 
-/// Clear what [`install`] left. A slot no bind took drops the owner's hub
-/// sender, so an owner still waiting for its hub ends, and the state reads
-/// as not synchronized.
+/// Clear what [`install`] left, taken or not. A slot no bind took drops
+/// the owner's hub sender, so an owner still waiting for its hub ends, and
+/// the state reads as not synchronized. The next node's install starts
+/// the slot again.
 pub fn uninstall() {
-    ATTACH.lock().unwrap_or_else(PoisonError::into_inner).take();
+    *ATTACH.lock().unwrap_or_else(PoisonError::into_inner) = Slot::Empty;
     STATE.lock().unwrap_or_else(PoisonError::into_inner).take();
 }
 
@@ -79,15 +96,24 @@ pub extern "C" fn shekyl_node_is_synchronized() -> u8 {
     u8::from(synced)
 }
 
+/// What a bind finds in the slot.
+pub(crate) type Taken = Option<(mpsc::UnboundedSender<Routed>, oneshot::Sender<Arc<Hub>>)>;
+
 /// Take what the node left, once. The production seam is bound once per
-/// process (`zone_server.h`'s `bind_seam`). A later bind, such as a test's
-/// rebind after a clear, finds nothing and builds a pass-through router.
-pub(crate) fn take() -> Option<(mpsc::UnboundedSender<Routed>, oneshot::Sender<Arc<Hub>>)> {
-    ATTACH
-        .lock()
-        .unwrap_or_else(PoisonError::into_inner)
-        .take()
-        .map(|attach| (attach.router, attach.hub))
+/// process (`zone_server.h`'s `bind_seam`). `Ok(None)` is a process with no
+/// node (a test's bind, which builds an unattached router). A bind after
+/// the node's owner was taken is [`SecondBind`]: it would run the seam
+/// without chain sync.
+pub(crate) fn take() -> Result<Taken, SecondBind> {
+    let mut slot = ATTACH.lock().unwrap_or_else(PoisonError::into_inner);
+    match std::mem::replace(&mut *slot, Slot::Taken) {
+        Slot::Empty => {
+            *slot = Slot::Empty;
+            Ok(None)
+        }
+        Slot::Left(attach) => Ok(Some((attach.router, attach.hub))),
+        Slot::Taken => Err(SecondBind),
+    }
 }
 
 #[cfg(test)]

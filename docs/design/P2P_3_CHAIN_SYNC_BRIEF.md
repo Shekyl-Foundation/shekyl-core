@@ -1747,7 +1747,7 @@ increments?
   executor, serving and the wire are built (CS-3). The cutover does two
   things at once:
   - route the live sessions to the owner: the daemon builds the router
-    attached (`Router::attached`) rather than pass-through, and starts
+    attached (`Router::attached`) rather than unattached, and starts
     the owner;
   - delete the **sync half** of the handler and `block_queue`.
   - What it needs from the owner is built (CS-4). **An inbound session's
@@ -1941,7 +1941,9 @@ it decided beyond the rows above:
   the slot once, builds `Router::attached`, mints the hub and sends it.
   The owner handles nothing until the hub arrives; the router precedes
   every session. `Node::stop` stops it after the doors and before the
-  service. A bind with nothing left is pass-through.
+  service. A bind in a process with no node builds `Router::unattached`;
+  a bind after the daemon's bind took the owner is refused, and the
+  owner's end is a fatal stop of the daemon.
 - **A stall is a fact, not a state.** `Sync::stalled()` is `Behind` with
   nothing moving toward `H*`: no header or body request in flight, no
   proof running, nothing with the entry. The entry's own refusals (an
