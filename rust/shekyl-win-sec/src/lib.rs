@@ -51,6 +51,8 @@
 //!   containment argument becomes a type rather than a call-site rule.
 //! - [`create_owner_only_file`] — the seed file's `0600` equivalent (WP-D8).
 //! - [`free_bytes_available`] — the disk probe's Windows half (WP-D9).
+//! - [`cap_syn_retransmissions`] — the clearnet dial socket's SYN retry cap,
+//!   so a refused connect is reported inside the dial deadline.
 //!
 //! # Verification status
 //!
@@ -78,6 +80,8 @@ mod pipe;
 mod sddl;
 #[cfg(windows)]
 mod sid;
+#[cfg(windows)]
+mod syn;
 
 /// A lock-free write to standard error, for a panic hook.
 pub mod console;
@@ -109,6 +113,8 @@ pub use pipe::{
 pub use sddl::{OwnerOnlyDescriptor, SddlError};
 #[cfg(windows)]
 pub use sid::{current_logon_sid, current_user_sid, SidError, SidString};
+#[cfg(windows)]
+pub use syn::cap_syn_retransmissions;
 
 /// Build a [`SidString`] from an arbitrary string, for probes only.
 ///
