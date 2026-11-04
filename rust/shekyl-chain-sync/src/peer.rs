@@ -25,7 +25,7 @@ use std::collections::BTreeSet;
 use std::time::{Duration, Instant};
 
 use shekyl_chain_rules::{seed_height, FormAttempt, HeaderJudged, RuleSet, Target};
-use shekyl_difficulty::SEEDHASH_EPOCH_LAG;
+use shekyl_difficulty::{CumulativeDifficulty, SEEDHASH_EPOCH_LAG};
 use shekyl_types::{BlockHash, BlockHeight};
 use shekyl_wire::{BlockBody, PowBlob};
 
@@ -43,40 +43,145 @@ pub(crate) struct Inventory {
     pub skeleton: BTreeSet<BlockHash>,
 }
 
-/// Gates that outlive a mode. Each clears on its own event.
-#[derive(Clone, Copy)]
-pub(crate) struct Gates {
-    /// Not drawn for headers until the claim changes.
-    pub header_quiet: bool,
-    /// The last header request to this session from the current `H*`
-    /// yielded nothing (`Command::HeadersSpent`): it named no header `T`
-    /// lacked, or its run ended below `H*`. The same request would get
-    /// the same answer, so it is not drawn to extend `H*` until its claim
-    /// or `H*` changes.
-    pub header_spent: bool,
-    /// The last header response from this session could not be proven:
-    /// the ingest window's slots did not hold its seed
-    /// (`Command::SeedNotHeld`). The window's state, not the peer's
-    /// answer: not drawn to extend `H*` until the slots change
-    /// (`Event::Seeds`) or the claim does.
-    pub seed_not_held: bool,
-    /// Missed a body deadline. A source again when `H*` changes.
-    pub body_excluded: bool,
-    /// Already followed one past-cap run. Clears when the claim changes.
-    pub past_cap_followed: bool,
-    /// The one evidence draw has been spent.
-    pub evidence_spent: bool,
+/// Whether this session may be drawn to extend `H*`.
+///
+/// The holds are independent, and each releases on its own event. A new
+/// claim releases all of them. A new `H*` releases the spent locator and
+/// the missing seed: both were about that locator. A new seed window
+/// releases only the seed. An unlinked body, or one past the cap, releases
+/// the quiet hold and the spent locator so headers are asked for again; a
+/// past-cap branch already followed stays followed.
+#[derive(Clone, Copy, Default)]
+pub(crate) struct HeaderDraw {
+    /// Quieted until the claim changes.
+    quiet: bool,
+    /// One past-cap branch was followed. Released only by a new claim.
+    past_cap: bool,
+    /// The last request from this `H*` yielded nothing.
+    spent: bool,
+    /// The last response hashed under a seed the window did not hold.
+    seed_absent: bool,
 }
 
-impl Gates {
+impl HeaderDraw {
     pub(crate) const fn open() -> Self {
         Self {
-            header_quiet: false,
-            header_spent: false,
-            seed_not_held: false,
-            body_excluded: false,
-            past_cap_followed: false,
-            evidence_spent: false,
+            quiet: false,
+            past_cap: false,
+            spent: false,
+            seed_absent: false,
+        }
+    }
+
+    /// Drawn for headers from the current `H*`.
+    pub(crate) const fn eligible(self) -> bool {
+        !self.quiet && !self.past_cap && !self.spent && !self.seed_absent
+    }
+
+    /// Header work from this `H*` is finished, for body planning.
+    ///
+    /// A missing seed is the window's fact, so the session may still serve
+    /// bodies.
+    pub(crate) const fn headers_finished(self) -> bool {
+        self.quiet || self.past_cap || self.spent
+    }
+
+    /// One past-cap branch was already followed.
+    pub(crate) const fn past_cap_followed(self) -> bool {
+        self.past_cap
+    }
+
+    pub(crate) fn on_claim(&mut self) {
+        *self = Self::open();
+    }
+
+    pub(crate) fn on_star(&mut self) {
+        self.spent = false;
+        self.seed_absent = false;
+    }
+
+    pub(crate) fn on_seeds(&mut self) {
+        self.seed_absent = false;
+    }
+
+    /// Ask for headers again after an unlinked body or one past the cap.
+    pub(crate) fn on_relocate(&mut self) {
+        self.quiet = false;
+        self.spent = false;
+    }
+
+    pub(crate) fn quiet(&mut self) {
+        self.quiet = true;
+    }
+
+    pub(crate) fn followed_past_cap(&mut self) {
+        self.past_cap = true;
+    }
+
+    pub(crate) fn spend(&mut self) {
+        self.spent = true;
+    }
+
+    pub(crate) fn miss_seed(&mut self) {
+        self.seed_absent = true;
+    }
+}
+
+/// Whether this session is asked for bodies.
+#[derive(Clone, Copy, Default, PartialEq, Eq)]
+pub(crate) enum BodySource {
+    /// A source.
+    #[default]
+    Open,
+    /// Missed a body deadline. A source again when `H*` changes.
+    Excluded,
+}
+
+impl BodySource {
+    pub(crate) const fn excluded(self) -> bool {
+        matches!(self, Self::Excluded)
+    }
+}
+
+/// The one evidence draw this session may take.
+#[derive(Clone, Copy, Default, PartialEq, Eq)]
+pub(crate) enum EvidenceDraw {
+    /// Not yet drawn.
+    #[default]
+    Available,
+    /// Drawn. It is not drawn again.
+    Spent,
+}
+
+impl EvidenceDraw {
+    pub(crate) const fn available(self) -> bool {
+        matches!(self, Self::Available)
+    }
+}
+
+/// Where this session's header answer stands for the opening.
+///
+/// A received response answers the opening once the run holds no header
+/// still to prove. That is the run's cursor, read when the opening
+/// settles, so it is not copied onto this state.
+#[derive(Clone, Copy, Default, PartialEq, Eq)]
+pub(crate) enum HeaderReply {
+    /// No header response has arrived, and the deadline has not passed.
+    #[default]
+    Waiting,
+    /// A header response arrived.
+    Received,
+    /// The proof answered, or the header deadline passed.
+    Resolved,
+}
+
+impl HeaderReply {
+    /// Whether this reply has answered the opening.
+    pub(crate) fn answers_opening(self, run: Option<&Run>) -> bool {
+        match self {
+            Self::Waiting => false,
+            Self::Resolved => true,
+            Self::Received => run.is_none_or(|run| run.chain.proven >= run.chain.checked.len()),
         }
     }
 }
@@ -235,6 +340,41 @@ pub(crate) enum Mode {
     },
 }
 
+/// How a header page meets the session's run.
+#[derive(Clone, Copy, PartialEq, Eq)]
+pub(crate) enum PageFit {
+    /// The page's first new header extends the run's tip.
+    Continues,
+    /// An evidence run keeps the branch it drew. The page is another chain.
+    Aside,
+    /// The page starts another chain, so the run it does not extend is replaced.
+    Replaces,
+}
+
+/// What an accepted page on a reachable run asks the session to do.
+#[derive(Clone, Copy, PartialEq, Eq)]
+pub(crate) enum Reach {
+    /// The chain ended short of its claim and short of `H*`.
+    Unmet,
+    /// The chain ended at or above its claim and short of `H*`.
+    BelowStar,
+    /// The window is full, short of `H*`, and not yet in the slot.
+    FillSlot {
+        /// The peer said the chain continues.
+        more: bool,
+    },
+    /// The window beats `H*`, or it already holds the slot.
+    Prove {
+        /// The peer said the chain continues.
+        more: bool,
+    },
+    /// The window still has room and does not yet beat `H*`.
+    Continue {
+        /// The peer said the chain continues.
+        more: bool,
+    },
+}
+
 /// One chain of headers a session served, above its parent (in `T` or on
 /// main), and the mode that says what is done with them. A reachable
 /// run's proven headers are also in `T`; it keeps them, so its chain runs
@@ -319,6 +459,61 @@ impl Run {
             Mode::Slot { .. } | Mode::Challenging { .. } => beats_star,
             Mode::PastCap | Mode::EvidenceCandidate => false,
         }
+    }
+
+    /// How `base`, the parent of this page's first new header, meets the run.
+    ///
+    /// An evidence check proves the branch it drew. A page from another
+    /// chain is set aside and the run stays. Any other run that the page
+    /// does not extend is replaced.
+    pub(crate) fn page_fit(&self, base: BlockHash) -> PageFit {
+        let tip = self
+            .chain
+            .checked
+            .last()
+            .map_or(self.chain.parent, |checked| checked.hash);
+        if tip == base {
+            PageFit::Continues
+        } else if self.is_evidence() {
+            PageFit::Aside
+        } else {
+            PageFit::Replaces
+        }
+    }
+
+    /// What this reachable page asks for, once its headers are on the run.
+    ///
+    /// A chain that ended short of `H*` is closed or spent before the slot
+    /// is considered. A full window that is still short of `H*` enters the
+    /// slot. A window that beats `H*`, or already holds the slot, is proved.
+    pub(crate) fn reach(
+        &self,
+        more: bool,
+        claim: Option<CumulativeDifficulty>,
+        star: CumulativeDifficulty,
+        budget: usize,
+    ) -> Reach {
+        let work = self
+            .chain
+            .checked
+            .last()
+            .map_or(CumulativeDifficulty::ZERO, |checked| checked.work);
+        let beats = work > star;
+        if !more {
+            if claim.is_some_and(|claim| work < claim) && !beats {
+                return Reach::Unmet;
+            }
+            if !beats {
+                return Reach::BelowStar;
+            }
+        }
+        if self.chain.checked.len() >= budget && !beats && !self.is_slot() {
+            return Reach::FillSlot { more };
+        }
+        if beats || self.is_slot() {
+            return Reach::Prove { more };
+        }
+        Reach::Continue { more }
     }
 
     /// The run's mode, as the view names it.
@@ -475,7 +670,12 @@ pub(crate) struct Peer<K> {
     pub claim: Option<PeerClaim>,
     /// The highest block this peer has named.
     pub frontier: Option<(BlockHeight, BlockHash)>,
-    pub gates: Gates,
+    /// Whether this session may be drawn to extend `H*`.
+    pub draw: HeaderDraw,
+    /// Whether this session is asked for bodies.
+    pub bodies: BodySource,
+    /// The one evidence draw this session may take.
+    pub evidence: EvidenceDraw,
     pub inventory: Inventory,
     /// The header run. Absent when this peer is not extending a fork.
     pub run: Option<Run>,
@@ -496,13 +696,8 @@ pub(crate) struct Peer<K> {
     /// The rate this peer's last header or body response arrived at, in
     /// bytes per second. `None` until one has.
     pub rate: Option<u64>,
-    /// A header request to this peer has resolved: its headers were
-    /// proven (or refused), or it passed its deadline. The opening reads
-    /// it (CS-Q2 step 8).
-    pub answered: bool,
-    /// This peer has sent a header response. It has resolved once no
-    /// header of that response is waiting for its proof.
-    pub responded: bool,
+    /// Where this session's header answer stands for the opening.
+    pub reply: HeaderReply,
 }
 
 impl<K> Peer<K> {
@@ -511,7 +706,9 @@ impl<K> Peer<K> {
             transit,
             claim,
             frontier: None,
-            gates: Gates::open(),
+            draw: HeaderDraw::open(),
+            bodies: BodySource::Open,
+            evidence: EvidenceDraw::Available,
             inventory: Inventory::default(),
             run: None,
             follow_up: None,
@@ -519,8 +716,7 @@ impl<K> Peer<K> {
             span: None,
             announced: Vec::new(),
             rate: None,
-            answered: false,
-            responded: false,
+            reply: HeaderReply::Waiting,
         }
     }
 }

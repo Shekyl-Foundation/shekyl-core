@@ -249,7 +249,7 @@ where
     fn find_source(&self, end: BlockHash, skip_unavailable: bool) -> Option<K> {
         let end_height = self.tree.connecting(end)?;
         self.peers.iter().find_map(|(key, state)| {
-            if state.gates.body_excluded || state.inventory.skeleton.contains(&end) {
+            if state.bodies.excluded() || state.inventory.skeleton.contains(&end) {
                 return None;
             }
             if state.span.is_some() {
@@ -392,9 +392,6 @@ where
         {
             return false;
         }
-        peer.gates.header_quiet
-            || peer.gates.header_spent
-            || peer.gates.past_cap_followed
-            || peer.claim.is_none_or(|claim| claim.work <= self.star.work)
+        peer.draw.headers_finished() || peer.claim.is_none_or(|claim| claim.work <= self.star.work)
     }
 }

@@ -59,7 +59,7 @@ fn the_latch_plans_no_evidence_hash() {
         formed_on(&along, &rules, &mut block, parent, timestamp + 120);
         let out = answer(&mut sync, &view, 1, block.pow_blob(), u128::MAX, true);
         assert!(!proves(&out).contains(&HashClass::Evidence));
-        assert!(sync.evidence_session().is_none());
+        assert!(sync.evidence_holder().is_none());
     });
 }
 
@@ -299,7 +299,7 @@ fn the_evidence_draw_is_uniform_over_the_waiting_candidates() {
                 Command::Prove {
                     class: HashClass::Evidence,
                     ..
-                } => sync.evidence_session(),
+                } => sync.evidence_holder(),
                 _ => None,
             });
             match drawn {
@@ -564,7 +564,7 @@ fn an_evidence_refetch_after_a_whole_fork_response_is_proven() {
             &mut out,
         )
         .unwrap();
-        assert_eq!(sync.evidence_session(), Some(1));
+        assert_eq!(sync.evidence_holder(), Some(1));
         assert!(
             out.iter()
                 .any(|command| matches!(command, Command::RequestHeaders { session: 1, .. })),
@@ -691,7 +691,7 @@ fn a_page_during_an_evidence_check_does_not_end_it() {
             &mut out,
         )
         .unwrap();
-        assert_eq!(sync.evidence_session(), Some(1));
+        assert_eq!(sync.evidence_holder(), Some(1));
         let mut proving = Vec::new();
         sync.handle(
             Event::Headers {
@@ -744,7 +744,7 @@ fn a_page_during_an_evidence_check_does_not_end_it() {
         .unwrap();
         assert!(closes(&out).is_empty(), "the page closed: {out:?}");
         assert_eq!(
-            sync.evidence_session(),
+            sync.evidence_holder(),
             Some(1),
             "the page ended the check: {out:?}"
         );
@@ -816,7 +816,7 @@ fn an_evidence_candidate_is_drawn_when_nothing_else_arrives() {
             });
         }
         assert!(sync.run_len(1) > 0, "the candidate run did not form");
-        assert!(sync.evidence_session().is_none(), "drawn before the wake");
+        assert!(sync.evidence_holder().is_none(), "drawn before the wake");
         let id = wake.expect("the candidate armed no wake");
         let mut out = Vec::new();
         sync.handle(
@@ -834,6 +834,6 @@ fn an_evidence_candidate_is_drawn_when_nothing_else_arrives() {
             proves(&out).contains(&HashClass::Evidence),
             "the wake did not draw: {out:?}"
         );
-        assert_eq!(sync.evidence_session(), Some(1));
+        assert_eq!(sync.evidence_holder(), Some(1));
     });
 }

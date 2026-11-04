@@ -87,7 +87,7 @@ where
         let Some(state) = self.peers.get_mut(&session) else {
             return;
         };
-        if self.alarm || state.gates.evidence_spent {
+        if self.alarm || !state.evidence.available() {
             return;
         }
         let local = self
@@ -112,7 +112,7 @@ where
         !self.alarm
             && self.evidence_holder().is_none()
             && self.peers.values().any(|state| {
-                !state.gates.evidence_spent && state.run.as_ref().is_some_and(Run::is_candidate)
+                state.evidence.available() && state.run.as_ref().is_some_and(Run::is_candidate)
             })
     }
 
@@ -151,7 +151,7 @@ where
             .peers
             .iter()
             .filter(|(_, state)| {
-                !state.gates.evidence_spent && state.run.as_ref().is_some_and(Run::is_candidate)
+                state.evidence.available() && state.run.as_ref().is_some_and(Run::is_candidate)
             })
             .map(|(session, _)| *session)
             .collect();
@@ -159,7 +159,7 @@ where
             return;
         };
         if let Some(state) = self.peers.get_mut(&session) {
-            state.gates.evidence_spent = true;
+            state.evidence = crate::peer::EvidenceDraw::Spent;
             if let Some(run) = state.run.as_mut() {
                 run.begin_evidence();
             }
@@ -304,7 +304,7 @@ where
         let take = holder_work.is_none_or(|held| work > held);
         if !take {
             if let Some(state) = self.peers.get_mut(&session) {
-                state.gates.header_quiet = true;
+                state.draw.quiet();
                 state.run = None;
             }
             return;

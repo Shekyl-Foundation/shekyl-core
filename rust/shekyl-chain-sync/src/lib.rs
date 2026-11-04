@@ -32,6 +32,8 @@ mod harness;
 #[cfg(all(test, feature = "cs2-long-run"))]
 mod long_run;
 #[cfg(test)]
+mod model_inspect;
+#[cfg(test)]
 mod offer_tests;
 #[cfg(test)]
 mod page_overlap_tests;

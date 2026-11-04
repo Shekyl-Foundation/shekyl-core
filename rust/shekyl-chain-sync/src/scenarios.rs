@@ -791,7 +791,7 @@ fn the_slot_holder_is_hashed_on_each_response() {
         .expect("main answers");
         hash_proves(&mut sync, &view, &mut out);
         assert_eq!(
-            sync.slot_session(),
+            sync.slot_holder(),
             Some(1),
             "the budget did not take the slot: {out:?}"
         );

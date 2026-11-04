@@ -21,13 +21,10 @@ use shekyl_types::{BlockCount, BlockHash, BlockHeight, ChainCount};
 
 use crate::peer::{Dispute, HeaderRequest, Peer};
 
-#[cfg(test)]
-use crate::branch::BranchView;
 use crate::claim::{self, PayloadRefused, PeerClaim};
 use crate::locator::{locator, locator_heights};
 use crate::state::{Declaration, SyncState};
 use crate::tree::{HeaderTree, Star};
-use crate::view::{BodiesInFlight, HeaderInFlight, SessionMode, SessionView, SyncView};
 
 /// Bytes per second assumed for a header or body request's deadline.
 ///
@@ -253,10 +250,7 @@ where
             let changed = open.claim != Some(claim);
             open.claim = Some(claim);
             if changed {
-                open.gates.header_quiet = false;
-                open.gates.header_spent = false;
-                open.gates.seed_not_held = false;
-                open.gates.past_cap_followed = false;
+                open.draw.on_claim();
             }
         } else {
             self.pending.insert(session, claim);
@@ -332,12 +326,8 @@ where
             return;
         };
         let answered = self.peers.values().all(|peer| {
-            let proving = peer
-                .run
-                .as_ref()
-                .is_some_and(|run| run.chain.proven < run.chain.checked.len());
             peer.claim.is_some_and(|claim| {
-                claim.work <= local.work || peer.answered || (peer.responded && !proving)
+                claim.work <= local.work || peer.reply.answers_opening(peer.run.as_ref())
             })
         });
         if answered {
@@ -445,102 +435,6 @@ where
             })
     }
 
-    /// The view (CS-5 §7): the state, the stall, the target and one row
-    /// per open session.
-    #[must_use]
-    pub fn view(&self) -> SyncView<K> {
-        let sessions = self
-            .peers
-            .iter()
-            .map(|(session, peer)| {
-                let header_request = self
-                    .header_request
-                    .as_ref()
-                    .filter(|request| request.session == *session)
-                    .or(peer.follow_up.as_ref())
-                    .map(|request| HeaderInFlight {
-                        sent: request.sent,
-                        deadline: request.deadline,
-                    });
-                let body_requests = peer
-                    .span
-                    .iter()
-                    .filter_map(|span| {
-                        let first = self.tree.connecting(*span.hashes.first()?)?;
-                        Some(BodiesInFlight {
-                            first,
-                            count: BlockCount::from_raw(
-                                u64::try_from(span.hashes.len()).unwrap_or(u64::MAX),
-                            ),
-                            planned_bytes: BODIES_RESPONSE_BYTES,
-                            sent: span.sent,
-                            deadline: span.deadline,
-                        })
-                    })
-                    .collect();
-                SessionView {
-                    session: *session,
-                    claim: peer.claim,
-                    mode: peer
-                        .run
-                        .as_ref()
-                        .map_or(SessionMode::Idle, crate::peer::Run::view_mode),
-                    header_request,
-                    body_requests,
-                    transit: peer.transit,
-                    rate: peer.rate,
-                }
-            })
-            .collect();
-        SyncView {
-            state: self.state(),
-            stalled: self.stalled(),
-            target: self.star_count(),
-            sessions,
-        }
-    }
-
-    /// `H*`: the hash and the work selection last chose.
-    #[cfg(test)]
-    #[must_use]
-    pub(crate) fn selected(&self) -> Star {
-        self.star
-    }
-
-    /// Headers in `T`.
-    #[cfg(test)]
-    #[must_use]
-    pub(crate) fn header_count(&self) -> usize {
-        self.tree.len()
-    }
-
-    /// Whether `T` holds `hash`.
-    #[cfg(test)]
-    #[must_use]
-    pub(crate) fn contains_header(&self, hash: BlockHash) -> bool {
-        self.tree.contains(hash)
-    }
-
-    /// Whether `hash` was marked invalid, with its descendants.
-    #[cfg(test)]
-    #[must_use]
-    pub(crate) fn remembers_header(&self, hash: BlockHash) -> bool {
-        self.tree.remembers(hash)
-    }
-
-    /// Node loads since the tree was built, or since [`Self::reset_visits`].
-    #[cfg(test)]
-    #[must_use]
-    pub(crate) fn tree_visits(&self) -> u64 {
-        self.tree.visits()
-    }
-
-    /// Start the node-load count over.
-    #[cfg(test)]
-    pub(crate) fn reset_visits(&self) {
-        self.tree.reset_visits();
-    }
-
     /// The peer whose run holds the long-run slot.
     pub(crate) fn slot_holder(&self) -> Option<K> {
         self.peers.iter().find_map(|(key, peer)| {
@@ -567,94 +461,6 @@ where
             .values()
             .filter(|peer| peer.span.is_some())
             .count()
-    }
-
-    /// The peer whose run holds the long-run slot.
-    #[cfg(test)]
-    #[must_use]
-    pub(crate) fn slot_session(&self) -> Option<K> {
-        self.slot_holder()
-    }
-
-    /// Cheap-checked headers the session's run still holds.
-    #[cfg(test)]
-    #[must_use]
-    pub(crate) fn run_len(&self, session: K) -> usize {
-        self.peers
-            .get(&session)
-            .and_then(|peer| peer.run.as_ref())
-            .map(|run| run.chain.checked.len())
-            .unwrap_or(0)
-    }
-
-    /// The peer whose evidence check is in flight.
-    #[cfg(test)]
-    #[must_use]
-    pub(crate) fn evidence_session(&self) -> Option<K> {
-        self.evidence_holder()
-    }
-
-    /// The record `T` holds for `hash`.
-    #[cfg(test)]
-    pub(crate) fn header_record(
-        &self,
-        hash: BlockHash,
-    ) -> Option<shekyl_chain_rules::HeaderRecord> {
-        self.tree.record(hash)
-    }
-
-    /// The run's cheap-checked headers, in order. A past-cap run keeps
-    /// only its window, so this is that window.
-    #[cfg(test)]
-    #[must_use]
-    pub(crate) fn run_records(&self, session: K) -> Vec<shekyl_chain_rules::HeaderRecord> {
-        self.peers
-            .get(&session)
-            .and_then(|peer| peer.run.as_ref())
-            .map(|run| {
-                run.chain
-                    .checked
-                    .iter()
-                    .map(|c| shekyl_chain_rules::HeaderRecord {
-                        hash: c.hash,
-                        header: c.header.clone(),
-                        cumulative_difficulty: c.work,
-                    })
-                    .collect()
-            })
-            .unwrap_or_default()
-    }
-
-    /// The branch whose tip is `parent`: `T` when the parent is in the
-    /// tree, main when the parent is the local tip. `None` when it is
-    /// neither, and the caller judges against `main` and records the result.
-    #[cfg(test)]
-    pub(crate) fn branch_of<'a, H>(
-        &'a self,
-        main: &'a H,
-        parent: BlockHash,
-    ) -> Option<BranchView<'a, H>> {
-        if let Some(placed) = self.tree.placement(parent) {
-            return Some(BranchView::above(
-                main,
-                &self.tree,
-                parent,
-                placed.height,
-                placed.fork,
-            ));
-        }
-        let local = self.local?;
-        if local.hash == parent {
-            return match local.height {
-                Some(height) => Some(BranchView::on_main(main, parent, height)),
-                None if parent == BlockHash::NULL => Some(BranchView::empty_main(main)),
-                None => None,
-            };
-        }
-        if local.height.is_none() && parent == BlockHash::NULL {
-            return Some(BranchView::empty_main(main));
-        }
-        None
     }
 
     /// The transit the session opened with.
@@ -814,12 +620,11 @@ where
             }
             for peer in self.peers.values_mut() {
                 peer.span = None;
-                peer.gates.body_excluded = false;
+                peer.bodies = crate::peer::BodySource::Open;
                 // A new `H*` is a new locator: an answer that yielded
                 // nothing from the old one says nothing about this one,
                 // and the headers it fetches may hash under another seed.
-                peer.gates.header_spent = false;
-                peer.gates.seed_not_held = false;
+                peer.draw.on_star();
             }
         }
         Ok(())
@@ -864,10 +669,7 @@ where
             .peers
             .iter()
             .filter(|(_, peer)| {
-                !peer.gates.header_quiet
-                    && !peer.gates.header_spent
-                    && !peer.gates.seed_not_held
-                    && !peer.gates.past_cap_followed
+                peer.draw.eligible()
                     && peer.follow_up.is_none()
                     && peer.claim.is_some_and(|claim| claim.work > self.star.work)
             })
@@ -995,7 +797,7 @@ where
         Ok(points)
     }
 
-    fn star_count(&self) -> ChainCount {
+    pub(crate) fn star_count(&self) -> ChainCount {
         if let Some(height) = self.tree.connecting(self.star.hash) {
             return ChainCount::with_tip(height).unwrap_or(ChainCount::ZERO);
         }
