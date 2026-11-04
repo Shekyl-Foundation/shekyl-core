@@ -53,7 +53,7 @@ permissions:
 
 jobs:
   model:
-    if: (github.event.action != 'edited' || github.event.changes.base.ref.from)
+    if: (github.event.action != 'edited' || contains(toJSON(github.event.changes), 'base'))
     name: "NNhfs ProVerif model"
     runs-on: ubuntu-latest
     # The variants take about a second each; the budget is the uncached

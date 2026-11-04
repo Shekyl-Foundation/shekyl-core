@@ -70,7 +70,7 @@ jobs:
   #
   # Fails closed: an uncomputable file list yields `false` and the suite runs.
   changes:
-    if: (github.event.action != 'edited' || github.event.changes.base.ref.from)
+    if: (github.event.action != 'edited' || contains(toJSON(github.event.changes), 'base'))
     name: 'Change scope (rust)'
     runs-on: ubuntu-latest
     outputs:
@@ -102,7 +102,7 @@ jobs:
   rust-audit-and-test:
     name: "Rust: audit, test, determinism"
     needs: changes
-    if: (github.event.action != 'edited' || github.event.changes.base.ref.from) && (needs.changes.outputs.docs_only != 'true')
+    if: (github.event.action != 'edited' || contains(toJSON(github.event.changes), 'base')) && (needs.changes.outputs.docs_only != 'true')
     runs-on: ubuntu-latest
     container:
       image: ubuntu:24.04

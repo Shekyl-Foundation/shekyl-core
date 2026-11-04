@@ -52,7 +52,7 @@ env:
 
 jobs:
   aarch64-kats:
-    if: (github.event.action != 'edited' || github.event.changes.base.ref.from)
+    if: (github.event.action != 'edited' || contains(toJSON(github.event.changes), 'base'))
     name: "ARM v8 qemu KATs"
     runs-on: ubuntu-latest
     container:

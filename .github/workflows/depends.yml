@@ -59,7 +59,7 @@ jobs:
   # The legs this run takes, as a matrix (scripts/ci/depends_legs.py). It
   # fails closed: anything it cannot decide runs every leg.
   legs:
-    if: (github.event.action != 'edited' || github.event.changes.base.ref.from)
+    if: (github.event.action != 'edited' || contains(toJSON(github.event.changes), 'base'))
     name: 'Depends legs'
     runs-on: ubuntu-latest
     outputs:
@@ -78,7 +78,7 @@ jobs:
 
   build-cross:
     needs: legs
-    if: (github.event.action != 'edited' || github.event.changes.base.ref.from) && (needs.legs.outputs.legs != '[]')
+    if: (github.event.action != 'edited' || contains(toJSON(github.event.changes), 'base')) && (needs.legs.outputs.legs != '[]')
     runs-on: ubuntu-latest
     # A nightly red reaches a human: the on-failure step opens or comments
     # on a tracking issue (the slow-gate nightly's route).

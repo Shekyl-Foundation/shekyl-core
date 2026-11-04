@@ -53,7 +53,7 @@ permissions:
 
 jobs:
   wallet-rpc-liveness:
-    if: (github.event.action != 'edited' || github.event.changes.base.ref.from)
+    if: (github.event.action != 'edited' || contains(toJSON(github.event.changes), 'base'))
     name: "wallet RPC: registry and dispatch agree in both directions"
     runs-on: ubuntu-latest
     steps:
