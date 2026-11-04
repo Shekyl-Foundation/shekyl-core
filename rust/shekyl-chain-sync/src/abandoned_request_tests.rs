@@ -82,7 +82,7 @@ fn an_answer_to_a_withdrawn_request_is_discarded_and_the_next_is_judged() {
     let rules = fixed(1, 64);
     let fixture = chain_of(8);
     let template = candidate_on(&fixture, Vec::new()).block;
-    let mut sync = Sync::new(Trust::UNANCHORED, move |_| rules);
+    let mut sync = Sync::new(Trust::UNPINNED, move |_| rules);
     let wall = shekyl_types::Timestamp::from_raw(u64::MAX / 4);
     sync.set_wall(wall);
     let base: Vec<HeaderRecord> = fixture.with_view(|view| {

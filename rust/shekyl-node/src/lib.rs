@@ -80,7 +80,7 @@ use shekyl_chain_ingest::service::{
     ArrivalTag, Follow, PoolWiring, Reply, Service, ServiceConfig, ServiceFault,
 };
 use shekyl_chain_ingest::{Chain, ChainRules, Metrics, ProductionSubstrate, SubstrateFault};
-use shekyl_chain_rules::{AdmissionPolicy, FakechainSchedule, ReleaseAnchors, RuleSet};
+use shekyl_chain_rules::{AdmissionPolicy, FakechainSchedule, GenesisPin, RuleSet};
 use shekyl_chain_store::apply_policy::ApplyPolicy;
 use shekyl_chain_store::pool::PoolOpen;
 use shekyl_chain_store::store::{ChainStore, CutShort, Horizons, SnapshotView};
@@ -154,6 +154,19 @@ pub enum OpenError {
     /// A layout-mismatched chain file could not be removed.
     #[error("the chain file could not be removed: {0}")]
     Wipe(std::io::Error),
+    /// The chain file was written by a newer release than this binary. It
+    /// is left as it is: removing it would destroy the newer node's data.
+    #[error(
+        "the chain file is layout {found}, newer than this binary's {expected}: this \
+         binary is older than the store, so the store was left untouched. Run the release \
+         that wrote it, or a newer one"
+    )]
+    NewerChainLayout {
+        /// The layout the file was sealed at.
+        found: shekyl_chain_store::codec::SchemaVersion,
+        /// The layout this binary writes.
+        expected: shekyl_chain_store::codec::SchemaVersion,
+    },
     /// The pool file did not open.
     #[error("the pool did not open: {0}")]
     Pool(String),
@@ -249,11 +262,11 @@ impl Node {
         let rules = rules_of(args.config)?;
         let horizons = Horizons::under(&rules.in_force(BlockHeight::ZERO))
             .map_err(|error| OpenError::Rules(format!("the store horizons: {error}")))?;
-        let anchors = anchors_of(rules);
+        let genesis = genesis_pin_of(rules);
         std::fs::create_dir_all(&args.config.data_dir).map_err(OpenError::Directory)?;
         let store_path = args.config.data_dir.join("chain.db");
         let pool_path = args.config.data_dir.join("pool.db");
-        let store = Arc::new(open_chain(&store_path, horizons, &anchors)?);
+        let store = Arc::new(open_chain(&store_path, horizons, &genesis)?);
         tracing::info!("{}", store_durability_line());
         let parallelism = std::thread::available_parallelism().unwrap_or(NonZeroUsize::MIN);
         let budget = Budget::new(parallelism);
@@ -916,23 +929,34 @@ fn spawn_sync_owner(
 fn open_chain(
     path: &std::path::Path,
     horizons: Horizons,
-    anchors: &ReleaseAnchors,
+    genesis: &GenesisPin,
 ) -> Result<ChainStore, OpenError> {
     use shekyl_chain_store::store::{StoreCannot, StoreError};
-    match ChainStore::with_release(path, ApplyPolicy::Full, horizons, anchors) {
+    match ChainStore::with_genesis(path, ApplyPolicy::Full, horizons, genesis) {
         Ok((store, cut)) => {
             log_chain_cut(cut);
             Ok(store)
         }
-        Err(StoreError::Cannot(StoreCannot::SchemaVersionMismatch { found, expected })) => {
+        Err(StoreError::Cannot(StoreCannot::SchemaVersionMismatch { found, expected }))
+            if found > expected =>
+        {
+            Err(OpenError::NewerChainLayout { found, expected })
+        }
+        // TEMPORARY, pre-genesis only (FOLLOWUPS, trigger: before mainnet
+        // genesis): an older layout is removed so an alpha starts on a fresh
+        // store. The permanent policy ships each layout bump with its
+        // migration and never deletes (`DAEMON_REDB_STORE.md` §11.1, S3).
+        Err(StoreError::Cannot(StoreCannot::SchemaVersionMismatch { found, expected }))
+            if found < expected =>
+        {
             tracing::warn!(
                 %found,
                 %expected,
-                "the chain file is a layout this release does not speak; removing it and opening a fresh store"
+                "the chain file's layout is older than this release's layout; removing it and opening a fresh store"
             );
             std::fs::remove_file(path).map_err(OpenError::Wipe)?;
             let (store, cut) =
-                ChainStore::with_release(path, ApplyPolicy::Full, horizons, anchors)?;
+                ChainStore::with_genesis(path, ApplyPolicy::Full, horizons, genesis)?;
             log_chain_cut(cut);
             Ok(store)
         }
@@ -969,10 +993,14 @@ fn store_durability_line() -> String {
     )
 }
 
-fn anchors_of(rules: ChainRules) -> ReleaseAnchors {
+fn genesis_pin_of(rules: ChainRules) -> GenesisPin {
     match rules {
-        ChainRules::Scheduled(net) => ReleaseAnchors::for_network(net),
-        ChainRules::Regtest { .. } => ReleaseAnchors::EMPTY,
+        ChainRules::Scheduled(net) => GenesisPin::for_network(net),
+        // Regtest's block 0 is as deterministic as any network's, so its
+        // store is pinned too (S1, design review 2026-11-03). `validate`'s
+        // CEN-E1 leaves regtest unpinned (`ChainRules::trust`): harness
+        // chains mine their own genesis.
+        ChainRules::Regtest { .. } => GenesisPin::FAKECHAIN,
     }
 }
 

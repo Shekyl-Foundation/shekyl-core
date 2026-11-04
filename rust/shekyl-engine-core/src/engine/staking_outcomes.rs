@@ -788,7 +788,7 @@ mod tests {
     async fn an_acknowledgement_clears_every_personas_outcome_through_the_height_shown() {
         use crate::engine::test_support::staker_engine;
 
-        let (_tmp, engine) = staker_engine(3, 21);
+        let (_tmp, engine) = staker_engine(3, 21).await;
         let wrap = *engine.state_wrap_key().as_bytes();
         let engine = Arc::new(RwLock::new(engine));
         assert_eq!(

@@ -69,7 +69,7 @@ pub enum RowStatus {
     /// enforces it at a site other than the per-block stages, so no
     /// per-block coverage could ever contain it (`CHAIN_RULES_SLICE_3.md`
     /// Q4). The first is CEN-E5, run once by the writer at open
-    /// (`ReleaseAnchors::conflict_with`).
+    /// (`GenesisPin::conflict_with`).
     ///
     /// The registry entry carries the citation — `enforced_at(path, "test")`
     /// — and that is the only copy. The path is compile-pinned; the gate
@@ -390,17 +390,17 @@ census_rows! {
         // D7 as data on a Fakechain rule set (`DifficultyRule::Fixed`), the
         // override arm D4 consults on every block (slice 2 Q10, arm (d)).
         D7 implemented(crate::rules::difficulty::D7),
-        // 4.E Checkpoints and fast-sync trust — the anchor model's rows
-        // (`CHAIN_RULES_SLICE_3.md` §0; `PDM-Q5`).
-        E1 implemented(crate::rules::anchors::E1),
-        // E2 the anchor floor and the rolling reorg cap, judged over the fork
-        // an alternative would cause (`E2::check`, `alt_against`, DRS-E5
-        // slice 9). The main chain satisfies both by construction, so the
-        // row is the alt tier's alone — `enforced_at`, not per block.
-        E2 enforced_at(crate::rules::alt::E2, "an_alternative_rooted_below_the_anchor_is_refused_and_one_at_or_above_it_is_not"),
+        // 4.E The genesis pin (`genesis_pin.rs`); no coded checkpoints (S1,
+        // design review 2026-11-03).
+        E1 implemented(crate::rules::genesis::E1),
+        // E2 is bucket 3 (REJECTED, S1 2026-11-03): no coded checkpoints,
+        // so no anchor floor; the reorg cap bound only when anchored, and
+        // `D_max` stays a local limit of the switch (`PopBeyondReorgCap`).
+        // The census keeps the id marked REJECTED; this registry does not.
+        // CEN-F12 is the precedent.
         // E5 is enforced once, by the writer at open — not per block
         // (slice 3 Q4 (a)); the test named is the refusal fixture.
-        E5 enforced_at(crate::rules::anchors::E5, "a_recorded_block_that_is_not_the_anchor_is_the_conflict"),
+        E5 enforced_at(crate::rules::genesis::E5, "a_foreign_genesis_is_the_conflict_at_height_zero"),
         // 4.F Miner transaction (structure and emission)
         F1 implemented(crate::rules::miner::F1),
         F2 by_construction(shekyl_wire::transaction::TX_VERSION, "f2_the_wire_admits_one_transaction_version"),
@@ -603,7 +603,7 @@ census_rows! {
         K5 held_by_store("shekyl-chain-ingest", "a_promoted_block_that_fails_validate_rolls_back_and_removes_its_suffix"),
         K5b held_by_store("shekyl-chain-ingest", "a_tampered_witness_on_an_alt_row_fails_promotion_k5b"),
         K6 held_by_store("shekyl-chain-ingest", "a_heavier_branch_switches_and_equals_the_branch_connected_directly"),
-        K7 held_by_store("shekyl-chain-ingest", "a_checkpoint_forced_switch_discards_the_demoted_chain"),
+        K7 held_by_store("shekyl-chain-ingest", "a_heavier_branch_switches_and_equals_the_branch_connected_directly"),
         K8 held_by_store("shekyl-chain-store", "an_alt_row_has_no_supply_word"),
         // K9: an alternative block's bodies (DRS-E5 PR-b b4; the review of
         // #1102, B1) — held by the store beside its row and promoted from

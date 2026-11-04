@@ -173,6 +173,22 @@ pub enum Command<K> {
         /// The first session's header deadline.
         deadline: Instant,
     },
+    /// Wake the model at `deadline` with `Event::Deadline { session, request:
+    /// id }` for the evidence draw. A header response records a candidate
+    /// and does not draw, so responses arriving together are drawn over as
+    /// a set; the wake is the draw's bound when nothing else arrives (the
+    /// §10 partition regtest: a node whose one peer served its heavier chain
+    /// and then went quiet never began the check). One is armed at a time.
+    ArmDraw {
+        /// The session whose response recorded the candidate.
+        session: K,
+        /// The id `Deadline` carries back.
+        id: u64,
+        /// That session's declared transit from the response: a response
+        /// another session is sending to a request of the same round is
+        /// about that far away.
+        deadline: Instant,
+    },
     /// Bodies along `H*`.
     RequestBodies {
         /// The session.

@@ -2,20 +2,57 @@
 
 **Families (registered in `IMPLEMENTATION_INDEX.md` §2, rule 94):** **`CS-Q`** (questions, ruled here) and **`CS-F`** (findings). Grep surface: `rg -n -e '\bCS-[QF]'`, because the serve-credit findings family `SCS-F` contains `CS-F` as a substring. `CSR-` is a separate family.
 **Ground:** `dev` at `24961a9a8` (2026-10-19), after #1101 (DRS-X Round 0), #1088 (the daemon-config cutover) and #1102 (the Rust pool); DRS-X PR 2 (#1123, open) read at `e3180b665` for the door's `BeyondCap`. The handler is 2,669 + 228 lines; `block_queue` is 651 (`.h` 115 + `.cpp` 536); `cryptonote_protocol_defs.h` is 300.
-**Status:** **CS-5, the cutover, is implemented (2026-11-01, #1237):** live sessions sync through the Rust owner, which the node owns and the seam's bind attaches; the C++ handler keeps RD's transaction routes only; `sync_info` is the owner's view (3.66); 2003, 2004, 2006 and 2007 are retired (§ CS-5 below). CS-1 implemented (2026-10-21); CS-2 model and its §5 harness are in `shekyl-chain-sync` (2026-10-22); CS-3 implemented (2026-10-23): the runtime half and CS-Q11's loopback harness. CS-4 (pre-cutover, pure Rust): the inbound claim tap, the relay, the state handle's publisher and the cutover's deletion table. The cutover follows the DRS-X flip. Round 0 RULED, Rick 2026-10-18: CS-Q1…CS-Q12 as recommended, with four amendments: the complement request is chain sync's (CS-Q1, CS-Q10); `Synced` reads verified headers only (CS-Q2 step 8); the long-run slot is paid for in PoW and goes to the most verified work (CS-Q2 step 3); `following_degraded` gets a Rust producer (§A, coupling 4). Three corrections to CS-Q2 and CS-Q3, confirmed 2026-10-19 (Rick): a body, with its attestation witness, is bound to its header before the offer, so a substituted body or witness never invalidates an honest header (CEN-G2, CEN-B4); `Synced` waits for PDM-Q5's backward fill, with `Following` until then; and the body form is per transaction. The objects response follows PWD-B3's continuation (Rick, 2026-10-20): every requested block is sent, deferred by the budget, or marked unavailable, and only an unmarked shortfall closes the session (CS-Q3.2). Ruled 2026-10-19 (Rick), from DRS-X PR 2's design review: `following_degraded` is set by ingest's three refusals and by the sync owner, all through the connector, its one writer (§A items 7 and coupling 4); header PoW follows the earned-seed rule; and a past-cap branch is checked as evidence under `Class::Evidence` (CS-Q2 step 3). **Amended 2026-10-22 (Rick):** CS-Q2 step 1 refuses a block count of 0, or cumulative work below that count. **CS-1 is implemented (2026-10-21):** `form_header`, `judge_header`, `judge_header_cheap` and `bind_body` in `shekyl-chain-rules`; `PowBlob` and `BlockBody` in `shekyl-wire`; commands 2011–2014 in `shekyl-levin`, not admitted at ingress; the handler files are shrink-frozen (CS-Q9). CS-2, the sync model, is in `shekyl-chain-sync` (2026-10-22): the branch view, runs, the long-run slot, bodies, entry outcomes and close causes. **CS-3 is implemented (2026-10-23),** in `shekyl-chain-sync-runtime`, layered over the pure model in `shekyl-chain-sync` (Rick, 2026-10-23: ingest and the node depend on the model, the runtime on them): the router (the seam's post sink, attached to the node's owner since CS-5), the sync owner on its `chain-sync` row, the executor with `Class::Evidence`, serving 2011–2014 from the store, `Door::offer_bound` (formed with `form_judged`), the latch through the connector (`RaiseAlarm`, `WatchLatch`), and CS-Q11's loopback harness in `shekyl-p2p-harness` (`sync`).
+**Status:** **CS-5, the cutover, is implemented (2026-11-01, #1237):** live sessions sync through the Rust owner, which the node owns and the seam's bind attaches; the C++ handler keeps RD's transaction routes only; `sync_info` is the owner's view (3.68); 2003, 2004, 2006 and 2007 are retired (§ CS-5 below). CS-1 implemented (2026-10-21); CS-2 model and its §5 harness are in `shekyl-chain-sync` (2026-10-22); CS-3 implemented (2026-10-23): the runtime half and CS-Q11's loopback harness. CS-4 (pre-cutover, pure Rust): the inbound claim tap, the relay, the state handle's publisher and the cutover's deletion table. The cutover follows the DRS-X flip. Round 0 RULED, Rick 2026-10-18: CS-Q1…CS-Q12 as recommended, with four amendments: the complement request is chain sync's (CS-Q1, CS-Q10); `Synced` reads verified headers only (CS-Q2 step 8); the long-run slot is paid for in PoW and goes to the most verified work (CS-Q2 step 3); `following_degraded` gets a Rust producer (§A, coupling 4). Three corrections to CS-Q2 and CS-Q3, confirmed 2026-10-19 (Rick): a body, with its attestation witness, is bound to its header before the offer, so a substituted body or witness never invalidates an honest header (CEN-G2, CEN-B4); `Synced` waits for PDM-Q5's backward fill, with `Following` until then; and the body form is per transaction. The objects response follows PWD-B3's continuation (Rick, 2026-10-20): every requested block is sent, deferred by the budget, or marked unavailable, and only an unmarked shortfall closes the session (CS-Q3.2). Ruled 2026-10-19 (Rick), from DRS-X PR 2's design review: `following_degraded` is set by ingest's three refusals and by the sync owner, all through the connector, its one writer (§A items 7 and coupling 4); header PoW follows the earned-seed rule; and a past-cap branch is checked as evidence under `Class::Evidence` (CS-Q2 step 3). **Amended 2026-10-22 (Rick):** CS-Q2 step 1 refuses a block count of 0, or cumulative work below that count. **CS-1 is implemented (2026-10-21):** `form_header`, `judge_header`, `judge_header_cheap` and `bind_body` in `shekyl-chain-rules`; `PowBlob` and `BlockBody` in `shekyl-wire`; commands 2011–2014 in `shekyl-levin`, not admitted at ingress; the handler files are shrink-frozen (CS-Q9). CS-2, the sync model, is in `shekyl-chain-sync` (2026-10-22): the branch view, runs, the long-run slot, bodies, entry outcomes and close causes. **CS-3 is implemented (2026-10-23),** in `shekyl-chain-sync-runtime`, layered over the pure model in `shekyl-chain-sync` (Rick, 2026-10-23: ingest and the node depend on the model, the runtime on them): the router (the seam's post sink, attached to the node's owner since CS-5), the sync owner on its `chain-sync` row, the executor with `Class::Evidence`, serving 2011–2014 from the store, `Door::offer_bound` (formed with `form_judged`), the latch through the connector (`RaiseAlarm`, `WatchLatch`), and CS-Q11's loopback harness in `shekyl-p2p-harness` (`sync`).
 **Parent:** [`P2P_3_IMPLEMENTATION_ROUND.md`](P2P_3_IMPLEMENTATION_ROUND.md) §4.2, row **CS**. [`DRS_X_STORE_FLIP.md`](DRS_X_STORE_FLIP.md) carries §A below as chain sync's Round 0 requirement.
 
 ## Constants (CS-1)
 
-Values this PR introduces that are not derived. Each is an `Assumption`
-(Ruling B): written down, not measured.
+Values this PR introduces that are not derived. Each began as an
+`Assumption` (Ruling B): written down, not measured. The two the table
+marks **measured** were read on CS-5's §10 fleet (2026-11-03; #1237's §12
+report is the public record, the captures are in `shekyl-dev`
+`infrastructure/captures/cs5-s10/`), and the table after this one gives
+the host-role figures that reading rests on.
 
 | Name | Value | Basis | Replaced by |
 | --- | --- | --- | --- |
 | `HEADERS_RESPONSE_BYTES` | 2 MiB | A header response's preimage budget. About ten thousand headers, past the tip case (~144 KiB) and short of a whole initial-sync run. A preimage shorter than a PoW preimage is refused, so the encoded cap's two-byte length-prefix allowance holds. | CS-Q11: headers per second and peak memory on the floor device, after the cutover |
 | `BODIES_RESPONSE_BYTES` | 8 MiB | How much a body response adds after the first held block, which is sent whatever its size. Charged when the response is stored and when it is decoded. Not derived from the block-weight limit. | CS-Q11: bodies per second and peak memory on the floor device, after the cutover |
-| `SYNC_RATE_FLOOR` | 8 KiB/s | The deadline of a header request and of a body request. A full header response (`HEADERS_RESPONSE_BYTES`, 2 MiB) takes 256 seconds. A body deadline is `BODIES_RESPONSE_BYTES` at this rate, the same construction as the header deadline. The request names hashes; the bytes the peer may send are the body budget, which is known when the request is made. One rate: the two streams are not different measurements. Slow for one Tor stream, and not a clearnet rate, so an honest Tor peer is not declared late. | CS-Q11: a post-cutover regtest measurement over a real Tor path. Loopback has no network and cannot measure it. Split the constant only if that measurement shows the streams need different floors. |
-| `BODY_REQUESTS_IN_FLIGHT` | 4 | How many body spans may be outstanding at once, before the entry's room is the limit. | CS-Q11: a post-cutover regtest measurement over a real Tor path: how many spans keep a slow honest peer's stream full. Loopback has no network and cannot measure it. |
+| `SYNC_RATE_FLOOR` | 8 KiB/s | The deadline of a header request and of a body request. A full header response (`HEADERS_RESPONSE_BYTES`, 2 MiB) takes 256 seconds. A body deadline is `BODIES_RESPONSE_BYTES` at this rate, the same construction as the header deadline. The request names hashes; the bytes the peer may send are the body budget, which is known when the request is made. One rate: the two streams are not different measurements. Slow for one Tor stream, and not a clearnet rate, so an honest Tor peer is not declared late. | **Measured 2026-11-03 (CS-Q11), kept at 8 KiB/s.** Over the managed Tor on the §10 fleet, 122 body responses of 3–46 KiB arrived in 0.4–8.2 s: responses of 4–32 KiB at p10 6.8 / p50 13.4 KiB/s, of 32–262 KiB at p10 25 / p50 48 / max 74 KiB/s; the two under 8 KiB/s were sub-second round trips of small responses, not slow streams. The slowest transit, 8.2 s, was 1/125 of its deadline. The 26 header responses took 0.3–1.9 s, the large ones at p50 57 KiB/s. Clearnet bodies ran at p50 818 KiB/s. Nothing in the measurement separates the two streams: one floor stands. |
+| `BODY_REQUESTS_IN_FLIGHT` | 4 | How many body spans may be outstanding at once, before the entry's room is the limit. | **Measured 2026-11-03 (CS-Q11), kept at 4.** One node on the public host syncing 1,200 blocks over the managed Tor from eight servers, on builds capped at 2, 4 and 8 (4 is the tree's build): spans in flight at each request p50 / max 2 / 2, 4 / 4, 5 / 8; requests made at the cap 54 of 59, 35 of 63, 11 of 39; seated spans 53, 49, 39, none of them waited (`waited=true` 0, door refusals 0 at every cap: the door drained a 31-block span in about 0.6 s on that host, so its 32 seats never bound); body throughput 23.4, 36.7, 37.6 blocks/s, per-response p50 24, 28, 34 KiB/s. The reading rule written before the first run — the smallest cap at which the seats limit before the cap does — returned no cap up to 8, which is the most eight sessions can hold; the throughput knee is at 4 (+57% from 2, +2.5% from 4 to 8), and a request on a dead Tor circuit holds the apply line whatever the cap, with the exposure growing in the count (#1237 §12). Over clearnet the question did not arise: bodies at p50 818 KiB/s drained faster than they were asked for. |
+
+### What the §10 fleet measured, by host role (2026-11-03)
+
+The figures the two measured constants rest on, and the one finding that
+bears on them. The store commit is the connector's apply per block read
+from the profile deltas between consecutive `sync reached the best chain`
+lines over the 60-minute stale-rate takes; propagation is the finder's tip
+move to this node's, net of both stores; fsync is 40 × 4 KiB `pwrite` +
+`fsync` 250 ms apart with the hosts idle.
+
+| Host role | Honest sync, 400 blocks (clearnet / Tor) | Store commit per block (p50 / max; clearnet, Tor) | Propagation to this node (p50 / p90 / max; clearnet, Tor) | fsync (p50 / max) |
+| --- | --- | --- | --- | --- |
+| The public host (4 vCPU, KVM) | served the chain | 0.01 / 0.1 s; 0.01 / 0.02 s | 0.81 / 0.93 / 1.05 s; 1.31 / 1.52 / 35.0 s | 5 / 23 ms |
+| The lab miner host (8 vCPU, KVM) | 79.1 s / 197.4 s | 0.46 / 20.9 s; 0.30 / 33.3 s | 1.67 / 2.15 / 22.1 s; 1.95 / 17.7 / 39.8 s | 133 ms / 23.5 s |
+| The staging staker host (8 vCPU, KVM; a testnet daemon beside it) | 170.6 s / 144.9 s | 7.76 / 38.1 s; 7.12 / 40.1 s | 9.5 / 43.3 / 55.9 s; 2.46 / 32.1 / 49.3 s | 107 ms / 962 ms |
+| The floor device (rule 76) | not in the fleet: derived | — | — | — |
+
+The learn latencies the stale-rate takes report (#1237 §12: p50 3.0 s
+clearnet, 3.7 s Tor; p90 29–36 s) are the finder's commit, the wire and
+the receiver's commit, because the relay fires on the tip event after the
+local commit; 51 of the 54 clearnet learns over 10 s and 50 of the 54 Tor
+ones land on a commit of more than 5 s for the block on one of the two lab
+hosts, whose virtual disks stall (the fsync column). Net of the store the
+wire is the public host's row. The store is redb at `Durability::Immediate`
+with two-phase commit, two fsyncs a batch; CS-5 did not change it or its
+policy (`DAEMON_REDB_STORE.md`), and the figures are recorded for that
+document's ruling, not acted on here.
+
+The floor device was not in the fleet (`cs2-long-run.yml`'s aarch64 runner
+does not exist), so its row is derived: its light-mode hash is slower than
+the public host's 0.76 s, so an honest sync there runs at the verifier's
+rate (§8), and neither constant depends on it — both bound the wire and
+the door, and were read where the store did not stall.
 
 ## CS-2 rulings (Rick, 2026-10-21)
 
@@ -87,8 +124,9 @@ fix to its PR 2 (`:330`). §A records the couplings that remain.
     (`shekyl-wire/src/block.rs:322-356`).
   - Difficulty is `lwma1_next` over timestamps and cumulative
     difficulties only.
-  - `ReleaseAnchors` is a genesis hash plus a static table of
-    `(height, hash)` anchors (`shekyl-chain-rules/src/anchors.rs:114`).
+  - `GenesisPin` is each network's genesis hash and nothing above it
+    (`shekyl-chain-rules/src/genesis_pin.rs`; S1, 2026-11-03: no coded
+    checkpoints).
   - So a header chain can be checked for linkage, PoW, difficulty,
     timestamps and anchors without any bodies.
 - **CS-F7. Validation runs on the p2p I/O pool.**
@@ -310,7 +348,7 @@ ingest deciding forks.**
      cost.** Any failure closes the session.
      - linkage;
      - timestamp rules (MTP from the chain, FTL against the local clock);
-     - `ReleaseAnchors` (CEN-E1);
+     - the genesis pin (`GenesisPin`, CEN-E1);
      - each header's difficulty from `lwma1_next`, which needs only the
        chain's timestamps and work.
      - Headers that pass are added to the session's run. So the run's
@@ -483,6 +521,26 @@ ingest deciding forks.**
             dialer's rule: an honest chain served by many honest sessions
             is reached in proportion to their share.
           - **At most one check per session.**
+          - **When the draw runs (Defect 11, §10's partition regtest,
+            2026-11-03):** a header response records its candidate and
+            does not draw, so responses of one round are drawn over as
+            a set; the draw runs at the next event. That event is not
+            promised — a peer that has served its chain may send nothing
+            more, and the regtest's heavier-chain node sat with its
+            peer's 841 headers and never began the check. The response
+            therefore arms a wake (`Command::ArmDraw`) one declared
+            transit out, the bound on the draw when nothing else
+            arrives; one is armed at a time.
+          - **While the check runs (Defect 12, the same regtest):** a
+            page from the session that does not continue the drawn run
+            is discarded and the run stays. The page is the branch asked
+            for again — the peer's claim moved while the check ran, and
+            this node's locator holds nothing of the branch, so the peer
+            answered from the fork — and it adds nothing the check
+            needs. The branch counts as followed until the claim moves
+            again. Until 2026-11-03 the page dropped the run, and with
+            the session's one draw spent nothing drew again: the heavier
+            node that kept mining was never latched against.
        4. **In order from the fork, and stop at proof.**
           - Every later seed on the run is earned under B2's 65-block
             rule (above).
@@ -1676,7 +1734,7 @@ increments?
 **Ruled (Rick, 2026-10-18): as written.**
 - **Now, pure Rust, no FFI:**
   - (1) the header-chain verifier (over `shekyl-difficulty`, RandomX and
-    `ReleaseAnchors`), tested against the captured chains;
+    `GenesisPin`), tested against the captured chains;
   - (2) the sync model as a crate with property tests (CS-Q11);
   - (3) the new payload types in `shekyl-levin` with KATs.
 - **The cutover's horizon.** The cutover follows the DRS-X flip, whose
@@ -1896,7 +1954,7 @@ it decided beyond the rows above:
   session with no header run is `idle`. The rate is the last response's
   bytes over the time since its request was sent. The owner publishes
   the view on a watch after every event; `sync_info` renders it and
-  `get_connections` joins it to the board (3.66).
+  `get_connections` joins it to the board (3.68).
 - **Our own blocks.** The model relays a new tip it neither accepted nor
   still awaits from the entry, from the tip event, to every session
   (`Command::Relay::from` is `None`). The first tip observed relays
@@ -1930,23 +1988,10 @@ it decided beyond the rows above:
   about 190 ms of each block's wall time; `form_judged` is under 1 ms,
   the connector's apply 5–7 ms, the body transit under 0.2 ms. The sync
   path has nothing left to tune at that cost: the hash is one per block
-  by ruling, and it already runs on every core. The cost per hash is the
-  verifier's, not chain sync's.
-- **Open: the catch-up proof-of-work cost** (Rick, 2026-11-01). No lever
-  is chosen, in chain sync or on the DRS line. Proof of work alone is
-  about 16 minutes for PB-D2's 5,040 blocks on the qualified host
-  (5,040 × 0.76 s ÷ 3.9) against its 15-minute reference, and transaction
-  verification at design load, not yet measured, comes on top. The owner
-  is the RandomX v2 asymmetry program (`RANDOMX_V2_MINING_ASYMMETRY.md`):
-  dataset mode for verification is its option (a), a faster verifier per
-  core moves that decision's floor, and catch-up cost is one of its
-  inputs. The decision carries PB-R1 (`DAEMON_REDB_STORE.md` §1.3a.4):
-  dataset mode on a non-mining node breaks the 2 GiB ceiling, so taking
-  it needs a change under its §1.3a.1 rule 6, or a mode keyed to the
-  host's RAM, which is two verification paths and a switch that depends
-  on the host. Trigger: PB-D2's first design-load run with its
-  proof-of-work share (§1.3a.6), which needs #1245's adversarial-block
-  builder.
+  by ruling, and it already runs on every core. At that rate PB-D2's
+  5,040 blocks (a week offline) take about 16 minutes of proof of work
+  on the qualified host (5,040 × 0.76 s ÷ 3.9), against its 15-minute
+  reference.
 - **The per-block profile is one sink.** The node's measurement sink
   (`shekyl-chain-ingest`'s `Metrics`, schema `shekyl_e2_metrics_v4`),
   which the substrate already hashes into, also takes the entry's
@@ -1975,6 +2020,45 @@ it decided beyond the rows above:
   reads as the cap at which spans wait for seats. Not timed: the model's
   own gate on planning while it reads zero seats (`plan_bodies`), which
   the per-response lines show as fewer requests in flight than the cap.
+- **§10, measured (2026-11-03, #1237's §12 report).** Three CS-5 nodes on
+  the public host, the lab miner host and the staging staker host, clearnet
+  then the managed Tor, with a fourth daemon for the stall case. Honest sync
+  of 400 blocks: 79–197 s. §4's relay reached every node that held a
+  session; the stall case recovered on the redial (clearnet: a fresh node
+  at 156 of 417 when its only peer stopped, back to 417 26 s after that
+  peer returned; Tor: a fresh node holding its only peer's 400 headers
+  when that peer was frozen for 300 s, its connection closed by the
+  120 s timed-sync bound during the freeze, back at 400 30 s after the
+  thaw, on the redial). The stale-rate take (60 min at a 30 s
+  interval, calibrated from the fleet's measured hash rate): clearnet 85
+  heights, 7 forks (8.2%; alpha.10 9.9%), learn latency p50 3.0 s / p90
+  28.8 s / p99 52.4 s, 54 of 170 over 10 s; Tor 84 heights, 13 forks
+  (15.5%), p50 3.7 s / p90 36.3 s / p99 46.5 s, 54 of 168 over 10 s
+  (alpha.10's sync-path median: 29 s). The learns over 10 s are the store's,
+  not the wire's: 30 + 21 of the clearnet 54 and 32 + 18 of the Tor 54 land
+  on a receiver's or the finder's connector apply of more than 5 s for a
+  block (the relay fires on the tip event, after the local commit), and the
+  two lab hosts' commits — redb at `Durability::Immediate` with two-phase
+  commit, two fsyncs a batch — stalled for 20–49 s at a time on their
+  virtual disks, twice on both hosts at the same moment. Net of the store,
+  propagation to the public host was p50 0.81 s, p90 0.93 s, max 1.05 s
+  over clearnet and p50 1.31 s, p90 1.52 s over Tor. The store and its
+  durability policy are not CS-5's; the measurement is recorded here for a
+  ruling (`DAEMON_REDB_STORE.md`). One convergence take over Tor was void
+  (the harness restarted a node against a peer onion the peer's own
+  restart had retired, so the node held no session; a node with no
+  session learns nothing, which is §4's rule, not a defect); rerun on
+  fresh onions, that node — 35 blocks down its own fork, 177 behind —
+  reached the best chain 198 s after its start. The `D_max` partition
+  regtest (CS-Q11) passed every leg between the public host and a lab
+  host over clearnet (a common chain of 100, branches of 900 and 830,
+  fork depth 730 past `D_max` 720): the lighter half latched 122 s after
+  the rejoin, the heavier half stayed clear for 60 s and at equal work for
+  120 s, and the overtaken half latched 91 s after the other passed it,
+  then kept mining — each latch all proof, read on the 2 s `get_info`
+  poll. Its first two runs found Defects 11 and 12 in the evidence check
+  (CS-Q2, the past-cap evidence check, item 3); the third, on the fixed
+  head, is the measurement. The two constants: the table above.
 
 ## §A. What chain sync needs from the DRS-X entry
 

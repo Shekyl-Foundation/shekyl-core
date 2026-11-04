@@ -35,12 +35,15 @@
 //! the wallet is caught up — during catch-up the wallet ingests far faster than
 //! the steady-state rate the bound is sized for, so an armed check fires on
 //! every healthy catch-up. Deciding that needs both the chain height and the
-//! wallet's ingest height, and **both are already on the witness**:
-//! `ServeSet::as_of_height` is the chain height the bond record was read at, and
-//! `ServingReader::sync_tip_height` is what this wallet has ingested. Threading
-//! a host handle into the sweep would buy a tip the witness already carries, at
-//! the cost of shared mutable state for a host that does not exist during the
-//! launch standoff. Recorded as a divergence rather than taken silently.
+//! wallet's ingest height, and **both are this task's to read**:
+//! `ServeSet::as_of_height` on the witness is the chain height the bond record
+//! was read at, and `PersonaServingHost::ingested_tip` is what this wallet has
+//! ingested, read from the served store through the host's own pinner.
+//! Threading a host handle into the sweep would buy a tip this task already
+//! reads, at the cost of shared mutable state for a host that does not exist
+//! during the launch standoff. Recorded as a divergence rather than taken
+//! silently. (*Records-was, until 2026-11-02:* the ingest tip was
+//! `ServingReader::sync_tip_height` on the witness's own reader.)
 //!
 //! (SH-2a's warning against subtracting those two heights is about the
 //! *staleness clock*, which must be one clock read twice. This is a different

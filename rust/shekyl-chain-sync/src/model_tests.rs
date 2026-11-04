@@ -127,7 +127,7 @@ fn claim(count: u64, work: u128) -> PeerClaim {
 
 #[test]
 fn a_genesis_only_claim_is_admitted() {
-    let mut sync = Sync::new(Trust::UNANCHORED, issued);
+    let mut sync = Sync::new(Trust::UNPINNED, issued);
     // One block, target 1.
     assert_eq!(hint(&mut sync, claim(1, 1)), Ok(()));
     assert_eq!(sync.state(), SyncState::NoView);
@@ -135,7 +135,7 @@ fn a_genesis_only_claim_is_admitted() {
 
 #[test]
 fn a_block_count_of_zero_is_refused() {
-    let mut sync = Sync::new(Trust::UNANCHORED, issued);
+    let mut sync = Sync::new(Trust::UNPINNED, issued);
     assert_eq!(
         hint(&mut sync, claim(0, 1)),
         Err(ClaimError::Refused(PayloadRefused::Height))
@@ -148,7 +148,7 @@ fn a_block_count_of_zero_is_refused() {
 
 #[test]
 fn work_below_the_block_count_is_refused() {
-    let mut sync = Sync::new(Trust::UNANCHORED, issued);
+    let mut sync = Sync::new(Trust::UNPINNED, issued);
     assert_eq!(
         hint(&mut sync, claim(3, 2)),
         Err(ClaimError::Refused(PayloadRefused::Work))
@@ -175,7 +175,7 @@ fn a_regtest_fixed_target_admits_an_honest_claim() {
         work < GENESIS_DIFFICULTY,
         "this chain's work is the fixed targets, not the DAA constant"
     );
-    let mut sync = Sync::new(Trust::UNANCHORED, issued);
+    let mut sync = Sync::new(Trust::UNPINNED, issued);
     assert_eq!(hint(&mut sync, claim(count, work)), Ok(()));
 }
 
@@ -187,7 +187,7 @@ fn a_regtest_fixed_target_admits_an_honest_claim() {
 /// complement. A claim after that moves nothing.
 #[test]
 fn a_claim_holds_the_opening_and_never_grants_a_state() {
-    let mut sync = Sync::new(Trust::UNANCHORED, issued);
+    let mut sync = Sync::new(Trust::UNPINNED, issued);
     let opened = open(&mut sync, 1);
     assert!(
         !opened
@@ -241,7 +241,7 @@ fn a_claim_holds_the_opening_and_never_grants_a_state() {
 #[test]
 fn a_declared_node_with_no_session_is_synced() {
     for declaration in [crate::Declaration::Offline, crate::Declaration::Closed] {
-        let mut sync = Sync::new(Trust::UNANCHORED, issued).with_declaration(declaration);
+        let mut sync = Sync::new(Trust::UNPINNED, issued).with_declaration(declaration);
         assert_eq!(sync.state(), SyncState::Synced, "{declaration:?}");
         open(&mut sync, 1);
         assert_eq!(
@@ -263,13 +263,13 @@ fn a_declared_node_with_no_session_is_synced() {
         assert_eq!(sync.state(), SyncState::Synced, "{declaration:?}");
         assert!(out.is_empty(), "{declaration:?}: {out:?}");
     }
-    let open_network = Sync::<u8, _>::new(Trust::UNANCHORED, issued);
+    let open_network = Sync::<u8, _>::new(Trust::UNPINNED, issued);
     assert_eq!(open_network.state(), SyncState::NoView);
 }
 
 #[test]
 fn the_last_session_closing_returns_to_no_view() {
-    let mut sync = Sync::new(Trust::UNANCHORED, issued);
+    let mut sync = Sync::new(Trust::UNPINNED, issued);
     open(&mut sync, 1);
     open(&mut sync, 2);
     fire_opening(&mut sync);
@@ -302,7 +302,7 @@ fn the_last_session_closing_returns_to_no_view() {
 
 #[test]
 fn a_short_fill_is_following_and_the_latch_does_not_withhold_synced() {
-    let mut sync = Sync::new(Trust::UNANCHORED, issued);
+    let mut sync = Sync::new(Trust::UNPINNED, issued);
     open(&mut sync, 1);
     fire_opening(&mut sync);
     let mut out = Vec::new();
@@ -354,7 +354,7 @@ fn a_short_fill_is_following_and_the_latch_does_not_withhold_synced() {
 
 #[test]
 fn a_store_fault_reaches_the_caller() {
-    let mut sync = Sync::new(Trust::UNANCHORED, issued);
+    let mut sync = Sync::new(Trust::UNPINNED, issued);
     let mut out = Vec::new();
     let fault = sync
         .handle(
@@ -444,7 +444,7 @@ fn a_tip_is_read_from_the_chain() {
         }
     }
 
-    let mut sync = Sync::new(Trust::UNANCHORED, issued);
+    let mut sync = Sync::new(Trust::UNPINNED, issued);
     open(&mut sync, 1);
     fire_opening(&mut sync);
     let mut out = Vec::new();
@@ -479,7 +479,7 @@ fn a_tip_is_read_from_the_chain() {
 /// request's session closes, and then it is drawn.
 #[test]
 fn one_header_request_extends_the_frontier() {
-    let mut sync = Sync::new(Trust::UNANCHORED, issued);
+    let mut sync = Sync::new(Trust::UNPINNED, issued);
     open(&mut sync, 1);
     open(&mut sync, 2);
     let mut out = Vec::new();

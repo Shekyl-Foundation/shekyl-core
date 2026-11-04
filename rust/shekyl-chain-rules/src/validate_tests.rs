@@ -31,7 +31,7 @@ fn a_well_formed_candidate_passes_and_covers_only_the_landed_rows() {
             formed_on(&chain, input),
             &view,
             &RuleSet::GENESIS,
-            &Trust::UNANCHORED,
+            &Trust::UNPINNED,
         ))
         .expect("the fixture satisfies every landed rule");
         assert_eq!(valid.rule_set_id(), RuleSetId::GENESIS);
@@ -245,7 +245,7 @@ fn the_validated_block_is_the_candidate_with_identities_derived_once() {
             formed_on(&chain, input),
             &view,
             &RuleSet::GENESIS,
-            &Trust::UNANCHORED,
+            &Trust::UNPINNED,
         ))
         .expect("the fixture satisfies every landed rule");
         let block = valid.block();
@@ -267,7 +267,7 @@ fn a_block_with_no_listed_transactions_passes() {
             formed(candidate(Vec::new())),
             &view,
             &RuleSet::GENESIS,
-            &Trust::UNANCHORED,
+            &Trust::UNPINNED,
         ))
         .expect("the fixture satisfies every landed rule");
         assert!(valid.block().transactions().is_empty());
@@ -497,7 +497,7 @@ fn a_rule_set_claim_the_view_stage_refutes_is_stale_with_a_bounded_retry() {
     .expect("no fault")
     .expect("major 2 passes B1 under a set that admits 2");
     MockChain::default().with_view(|view| {
-        let fault = validate(formed, &view, &RuleSet::GENESIS, &Trust::UNANCHORED)
+        let fault = validate(formed, &view, &RuleSet::GENESIS, &Trust::UNPINNED)
             .expect_err("a stale rule-set claim is a fault, not a verdict");
         let Fault::Stale(Stale::RuleSet {
             formed_under,
@@ -541,7 +541,7 @@ fn a_target_claim_the_view_does_not_derive_is_stale_with_a_bounded_retry() {
     .expect("the zero longhash satisfies the claimed target");
     assert_eq!(formed.target(), wrong);
     chain.with_view(
-        |view| match validate(formed, &view, &RuleSet::GENESIS, &Trust::UNANCHORED) {
+        |view| match validate(formed, &view, &RuleSet::GENESIS, &Trust::UNPINNED) {
             Err(Fault::Stale(Stale::Target {
                 claimed,
                 expected,
@@ -574,7 +574,7 @@ fn the_last_attempt_is_terminal() {
     .expect("no fault")
     .expect("passes the stateless stage");
     MockChain::default().with_view(|view| {
-        match validate(formed, &view, &RuleSet::GENESIS, &Trust::UNANCHORED) {
+        match validate(formed, &view, &RuleSet::GENESIS, &Trust::UNPINNED) {
             Err(Fault::Stale(Stale::RuleSet { retry, .. })) => {
                 assert_eq!(retry, Retry::Exhausted);
             }
@@ -600,7 +600,7 @@ fn a_fakechain_rule_set_mints_at_genesis_with_d6_in_coverage() {
             expected_target(&MockChain::default(), &seven),
             &crate::block::ReferenceClaims::EMPTY,
         );
-        let valid = judged(validate(formed, &view, &seven, &Trust::UNANCHORED))
+        let valid = judged(validate(formed, &view, &seven, &Trust::UNPINNED))
             .expect("fakechain genesis mints");
         assert!(valid.coverage().covers_landed(&seven));
         assert!(valid.coverage().contains(CenRow::D6));
@@ -627,7 +627,7 @@ fn a_fakechain_set_is_stale_against_genesis_even_at_the_same_id() {
         &crate::block::ReferenceClaims::EMPTY,
     );
     MockChain::default().with_view(|view| {
-        let fault = validate(formed, &view, &RuleSet::GENESIS, &Trust::UNANCHORED)
+        let fault = validate(formed, &view, &RuleSet::GENESIS, &Trust::UNPINNED)
             .expect_err("the set moved, even though the id did not");
         match fault {
             Fault::Stale(Stale::RuleSet {
@@ -661,8 +661,8 @@ fn two_fakechain_targets_are_distinct_sets() {
         &crate::block::ReferenceClaims::EMPTY,
     );
     MockChain::default().with_view(|view| {
-        let fault = validate(formed, &view, &seven, &Trust::UNANCHORED)
-            .expect_err("different Fixed targets");
+        let fault =
+            validate(formed, &view, &seven, &Trust::UNPINNED).expect_err("different Fixed targets");
         assert!(matches!(fault, Fault::Stale(Stale::RuleSet { .. })));
     });
 }

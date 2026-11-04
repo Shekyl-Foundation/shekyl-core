@@ -12,7 +12,7 @@ use shekyl_chain_rules::{AtHeight, HeaderRecord, HeaderView, RuleSet, Trust};
 use shekyl_difficulty::{CumulativeDifficulty, MTP_WINDOW_USIZE, N_USIZE};
 use shekyl_draw_rng::SplitMix64;
 use shekyl_levin::{PortableMap, ResponseBodies, ResponseHeaders};
-use shekyl_types::{BlockHeight, ChainCount};
+use shekyl_types::{BlockHash, BlockHeight, ChainCount};
 use shekyl_wire::{Block, BlockBody, PowBlob, TxBody};
 
 use super::{
@@ -26,7 +26,7 @@ use crate::{Command, PeerClaim};
 fn the_latch_plans_no_evidence_hash() {
     let rules = cap(1);
     let main = chain_of(8);
-    let mut sync = Sync::new(Trust::UNANCHORED, move |_| rules);
+    let mut sync = Sync::new(Trust::UNPINNED, move |_| rules);
     main.with_view(|view| {
         let tip = view.tip().unwrap().unwrap();
         let mut out = Vec::new();
@@ -82,7 +82,7 @@ fn a_past_cap_run_holds_only_its_window() {
     let rules = cap(1);
     let main = chain_of(400);
     let window = N_USIZE.max(MTP_WINDOW_USIZE).saturating_add(8);
-    let mut sync = Sync::new(Trust::UNANCHORED, move |_| rules);
+    let mut sync = Sync::new(Trust::UNPINNED, move |_| rules);
     main.with_view(|raw| {
         let view = UnitWork(raw);
         let tip = view.tip().unwrap().unwrap();
@@ -146,7 +146,7 @@ fn the_evidence_draw_is_uniform_over_the_waiting_candidates() {
     let mut blobs = Vec::new();
     let mut parent = prefix[0].hash;
     let mut timestamp = prefix[0].header.timestamp;
-    let mut scratch = Sync::new(Trust::UNANCHORED, move |_| rules);
+    let mut scratch = Sync::new(Trust::UNPINNED, move |_| rules);
     main.with_view(|raw| {
         let view = UnitWork(raw);
         let tip = view.tip().unwrap().unwrap();
@@ -185,7 +185,7 @@ fn the_evidence_draw_is_uniform_over_the_waiting_candidates() {
     let mut hits = [0u32; 2];
     let trials = 80u64;
     for seed in 0..trials {
-        let mut sync = Sync::new(Trust::UNANCHORED, move |_| rules);
+        let mut sync = Sync::new(Trust::UNPINNED, move |_| rules);
         let mut rng = SplitMix64::new(seed.wrapping_mul(0x9E37_79B9_7F4A_7C15));
         main.with_view(|raw| {
             let view = UnitWork(raw);
@@ -330,7 +330,7 @@ fn a_bind_failure_closes_and_an_unavailable_block_does_not() {
     let rules = cap(64);
     let main = chain_of(21);
     let mut block = candidate_on(&main, Vec::new()).block;
-    let mut sync = Sync::new(Trust::UNANCHORED, move |_| rules);
+    let mut sync = Sync::new(Trust::UNPINNED, move |_| rules);
     main.with_view(|view| {
         let tip = view.tip().unwrap().unwrap();
         let mut out = Vec::new();
@@ -443,7 +443,7 @@ fn a_bind_failure_closes_and_an_unavailable_block_does_not() {
 /// Two honest sessions extend one frontier with one header request.
 #[test]
 fn one_header_request_extends_the_frontier() {
-    let mut sync = Sync::new(Trust::UNANCHORED, |_: BlockHeight| RuleSet::GENESIS);
+    let mut sync = Sync::new(Trust::UNPINNED, |_: BlockHeight| RuleSet::GENESIS);
     let main = chain_of(4);
     main.with_view(|view| {
         let tip = view.tip().unwrap().unwrap();
@@ -523,7 +523,7 @@ fn an_evidence_refetch_after_a_whole_fork_response_is_proven() {
     }
     .store()
     .expect("the response encodes");
-    let mut sync = Sync::new(Trust::UNANCHORED, move |_| rules);
+    let mut sync = Sync::new(Trust::UNPINNED, move |_| rules);
     main.with_view(|raw| {
         let view = UnitWork(raw);
         let tip = view.tip().unwrap().unwrap();
@@ -593,5 +593,247 @@ fn an_evidence_refetch_after_a_whole_fork_response_is_proven() {
                 .any(|command| matches!(command, Command::RaiseAlarm { .. })),
             "no alarm: {out:?}"
         );
+    });
+}
+
+/// A page that does not continue an evidence check leaves the check in
+/// place (§10 partition regtest, 2026-11-03: the heavier peer kept
+/// mining, its claim moved every timed sync, each move re-asked from the
+/// fork, and each page dropped the run it was proving; the session's
+/// one draw was spent, so nothing drew again and the latch never set).
+#[test]
+fn a_page_during_an_evidence_check_does_not_end_it() {
+    let rules = cap(1);
+    let main = chain_of(4);
+    let prefix = prefix_of(&main, 0);
+    let mut block = candidate_on(&main, Vec::new()).block;
+    let long = N_USIZE.max(MTP_WINDOW_USIZE) + 10;
+    let mut extra: Vec<HeaderRecord> = Vec::new();
+    let mut blobs = Vec::new();
+    let mut parent = prefix[0].hash;
+    let mut timestamp = prefix[0].header.timestamp;
+    // `long` headers, then one more: the peer's chain as first served, and
+    // as it stands one block later.
+    for step in 0..=long {
+        let along = Along {
+            prefix: &prefix,
+            extra: &extra,
+            fork: 0,
+        };
+        timestamp += 120;
+        formed_on(&along, &rules, &mut block, parent, timestamp);
+        let pow = block.pow_blob();
+        parent = PowBlob::read(&pow).expect("preimage").identity();
+        extra.push(HeaderRecord {
+            hash: parent,
+            header: block.header.clone(),
+            cumulative_difficulty: CumulativeDifficulty::from_raw(
+                u128::try_from(step).expect("small") + 2,
+            ),
+        });
+        blobs.push(pow);
+    }
+    let whole = ResponseHeaders {
+        blobs: blobs[..long].to_vec(),
+        tip_work: u128::MAX - 1,
+        more: false,
+    }
+    .store()
+    .expect("the response encodes");
+    let later = ResponseHeaders {
+        blobs,
+        tip_work: u128::MAX,
+        more: false,
+    }
+    .store()
+    .expect("the response encodes");
+    let mut sync = Sync::new(Trust::UNPINNED, move |_| rules);
+    main.with_view(|raw| {
+        let view = UnitWork(raw);
+        let tip = view.tip().unwrap().unwrap();
+        let mut out = Vec::new();
+        sync.handle(
+            Event::Tip { tip },
+            &view,
+            Instant::now(),
+            &mut NoDraw,
+            &mut out,
+        )
+        .unwrap();
+        open_and_claim(&mut sync, &view, 1, u128::MAX - 1);
+        sync.handle(
+            Event::Headers {
+                session: 1,
+                bytes: whole.clone(),
+            },
+            &view,
+            Instant::now(),
+            &mut NoDraw,
+            &mut out,
+        )
+        .unwrap();
+        let wake = out
+            .iter()
+            .find_map(|command| match command {
+                Command::ArmDraw { session: 1, id, .. } => Some(*id),
+                _ => None,
+            })
+            .expect("the candidate armed no wake");
+        out.clear();
+        sync.handle(
+            Event::Deadline {
+                session: 1,
+                request: wake,
+            },
+            &view,
+            Instant::now(),
+            &mut NoDraw,
+            &mut out,
+        )
+        .unwrap();
+        assert_eq!(sync.evidence_session(), Some(1));
+        let mut proving = Vec::new();
+        sync.handle(
+            Event::Headers {
+                session: 1,
+                bytes: whole,
+            },
+            &view,
+            Instant::now(),
+            &mut NoDraw,
+            &mut proving,
+        )
+        .unwrap();
+        assert_eq!(
+            proves(&proving).first(),
+            Some(&HashClass::Evidence),
+            "the refetch was not proven: {proving:?}"
+        );
+        // The peer's claim moves: the branch is asked for again, from the
+        // fork, and the page arrives while the check runs.
+        let mut out = Vec::new();
+        sync.claim(
+            1,
+            PeerClaim {
+                count: ChainCount::from_raw(2),
+                work: CumulativeDifficulty::from_raw(u128::MAX),
+                top: BlockHash::NULL,
+            },
+            &view,
+            Instant::now(),
+            &mut NoDraw,
+            &mut out,
+        )
+        .unwrap();
+        assert!(
+            out.iter()
+                .any(|command| matches!(command, Command::RequestHeaders { session: 1, .. })),
+            "the moved claim was not asked: {out:?}"
+        );
+        out.clear();
+        sync.handle(
+            Event::Headers {
+                session: 1,
+                bytes: later,
+            },
+            &view,
+            Instant::now(),
+            &mut NoDraw,
+            &mut out,
+        )
+        .unwrap();
+        assert!(closes(&out).is_empty(), "the page closed: {out:?}");
+        assert_eq!(
+            sync.evidence_session(),
+            Some(1),
+            "the page ended the check: {out:?}"
+        );
+        // The same claim asks nothing more until it moves again.
+        assert!(
+            !out.iter()
+                .any(|command| matches!(command, Command::RequestHeaders { .. })),
+            "the page was asked for again: {out:?}"
+        );
+        super::resolve_proves(&mut sync, &view, &mut proving);
+        assert!(
+            proving
+                .iter()
+                .any(|command| matches!(command, Command::RaiseAlarm { .. })),
+            "no alarm: {proving:?}"
+        );
+    });
+}
+
+/// A heavier past-cap run is drawn without further traffic: the header
+/// response that records the candidate arms a wake, and the wake draws
+/// (§10 partition regtest, 2026-11-03: a node whose one peer went quiet
+/// after serving its heavier chain never began the check).
+#[test]
+fn an_evidence_candidate_is_drawn_when_nothing_else_arrives() {
+    let rules = cap(1);
+    let main = chain_of(4);
+    let prefix = prefix_of(&main, 0);
+    let mut block = candidate_on(&main, Vec::new()).block;
+    let mut parent = prefix[0].hash;
+    let mut timestamp = prefix[0].header.timestamp;
+    let mut sync = Sync::new(Trust::UNPINNED, move |_| rules);
+    main.with_view(|raw| {
+        let view = UnitWork(raw);
+        let tip = view.tip().unwrap().unwrap();
+        let mut out = Vec::new();
+        sync.handle(
+            Event::Tip { tip },
+            &view,
+            Instant::now(),
+            &mut NoDraw,
+            &mut out,
+        )
+        .unwrap();
+        open_and_claim(&mut sync, &view, 1, u128::MAX);
+        let mut wake = None;
+        for step in 0..4 {
+            let extra = sync.run_records(1);
+            let along = Along {
+                prefix: &prefix,
+                extra: &extra,
+                fork: 0,
+            };
+            timestamp += 120;
+            formed_on(&along, &rules, &mut block, parent, timestamp);
+            let pow = block.pow_blob();
+            parent = PowBlob::read(&pow).expect("preimage").identity();
+            let out = answer(&mut sync, &view, 1, pow, u128::MAX, step < 3);
+            assert!(closes(&out).is_empty(), "header {step} closed: {out:?}");
+            assert!(
+                !proves(&out).contains(&HashClass::Evidence),
+                "a header response drew: {out:?}"
+            );
+            wake = wake.or_else(|| {
+                out.iter().find_map(|command| match command {
+                    Command::ArmDraw { session: 1, id, .. } => Some(*id),
+                    _ => None,
+                })
+            });
+        }
+        assert!(sync.run_len(1) > 0, "the candidate run did not form");
+        assert!(sync.evidence_session().is_none(), "drawn before the wake");
+        let id = wake.expect("the candidate armed no wake");
+        let mut out = Vec::new();
+        sync.handle(
+            Event::Deadline {
+                session: 1,
+                request: id,
+            },
+            &view,
+            Instant::now(),
+            &mut NoDraw,
+            &mut out,
+        )
+        .unwrap();
+        assert!(
+            proves(&out).contains(&HashClass::Evidence),
+            "the wake did not draw: {out:?}"
+        );
+        assert_eq!(sync.evidence_session(), Some(1));
     });
 }

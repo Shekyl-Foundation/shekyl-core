@@ -133,6 +133,8 @@ pub struct Sync<K, R> {
     pub(crate) alarm: bool,
     /// Raised from `T` already, so it is not raised again.
     pub(crate) alarm_sent: bool,
+    /// The evidence draw's wake ([`Command::ArmDraw`]), while one is armed.
+    pub(crate) draw_wake: Option<u64>,
     /// The posture `judge_header` is given. The fill's checkpoint does
     /// not read it: until slice 6 every posture is full.
     pub(crate) trust: Trust,
@@ -193,6 +195,7 @@ where
             fill_frontier: BlockHeight::ZERO,
             alarm: false,
             alarm_sent: false,
+            draw_wake: None,
             trust,
             requesting: Requesting::On,
             declaration: Declaration::Open,
@@ -675,7 +678,10 @@ where
         out: &mut Vec<Command<K>>,
     ) -> Result<(), H::Fault> {
         let before = self.state();
-        let header_response = matches!(event, Event::Headers { .. });
+        let header_response = match &event {
+            Event::Headers { session, .. } => Some(*session),
+            _ => None,
+        };
         match event {
             Event::SessionOpened { session, transit } => {
                 let claim = self.pending.remove(&session);
@@ -736,8 +742,12 @@ where
         // A header response only records an evidence candidate. The draw
         // waits for the next event, so two responses can both be waiting
         // and the draw is over that set, not over whichever arrived first.
-        if !header_response {
-            self.start_evidence(rng, now, out);
+        // The next event is not promised: a peer that has served its chain
+        // may send nothing more, so the response arms a wake that is the
+        // draw's bound (`ArmDraw`).
+        match header_response {
+            Some(session) => self.arm_draw(session, now, out),
+            None => self.start_evidence(rng, now, out),
         }
         self.plan(main, now, rng, out)?;
         self.plan_bodies(now, out);

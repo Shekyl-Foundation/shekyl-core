@@ -35,7 +35,7 @@ where
 {
     let main = chain_of(8);
     let mut block = candidate_on(&main, Vec::new()).block;
-    let mut sync = Sync::new(Trust::UNANCHORED, target_one as fn(BlockHeight) -> RuleSet);
+    let mut sync = Sync::new(Trust::UNPINNED, target_one as fn(BlockHeight) -> RuleSet);
     main.with_view(|view| {
         let tip = view.tip().expect("main answers").expect("a tip");
         drive(&mut sync, &view, Event::Tip { tip });

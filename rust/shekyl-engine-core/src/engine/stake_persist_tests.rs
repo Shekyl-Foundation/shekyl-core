@@ -524,7 +524,7 @@ async fn persist_bond_record_commits_durably_and_survives_reopen() {
         assert_eq!(g.ledger.staking.p_slot, 8);
     }
 
-    engine.close(&creds).expect("close created wallet");
+    engine.close(&creds).await.expect("close created wallet");
 
     // Durability: the record survives a real seal → write → read round trip.
     let opened = Engine::<SoloSigner>::open_full(
@@ -567,7 +567,7 @@ async fn corrupt_pscan_seal_degrades_the_gc_and_still_opens() {
     engine
         .persist_bond_record(PSlot::from_raw(2))
         .expect("persist bond record");
-    engine.close(&creds).expect("close");
+    engine.close(&creds).await.expect("close");
 
     // Truncated garbage where the sealed pscan state should be.
     std::fs::write(
@@ -616,7 +616,7 @@ async fn staker_reopen_spawns_stake_engine_over_bonded_union_lookahead() {
     engine
         .persist_bond_record(PSlot::from_raw(3))
         .expect("persist bond record");
-    engine.close(&creds).expect("close created wallet");
+    engine.close(&creds).await.expect("close created wallet");
 
     let opened = Engine::<SoloSigner>::open_full(
         &base_path,

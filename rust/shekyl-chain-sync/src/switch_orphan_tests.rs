@@ -100,7 +100,7 @@ fn a_header_anchored_at_a_demoted_block_leaves_t_and_the_page_is_judged() {
     let rules = fixed(1, 64);
     let fixture = chain_of(8);
     let template = candidate_on(&fixture, Vec::new()).block;
-    let mut sync = Sync::new(Trust::UNANCHORED, move |_| rules);
+    let mut sync = Sync::new(Trust::UNPINNED, move |_| rules);
     let wall = Timestamp::from_raw(u64::MAX / 4);
     sync.set_wall(wall);
     let substrate = MockSubstrate {

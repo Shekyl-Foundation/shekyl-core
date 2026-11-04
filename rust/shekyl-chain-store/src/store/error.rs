@@ -34,7 +34,7 @@
 //! to owe later.
 
 use crate::apply_policy::ArchivalFamily;
-use shekyl_chain_rules::{AnchorConflict, RuleSet};
+use shekyl_chain_rules::{GenesisConflict, RuleSet};
 use shekyl_types::{BlockHash, BlockHeight, PCanonicalId, TxHash};
 
 use crate::codec::{SchemaVersion, SettlementEpochBlocks};
@@ -314,17 +314,13 @@ pub enum StoreCannot {
         /// The schedule this session runs.
         session: SettlementEpochBlocks,
     },
-    /// The recorded chain contradicts a pin this binary carries (CEN-E5).
+    /// The recorded chain's genesis is not the one this binary pins
+    /// (CEN-E5): the file is another network's, or a remint.
     ///
     /// The file is coherent; this session is the wrong one for it — the
-    /// same class as [`Self::SettlementEpochMismatch`]. Genesis
-    /// ([`AnchorConflict::remedy`] is refuse-to-run) is another network's
-    /// file, or a remint. A later checkpoint carries a pop the ingest
-    /// driver still owes; this open reports that conflict and does not
-    /// pop, so a session cannot start on a chain that disagrees with its
-    /// pins and then forget to rewind. The payload is the rules crate's
-    /// conflict, not a second shape of it.
-    ReleasePin(AnchorConflict),
+    /// same class as [`Self::SettlementEpochMismatch`]. The payload is the
+    /// rules crate's conflict, not a second shape of it.
+    ForeignGenesis(GenesisConflict),
     /// The session's undo-log retention is not strictly inside its
     /// settlement epoch — zero, or `≥ SEB` (DRS-E1 S-PRUNE, `DRS_E1_SPRUNE.md`
     /// §3, §12). `tip − retention` has to sit above the body horizon, which
@@ -379,10 +375,10 @@ pub enum StoreCannot {
     ChainEmpty,
     /// The regtest serve-credit injection
     /// (`ChainStore::regtest_inject_serve_credit`, DRS-E4 §3.8 item 3) was
-    /// asked for under a [`Trust`](shekyl_chain_rules::Trust) that carries
-    /// a release's anchors — a public network's posture. The door writes
-    /// a bit the rules did not admit and opens on Fakechain only, as the
-    /// C++'s `regtest_inject_archival_serve_credit` refuses off
+    /// asked for under a [`Trust`](shekyl_chain_rules::Trust) that pins a
+    /// genesis. The door writes a bit the rules did not admit and opens
+    /// only for [`Trust::UNPINNED`](shekyl_chain_rules::Trust::UNPINNED),
+    /// which is what a Fakechain run is. The C++ refuses the same door off
     /// `FAKECHAIN` (`blockchain.cpp:4715`).
     InjectionOffFakechain,
     /// The regtest serve-credit injection named a persona with no bond
@@ -595,8 +591,8 @@ impl core::fmt::Display for StoreCannot {
             ),
             Self::ChainEmpty => f.write_str("the chain store has no block recorded"),
             Self::InjectionOffFakechain => f.write_str(
-                "regtest injection refused: the node's trust carries a release's anchors, so \
-                 this is not a Fakechain",
+                "regtest injection refused: the node's trust pins a genesis, so this is not an \
+                 unpinned Fakechain",
             ),
             Self::InjectionForUnbondedPersona { persona } => write!(
                 f,
@@ -648,24 +644,13 @@ impl core::fmt::Display for StoreCannot {
                  session runs {session}: persisted join epochs and serve-credit windows would be \
                  silently mislabeled; reopen under the pinned schedule or use a fresh data directory"
             ),
-            Self::ReleasePin(conflict) => match conflict.recorded {
-                Some(recorded) => write!(
-                    f,
-                    "block {height} is {recorded} but this binary pins {expected}; \
-                     the file is not this release's chain ({remedy:?})",
-                    height = conflict.height,
-                    expected = conflict.expected,
-                    remedy = conflict.remedy(),
-                ),
-                None => write!(
-                    f,
-                    "block {height} is absent below the tip but this binary pins {expected}; \
-                     the file is not this release's chain ({remedy:?})",
-                    height = conflict.height,
-                    expected = conflict.expected,
-                    remedy = conflict.remedy(),
-                ),
-            },
+            Self::ForeignGenesis(conflict) => write!(
+                f,
+                "block 0 is {recorded} but this binary pins {expected}; \
+                 the file is another network's chain, and this node does not run on it",
+                recorded = conflict.recorded,
+                expected = conflict.expected,
+            ),
             Self::Pool(cannot) => write!(f, "pool store: {cannot}"),
             Self::Alt(cannot) => write!(f, "alt-chain store: {cannot}"),
             Self::Queue(cannot) => write!(f, "bundle queue: {cannot}"),

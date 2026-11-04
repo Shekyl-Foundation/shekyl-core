@@ -492,7 +492,7 @@ pub enum WalletRpcError {
         count: usize,
     },
     /// `-29015`: the curve-tree membership data is unavailable for this
-    /// session — its actor stopped and a respawn did not recover it.
+    /// session — its actor stopped, or its store would not rebuild.
     #[error("the wallet's membership data is unavailable — close and reopen the wallet")]
     CurveTreeUnavailable,
     /// `-29016`: the curve-tree store cannot be used. It holds no keys and
@@ -1639,7 +1639,7 @@ pub(crate) fn from_daemon_fault(fault: DaemonFault, detail: &str) -> WalletRpcEr
     }
 }
 
-/// A curve-tree ingest failure that survived the engine's one respawn, by
+/// A curve-tree ingest failure that survived the engine's one rebuild, by
 /// its remedy. Reopening helps only where the session's tree is what
 /// failed; a fault a reopen reproduces never answers "close and reopen".
 fn from_curve_tree_ingest_fault(fault: CurveTreeIngestFault) -> WalletRpcError {
@@ -1649,7 +1649,7 @@ fn from_curve_tree_ingest_fault(fault: CurveTreeIngestFault) -> WalletRpcError {
         // session. A reopen reopens the store, which names its own fault.
         CurveTreeIngestFault::ActorUnavailable
         | CurveTreeIngestFault::ClientPoisoned
-        | CurveTreeIngestFault::RespawnFailed => WalletRpcError::CurveTreeUnavailable,
+        | CurveTreeIngestFault::RebuildFailed => WalletRpcError::CurveTreeUnavailable,
         // The daemon's data broke the contract: leaves its own header does not
         // commit to, or a block that does not decode.
         CurveTreeIngestFault::RootMismatch | CurveTreeIngestFault::BackfillBlockUndecodable => {
@@ -3620,7 +3620,7 @@ mod tests {
         for (fault, code) in [
             (F::ActorUnavailable, C::CurveTreeUnavailable),
             (F::ClientPoisoned, C::CurveTreeUnavailable),
-            (F::RespawnFailed, C::CurveTreeUnavailable),
+            (F::RebuildFailed, C::CurveTreeUnavailable),
             (F::RootMismatch, C::DaemonProtocolViolation),
             (F::BackfillBlockUndecodable, C::DaemonProtocolViolation),
             (F::ClientRejected, C::InternalError),

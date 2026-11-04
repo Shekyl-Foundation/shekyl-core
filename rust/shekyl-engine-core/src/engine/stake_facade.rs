@@ -318,7 +318,7 @@ mod tests {
     /// handle. It does NOT cover first-stake assembly.
     #[tokio::test(flavor = "multi_thread")]
     async fn staker_view_and_handle_predicate_agree() {
-        let (_tmp, engine) = staker_engine(3, SEED);
+        let (_tmp, engine) = staker_engine(3, SEED).await;
         assert!(engine.has_stake_engine());
         let view = engine
             .stake()

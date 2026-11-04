@@ -1135,6 +1135,11 @@ where
                     session,
                     id,
                     deadline,
+                }
+                | Command::ArmDraw {
+                    session,
+                    id,
+                    deadline,
                 } => self.arm(deadline, session, id),
                 Command::RequestBodies {
                     session,

@@ -19,7 +19,7 @@ use shekyl_curve_tree::BlockHeight;
 /// there is no argument through which to nominate them.
 ///
 /// That is the same move made twice elsewhere on this path — the store comes
-/// from the pin ([`PinReport::reader`](super::PinReport::reader)), and now
+/// from the pin ([`PinReport::store`](super::PinReport::store)), and now
 /// the set does too — and it is one rule rather than three fixes: **the host
 /// does not choose anything about its own duty.** Every such value is
 /// reported by the side that holds the bond record and the store, because

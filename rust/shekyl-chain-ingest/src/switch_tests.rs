@@ -10,7 +10,6 @@
 //! that switched equals the store that connected the winning branch
 //! directly, digest for digest.
 
-use shekyl_difficulty::ForkChoiceVerdict;
 use shekyl_types::{BlockHash, BlockHeight};
 
 use crate::connector::{Offered, PlanMismatchReason, RunFault, Switched};
@@ -56,7 +55,6 @@ async fn a_heavier_branch_switches_and_equals_the_branch_connected_directly() {
 
     // Equal work keeps the incumbent (K6): B's third block ties A's tip.
     let plan = offer_branch(&x, &b).await;
-    assert_eq!(plan.verdict, ForkChoiceVerdict::Switch);
     assert_eq!(plan.root.height, BlockHeight::from_raw(PREFIX - 1));
     assert_eq!(plan.demoted.len(), 3);
     assert_eq!(plan.promoted.len(), 4);
@@ -64,10 +62,6 @@ async fn a_heavier_branch_switches_and_equals_the_branch_connected_directly() {
     let Switched::Done(done) = x.reorganize(&plan).await.expect("switch") else {
         panic!("the switch did not land");
     };
-    assert!(
-        done.demoted_kept,
-        "a difficulty switch keeps the demoted chain (K7)"
-    );
     assert_eq!(
         done.demoted.iter().map(|(_, h)| *h).collect::<Vec<_>>(),
         a.iter().map(|m| m.hash).collect::<Vec<_>>()
@@ -209,77 +203,170 @@ async fn a_promoted_block_that_fails_validate_rolls_back_and_removes_its_suffix(
     y.close().await;
 }
 
-/// A trust whose one anchor pins `mined` at its height — a fixture table
-/// (no regtest run is anchored), leaked for the `'static` the release
-/// tables have.
-fn anchoring(mined: &Mined) -> shekyl_chain_rules::Trust {
-    let pins: &'static [shekyl_chain_rules::Anchor] =
-        Box::leak(Box::new([shekyl_chain_rules::Anchor {
-            height: mined.height,
-            hash: mined.hash,
-        }]));
-    shekyl_chain_rules::Trust::full(shekyl_chain_rules::ReleaseAnchors::for_tests(None, pins))
-}
-
-#[tokio::test]
-async fn a_checkpoint_forced_switch_discards_the_demoted_chain() {
-    let mut x = with_prefix("switch-forced-x", PREFIX).await;
-    let mut y = with_prefix("switch-forced-y", PREFIX).await;
-    x.mine(3).await;
+/// Switch `x` (which mines `depth` blocks above the prefix) onto `y`'s
+/// heavier branch of `depth + 1`. Returns both branches, the deep-reorg
+/// record and the following-degraded latch after the switch.
+async fn switch_of_depth(
+    name: &str,
+    depth: usize,
+) -> (
+    Vec<Mined>,
+    Vec<Mined>,
+    Option<crate::connector::DeepReorg>,
+    Option<shekyl_chain_store::codec::FollowingDegraded>,
+) {
+    let mut x = with_prefix(&format!("{name}-x"), PREFIX).await;
+    let mut y = with_prefix(&format!("{name}-y"), PREFIX).await;
+    let count = u64::try_from(depth).expect("fits");
+    let a = x.mine(count).await;
     y.idle();
-    let b = y.mine(4).await;
-    // A release pins B's first block above x's tip (K6's checkpoint arm).
-    // Above the tip it is no floor yet (CEN-E2), so the branch is offered.
-    x.connector()
-        .ask(crate::connector::AnchorForTests(anchoring(&b[3])))
-        .await
-        .expect("anchor");
+    let b = y.mine(count + 1).await;
     let plan = offer_branch(&x, &b).await;
-    assert_eq!(plan.verdict, ForkChoiceVerdict::ForcedSwitch);
-    assert!(
-        plan.demoted.is_empty(),
-        "ForcedSwitch discards the demoted chain and does not read it"
-    );
     let Switched::Done(done) = x.reorganize(&plan).await.expect("switch") else {
-        panic!("the forced switch did not land");
+        panic!("the switch did not land");
     };
-    assert!(!done.demoted_kept, "the checkpoint arm discards (K7)");
-    assert_eq!(done.demoted.len(), 3);
-    assert_eq!(
-        x.alt_blocks_held().await.expect("al6"),
-        0,
-        "nothing re-entered"
-    );
-    assert_eq!(x.digest().await.expect("d"), y.digest().await.expect("d"));
-    // Both alt tables empty: x discarded what it demoted, y never had any.
-    assert_same_chain(&x, &y, &[], "a forced switch equals B connected directly").await;
+    assert_eq!(done.demoted.len(), depth, "the switch popped {depth}");
+    let record = x.last_deep_reorg().await;
+    let latch = x.following_degraded().await;
     x.close().await;
     y.close().await;
+    (a, b, record, latch)
+}
+
+/// S1's deep-reorg event: a switch that pops exactly the lock window leaves
+/// no record; one block deeper writes the record (depth, fork height, the
+/// tips it left and connected) and leaves `following_degraded` clear, so a
+/// persona still reads the daemon as following. The window is
+/// `shekyl_consensus::DEFAULT_LOCK_WINDOW`, never restated.
+#[tokio::test]
+async fn a_switch_deeper_than_the_lock_window_is_recorded_and_the_node_still_follows() {
+    let window = shekyl_consensus::DEFAULT_LOCK_WINDOW;
+    let (_, _, record, latch) = switch_of_depth("switch-deep-at", window).await;
+    assert_eq!(
+        record, None,
+        "a switch of exactly the window leaves no record"
+    );
+    assert_eq!(latch, None);
+
+    let (a, b, record, latch) = switch_of_depth("switch-deep-past", window + 1).await;
+    assert_eq!(
+        record,
+        Some(crate::connector::DeepReorg {
+            depth: shekyl_types::BlockCount::from_raw(u64::try_from(window + 1).expect("fits")),
+            fork_at: BlockHeight::from_raw(PREFIX - 1),
+            old_tip: a.last().expect("A").hash,
+            new_tip: b.last().expect("B").hash,
+        }),
+        "one block deeper records the switch it made"
+    );
+    assert_eq!(
+        latch, None,
+        "a deep reorganization the node followed does not mark it degraded"
+    );
+}
+
+/// Rewrite the recorded blocks at `heights` (all below a fork point) with
+/// timestamp `at`, keeping each row's identity coherent: the blob,
+/// `block_info`'s hash and timestamp, and the hash index all name the
+/// rewritten block, so the reads that check a blob against its recorded
+/// identity (CEN-B6) pass. The links into those heights from above still
+/// name the old blocks, which nothing on the switch path re-reads: the
+/// alternative chain links to the root, and the demoted blocks' history is
+/// read by height. The links cannot all be made coherent: cascading
+/// `prev_id` upward reaches the root, and a root with a new identity is no
+/// longer the block the alternative chain links to. The tier reads
+/// timestamps from the header in the blob, not from `block_info`, so the
+/// blob has to change. What is left is a recorded chain whose next block
+/// fails its own timestamp rule: the store SI-27 is for. The test asserts
+/// that exact row at that height, so a fault from anything else fails it.
+fn rewrite_timestamps(path: &std::path::Path, heights: &[BlockHeight], at: u64) {
+    use redb::ReadableTable;
+    use shekyl_chain_store::codec::{BlockBody, BlockInfo};
+    use shekyl_chain_store::codec::{Canonical, Raw};
+    use shekyl_chain_store::lmdb_order::LmdbHashKey;
+    use shekyl_chain_store::schema::{BLOCKS, BLOCK_HEIGHTS, BLOCK_INFO};
+    let db = redb::Database::open(path).expect("open raw");
+    let txn = db.begin_write().expect("write");
+    {
+        let mut blocks = txn.open_table(BLOCKS).expect("blocks");
+        let mut infos = txn.open_table(BLOCK_INFO).expect("block_info");
+        let mut index = txn.open_table(BLOCK_HEIGHTS).expect("block_heights");
+        for &height in heights {
+            let raw = height.to_raw();
+            let bytes = blocks
+                .get(raw)
+                .expect("g")
+                .expect("a recorded block")
+                .value()
+                .bytes()
+                .to_vec();
+            let mut block = shekyl_wire::Block::from_bytes(&bytes).expect("parses");
+            let old = block.hash();
+            block.header.timestamp = at;
+            let new = block.hash();
+            blocks
+                .insert(raw, Raw::<BlockBody>::new(&block.serialize()))
+                .expect("blob");
+            let mut info: BlockInfo = infos
+                .get(raw)
+                .expect("g")
+                .expect("row")
+                .value()
+                .decode()
+                .expect("decodes");
+            assert_eq!(info.hash, old, "the row named the block");
+            info.hash = new;
+            info.timestamp = shekyl_types::Timestamp::from_raw(at);
+            infos
+                .insert(raw, info.encoded().as_encoded())
+                .expect("info");
+            index
+                .remove(LmdbHashKey::from_bytes(old.to_bytes()))
+                .expect("old key");
+            index
+                .insert(
+                    LmdbHashKey::from_bytes(new.to_bytes()),
+                    height.encoded().as_encoded(),
+                )
+                .expect("new key");
+        }
+    }
+    txn.commit().expect("commit");
 }
 
 #[tokio::test]
 async fn a_demoted_block_the_tier_refuses_halts_the_writer_si27() {
-    let mut x = with_prefix("switch-si27-x", PREFIX).await;
-    let mut y = with_prefix("switch-si27-y", PREFIX).await;
+    // SI-27: a recorded block passes its own cheap tier. Between the plan
+    // and the switch, the recorded blocks below the fork point are given
+    // timestamps above A's first block (`rewrite_timestamps`), so the
+    // window's median that block's timestamp rule (CEN-C2) reads is above
+    // it: the store holds a chain that fails its own rules. The scenario's
+    // difficulty is fixed, so the target the tier derives does not read
+    // those timestamps and the claim still matches; the refusal is C2's.
+    // Eleven blocks below the root, so the window is unpadded (CEN-C3):
+    // padding repeats block 0, whose identity is also the seed below the
+    // first epoch and cannot move.
+    const LONG_PREFIX: u64 = 12;
+    let mut x = with_prefix("switch-si27-x", LONG_PREFIX).await;
+    let mut y = with_prefix("switch-si27-y", LONG_PREFIX).await;
     let a = x.mine(3).await;
     y.idle();
     let b = y.mine(4).await;
     let plan = offer_branch(&x, &b).await;
-    // Witnesses the halt's wiring, not a production path: between the plan
-    // and the switch the fixture swaps in an anchor table the recorded
-    // chain fails (A's second block under another hash), so the demotion's
-    // tier refuses A's first block. Production cannot reach this — a
-    // release's anchors are admitted at open (CEN-E5) and checked at offer
-    // under the same tip (ruling 2, the SI-27 register row; the test
-    // `a_new_release_anchor_refuses_the_pending_alternative_at_offer_and_si27_never_fires`).
-    // It stands in for the one case SI-27 is for: a store whose recorded
-    // chain fails its own rules.
-    let mut wrong = a[1].clone();
-    wrong.hash = BlockHash::from_bytes([0xEE; 32]);
-    x.connector()
-        .ask(crate::connector::AnchorForTests(anchoring(&wrong)))
-        .await
-        .expect("anchor");
+    // Every block below the root but genesis. The root keeps its identity,
+    // so the alternative chain still links to it.
+    let below_root: Vec<BlockHeight> = (1..LONG_PREFIX - 1).map(BlockHeight::from_raw).collect();
+    let late = plan
+        .demoted
+        .first()
+        .expect("A's first block is demoted")
+        .candidate
+        .block
+        .header
+        .timestamp
+        + 10_000;
+    x.reopen(|path| rewrite_timestamps(path, &below_root, late))
+        .await;
     let err = x.reorganize(&plan).await.expect_err("SI-27 halts");
     let want = shekyl_chain_store::store::StoreInvariant::DemotedBlockRefused {
         height: a[0].height,
@@ -630,93 +717,6 @@ async fn a_plan_naming_a_recorded_block_as_its_alternative_tip_is_a_mismatch_not
         })
     ));
     assert_eq!(x.mine(1).await.len(), 1, "the writer is up");
-    x.close().await;
-    y.close().await;
-}
-
-/// A fixture anchor table pinning each `(height, hash)`, leaked for the
-/// `'static` a release table has.
-fn release(pins: &[(BlockHeight, BlockHash)]) -> shekyl_chain_rules::ReleaseAnchors {
-    let anchors: Vec<shekyl_chain_rules::Anchor> = pins
-        .iter()
-        .map(|&(height, hash)| shekyl_chain_rules::Anchor { height, hash })
-        .collect();
-    shekyl_chain_rules::ReleaseAnchors::for_tests(None, Box::leak(anchors.into_boxed_slice()))
-}
-
-/// Open the store at `path` under `anchors` the way a release opens it
-/// (`ChainStore::with_release`, CEN-E5 at open), and close it.
-fn admit_release(
-    path: &std::path::Path,
-    anchors: &shekyl_chain_rules::ReleaseAnchors,
-) -> Result<(), shekyl_chain_store::store::StoreError> {
-    let horizons = shekyl_chain_store::store::Horizons::under(
-        &crate::scenario::RULES.in_force(BlockHeight::from_raw(0)),
-    )
-    .expect("the scenario's rule set is a store schedule");
-    shekyl_chain_store::store::ChainStore::with_release(
-        path,
-        shekyl_chain_store::apply_policy::ApplyPolicy::default(),
-        horizons,
-        anchors,
-    )
-    .map(drop)
-}
-
-#[tokio::test]
-async fn a_new_release_anchor_refuses_the_pending_alternative_at_offer_and_si27_never_fires() {
-    // Ruling 2 (2026-10-15): an anchor table cannot reach SI-27. Two
-    // mechanisms stand between them, and this test runs both.
-    let mut x = with_prefix("switch-si27-anchor-x", PREFIX).await;
-    let mut y = with_prefix("switch-si27-anchor-y", PREFIX).await;
-    let a = x.mine(3).await;
-    y.idle();
-    let b = y.mine(4).await;
-    // B is pending: held as alternative blocks, its fork point below A.
-    for mined in &b[..3] {
-        assert!(matches!(
-            x.offer(mined).await.expect("offer"),
-            Offered::Held { .. }
-        ));
-    }
-    // (1) At open: a release whose anchor contradicts the recorded chain
-    // does not open the store (CEN-E5, `StoreCannot::ReleasePin`) ...
-    let contradicting = release(&[(a[1].height, BlockHash::from_bytes([0xEE; 32]))]);
-    // ... and one that agrees with it does. Its anchor sits above B's fork
-    // point.
-    let agreeing = release(&[(a[1].height, a[1].hash)]);
-    let mut refused_at_open = None;
-    x.reopen(|path| {
-        refused_at_open = Some(admit_release(path, &contradicting));
-        admit_release(path, &agreeing).expect("an agreeing release opens the store");
-    })
-    .await;
-    assert!(
-        matches!(
-            refused_at_open,
-            Some(Err(shekyl_chain_store::store::StoreError::Cannot(
-                shekyl_chain_store::store::StoreCannot::ReleasePin(_)
-            )))
-        ),
-        "{refused_at_open:?}"
-    );
-    x.connector()
-        .ask(crate::connector::AnchorForTests(
-            shekyl_chain_rules::Trust::full(agreeing),
-        ))
-        .await
-        .expect("anchor");
-    // (2) At offer, under that tip: B's heavier block forks below the new
-    // floor, so CEN-E2 refuses it there — no plan exists, so no switch
-    // ever judges a demoted block under the new table.
-    match x.offer(&b[3]).await.expect("offer") {
-        Offered::Refused(refused) => {
-            assert_eq!(refused.rule, shekyl_chain_rules::CenRow::E2);
-        }
-        other => panic!("the pending alternative was not refused at offer: {other:?}"),
-    }
-    // The writer is up: no SI-27, no halt.
-    assert_eq!(x.mine(1).await.len(), 1, "the writer stays up");
     x.close().await;
     y.close().await;
 }

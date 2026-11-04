@@ -439,6 +439,18 @@ where
     }
 
     /// The `following_degraded` latch, `None` while it is clear.
+    /// The most recent switch deeper than the lock window, as the connector
+    /// publishes it.
+    pub async fn last_deep_reorg(&self) -> Option<crate::connector::DeepReorg> {
+        let watch = self
+            .connector
+            .ask(crate::connector::WatchDeepReorg)
+            .await
+            .expect("the deep-reorg watch");
+        let held = *watch.borrow();
+        held
+    }
+
     pub async fn following_degraded(&self) -> Option<shekyl_chain_store::codec::FollowingDegraded> {
         let watch = self
             .connector

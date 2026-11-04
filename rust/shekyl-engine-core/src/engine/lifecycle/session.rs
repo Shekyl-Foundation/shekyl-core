@@ -65,8 +65,8 @@ impl<
     ///
     /// Callers that must keep the live `Engine` when flush fails (e.g.
     /// wallet-rpc `close_wallet`, which re-installs the session on I/O
-    /// error) use this before dropping. [`Self::close`] is the
-    /// consume-on-any-outcome path for CLI / tests.
+    /// error) use this, then [`Self::release`] on success. [`Self::close`]
+    /// is the consume-on-any-outcome path for CLI / tests.
     ///
     /// # Errors
     ///
@@ -102,9 +102,12 @@ impl<
         Ok(())
     }
 
-    /// Close the wallet. Errors if `outstanding_pending_txs() > 0`.
+    /// Close the wallet: persist, then [`Self::release`]. Errors if
+    /// `outstanding_pending_txs() > 0`.
     ///
-    /// On success, `self` is consumed and the drop sequence runs:
+    /// The release runs whether or not the persist succeeded, so when this
+    /// returns the wallet's stores are closed either way and the wallet can
+    /// be reopened at once. Then the drop sequence runs:
     ///
     /// 1. `self.persistence` — when the default [`WalletFile`] implementor is
     ///    used, `Drop` releases the advisory lock on the keys file (`<base>.keys`,
@@ -131,22 +134,41 @@ impl<
     ///   reservations are still in flight.
     /// - [`OpenError::Persistence`] for state-save / prefs-save failures.
     ///
-    /// On either error variant, `self` is still dropped (by-value `self`
-    /// cannot be returned through `Result<(), E>`). Callers that must
-    /// retain the live engine on flush failure must call
-    /// [`Self::persist_for_close`] first and only drop on `Ok`.
+    /// On either error variant, `self` is still released and dropped
+    /// (by-value `self` cannot be returned through `Result<(), E>`). Callers
+    /// that must retain the live engine on flush failure must call
+    /// [`Self::persist_for_close`] first and only release on `Ok`.
     ///
     /// `credentials` is ignored on the steady-state close path (region-2 sealing
     /// uses the session [`StateWrapKey`](crate::engine::sealing_keys::StateWrapKey)); the
     /// parameter remains for API stability with pre-F5(b) callers.
-    pub fn close(self, _credentials: &Credentials<'_>) -> Result<(), OpenError> {
-        self.persist_for_close()?;
+    pub async fn close(self, _credentials: &Credentials<'_>) -> Result<(), OpenError> {
+        let persisted = self.persist_for_close();
+        self.release().await;
+        persisted
+    }
 
-        // Explicit drop so the chain documented above runs at a
-        // named program point rather than at the end of the function
-        // scope. Equivalent observable behavior; clearer in a debug
-        // session that wants to step into each Drop.
+    /// Stop every actor that owns a wallet file, awaiting each, then drop the
+    /// engine. When this returns the curve-tree store and the persona body
+    /// store are closed, so the wallet can be reopened at once, by this
+    /// process or another (`CURVE_TREE_CLIENT.md` §11, §11.1).
+    ///
+    /// Persists nothing: [`Self::close`] persists first, and a caller that
+    /// persisted with [`Self::persist_for_close`] calls this instead of
+    /// dropping the engine. A dropped engine still stops its actors, but
+    /// without anyone waiting, so a reopen that races it is refused as
+    /// locked. *Records-was (until 2026-11-02):* close dropped the engine and
+    /// the curve-tree open polled the lock for up to two seconds.
+    ///
+    /// The stake actor stops before the body-store actor, and both before
+    /// the curve-tree actor; nothing else in the engine owns a file.
+    pub async fn release(self) {
+        if let Some(stake) = &self.stake {
+            stake.shutdown().await;
+        }
+        self.curve_tree.shutdown().await;
+        // Explicit drop so the chain documented on `close` runs at a named
+        // program point.
         drop(self);
-        Ok(())
     }
 }

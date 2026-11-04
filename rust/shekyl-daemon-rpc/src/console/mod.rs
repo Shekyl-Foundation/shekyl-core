@@ -1124,7 +1124,7 @@ fn print_net_stats(src: &Source, now: u64) -> Result<String, String> {
     ))
 }
 
-/// `sync_info`: chain sync's view (3.66).
+/// `sync_info`: chain sync's view (3.68).
 #[deny(clippy::arithmetic_side_effects)]
 fn sync_info(src: &Source) -> Result<String, String> {
     let reply = native_json_rpc(src, "sync_info", &serde_json::json!({}), |core| {

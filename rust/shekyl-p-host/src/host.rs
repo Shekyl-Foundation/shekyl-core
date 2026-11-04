@@ -10,8 +10,9 @@ use std::fmt;
 use std::sync::atomic::{AtomicU32, Ordering};
 use std::sync::{Arc, Mutex};
 
-use shekyl_p_serve::{PServeEndpoint, PassSigner, ServeCounterReader, StoreShardProvider};
-use shekyl_p_store::BodyStoreReader;
+use shekyl_p_serve::{
+    HeldShardSource, PServeEndpoint, PassSigner, ServeCounterReader, StoreShardProvider,
+};
 use shekyl_tor_control_wallet::service::{
     OnionIdentity, OnionServiceSpec, ServiceId, ServingPosture, TorPosture, WalletTorControl,
     WalletTorControlConfig,
@@ -66,10 +67,12 @@ pub struct PersonaServing {
     /// correct direction for a persona that cannot see the chain — but it
     /// is a wiring bug, not a posture.
     pub tip: Arc<DaemonTipCache>,
-    /// Read-only handle on `P`'s body store. The endpoint streams
-    /// `shard_frame` bodies from here; pin evidence still lives on the
-    /// curve-tree witness the pinner acquires (`WSS-Q1`(a)).
-    pub bodies: BodyStoreReader,
+    /// Where `P`'s held shard bodies are read from, chunk by chunk. The
+    /// endpoint streams `shard_frame` bodies from here; pin evidence still
+    /// lives on the curve-tree witness the pinner acquires (`WSS-Q1`(a)).
+    /// The source hands back plaintext copies, so the host holds no store
+    /// key (`WSS-Q13`); in the wallet it is the body-store actor.
+    pub bodies: Arc<dyn HeldShardSource>,
 }
 
 impl fmt::Debug for PersonaServing {
@@ -80,7 +83,7 @@ impl fmt::Debug for PersonaServing {
             .field("max_streams", &self.max_streams)
             .field("key", &"<dyn PassKey<IDENTITY_ENVELOPE_LEN>>")
             .field("tip", &self.tip)
-            .field("bodies", &"<BodyStoreReader>")
+            .field("bodies", &"<dyn HeldShardSource>")
             .finish()
     }
 }
@@ -290,8 +293,8 @@ impl BoundServe {
 ///   still pins the curve-tree serve set (`CTS-7`: the concept survives,
 ///   re-keyed to shard `k`). A pin does not keep a `.pstore` row. The
 ///   body row is erased when the pin-release gate releases that shard
-///   (`WSS-Q8`). That erase is an ask to the stake actor, which keeps
-///   the writer. This host does not hold it.
+///   (`WSS-Q8`). That erase is a message to the body-store actor, which
+///   keeps the key. This host does not hold the store or the key.
 /// - **A serving persona always runs full vanguards.** The posture this host
 ///   writes is [`ServingPosture::Serving`], the one variant that carries both
 ///   the onion and `VanguardsMode::Managed`. The "onion without vanguards"
@@ -299,13 +302,13 @@ impl BoundServe {
 ///
 /// # Custody (§7.2(iii))
 ///
-/// This host holds: an expanded [`OnionIdentity`], a **read-only**
-/// [`ServingReader`](shekyl_curve_tree::ServingReader) on the store (via
-/// the live witness), and the one [`ServeSetPinner`] taken at start. It
-/// holds no seed, no bond spend authority, and no body-store writer.
-/// Pinning writes go through the pinner to the curve-tree actor. A
-/// pin-release erase goes through the pinner to the stake actor, which
-/// keeps the body-store key. The one assumption worth stating rather than leaving implicit:
+/// This host holds: an expanded [`OnionIdentity`], the live witness, and
+/// the one [`ServeSetPinner`] taken at start. It holds no seed, no bond
+/// spend authority, no body-store writer, and no handle on the curve-tree
+/// store. Pinning writes and the witness's reads go through the pinner to
+/// the curve-tree actor, the store's one owner. A
+/// pin-release erase goes through the pinner to the body-store actor,
+/// which keeps the key. The one assumption worth stating rather than leaving implicit:
 /// the design frames the custody boundary as *which secret crosses the
 /// process boundary*, and this host is in-process with the wallet — so
 /// what enforces the boundary here is the type of what it can hold, not
@@ -524,9 +527,9 @@ impl<P: ServeSetPinner> PersonaServingHost<P> {
     /// the safe direction: stale pins retain bytes, missing pins lose them.
     ///
     /// **Takes no pinner, and that is what keeps the pins in the store being
-    /// served.** `refreshed` builds the new witness with *this host's* reader,
-    /// because the endpoint never rebinds and so the served store cannot
-    /// change. If the refresh could be handed a different pinner, its pins
+    /// served.** `refreshed` keeps *this host's* store, refusing a report
+    /// that names another, because the endpoint never rebinds and so the
+    /// served store cannot change. If the refresh could be handed a different pinner, its pins
     /// could land in a different store while the witness claimed they were
     /// here — a witness asserting safety for a store nobody is serving, which
     /// is worse than no witness. One host, one pinner, taken at `start`.
@@ -592,18 +595,29 @@ impl<P: ServeSetPinner> PersonaServingHost<P> {
     /// A store read failure while refresh is failing therefore does not mask
     /// the reading: there is nothing to read.
     ///
+    /// The store is read through this host's pinner, outside the serve-set
+    /// lock: the witness is cloned out first, as [`Self::refresh`] does.
+    ///
     /// # Errors
     ///
-    /// Store failure reading the sync tip.
-    pub fn staleness(
-        &self,
-        bound: StalenessBound,
-    ) -> Result<Staleness, shekyl_curve_tree::StoreError> {
+    /// [`PinError`] as [`PinnedServeSet::staleness`].
+    pub async fn staleness(&self, bound: StalenessBound) -> Result<Staleness, PinError> {
         let consecutive = self.refresh_failures.load(Ordering::Relaxed);
         if consecutive > 0 {
             return Ok(Staleness::RefreshFailing { consecutive });
         }
-        self.lock_pinned().staleness(bound)
+        let pinned = self.pinned_serve_set();
+        pinned.staleness(&self.pinner, bound).await
+    }
+
+    /// The served store's ingest tip, read through this host's pinner.
+    ///
+    /// # Errors
+    ///
+    /// [`PinError`] as [`PinnedServeSet::ingested_tip`].
+    pub async fn ingested_tip(&self) -> Result<shekyl_curve_tree::BlockHeight, PinError> {
+        let pinned = self.pinned_serve_set();
+        pinned.ingested_tip(&self.pinner).await
     }
 
     /// The bound loopback address the onion targets.

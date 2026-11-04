@@ -613,8 +613,13 @@ fn a_file_the_engine_never_finished_initializing_is_created_by_the_next_open() {
     ] {
         let path = tmp(label);
         std::fs::write(&path, &bytes).expect("the unfinished file");
-        let (store, cut) = open_at(&path, ApplyPolicy::Full, production_horizons())
-            .unwrap_or_else(|e| panic!("{label}: created: {e:?}"));
+        let (store, cut) = open_at(
+            &path,
+            ApplyPolicy::Full,
+            production_horizons(),
+            GenesisAdmission::Unpinned,
+        )
+        .unwrap_or_else(|e| panic!("{label}: created: {e:?}"));
         let Some(CutShort::Uninitialized { to }) = cut else {
             panic!("{label}: {cut:?}");
         };
@@ -628,8 +633,13 @@ fn a_file_the_engine_never_finished_initializing_is_created_by_the_next_open() {
             "{label}: the path lock stays"
         );
         drop(store);
-        let (_store, cut) = open_at(&path, ApplyPolicy::Full, production_horizons())
-            .unwrap_or_else(|e| panic!("{label}: reopens: {e:?}"));
+        let (_store, cut) = open_at(
+            &path,
+            ApplyPolicy::Full,
+            production_horizons(),
+            GenesisAdmission::Unpinned,
+        )
+        .unwrap_or_else(|e| panic!("{label}: reopens: {e:?}"));
         assert!(cut.is_none(), "{label}: an ordinary reopen");
         cleanup(&path);
         drop(std::fs::remove_file(&to));
@@ -652,7 +662,12 @@ fn two_openers_of_one_unfinished_file_finish_it_once() {
     let spawn = |path: std::path::PathBuf, go: Arc<Barrier>| {
         thread::spawn(move || {
             go.wait();
-            open_at(&path, ApplyPolicy::Full, production_horizons())
+            open_at(
+                &path,
+                ApplyPolicy::Full,
+                production_horizons(),
+                GenesisAdmission::Unpinned,
+            )
         })
     };
     let left = spawn(path.clone(), Arc::clone(&go));
@@ -681,7 +696,13 @@ fn two_openers_of_one_unfinished_file_finish_it_once() {
         b"",
         "the original empty file"
     );
-    let (_store, cut) = open_at(&path, ApplyPolicy::Full, production_horizons()).expect("reopen");
+    let (_store, cut) = open_at(
+        &path,
+        ApplyPolicy::Full,
+        production_horizons(),
+        GenesisAdmission::Unpinned,
+    )
+    .expect("reopen");
     assert!(cut.is_none(), "the file is a store now");
     cleanup(&path);
     drop(std::fs::remove_file(&to));

@@ -82,7 +82,7 @@ shekyl-chain-rules = { path = "../shekyl-chain-rules", features = ["harness"] }
 # consensus-visible from either.
 shekyl-harness-spender = { path = "../shekyl-harness-spender" }
 shekyl-harness-wallet = { path = "../shekyl-harness-wallet" }
-# The release-admission tests open under `ReleaseAnchors::for_network`.
+# The release-admission tests open under `GenesisPin::for_network`.
 # The store admits a table and does not know which networks exist (rule
 # 71); the test needs the type that selects the production tables. Already
 # a normal dependency of shekyl-chain-rules (rule 17); test-only here.

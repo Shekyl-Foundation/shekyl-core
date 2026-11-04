@@ -239,35 +239,38 @@ impl Engine<SoloSigner> {
         let key = crate::engine::key_actor::KeyEngineHandle::spawn(keys);
 
         // CT-5a commit 2: open the FCMP++ curve-tree store *beside the wallet
-        // files* (`docs/design/CT5_ENGINE_WIRING.md` §3.1) and spawn the actor
-        // over it. The store is the `.curvetree` sibling of the `.wallet` /
-        // `.wallet.keys` pair; `open_and_spawn` resumes from its contents with
-        // no genesis replay (R1-Q2). It requires the same ambient runtime the
-        // `KeyEngineHandle::spawn` above already asserts, so it is grouped here
-        // with the other actor spawn. A store-open failure keeps its meaning:
-        // the store classifies it (`ClientError::open_fault` — locked by
-        // another process, corrupt, unsupported, I/O), so the RPC names that
-        // remedy instead of reporting every open failure as one fault.
-        let curve_tree = {
+        // files* (`docs/design/CT5_ENGINE_WIRING.md` §3.1). The store is the
+        // `.curvetree` sibling of the `.wallet` / `.wallet.keys` pair;
+        // `CurveTreeClient::open` resumes from its contents with no genesis
+        // replay (R1-Q2). A store-open failure keeps its meaning: the store
+        // classifies it (`ClientError::open_fault` — locked by another
+        // process, corrupt, unsupported, I/O), so the RPC names that remedy
+        // instead of reporting every open failure as one fault.
+        //
+        // The client stays a value until every fallible open below has
+        // succeeded. Dropping the value closes the file. Dropping an
+        // `ActorRef` does not wait for `on_stop`, and the next open would
+        // then see `LockedElsewhere` for a wallet that never opened
+        // (`CURVE_TREE_CLIENT.md` §11).
+        let curve_tree_client = {
             let store_path =
                 shekyl_engine_file::paths::curve_tree_store_path_from(file.base_path());
-            crate::engine::curve_tree_actor::CurveTreeHandle::open_and_spawn(&store_path).map_err(
-                |e| {
-                    OpenError::Io(IoError::CurveTreeStore {
-                        fault: e.open_fault(),
-                        detail: format!("{e:?}"),
-                    })
-                },
-            )?
+            shekyl_curve_tree::CurveTreeClient::open(&store_path).map_err(|e| {
+                OpenError::Io(IoError::CurveTreeStore {
+                    fault: e.open_fault(),
+                    detail: format!("{e:?}"),
+                })
+            })?
         };
 
         // ARCHIVAL_BOND_CONSTRUCTION.md §10.2 (Model D): for a staker, derive the
-        // derive-forward set from the still-borrowed `master_seed` and spawn the
-        // StakeEngine over it. Read `&ledger.staking` *before* `ledger` is moved
+        // derive-forward set from the still-borrowed `master_seed` and open the
+        // body store. Read `&ledger.staking` *before* `ledger` is moved
         // into the `LocalLedger` aggregate below. Non-stakers (the common case)
         // get `None` — no derivation, no resident personas, no actor, no
-        // `.pstore`.
-        let stake = Self::spawn_stake_engine_if_staker(
+        // `.pstore`. A failure here drops the curve-tree client above and the
+        // body store, both values, so both files are closed.
+        let stake_ready = Self::prepare_stake_engine_if_staker(
             master_seed,
             network_to_derivation(network),
             seed_format,
@@ -276,6 +279,26 @@ impl Engine<SoloSigner> {
             p_store_key,
             file.base_path(),
         )?;
+
+        // Spawn only after the opens have succeeded. The conformance
+        // self-cert is the one fallible step left, and its failure awaits
+        // the same shutdown `Engine::release` does before returning.
+        let curve_tree = crate::engine::curve_tree_actor::CurveTreeHandle::spawn(curve_tree_client);
+        let stake = match stake_ready {
+            None => None,
+            Some(ready) => {
+                let handle = Self::spawn_prepared_stake_engine(ready);
+                // The self-cert is the only fallible step after the actors
+                // exist. Its failure awaits their shutdown before the error
+                // leaves this function, so the `?` does not drop a live
+                // `ActorRef`.
+                #[cfg(feature = "conformance")]
+                {
+                    observe_stake_self_cert(&handle, &curve_tree)?;
+                }
+                Some(handle)
+            }
+        };
 
         let ledger = std::sync::Arc::new(crate::engine::local_ledger::LocalLedger::new(
             ledger, indexes,
@@ -349,9 +372,14 @@ impl Engine<SoloSigner> {
         })
     }
 
-    /// Derive the Model-D derive-forward set and spawn the archival
-    /// [`StakeEngine`](crate::engine::stake_engine::StakeEngine) for a staker, or return
-    /// `None` for a non-staker (`ARCHIVAL_BOND_CONSTRUCTION.md` §10.2).
+    /// Derive the Model-D derive-forward set and open the body store for a
+    /// staker, or return `None` for a non-staker
+    /// (`ARCHIVAL_BOND_CONSTRUCTION.md` §10.2).
+    ///
+    /// Does not spawn. The body store and the bundles are values, so a
+    /// failure drops them and closes the file. [`Self::spawn_prepared_stake_engine`]
+    /// is what turns a prepared value into actors, and it runs only after
+    /// the curve-tree client has opened the same way.
     ///
     /// The derive-forward set is
     /// [`StakingBlock::derive_forward_slots`] — `{bonded} ∪ {cursor ..= cursor+k}`,
@@ -382,7 +410,7 @@ impl Engine<SoloSigner> {
     ///
     /// [`OpenError::Key`] if any archival derivation fails (same closed-error
     /// contract as `rederive_account`).
-    fn spawn_stake_engine_if_staker(
+    fn prepare_stake_engine_if_staker(
         master_seed: &[u8; MASTER_SEED_BYTES],
         derivation_network: DerivationNetwork,
         seed_format: SeedFormat,
@@ -390,7 +418,7 @@ impl Engine<SoloSigner> {
         first_stake_intent: Option<FirstStakeIntent>,
         p_store_key: Option<shekyl_p_store::StoreKey>,
         wallet_path: &std::path::Path,
-    ) -> Result<Option<StakeEngineHandle>, OpenError> {
+    ) -> Result<Option<PreparedStakeEngine>, OpenError> {
         // SA-R1-a (ARCHIVAL_STAKE_ACTIVATION_PLAN.md §5.6/§5.7, RATIFIED):
         // first-stake needs a spawned StakeEngine to assemble against BEFORE
         // `persist_bond_record` flips `staking_enabled`, so the gate admits a
@@ -478,35 +506,65 @@ impl Engine<SoloSigner> {
             bonded.insert(intent.slot());
         }
 
-        // Idle at open: the request path (2c-2b) mints a handle and activates.
-        let handle = StakeEngineHandle::spawn(bundles, bonded, None, bodies);
-
-        // S6 (conformance build only) — eager observation of the actor's
-        // `on_start` RNG self-cert. Block wallet-open until the grade completes;
-        // a non-conformant CSPRNG surfaces as `OpenError`, failing open loudly
-        // rather than staking on an RNG that cannot produce unlinkable timing.
-        //
-        // This deliberately uses `block_in_place` directly rather than
-        // `drive_persistence`: the awaited work (the actor's `on_start`) runs on
-        // the *ambient* runtime, not inside the future, so `drive_persistence`'s
-        // current-thread fallback (a fresh runtime on a scope thread) would
-        // deadlock — the actor would never be polled while we wait. `block_in_place`
-        // on a multi-thread runtime releases this worker so the actor keeps
-        // running; on a current-thread runtime it *panics* loudly (the
-        // panic-not-deadlock signal). Production wallet-open runs on the
-        // `rt-multi-thread` ambient runtime; conformance tests must use
-        // `#[tokio::test(flavor = "multi_thread")]`.
-        #[cfg(feature = "conformance")]
-        {
-            let rt = tokio::runtime::Handle::current();
-            let cert = tokio::task::block_in_place(|| rt.block_on(handle.wait_for_self_cert()));
-            if let Err(failure) = cert {
-                return Err(OpenError::StakeRngSelfCertFailed(failure));
-            }
-        }
-
-        Ok(Some(handle))
+        Ok(Some(PreparedStakeEngine {
+            bundles,
+            bonded,
+            bodies,
+        }))
     }
+
+    /// Spawn the stake actor over `ready`. Idle at open: the request path
+    /// mints a handle and activates. Cannot fail: the body store and the
+    /// bundles are already values. The conformance self-cert, the one
+    /// fallible step after this, is the caller's.
+    fn spawn_prepared_stake_engine(ready: PreparedStakeEngine) -> StakeEngineHandle {
+        StakeEngineHandle::spawn(ready.bundles, ready.bonded, None, ready.bodies)
+    }
+}
+
+/// Stake inputs opened and derived before any store-owning actor exists.
+struct PreparedStakeEngine {
+    bundles: std::collections::BTreeMap<PSlot, shekyl_crypto_pq::archival_p::ArchivalPKeys>,
+    bonded: std::collections::BTreeSet<PSlot>,
+    bodies: shekyl_p_store::BodyStore,
+}
+
+/// S6 (conformance build only) — eager observation of the actor's
+/// `on_start` RNG self-cert. Block wallet-open until the grade completes;
+/// a non-conformant CSPRNG surfaces as `OpenError`, failing open loudly
+/// rather than staking on an RNG that cannot produce unlinkable timing.
+///
+/// On failure this awaits the stake actor, then the body-store actor, then
+/// the curve-tree actor: the same order [`Engine::release`] uses, so the
+/// files are closed before the error returns. No reopen timer.
+///
+/// This deliberately uses `block_in_place` directly rather than
+/// `drive_persistence`: the awaited work (the actor's `on_start`) runs on
+/// the *ambient* runtime, not inside the future, so `drive_persistence`'s
+/// current-thread fallback (a fresh runtime on a scope thread) would
+/// deadlock — the actor would never be polled while we wait. `block_in_place`
+/// on a multi-thread runtime releases this worker so the actor keeps
+/// running; on a current-thread runtime it *panics* loudly (the
+/// panic-not-deadlock signal). Production wallet-open runs on the
+/// `rt-multi-thread` ambient runtime; conformance tests must use
+/// `#[tokio::test(flavor = "multi_thread")]`.
+#[cfg(feature = "conformance")]
+fn observe_stake_self_cert(
+    handle: &StakeEngineHandle,
+    curve_tree: &crate::engine::curve_tree_actor::CurveTreeHandle,
+) -> Result<(), OpenError> {
+    let rt = tokio::runtime::Handle::current();
+    let cert = tokio::task::block_in_place(|| rt.block_on(handle.wait_for_self_cert()));
+    if let Err(failure) = cert {
+        tokio::task::block_in_place(|| {
+            rt.block_on(async {
+                handle.shutdown().await;
+                curve_tree.shutdown().await;
+            })
+        });
+        return Err(OpenError::StakeRngSelfCertFailed(failure));
+    }
+    Ok(())
 }
 
 /// Sealed evidence the open-time SP-R0 reconcile consumes: arm #3's

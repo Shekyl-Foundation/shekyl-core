@@ -1515,13 +1515,16 @@ is load-bearing:
   it, the new chain's pair is compared with the old chain's leaf at that
   gindex, reported stale and dropped;
 - **before the first fold**, for the reason above;
-- **inside the respawn-aware wrapper**, because a respawned actor starts with
+- **inside the recovery wrapper**, because a rebuilt client starts with
   an empty registry: the retry re-offers the set before it folds the rest of
   the range. This is also what the earlier ordering rule — "register after
-  the respawn-aware ingest, so a dead actor has been healed" — was for. A
-  dead actor fails this call with the same respawn-recoverable fault the
+  the recovering ingest, so a poisoned client has been rebuilt" — was for. A
+  poisoned client fails this call with the same recoverable fault the
   ingest's own calls raise, and the ordering that rule asked for would have
-  let a respawned actor fold the whole range unregistered.
+  let a rebuilt client fold the whole range unregistered. *Records-was
+  (until 2026-11-02):* recovery was an engine-side respawn of the actor;
+  it is now an in-place rebuild inside it (`CURVE_TREE_CLIENT.md` §11),
+  with the same empty registry and the same placement.
 
 Since the placement is only visible in what the registration *cost*, the
 ingest returns the `OwnershipSync` it got. The first draft of the tests below
@@ -1669,7 +1672,7 @@ each failed by the mutation beside it:
 | --- | --- |
 | `an_output_found_and_drained_within_one_scan_result_is_captured_as_it_folds` | the registration moved behind the fold (`after_drain` reads 1) |
 | `a_reorged_result_registers_against_the_chain_it_keeps` | the registration moved ahead of the rollback (the new pair is reported stale) |
-| `a_respawned_actor_is_re_offered_the_set_before_it_folds` | the respawn retry offering nothing |
+| `a_rebuilt_client_is_re_offered_the_set_before_it_folds` (named `a_respawned_actor_…` until 2026-11-02) | the recovery retry offering nothing |
 | `a_detection_spent_within_the_same_result_is_not_registered` | the spent filter removed |
 | `a_ledger_row_the_result_supersedes_is_not_offered_from_the_ledger` | the range filter removed; the result's observed spends ignored |
 | `refresh::start_refresh_integration_tests::refresh_registers_a_found_output_before_the_fold_reaches_it` | the refresh task handing the ingest an empty set |
@@ -1762,7 +1765,7 @@ the block's listed hash for a body, computed for the coinbase.
 
 **Where it sits.** The expectations ride the same registration step as the
 pairs (`ownership::curve_tree_offer`): inside the ingest, after its
-rollback, before its first fold, inside the respawn wrapper — for §11.12's
+rollback, before its first fold, inside the recovery wrapper — for §11.12's
 reasons, and one more: a rollback leaves the expectations in place, so a
 transaction mined again on the other fork is matched again at its new
 gindex (`a_re_mined_transaction_is_matched_again_after_a_rollback`).

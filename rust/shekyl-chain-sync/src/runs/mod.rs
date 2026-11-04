@@ -60,6 +60,11 @@ where
             self.opening = crate::model::Opening::Resolved;
             return;
         }
+        // The evidence draw's wake: the step's draw follows this event.
+        if self.draw_wake == Some(request) {
+            self.draw_wake = None;
+            return;
+        }
         // A withdrawn request's deadline: its answer is no longer owed.
         if let Some(peer) = self.peers.get_mut(&session) {
             if let Some(at) = peer.withdrawn.iter().position(|id| *id == request) {
@@ -368,6 +373,29 @@ where
                     == base
             });
         if continues == Some(false) {
+            // An evidence check proves the branch it drew, from the fork,
+            // and the session's one draw is spent on it. A page that does
+            // not continue that run is the branch asked for again: the
+            // peer's claim moved while the check ran, and this node's
+            // locator holds nothing of the branch, so the peer answered
+            // from the fork. The page adds nothing the check needs and
+            // is discarded; the run stays. Until 2026-11-03 it dropped
+            // the run, and with the draw spent nothing drew again: a
+            // heavier peer that kept mining never latched (#1237, §10's
+            // partition regtest, Defect 12). The branch counts as
+            // followed until the claim moves again, so the discarded
+            // page is not re-asked at the round trip.
+            let evidence = self
+                .peers
+                .get(&session)
+                .and_then(|s| s.run.as_ref())
+                .is_some_and(Run::is_evidence);
+            if evidence {
+                if let Some(state) = self.peers.get_mut(&session) {
+                    state.gates.past_cap_followed = true;
+                }
+                return Ok(());
+            }
             self.drop_run(session);
         }
         // Pending headers are judged above the run's own parent, in `T` or
