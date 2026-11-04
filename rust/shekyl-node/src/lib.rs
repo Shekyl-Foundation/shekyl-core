@@ -72,6 +72,7 @@ pub use facts::free_bytes;
 pub use mining::{MiningControl, MiningRefused, MiningStatus, PostedJob};
 pub use producer::descriptors as producer_descriptors;
 pub use shekyl_chain_sync::Declaration;
+pub use shekyl_chain_sync_runtime::owner::Ended as SyncEnded;
 
 use std::num::NonZeroUsize;
 use std::sync::{Arc, Mutex, PoisonError};
@@ -245,6 +246,8 @@ pub struct Node {
     /// Chain sync's owner (CS-5 §2), the node's for its lifetime. It
     /// publishes into [`Self::sync`], and the seam's bind hands it the hub.
     sync_owner: Mutex<Option<shekyl_chain_sync_runtime::owner::Running>>,
+    /// How chain sync's owner ended, once it has ([`Self::sync_ended`]).
+    sync_ended: tokio::sync::watch::Receiver<Option<shekyl_chain_sync_runtime::owner::Ended>>,
     runtime: Mutex<Option<shekyl_runtime::Pool>>,
     /// The hasher budget `pow_hash` acquires under. The facts-lock test
     /// holds its permits; production does not keep a second copy.
@@ -557,6 +560,7 @@ impl Node {
             sockets,
             handles,
             service: Mutex::new(Some(service)),
+            sync_ended: sync_owner.ended(),
             sync_owner: Mutex::new(Some(sync_owner)),
             runtime: Mutex::new(Some(runtime)),
             #[cfg(test)]
@@ -589,6 +593,17 @@ impl Node {
     #[must_use]
     pub const fn sync(&self) -> &tokio::sync::watch::Sender<SyncState> {
         &self.sync
+    }
+
+    /// How chain sync's owner ended, once it has: `None` while it runs.
+    /// An owner that ends on its own (`Ended::Failed`) leaves a daemon
+    /// that never syncs again, so the daemon stops on it. The watch
+    /// outlives the owner and the node's stop.
+    #[must_use]
+    pub fn sync_ended(
+        &self,
+    ) -> tokio::sync::watch::Receiver<Option<shekyl_chain_sync_runtime::owner::Ended>> {
+        self.sync_ended.clone()
     }
 
     /// The node's one pool, while it runs: what the composition root hands

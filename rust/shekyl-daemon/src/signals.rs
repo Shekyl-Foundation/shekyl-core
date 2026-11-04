@@ -8,7 +8,9 @@
 //! Every trigger reaches one latch: the POSIX signals and every Windows
 //! console event through [`own`], which holds the operating system's
 //! streams for the process's life on the signal runtime; the console's
-//! `exit` and the RPC's `stop_daemon` through [`request_stop`]. A wait is
+//! `exit` and the RPC's `stop_daemon` through [`request_stop`]; and a part
+//! the daemon cannot run without ending, chain sync's owner, through
+//! [`fatal`], whose stop also makes the exit a failure. A wait is
 //! [`stop_requested`], which answers at once when the latch is already
 //! set, so a trigger that arrives between two waits (the managed Tor's
 //! bootstrap sits between the RPC start and step 8) is kept, not dropped:
@@ -46,6 +48,14 @@ fn latched() -> Option<&'static str> {
 /// The daemon's own request: the console's `exit`, the RPC's `stop_daemon`.
 pub fn request_stop() {
     latch("the daemon's own request (console or RPC)");
+}
+
+/// A part the daemon cannot run without has ended, with `cause`: chain
+/// sync's owner ending on its own. Every waiter sees the stop with this
+/// cause. The caller makes the exit a failure; a stop already latched
+/// keeps its own cause.
+pub fn fatal(cause: &'static str) {
+    latch(cause);
 }
 
 /// Install the owner of the operating system's stop triggers on `handle`:
@@ -139,6 +149,8 @@ mod tests {
     /// the latch is process-wide.
     #[test]
     fn a_request_between_waits_is_kept_and_a_stale_one_is_cleared() {
+        // The run tests latch the same owner: one at a time.
+        let _serial = crate::run::hold_process_table();
         let rt = runtime();
         request_stop();
         own(rt.handle()).expect("own");
