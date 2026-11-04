@@ -12,7 +12,7 @@
 //! [`StructurallyValid`], stateless and outside any transaction;
 //! [`validate`] takes that, a `ChainView<'id>` (narrow, read-only trait over
 //! **recorded** chain facts), the rule set in force and the node's [`Trust`]
-//! (the release anchors; from slice 6, the below-anchor posture), and yields
+//! (the genesis pin it carries), and yields
 //! `ChainValid<'id, V>` or `InvalidBlock { rule: CenRow, .. }` — or a
 //! [`Fault`], which is neither. Ruled in
 //! [`CONSENSUS_C2_R8_STORE_PLACEMENT.md`](../../docs/completed/CONSENSUS_C2_R8_STORE_PLACEMENT.md)
@@ -54,15 +54,16 @@
 //! [`Substrate`], and ten rows (C1–C3, D1, D1b, D2, D3, D4, D6, D7; D5 is
 //! the alt window, recorded by the cheap tier beside D4 — slice 9); slice 3
 //! (`CHAIN_RULES_SLICE_3.md`) housed `PDM-Q5`'s anchor model — the
-//! release-carried [`ReleaseAnchors`], the [`Trust`] input to `validate`,
+//! release-carried [`GenesisPin`], the [`Trust`] input to `validate`,
 //! CEN-E1 per block and CEN-E5 at writer open (the first `enforced_at` row;
-//! E2 waits on the alt view and `D_max`); slice 4 (`CHAIN_RULES_SLICE_4.md`)
+//! CEN-E2 is rejected: no coded checkpoints, and `D_max` stays the switch's
+//! local limit); slice 4 (`CHAIN_RULES_SLICE_4.md`)
 //! landed 4.F's sixteen operand-complete rows — the coinbase's shape and
 //! height claims as predicates at [`TxSlot::Miner`], the emission
 //! definitions derived and recorded in coverage (the priced value stays
 //! off the verdict until F14b's paid reward), four rows `by_construction`
 //! (the first of that status), every public network's genesis pinned in
-//! [`ReleaseAnchors`] — verified by equality, in no trust band — and
+//! [`GenesisPin`] — verified by equality, in no trust band — and
 //! `RuleSet::mined_money_unlock_window` (the split epoch is
 //! `shekyl_economics::EMISSION_SPLIT_EPOCH`, read by the split itself); F14/F14b/F16/F18 wait on CEN-G6's
 //! median (slice 7) and F17 on the curve tree's writer (DRS-E3); slice 5
@@ -121,7 +122,6 @@
 #![deny(unsafe_code)]
 
 mod alt;
-mod anchors;
 mod archival;
 mod archival_reads;
 mod block;
@@ -130,6 +130,7 @@ mod coverage;
 mod drain;
 mod epoch_floor;
 mod fault;
+mod genesis_pin;
 mod header_facts;
 mod header_ladder;
 mod header_path;
@@ -159,8 +160,7 @@ mod view;
 pub mod harness;
 pub mod relay_floor;
 
-pub use alt::{alt_against, anchor_band, AltChainView, AltValid, AnchorBand, Fork, InvertedFork};
-pub use anchors::{Anchor, ReleaseAnchors};
+pub use alt::{alt_against, AltChainView, AltValid, Fork, InvertedFork};
 pub use archival::{
     admission_plan, closed_and_final, drawable_epoch_walked_back, remember_window_epochs,
     shard_close, shard_close_height, Accrual, AdmissionPlan, AdmissionPlanFault, ArchivalDelta,
@@ -168,6 +168,7 @@ pub use archival::{
     RecordWrite, RecordWriteKind, ReleasePreImage, ServeCreditKey, Settlement, Slash,
     SupportSettlement, WALK_BACK_EPOCHS,
 };
+pub use genesis_pin::GenesisPin;
 // The support stream's schedule on the connect path (`SO-D12` S1): the
 // transition writes a block's seats with it, and the store's bundle view
 // requires the stored row to equal it (SI-43).
@@ -216,13 +217,13 @@ pub use rule_set::{
     ResponseWindowOutrunsAnchor, RuleSchedule, RuleSet, RuleSetId, SettlementEpochBlocks,
     SettlementSchedule,
 };
-pub use rules::anchors::{AnchorConflict, Remedy};
 pub use rules::block_weight::{
     block_weight_limit_at, effective_median_at, effective_median_at_windows, even_pair_median,
     median, medians_from, medians_over, medians_over_window, EffectiveMedian, Weights,
 };
 pub use rules::body::{ArchivalKey, BlockArchivalKeys};
 pub use rules::difficulty::{cumulative_difficulty_after, target_claim, Target};
+pub use rules::genesis::GenesisConflict;
 pub use rules::miner::{
     closed_shards_before, closed_shards_through, tx_volume_span, tx_volume_span_of,
     tx_volume_window, TxVolumeSpan,

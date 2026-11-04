@@ -111,11 +111,11 @@ fn stop_closes_the_store_withdraws_the_board_and_a_second_stop_is_a_no_op() {
     let rules =
         ChainRules::new(Chain::Regtest, None, FakechainSchedule::PRODUCTION).expect("rules");
     let horizons = Horizons::under(&rules.in_force(BlockHeight::ZERO)).expect("horizons");
-    let (store, _cut) = ChainStore::with_release(
+    let (store, _cut) = ChainStore::with_genesis(
         dir.path().join("chain.db"),
         ApplyPolicy::Full,
         horizons,
-        &ReleaseAnchors::EMPTY,
+        &GenesisPin::NONE,
     )
     .expect("the store closed, so it opens again");
     let snap = store.begin_read().expect("read");
@@ -290,6 +290,54 @@ fn a_newer_chain_file_is_refused_an_older_one_replaced_and_a_corrupt_one_kept() 
         "a corrupt chain file is not a layout mismatch"
     );
     assert_eq!(std::fs::read(&chain).expect("still there"), garbage);
+}
+/// A regtest node refuses a store whose block 0 is another network's, and
+/// leaves it as it was: the genesis pin covers regtest, judged on the
+/// read-only open (S1, design review 2026-11-03). The network marker sits
+/// above this check in the daemon and can be copied with a store; the pin
+/// is what the store itself says. Red edit: leave regtest unpinned at open.
+#[test]
+fn a_regtest_node_refuses_a_testnet_store_and_leaves_it_unwritten() {
+    use shekyl_chain_store::store::{StoreCannot, StoreError};
+    let dir = tempfile::tempdir().expect("temp");
+    let testnet = config_on(dir.path(), "testnet", &[]);
+    let open_on = |config: &DaemonConfig| {
+        Node::open(OpenArgs {
+            config,
+            version: "test".to_owned(),
+            protocol_version: 1,
+            release_build: false,
+            request_stop: Arc::new(|| {}),
+        })
+    };
+    open_on(&testnet).expect("a testnet node opens").stop();
+    let chain = dir.path().join("chain.db");
+    let before = std::fs::read(&chain).expect("the testnet store");
+    let modified = std::fs::metadata(&chain)
+        .and_then(|meta| meta.modified())
+        .expect("mtime");
+    match open_on(&config_at(dir.path())) {
+        Err(OpenError::Store(StoreError::Cannot(StoreCannot::ForeignGenesis(conflict)))) => {
+            assert_eq!(conflict.expected, genesis_hash());
+            assert_eq!(
+                conflict.recorded,
+                BlockHash::from_bytes(shekyl_rpc_types::genesis_hash_for(DaemonNetwork::Testnet))
+            );
+        }
+        Err(other) => panic!("another network's store is a genesis refusal, got {other}"),
+        Ok(node) => {
+            node.stop();
+            panic!("a regtest node opened a testnet store");
+        }
+    }
+    assert_eq!(std::fs::read(&chain).expect("still there"), before);
+    assert_eq!(
+        std::fs::metadata(&chain)
+            .and_then(|meta| meta.modified())
+            .expect("mtime"),
+        modified,
+        "a refused store keeps its modification time"
+    );
 }
 /// A pool file at another version is recreated and the node starts. A
 /// pool file that is not a pool file is refused and kept. Red edit:

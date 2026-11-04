@@ -22,8 +22,8 @@ error[E0521]: borrowed data escapes outside of closure
    |                `outer` is a reference that is only valid in the closure body
    |                has type `Stub<Brand<'1>>`
 19 |         with_view(|inner| {
-20 |             let valid = validate(formed(), &inner, &RuleSet::GENESIS, &Trust::UNANCHORED)
-   |                         ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+20 |             let valid = validate(formed(), &inner, &RuleSet::GENESIS, &Trust::UNPINNED)
+   |                         ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
    |                         |
    |                         `outer` escapes the closure body here
    |                         argument requires that `'1` must outlive `'static`

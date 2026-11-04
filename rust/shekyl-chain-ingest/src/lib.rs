@@ -267,7 +267,7 @@ pub use connector::{
     Inject, Injected, IssueDraws, OfferAlt, Offered, PlanMismatchReason, PlannedBlock,
     PlannedDemotion, PlannedPromotion, PopBeyondReorgCap, PopBlocks, RaiseAlarm, RefusePromotion,
     Reorganize, Rewind, Rewound, RunEnd, RunFault, SwitchDone, SwitchPlan, Switched, TableRows,
-    TemplateFacts, TipChanged, WatchLatch, WatchTip,
+    TemplateFacts, TipChanged, WatchDeepReorg, WatchLatch, WatchTip,
 };
 pub use corpus::{CorpusFault, CorpusNet, CorpusReader, CorpusWriter, CORPUS_FORMAT_VERSION};
 #[cfg(feature = "fetch")]

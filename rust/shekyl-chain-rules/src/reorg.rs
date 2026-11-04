@@ -3,15 +3,17 @@
 // All rights reserved.
 // BSD-3-Clause
 
-//! `D_max`, the consensus reorg cap (`PDM-Q11`) — **the genesis rule set's
+//! `D_max`, the reorg cap (`PDM-Q11`) — **the genesis rule set's
 //! value**; the cap in force is `RuleSet::reorg_cap` — and the journal
 //! horizon derived from it (`PDM-Q-F19`).
 //!
 //! # One number, three derivations
 //!
 //! `PDM-Q11` (RULED 2026-09-17, `ARCHIVAL_PRUNED_DAEMON_MODE.md`) froze the
-//! *shape* — a detectability boundary, home `CEN-E2` (`is_alternative_block_allowed`
-//! above the checkpoint) — and pinned the *numeric* **PROVISIONAL** on the
+//! *shape* as a detectability boundary. S1 (2026-11-03) rejected the
+//! consensus row that would have refused an alternative past it (CEN-E2):
+//! the cap is the switch's local limit (`PopBeyondReorgCap`) and the floor
+//! under undo retention, not a verdict. The *numeric* is **PROVISIONAL** on the
 //! `bond_duration` precedent. Three surfaces derive from it: F10's discard
 //! predicate (now the epoch calendar, `DRS_E1_SPRUNE.md` §2), F19's journal
 //! horizon ([`journal_horizon`]), and the store's undo-log retention
@@ -28,8 +30,9 @@
 //! requester anchors so an admitted pass survives any legal reorg, owner
 //! E4 / pass admission (`SF-D8`, `pass_anchor.rs`
 //! `PASS_ANCHOR_DEPTH_BLOCKS`), requirement *depth ≥ cap (+ L)* — and it is
-//! the **reorg cap**, owner consensus (`PDM-Q11`, `CEN-E2`), a
-//! detectability boundary on Q11's own requirement. The value was tuned
+//! the **reorg cap**, the switch's local limit and the retention floor
+//! (`PDM-Q11`; CEN-E2 rejected), a detectability boundary on Q11's own
+//! requirement. The value was tuned
 //! for the first job (the key predates Q11; its comment names the cap as a
 //! consumer), so the two are not one number by rationale: the depth's
 //! requirement is `≥ cap`, not `= cap`. The split — the depth on its own

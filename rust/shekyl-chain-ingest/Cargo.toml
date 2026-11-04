@@ -102,6 +102,7 @@ shekyl-chain-store = { path = "../shekyl-chain-store" }
 shekyl-address = { path = "../shekyl-address" }
 # CumulativeDifficulty — the accumulator the trace records for SI-10.
 shekyl-difficulty = { path = "../shekyl-difficulty" }
+shekyl-consensus = { path = "../shekyl-consensus" }
 # The owners of two connect-fact folds `facts::Composed` performs:
 # `advance_already_generated` (CEN-F13's accumulator) and `long_term_weight`
 # (CEN-G6's clamp). Composition, not derivation — the emission itself is

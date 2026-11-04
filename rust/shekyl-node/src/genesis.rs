@@ -18,7 +18,7 @@ use shekyl_wire::{Block, Transaction};
 use crate::OpenError;
 
 /// The header the binary was built with. The pin test in `shekyl-chain-rules`
-/// rebuilds the same block and checks it against [`shekyl_chain_rules::ReleaseAnchors`].
+/// rebuilds the same block and checks it against [`shekyl_chain_rules::GenesisPin`].
 const CONFIG_H: &str = include_str!("../../../src/cryptonote_config.h");
 
 /// The network whose `GENESIS_TX` this daemon connects. Regtest shares

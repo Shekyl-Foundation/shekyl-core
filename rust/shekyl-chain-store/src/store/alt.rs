@@ -21,9 +21,8 @@
 //! that exceeds the reorg cap in force, no switch reaches it: the cap is
 //! checked before any pop (`E5-Q6`), and the tip only rises. So the connect
 //! that advances the tip to `t` removes, in its own write, every row at or
-//! below `t − cap` with its bodies ([`WriteBatch::retire_alt_blocks`]); the
-//! writer also removes every row at or below the anchor floor (CEN-E2),
-//! which the store does not know. The lifetime of an alt row is the cap —
+//! below `t − cap` with its bodies ([`WriteBatch::retire_alt_blocks`]).
+//! The lifetime of an alt row is the cap —
 //! no constant of its own.
 //!
 //! **A dead row takes its descendants.** A row above the line whose chain
@@ -257,7 +256,7 @@ impl WriteBatch<'_, '_> {
     /// **The death rule** (module docs): remove every alt block at or below
     /// `through`, and every alt block descending from one of them, with
     /// their bodies; returns how many. `connect` calls it with the tip less
-    /// the cap in force; the writer calls it with the anchor floor.
+    /// the reorg cap in force.
     ///
     /// # Errors
     ///

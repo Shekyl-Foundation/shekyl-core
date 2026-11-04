@@ -3979,6 +3979,7 @@ dependencies = [
  "shekyl-chain-rules",
  "shekyl-chain-store",
  "shekyl-chain-sync",
+ "shekyl-consensus",
  "shekyl-crypto-hash",
  "shekyl-crypto-pq",
  "shekyl-curve-generators",

@@ -19,8 +19,8 @@ use shekyl_chain_rules::harness::fixture::{coinbase_extra, TWO_G};
 use shekyl_chain_rules::harness::MockSubstrate;
 use shekyl_chain_rules::{
     bind_body, form, form_header, form_judged, judge_header, judge_header_cheap, seed_height,
-    target_claim, validate, AtHeight, Candidate, CenRow, ChainView, Fault, FormAttempt, HeaderView,
-    OpenHeader, ProspectFault, ReferenceClaims, ReleaseAnchors, RuleSet, Stale, Target, Trust,
+    target_claim, validate, AtHeight, Candidate, CenRow, ChainView, Fault, FormAttempt, GenesisPin,
+    HeaderView, OpenHeader, ProspectFault, ReferenceClaims, RuleSet, Stale, Target, Trust,
 };
 use shekyl_chain_store::apply_policy::ApplyPolicy;
 use shekyl_chain_store::store::{StoreError, WriteBatch};
@@ -721,15 +721,15 @@ fn bind_body_agrees_with_validate() {
     assert!(witnessed, "no witness was substituted");
 }
 
-/// A block at an anchored height whose hash is not the anchor's is CEN-E1
-/// on both paths.
+/// A genesis candidate whose hash is not the pin is CEN-E1 on both paths.
+/// Nothing above height 0 is pinned, so the fixture is block 0.
 #[test]
-fn an_anchored_height_with_the_wrong_hash_is_e1_on_both_paths() {
+fn a_genesis_candidate_with_the_wrong_hash_is_e1_on_both_paths() {
     let (dir, manifest) = captured_chains().into_iter().next().expect("a chain");
     let chain = load(&dir, &manifest.shape);
     let rules = rules_for(&manifest);
-    let anchors = ReleaseAnchors::for_tests(Some(BlockHash::from_bytes([0xab; 32])), &[]);
-    let trust = Trust::full(anchors);
+    let pin = GenesisPin::for_tests(Some(BlockHash::from_bytes([0xab; 32])));
+    let trust = Trust::full(pin);
     let substrate = mock_with_the_real_clock();
     let path = tmp("header-path-anchor");
     let store = open_store_under(&path, &rules.in_force(BlockHeight::ZERO), ApplyPolicy::Full);

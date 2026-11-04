@@ -179,13 +179,13 @@ fn an_index_that_does_not_fold_to_its_digest_halts_the_slash_pass() {
             .issued_digest(epoch, EpochFloor::NONE)
             .unwrap();
         store
-            .regtest_issue_draws(Trust::UNANCHORED, epoch, &[extra], digest)
+            .regtest_issue_draws(Trust::UNPINNED, epoch, &[extra], digest)
             .expect("issued");
     }
     // The digest cell changed under its rows.
     fn the_digest_changed(store: &ChainStore, epoch: SettlementEpoch) {
         store
-            .regtest_issue_draws(Trust::UNANCHORED, epoch, &[], IssuedDigest::ZERO)
+            .regtest_issue_draws(Trust::UNPINNED, epoch, &[], IssuedDigest::ZERO)
             .expect("written");
     }
     // A row lost: removed beneath the door.

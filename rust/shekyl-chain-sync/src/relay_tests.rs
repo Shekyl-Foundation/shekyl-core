@@ -29,7 +29,7 @@ use crate::Command;
 #[test]
 fn a_shorter_heavier_replacement_is_not_beneath_the_tip_already_seen() {
     let rules = crate::proof::fixed(1, 64);
-    let mut sync: Sync<u8, _> = Sync::new(Trust::UNANCHORED, move |_| rules);
+    let mut sync: Sync<u8, _> = Sync::new(Trust::UNPINNED, move |_| rules);
     sync.local = Some(crate::model::Local {
         hash: BlockHash::from_bytes([1; 32]),
         height: Some(BlockHeight::from_raw(20)),
@@ -157,7 +157,7 @@ where
 {
     let main = chain_of(8);
     let mut block = candidate_on(&main, Vec::new()).block;
-    let mut sync = Sync::new(Trust::UNANCHORED, target_one as fn(BlockHeight) -> RuleSet);
+    let mut sync = Sync::new(Trust::UNPINNED, target_one as fn(BlockHeight) -> RuleSet);
     main.with_view(|view| {
         let tip = view.tip().expect("main answers").expect("a tip");
         drive(&mut sync, &view, Event::Tip { tip });

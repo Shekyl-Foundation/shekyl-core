@@ -12,22 +12,19 @@
 //! 1. [`OfferAlt`] — a formed block whose parent is not the tip. The cheap
 //!    tier judges it over the stitched [`AltView`] (`alt_against`), AL1
 //!    stores the verdict, and the fork choice reads the two cumulative
-//!    difficulties and the checkpoint table (K6). A winning verdict comes
-//!    back as a [`SwitchPlan`]: the blocks the switch will judge, each with
-//!    its seed claim, for the caller to `form` off the actor (step 1 of
-//!    §2.3 — the M alt entries and, unless the verdict is the checkpoint's,
-//!    the N demoted blocks).
+//!    difficulties (K6). A winning verdict comes back as a
+//!    [`SwitchPlan`]: the blocks the switch will judge, each with its seed
+//!    claim, for the caller to `form` off the actor (step 1 of §2.3 — the
+//!    M alt entries and the N demoted blocks).
 //! 2. [`Reorganize`] — the formed blocks, with the tip the plan was made
 //!    against. On the actor, before any write: the plan is held to the
 //!    store (a tip that moved is a driver defect, never a switch); the cap
-//!    is checked (`E5-Q6`); each demoted block the plan formed — the
-//!    `Switch` arm, which re-admits them — is judged by the cheap tier
-//!    over a snapshot taken here, where its history is exactly the chain
-//!    below it (SAL-13; a refusal is SI-27). `ForcedSwitch` forms none of
-//!    them and discards them (K7), so the tier does not run and SI-27 does
-//!    not arm. Then one `store.write`: the
+//!    is checked (`E5-Q6`); each demoted block, which the switch
+//!    re-admits, is judged by the cheap tier over a snapshot taken here,
+//!    where its history is exactly the chain below it (SAL-13; a refusal
+//!    is SI-27). Then one `store.write`: the
 //!    pops and SI-5 (`pop_many`), the demoted rows from their verdicts
-//!    (K7; the checkpoint arm discards them), every alt entry through the
+//!    (K7), every alt entry through the
 //!    full `validate` and `connect` (K5; K5b's witness travels in the alt
 //!    row), each connect removing its block's alt row (a block id has one
 //!    home, `store/alt.rs`). A promotion verdict aborts the
@@ -214,9 +211,6 @@ pub struct SwitchPlan {
     pub root: Tip,
     /// The alternative chain's tip — the offered block.
     pub alt_tip: BlockHash,
-    /// The fork choice's arm: `ForcedSwitch` discards the demoted chain
-    /// (K7), so its blocks are not formed.
-    pub verdict: ForkChoiceVerdict,
     /// The recorded blocks above the fork point, ascending.
     pub demoted: Vec<PlannedDemotion>,
     /// The alt entries, ascending, ending at the offered block.
@@ -287,8 +281,7 @@ pub struct Reorganize {
     pub tip: Tip,
     /// The plan's alternative tip.
     pub alt_tip: BlockHash,
-    /// The demoted blocks, formed, ascending; empty when the plan's verdict
-    /// is `ForcedSwitch`.
+    /// The demoted blocks, formed, ascending.
     pub demoted: Vec<StructurallyValid>,
     /// The alt entries, formed, ascending.
     pub promoted: Vec<StructurallyValid>,
@@ -315,9 +308,6 @@ pub struct RefusePromotion {
 pub struct SwitchDone {
     /// The blocks popped, ascending by height.
     pub demoted: Vec<(BlockHeight, BlockHash)>,
-    /// Whether the demoted blocks were kept as alt rows (`Switch`) or
-    /// discarded (`ForcedSwitch`, K7).
-    pub demoted_kept: bool,
     /// The blocks connected, ascending.
     pub promoted: Vec<(BlockHeight, BlockHash)>,
     /// The demoted blocks' listed transactions, in chain order — for the
@@ -429,7 +419,7 @@ impl Message<OfferAlt> for Connector {
         msg: OfferAlt,
         _ctx: &mut Context<Self, Self::Reply>,
     ) -> Self::Reply {
-        let (rules, trust) = (self.rules, self.trust);
+        let (rules, trust) = (self.rules, self.rules.trust());
         let offered = self
             .writer
             .with_store(|store| offer(store, rules, trust, msg.0))?;
@@ -448,13 +438,16 @@ impl Message<Reorganize> for Connector {
         msg: Reorganize,
         _ctx: &mut Context<Self, Self::Reply>,
     ) -> Self::Reply {
-        let (rules, trust) = (self.rules, self.trust);
+        let (rules, trust) = (self.rules, self.rules.trust());
         let memo = &mut self.memo;
         let switched = self
             .writer
             .with_store(|store| switch(store, rules, trust, memo, msg))?;
-        if matches!(switched, Switched::Done(_)) {
+        if let Switched::Done(done) = &switched {
             self.tip_moved();
+            if let Some(reorg) = deep_reorg(done) {
+                self.note_deep_reorg(reorg);
+            }
         }
         let evidence = match &switched {
             Switched::BeyondCap { evidence, .. } | Switched::BelowFloor { evidence, .. } => {
@@ -528,18 +521,15 @@ fn offer(
     }
     let tip = tip.expect("an alternative chain links to a recorded block");
     let current = recorded_work(&snap, tip.height)?;
-    // K6: the comparison's one implementation; the checkpoint arm is the
-    // release's pin at the block's height naming this block.
-    let checkpoint = trust.anchors().expected_at(height) == Some(hash);
-    let verdict = fork_choice(current, alternative, checkpoint);
-    if verdict == ForkChoiceVerdict::KeepCurrent {
+    // K6: the comparison's one implementation.
+    if fork_choice(current, alternative) == ForkChoiceVerdict::KeepCurrent {
         return Ok(Offered::Held { height });
     }
     drop(snap);
     // A fresh snapshot: the plan's alternative chain includes the row just
     // written.
     let snap = store.begin_read()?;
-    match plan(store, &snap, rules, tip, hash, verdict)? {
+    match plan(store, &snap, rules, tip, hash)? {
         Planned::Due(plan) => Ok(Offered::SwitchDue(plan)),
         Planned::BeyondCap { beyond, evidence } => Ok(Offered::BeyondCap { beyond, evidence }),
         Planned::Refused { refused, remove } => {
@@ -555,16 +545,15 @@ fn offer(
 /// (`target_claim`) over the chain the block is on: the stitched view for
 /// an alt entry, the recorded chain below it for a demoted block. A D6
 /// refusal on an alt entry is that block's verdict ([`Planned::Refused`]);
-/// on a demoted block the `Switch` arm forms, it is a recorded block
-/// failing its own rules — SI-27, the writer halts, as the cheap tier's
-/// refusal does in [`switch`]. `ForcedSwitch` forms none of them (K7).
+/// on a demoted block, it is a recorded block failing its own rules —
+/// SI-27, the writer halts, as the cheap tier's refusal does in
+/// [`switch`].
 fn plan(
     store: &ChainStore,
     snap: &ReadSnapshot<'_>,
     rules: ChainRules,
     tip: Tip,
     alt_tip: BlockHash,
-    verdict: ForkChoiceVerdict,
 ) -> Result<Planned, RunFault> {
     let chain = AltChain::build(snap, &alt_tip)?;
     let root = chain.root();
@@ -576,44 +565,41 @@ fn plan(
     }
     let stitched = AltView::new(snap, chain.clone());
     let entries = chain.entries();
-    // K7: ForcedSwitch discards the demoted chain, so the plan does not
-    // read the blocks it will not form. The Switch arm re-admits them and
-    // claims their seed and target over the chain below each one.
+    // K7: the switch re-admits the demoted blocks, so the plan claims
+    // their seed and target over the chain below each one.
     let mut demoted = Vec::new();
-    if verdict == ForkChoiceVerdict::Switch {
-        let mut height = root.height;
-        while height < tip.height {
-            height = height.checked_add(BlockCount::ONE).expect("below the tip");
-            let candidate = match snap.candidate_at(height)? {
-                AtHeight::Recorded(candidate) => candidate,
-                AtHeight::AboveTip => unreachable!("heights up to the tip are recorded"),
-            };
-            let recorded = match snap.recorded_pow(height)? {
-                AtHeight::Recorded(pow) => pow.proven(),
-                AtHeight::AboveTip => unreachable!("heights up to the tip are recorded"),
-            };
-            // The recorded chain below this block, as the cheap tier will see
-            // it in `switch` (SAL-13): the seed and the target over the same view.
-            let parent = recorded_hash(snap, BlockHeight::from_raw(height.to_raw() - 1))?;
-            let below = AltView::new(snap, AltChain::build(snap, &parent)?);
-            let target = match target_claim(&below, height, &rules.in_force(height)) {
-                Ok(Ok(target)) => target,
-                Ok(Err(_refused)) => {
-                    return Err(halt_writer(store, |batch| batch.refuse_demotion(height)))
-                }
-                Err(fault) => return Err(snapshot_fault(store, height, fault)),
-            };
-            demoted.push(PlannedDemotion {
-                at: PlannedBlock {
-                    height,
-                    hash: recorded_hash(snap, height)?,
-                    seed: claimed_seed(&below, height)?,
-                    target,
-                    recorded,
-                },
-                candidate,
-            });
-        }
+    let mut height = root.height;
+    while height < tip.height {
+        height = height.checked_add(BlockCount::ONE).expect("below the tip");
+        let candidate = match snap.candidate_at(height)? {
+            AtHeight::Recorded(candidate) => candidate,
+            AtHeight::AboveTip => unreachable!("heights up to the tip are recorded"),
+        };
+        let recorded = match snap.recorded_pow(height)? {
+            AtHeight::Recorded(pow) => pow.proven(),
+            AtHeight::AboveTip => unreachable!("heights up to the tip are recorded"),
+        };
+        // The recorded chain below this block, as the cheap tier will see
+        // it in `switch` (SAL-13): the seed and the target over the same view.
+        let parent = recorded_hash(snap, BlockHeight::from_raw(height.to_raw() - 1))?;
+        let below = AltView::new(snap, AltChain::build(snap, &parent)?);
+        let target = match target_claim(&below, height, &rules.in_force(height)) {
+            Ok(Ok(target)) => target,
+            Ok(Err(_refused)) => {
+                return Err(halt_writer(store, |batch| batch.refuse_demotion(height)))
+            }
+            Err(fault) => return Err(snapshot_fault(store, height, fault)),
+        };
+        demoted.push(PlannedDemotion {
+            at: PlannedBlock {
+                height,
+                hash: recorded_hash(snap, height)?,
+                seed: claimed_seed(&below, height)?,
+                target,
+                recorded,
+            },
+            candidate,
+        });
     }
     let mut promoted = Vec::with_capacity(entries.len());
     for (index, entry) in entries.iter().enumerate() {
@@ -673,7 +659,6 @@ fn plan(
         tip,
         root,
         alt_tip,
-        verdict,
         demoted,
         promoted,
         headers,
@@ -693,6 +678,52 @@ fn heavier(chain: &AltChain) -> shekyl_chain_store::codec::FollowingDegraded {
         tip: tip.id,
         work: tip.block.cumulative_difficulty(),
     }
+}
+
+/// A switch that popped more blocks than the lock window (S1, design review
+/// 2026-11-03): `shekyl_consensus::DEFAULT_LOCK_WINDOW`, the single source
+/// for the wallet's `SPENDABLE_AGE` and curve-tree maturity, so a switch
+/// this deep un-confirms outputs a wallet already treated as spendable.
+///
+/// An event, not a state. The switch landed and the node follows the
+/// heavier chain; the connector logs a warning and keeps the most recent
+/// one (`WatchDeepReorg`), which the next overwrites. Nothing that decides
+/// whether the node is following reads it: the `following_degraded` latch
+/// keeps its one meaning, a heavier chain this node refused, because a
+/// latch here would mark every node that followed a legitimate deep
+/// reorganization degraded until a resync, and a degraded daemon stops its
+/// personas serving.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct DeepReorg {
+    /// The recorded blocks the switch popped.
+    pub depth: BlockCount,
+    /// The last height both chains share.
+    pub fork_at: BlockHeight,
+    /// The tip the switch left.
+    pub old_tip: BlockHash,
+    /// The tip the switch connected.
+    pub new_tip: BlockHash,
+}
+
+/// The [`DeepReorg`] a landed switch makes, or `None` for one at or inside
+/// the lock window.
+fn deep_reorg(done: &SwitchDone) -> Option<DeepReorg> {
+    let window = u64::try_from(shekyl_consensus::DEFAULT_LOCK_WINDOW).expect("the window fits u64");
+    let depth = u64::try_from(done.demoted.len()).expect("a pop count fits u64");
+    if depth <= window {
+        return None;
+    }
+    let (first, _) = *done.demoted.first()?;
+    let (_, old_tip) = *done.demoted.last()?;
+    let (_, new_tip) = *done.promoted.last()?;
+    Some(DeepReorg {
+        depth: BlockCount::from_raw(depth),
+        fork_at: first
+            .checked_sub_count(BlockCount::ONE)
+            .expect("a demoted block is above genesis"),
+        old_tip,
+        new_tip,
+    })
 }
 
 /// `E5-Q6`: the depth `chain` would pop from `tip`, against the cap in
@@ -779,7 +810,6 @@ fn switch(
     }
     let root = chain.root();
     let entries = chain.entries().to_vec();
-    let alt_tip_height = chain.parent().height;
     // K6, re-derived on the actor: the caller carries formed blocks, not
     // the verdict. An alternative tip the recorded chain holds is no
     // alternative chain at all.
@@ -789,17 +819,12 @@ fn switch(
         });
     };
     let alternative = last.block.cumulative_difficulty();
-    let checkpoint = trust.anchors().expected_at(alt_tip_height) == Some(msg.alt_tip);
-    let verdict = fork_choice(recorded_work(&snap, tip.height)?, alternative, checkpoint);
-    let keep_demoted = match verdict {
-        ForkChoiceVerdict::KeepCurrent => {
-            return Err(RunFault::PlanMismatch {
-                reason: PlanMismatchReason::IncumbentKept,
-            })
-        }
-        ForkChoiceVerdict::Switch => true,
-        ForkChoiceVerdict::ForcedSwitch => false,
-    };
+    if fork_choice(recorded_work(&snap, tip.height)?, alternative) == ForkChoiceVerdict::KeepCurrent
+    {
+        return Err(RunFault::PlanMismatch {
+            reason: PlanMismatchReason::IncumbentKept,
+        });
+    }
 
     // The promoted blocks are the alt entries, in order, each with the
     // witness its row carries (K5b).
@@ -822,9 +847,9 @@ fn switch(
     }
 
     // The demoted blocks: the recorded chain above the fork point, read
-    // before the closure (SAL-13). Their bodies return to the pool either
-    // way; their rows — and with them their bodies, AL1 — are written only
-    // on the difficulty arm (K7).
+    // before the closure (SAL-13). Their bodies return to the pool, and
+    // their rows — and with them their bodies, AL1 — are written as alt
+    // rows (K7).
     let depth = tip.height.to_raw() - root.height.to_raw();
     let mut demoted = Vec::new();
     let mut witnesses = Vec::new();
@@ -839,10 +864,9 @@ fn switch(
         witnesses.push(candidate.attestation_witness.clone());
         returned.extend(candidate.transactions);
     }
-    let expected_demoted = if keep_demoted { demoted.len() } else { 0 };
     // CEN-K5b's other direction: a demoted row carries the witness its
     // height row held, so the formed block must carry that one.
-    if msg.demoted.len() != expected_demoted
+    if msg.demoted.len() != demoted.len()
         || msg.demoted.iter().zip(demoted.iter().zip(&witnesses)).any(
             |(formed, ((_, hash), witness))| {
                 formed.hash() != *hash || formed.candidate().attestation_witness != *witness
@@ -884,7 +908,6 @@ fn switch(
         let view = batch.chain_view();
         let mut done = SwitchDone {
             demoted: demoted.clone(),
-            demoted_kept: keep_demoted,
             ..SwitchDone::default()
         };
         for (index, (formed, entry)) in msg.promoted.into_iter().zip(&entries).enumerate() {
@@ -900,7 +923,6 @@ fn switch(
                     // one home (`store/alt.rs`).
                     let connected = batch.connect(valid, in_force)?;
                     debug_assert!(connected.left_alt, "a promoted block was its own alt row");
-                    super::retire_below_the_anchor(batch, &trust, height)?;
                     done.promoted.push((height, hash));
                 }
                 Ok(Err(refused)) => {
@@ -1007,22 +1029,6 @@ fn claimed_seed(view: &AltView<'_>, height: BlockHeight) -> Result<BlockHash, Ru
         AtHeight::AboveTip => unreachable!(
             "the seed height sits below the block, and this view reaches at least the block's parent"
         ),
-    }
-}
-
-/// Replace the run's trust with a fixture table — test-only, so the fork
-/// choice's checkpoint arm (CEN-K6/K7) can be reached on a regtest chain,
-/// which no release anchors.
-#[cfg(test)]
-#[derive(Clone, Copy, Debug)]
-pub struct AnchorForTests(pub Trust);
-
-#[cfg(test)]
-impl Message<AnchorForTests> for Connector {
-    type Reply = ();
-
-    async fn handle(&mut self, msg: AnchorForTests, _ctx: &mut Context<Self, Self::Reply>) {
-        self.trust = msg.0;
     }
 }
 

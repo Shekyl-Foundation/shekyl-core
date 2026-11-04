@@ -295,10 +295,10 @@ fn the_implemented_rows_are_exactly_the_landed_slices() {
         .collect();
     assert_eq!(
         at_open,
-        [CenRow::D5, CenRow::E2, CenRow::E5, CenRow::K1b, CenRow::K4],
+        [CenRow::D5, CenRow::E5, CenRow::K1b, CenRow::K4],
         "slice 3 Q4 (a): E5 at writer open; DRS-E5 slice 9: the alt tier's target over the \
-         stitched window (D5), the anchor floor and reorg cap over the fork (E2), the \
-         height-0 claim (K1b) and the tier as the set and order of its steps (K4)"
+         stitched window (D5), the height-0 claim (K1b) and the tier as the set and order of \
+         its steps (K4)"
     );
     let held_by_store: Vec<CenRow> = CenRow::ALL
         .iter()
@@ -432,7 +432,10 @@ fn registries_are_the_expected_size_at_this_increment() {
     // with its implementation, `SO-D12` increment 3.
     // 162 → 161 on 2026-10-28: CEN-L10 (the C++ freeze/reader) went to
     // bucket 3 with the store flip (PDM-Q12; SAR-5) and left this registry.
-    assert_eq!(CenRow::ALL.len(), 161);
+    // 161 → 160 on 2026-11-03: CEN-E2 (the anchor floor and anchored reorg
+    // cap) went to bucket 3 with S1 (no coded checkpoints) and left this
+    // registry.
+    assert_eq!(CenRow::ALL.len(), 160);
     assert_eq!(PolicyRow::ALL.len(), 8);
 }
 

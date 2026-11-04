@@ -3,14 +3,17 @@
 // All rights reserved.
 // BSD-3-Clause
 
-//! Census 4.K's rule arms, and CEN-E2 — the rows only an alternative
-//! block can be judged on (`DRS_E5_POOL_ALT_PRUNE.md` §2.1, slice 9 a4).
+//! Census 4.K's rule arms — the rows only an alternative block can be
+//! judged on (`DRS_E5_POOL_ALT_PRUNE.md` §2.1, slice 9 a4).
 //!
-//! The alt tier ([`crate::alt_against`]) judges a block against the chain it
-//! extends rather than the recorded tip. Most of what it runs is the
-//! header-rule half of `validate`'s ladder, bound on a [`HeaderView`] so
-//! the stitched, unexecuted chain can answer it. Three rows have no
-//! main-chain arm at all and live here:
+//! CEN-E2 is rejected (S1, design review 2026-11-03): no coded checkpoints,
+//! so no anchor floor, and `D_max` is the switch's local limit
+//! (`PopBeyondReorgCap`), not a consensus refusal. The alt tier
+//! ([`crate::alt_against`]) judges a block against the chain it extends
+//! rather than the recorded tip. Most of what it runs is the header-rule
+//! half of `validate`'s ladder, bound on a [`HeaderView`] so the stitched,
+//! unexecuted chain can answer it. The rows with no main-chain arm live
+//! here:
 //!
 //! - **CEN-K1b** ([`K1b`]) — a block whose coinbase *claims* height 0
 //!   cannot be an alternative. Stateless: it reads the claim, not the
@@ -19,16 +22,6 @@
 //!   rule is CEN-F5's claimed-equals-derived equality, which runs after;
 //!   this arm's one job is to exit before a header is read. Not run by
 //!   `form`: on the main chain a height-0 claim is genesis admission.
-//! - **CEN-E2** ([`E2`]) — the two bands of `PDM-Q11`. The *anchor floor*:
-//!   an alternative rooted below the release's current anchor would replace
-//!   the anchored block, and no chain that does so can reach the anchor's
-//!   hash. The *rolling cap*: an alternative that would pop more than
-//!   `D_max` recorded blocks is refused, so a deep rewrite is a visible
-//!   split rather than a silent reorg. Both read the **fork** — where the
-//!   alternative leaves the recorded chain and how long the recorded chain
-//!   is — which no [`HeaderView`] states, so the rule is a function over
-//!   the [`Fork`] the alt view names (`AltChainView::fork`), recorded at
-//!   its site as CEN-E5 is.
 //! - **CEN-D5** ([`D5`]) — the alt chain's difficulty is CEN-D4's
 //!   algorithm over the stitched window. The algorithm is `D4::target`
 //!   unchanged; what D5 names is the window's provenance — the view the
@@ -36,7 +29,7 @@
 //!   (`AltView::header_at` in the store) — so the row records at the site
 //!   that fed D4 an alt view, and the algorithm records its own.
 //!
-//! A fourth row is the tier itself: **CEN-K4** ([`K4`]) — an alternative
+//! The tier itself is a row: **CEN-K4** ([`K4`]) — an alternative
 //! block is stored only after the ladder above has run, in that order, and
 //! nothing else. It has no predicate of its own; it is recorded when the
 //! last step passes, and what it holds is the set and the order, pinned by
@@ -44,12 +37,9 @@
 
 use shekyl_wire::Input;
 
-use crate::alt::Fork;
 use crate::census::CenRow;
 use crate::coverage::RuleCoverage;
-use crate::rule_set::RuleSet;
 use crate::rules::{FormContext, FormRule, Rule};
-use crate::trust::Trust;
 use crate::verdict::{InvalidBlock, Locus, Verdict};
 
 /// CEN-K1b: an alternative block whose coinbase claims height 0 is
@@ -59,7 +49,7 @@ use crate::verdict::{InvalidBlock, Locus, Verdict};
 /// holds it to the derived height later in the same ladder, and on an alt
 /// chain the derived height is `≥ 1` by construction (CEN-K1a, the
 /// store's `AltChain`), so every block this refuses F5 would also refuse.
-/// The row is the *order*: the C++ exits here before checkpoints,
+/// The row is the *order*: the C++ exits here before its checkpoint walk,
 /// attestation and PoW (`blockchain.cpp:1982`–`:1988`), and the census
 /// pins the arm to that one job — its falsifier is the arm acquiring
 /// another. The locus is the block (`reject_block_form`: a height-0 claim
@@ -91,8 +81,8 @@ impl FormRule for K1b {
 
 /// CEN-K4: an alternative block is accepted into storage after the cheap
 /// tier's ladder — the version rows, linkage, the timestamp rows over the
-/// stitched window, the anchor floor, PoW at the alt target, the
-/// coinbase's prevalidate-only rows — and before anything that reads
+/// stitched window, PoW at the alt target, the coinbase's prevalidate-only
+/// rows — and before anything that reads
 /// executed state, which is promotion's (`validate_miner_transaction`,
 /// `check_tx_inputs`, the curve root, the attestation set).
 ///
@@ -118,73 +108,6 @@ impl K4 {
     /// Record the row: the ladder ran to its end.
     pub(crate) fn record(coverage: &mut RuleCoverage) {
         coverage.insert(Self::ROW);
-    }
-}
-
-/// CEN-E2: the anchor floor and the rolling reorg cap (`PDM-Q11`, one
-/// function, two bands), over the fork an alternative block would cause.
-///
-/// **Band 1 — the floor.** Refused when the fork's root is below the
-/// release's current anchor (`ReleaseAnchors::current`, the last
-/// checkpoint the binary carries): the alternative's first block sits at
-/// `root + 1 ≤ C`, so accepting it would replace the anchored block, and
-/// a chain that replaces the anchored block cannot carry the anchor's hash
-/// at `C` (CEN-E1 would refuse it there). The C++
-/// (`is_alternative_block_allowed`, `checkpoints.cpp:97`–`:109`) tested the
-/// *candidate's claimed* height against the last checkpoint below the
-/// recorded height; this tests the *fork root*, a derived fact, so a chain
-/// whose earlier blocks were admitted before a release shipped the anchor
-/// is refused at its next block rather than extended past it.
-///
-/// **Band 2 — the cap.** Refused when the recorded blocks the alternative
-/// would pop — `recorded_tip − root` — exceed the rule set's
-/// [`reorg_cap`](RuleSet::reorg_cap) (`D_max`; read from the rule set,
-/// never the constant, so a Fakechain set and its store agree). `D_max` is
-/// a detectability boundary, not a security margin: below it an adversary
-/// who can afford the work reorganises silently; at it, the rewrite is a
-/// split the operator can see. The cap **binds only when anchored**: a node
-/// whose release carries no checkpoint has no cap (`PDM-Q11`, binding
-/// condition — the anchor is the cap's precondition, not its sibling).
-///
-/// Neither band reads the view: the fork is the caller's derivation
-/// ([`Fork`]), the anchor is the [`Trust`]'s, the cap is the rule set's.
-/// So this is not a [`HeaderRule`](crate::rules::HeaderRule) — it is run
-/// by the alt tier before any header is read, and records its row here.
-pub(crate) struct E2;
-
-impl Rule for E2 {
-    const ROW: CenRow = CenRow::E2;
-}
-
-impl E2 {
-    /// Judge `fork` under `trust`'s anchors and `rule_set`'s cap, recording
-    /// the row when it passes.
-    pub(crate) fn check(
-        fork: &Fork,
-        rule_set: &RuleSet,
-        trust: &Trust,
-        coverage: &mut RuleCoverage,
-    ) -> Verdict<()> {
-        // The floor is the last anchor the recorded chain has reached — the
-        // census row's "last anchor preceding the current height", read as
-        // at or below the recorded tip — not the table's last entry: an
-        // anchor above the tip is no floor yet, and treating it as one
-        // would refuse the very alternative block it names (CEN-K6's
-        // checkpoint arm, DRS-E5 a5). The C++ (`is_alternative_block_allowed`
-        // over `get_current_blockchain_height()`, the block COUNT) also
-        // floors on an anchor at `tip + 1`; that divergence is adjudicated
-        // against the specification, not toward the C++ (census CEN-E2,
-        // ruled 2026-10-15): an unreached anchor is no floor, and a block at
-        // its height that does not match it is CEN-E1's refusal.
-        //
-        // A hit records nothing: the row did not pass. No reached anchor,
-        // and a fork inside the band, record the row and pass. The cap does
-        // not bind on an unanchored chain (`anchor_band`).
-        if crate::alt::anchor_band(fork, rule_set, trust).is_some() {
-            return Err(InvalidBlock::new(Self::ROW, Locus::Block));
-        }
-        coverage.insert(Self::ROW);
-        Ok(())
     }
 }
 
