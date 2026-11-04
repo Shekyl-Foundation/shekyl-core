@@ -32,6 +32,7 @@ on:
     types: [checks_requested]
     branches: [dev]
   pull_request:
+    types: [opened, synchronize, reopened, edited]
     paths: &paths
       - "docs/api/wallet_rpc.yaml"
       - "rust/shekyl-wallet-rpc/**"
@@ -44,7 +45,7 @@ on:
     paths: *paths
 
 concurrency:
-  group: wallet-rpc-liveness-${{ github.ref }}
+  group: wallet-rpc-liveness-${{ github.ref }}${{ github.event.action == 'edited' && !contains(toJSON(github.event.changes), '"base":') && '-edited' || '' }}
   cancel-in-progress: true
 
 permissions:
@@ -52,6 +53,7 @@ permissions:
 
 jobs:
   wallet-rpc-liveness:
+    if: (github.event.action != 'edited' || contains(toJSON(github.event.changes), '"base":'))
     name: "wallet RPC: registry and dispatch agree in both directions"
     runs-on: ubuntu-latest
     steps:
