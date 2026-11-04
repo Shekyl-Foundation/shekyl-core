@@ -602,7 +602,7 @@ artifact where one exists.
 
 ```text
 master_seed_64   // wallet file — same as principal ([account.rs](../../rust/shekyl-crypto-pq/src/account.rs))
-network, format  // DerivationNetwork + SeedFormat — same salt_for() as principal
+network          // the network (NI-R7: no seed format) — same salt_for() as principal
 p_slot: u32      // rotation slot; genesis default 0; increment on pure over-enumeration rotation
 ```
 
@@ -616,8 +616,9 @@ new keys**). Consensus sees only the resulting `P_canonical_id`.
 Reuse the principal salt and wide-reduce discipline:
 
 ```text
-salt = salt_for(network, format)
-       // e.g. b"shekyl-master-derive-v1-mainnet-bip39"
+salt = salt_for(network)
+       // = name_id(network) || b"shekyl-master-derive-v3"
+       //   (NETWORK_IDENTITY.md NI-R7, NI-R10; V3_WALLET_DECISION_LOG.md 2026-11-04)
 
 HKDF-SHA-512(salt, ikm = master_seed_64, info = LABEL || 0x00 || p_slot.to_le_bytes(), L = per-row)
 ```
