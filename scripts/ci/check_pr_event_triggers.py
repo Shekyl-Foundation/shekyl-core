@@ -5,6 +5,8 @@
 # BSD-3-Clause
 """Every pull_request workflow runs on any base, and again when retargeted.
 
+Probe commit, not for merge: the retarget of this branch is the evidence that edited re-runs the eleven workflows.
+
 A `branches:` filter on `pull_request` means the workflow does not run while
 the PR's base is some other branch. Retargeting the PR fires `pull_request`
 with `action: edited`, and `edited` is not in the default activity types, so
