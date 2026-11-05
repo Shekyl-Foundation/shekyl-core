@@ -333,6 +333,12 @@ struct Actor<C: Clock + Clone + Send + Sync + 'static> {
 
 impl<C: Clock + Clone + Send + Sync + 'static> Actor<C> {
     async fn run(mut self) {
+        // The zone's own sync state starts from the watch as it reads now:
+        // a node already synchronised has no change to wait for, and the
+        // zone's planner of held origins reads only its own copy.
+        let sync = *self.node_sync.borrow_and_update();
+        let now = self.now();
+        self.driver.zone_mut().set_node_sync(sync, now);
         // The zone drew its first epoch at construction; arm its deadline.
         self.arm();
         self.publish();
