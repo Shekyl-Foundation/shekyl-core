@@ -105,6 +105,14 @@ then tag** (avoids the "tag not on the default branch" trap that
    - [ ] `Cargo.lock` and vendored-dep state are exactly the green-on-`dev`
          state (reproducible-build inputs must match what was reviewed).
    - [ ] **Frozen-tuple diff-check** (highest severity — see §6).
+   - [ ] **Staging deadlines:** `python3 scripts/release/check_staging_deadlines.py <tag>`
+         with the tag this cut will carry. A staging flag
+         (`NETWORK_IDENTITY.md` NI-R9) names a deadline release
+         (`Staging::deadline`, `rust/shekyl-network/src/lib.rs`), and the
+         gate refuses a cut at or past it while the flag still exists. The
+         remedy is the flag's exit, by its owner, or a re-ruled deadline
+         with its reason recorded beside it; there is no command-line
+         exemption.
    - [ ] **Gitian dry-run gate** — dispatch the gitian workflow against the
          frozen SHA and confirm **all four platforms** (Linux/Windows/FreeBSD/macOS)
          build green *before* the cut/promote/tag:

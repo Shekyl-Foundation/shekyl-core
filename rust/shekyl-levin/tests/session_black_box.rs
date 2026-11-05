@@ -202,7 +202,7 @@ fn genesis_claim() -> CoreSyncData {
         current_height: 1,
         cumulative_difficulty: 1,
         cumulative_difficulty_top64: 0,
-        top_id: shekyl_rpc_types::genesis_hash_for(shekyl_rpc_types::DaemonNetwork::Fakechain),
+        top_id: shekyl_rpc_types::genesis_hash_for(shekyl_rpc_types::Network::Regtest),
     }
 }
 

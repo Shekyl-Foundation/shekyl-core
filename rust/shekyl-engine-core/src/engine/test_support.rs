@@ -1070,7 +1070,7 @@ pub(crate) fn seeded_tx_leaves(
 use crate::engine::{
     Credentials, DaemonClient, Engine, EngineCreateParams, OpenedEngine, SoloSigner,
 };
-use shekyl_crypto_pq::account::MASTER_SEED_BYTES;
+use shekyl_crypto_pq::account::SEED_BYTES;
 use shekyl_engine_file::SafetyOverrides;
 use shekyl_types::PSlot;
 use tempfile::TempDir;
@@ -1087,10 +1087,10 @@ pub(crate) fn dummy_daemon() -> DaemonClient {
     DaemonClient::new(rpc)
 }
 
-/// Deterministic master seed; `multiplier` keeps distinct suites on
+/// Deterministic wallet seed; `multiplier` keeps distinct suites on
 /// distinct wallets (each former private copy had its own).
-pub(crate) fn fixed_seed(multiplier: u8) -> [u8; MASTER_SEED_BYTES] {
-    let mut s = [0u8; MASTER_SEED_BYTES];
+pub(crate) fn fixed_seed(multiplier: u8) -> [u8; SEED_BYTES] {
+    let mut s = [0u8; SEED_BYTES];
     for (i, b) in s.iter_mut().enumerate() {
         *b = u8::try_from(i & 0xff).unwrap_or(0).wrapping_mul(multiplier);
     }

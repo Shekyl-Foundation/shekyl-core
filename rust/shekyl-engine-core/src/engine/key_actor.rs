@@ -567,7 +567,7 @@ impl KeyEngine for KeyEngineHandle {
 mod tests {
     //! Stage-2 Step-1 contract tests for [`KeyActor`] / [`KeyEngineHandle`],
     //! per `STAGE_2_KEY_ENGINE_ACTOR.md` §5.2. No mocks: every test runs a real
-    //! [`KeyActor`] over a real [`AllKeysBlob`] (`generate_account_from_raw_seed`
+    //! [`KeyActor`] over a real [`AllKeysBlob`] (`account_from_seed`
     //! against a deterministic testnet seed — the same fixture shape
     //! `LocalKeys` tests use) and exercises it through real messages.
     //!
@@ -600,7 +600,7 @@ mod tests {
 
     use std::sync::atomic::{AtomicBool, Ordering};
 
-    use shekyl_crypto_pq::account::{generate_account_from_raw_seed, DerivationNetwork};
+    use shekyl_crypto_pq::account::{account_from_seed, Network};
     use shekyl_crypto_pq::kem::HybridCiphertext;
     use shekyl_crypto_pq::output::construct_output;
 
@@ -616,11 +616,10 @@ mod tests {
     /// affect receiver-side recovery (the recipient only sees the ciphertext).
     const TEST_TX_KEY_SECRET: [u8; 32] = [11u8; 32];
 
-    /// Rederive a fresh [`AllKeysBlob`] from `seed` (testnet, raw32).
+    /// Rederive a fresh [`AllKeysBlob`] from `seed` (testnet).
     fn make_blob(seed: [u8; 32]) -> AllKeysBlob {
-        let (_master_seed, blob) =
-            generate_account_from_raw_seed(&seed, DerivationNetwork::Testnet)
-                .expect("test rederivation succeeds for raw32 testnet seeds");
+        let (_master_seed, blob) = account_from_seed(&seed, Network::Testnet)
+            .expect("test derivation succeeds for a testnet seed");
         blob
     }
 

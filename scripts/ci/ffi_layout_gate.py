@@ -42,13 +42,13 @@ GROUPS = [
         "bounds": [
             "rust/shekyl-archival-retention/src/pass_anchor.rs",
         ],
-        # Its array bounds are aliases of constants in shekyl-crypto-pq and
-        # shekyl-address, which alias further constants; see EXEMPT.
-        "exclude": ["ShekylAllKeysBlob"],
+        "exclude": [],
         # The daemon's pairs (the configuration snapshot, the relay blob and
         # stem tallies, the seam's rows, the RPC facts) went with the C++
-        # host on 2026-11-05; what crosses now is the wallet, PQ, economics
-        # and curve-tree surface the test binaries and utilities link.
+        # host on 2026-11-05, and the account blob with the C++ wallet
+        # account code (NETWORK_IDENTITY.md NI-R7); what crosses now is the
+        # PQ, economics and curve-tree surface the test binaries and
+        # utilities link.
         "pairs": {
             "ShekylBuffer": "ShekylBuffer",
             "ShekylPqcKeypair": "ShekylPqcKeypair",
@@ -69,12 +69,6 @@ GROUPS = [
 # Structs a header defines that no pair compares, each with its reason.
 EXEMPT = {
     "ShekylOwnedBuffer": "C++ only: an RAII owner of a ShekylBuffer; it never crosses",
-    "ShekylAllKeysBlob": (
-        "its array bounds are shekyl-crypto-pq constants aliasing shekyl-address "
-        "constants that alias further ones, the cross-crate limitation the "
-        "FOLLOWUPS entry names; its Rust layout is pinned by "
-        "struct_layout_matches in account_ffi.rs"
-    ),
 }
 
 CONFIG = "scripts/ci/cbindgen-ffi-layouts.toml"

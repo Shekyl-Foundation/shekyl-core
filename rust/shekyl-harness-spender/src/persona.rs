@@ -40,7 +40,7 @@ use shekyl_archival_retention::{
     p_canonical_id_from_hybrid_pubkey, ArchivalBondPostVin, ArchivalServeCreditResponse,
     HoldingsDescriptor, HoldingsKind, ShardSet,
 };
-use shekyl_crypto_pq::account::{DerivationNetwork, SeedFormat, MASTER_SEED_BYTES};
+use shekyl_crypto_pq::account::{Network, MASTER_SEED_BYTES};
 use shekyl_crypto_pq::archival_p::{derive_archival_p_keys, ArchivalPKeys};
 use shekyl_crypto_pq::signature::{HybridEd25519MlDsa, SignatureScheme, SCHEME_DOMAIN_PQC_AUTH_TX};
 use shekyl_tx_builder::{InputTerm, OutputTerm};
@@ -66,13 +66,8 @@ impl Persona {
     /// Derive the persona at `p_slot` from the harness's master seed.
     #[must_use]
     pub fn at(p_slot: u32) -> Self {
-        let keys = derive_archival_p_keys(
-            &MASTER,
-            DerivationNetwork::Mainnet,
-            SeedFormat::Bip39,
-            p_slot,
-        )
-        .expect("the harness's seed derives a persona");
+        let keys = derive_archival_p_keys(&MASTER, Network::Mainnet, p_slot)
+            .expect("the harness's seed derives a persona");
         Self { keys }
     }
 

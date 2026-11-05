@@ -30,7 +30,6 @@
 
 #pragma once
 
-#include "cryptonote_basic/account.h"
 #include "crypto/crypto.h"
 
 // The derivation benches read a recipient and a transaction public key.
@@ -41,13 +40,19 @@ class single_tx_test_base
 public:
   bool init()
   {
-    m_bob.generate(crypto::secret_key{}, false, false, cryptonote::FAKECHAIN);
+    crypto::generate_keys(m_bob_spend_pub, m_bob_spend_sec);
+    crypto::generate_keys(m_bob_view_pub, m_bob_view_sec);
     crypto::secret_key tx_sec;
     crypto::generate_keys(m_tx_pub_key, tx_sec);
     return true;
   }
 
 protected:
-  cryptonote::account_base m_bob;
+  // Bob's spend and view key pairs: the benchmarks' subjects are the
+  // curve operations on them.
+  crypto::public_key m_bob_spend_pub;
+  crypto::secret_key m_bob_spend_sec;
+  crypto::public_key m_bob_view_pub;
+  crypto::secret_key m_bob_view_sec;
   crypto::public_key m_tx_pub_key;
 };

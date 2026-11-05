@@ -15,7 +15,7 @@ use std::num::NonZeroU128;
 use std::path::PathBuf;
 use std::sync::Arc;
 
-use shekyl_chain_rules::{FakechainSchedule, SettlementEpochBlocks, Substrate};
+use shekyl_chain_rules::{CappedEpoch, SettlementEpochBlocks, Substrate};
 use shekyl_chain_store::apply_policy::ApplyPolicy;
 use shekyl_types::{BlockCount, BlockHeight};
 
@@ -27,7 +27,7 @@ use crate::source::Source;
 use crate::test_support::{open_store_under, tmp};
 use crate::trace::Trace;
 
-use super::{Manifest, UntilRetiredJoin};
+use super::Manifest;
 
 /// Hasher count the captured-chain tests pin, so one chain is the same run
 /// on every host. The host's parallelism would make the width, and the
@@ -41,7 +41,7 @@ pub(crate) const CAPTURED_REPLAY_HASHERS: std::num::NonZeroUsize =
 /// The rule set the daemon mined `manifest` under: fixed difficulty and
 /// the `(SEB, cap)` pair the manifest records.
 pub(crate) fn rules_for(manifest: &Manifest) -> ChainRules {
-    let schedule = FakechainSchedule::new(
+    let schedule = CappedEpoch::new(
         SettlementEpochBlocks::new(manifest.settlement_epoch_blocks)
             .expect("a captured chain's epoch is non-zero"),
         BlockCount::from_raw(manifest.reorg_cap_blocks),
@@ -52,12 +52,15 @@ pub(crate) fn rules_for(manifest: &Manifest) -> ChainRules {
             manifest.shape
         )
     });
-    ChainRules::Regtest {
-        fixed_difficulty: Some(
+    // Captured on regtest's table genesis: held to it, as the daemon was.
+    ChainRules::new(
+        shekyl_network::Network::Regtest,
+        Some(
             NonZeroU128::new(manifest.fixed_difficulty).expect("a regtest difficulty is non-zero"),
         ),
         schedule,
-    }
+    )
+    .expect("regtest's row permits its levers")
 }
 
 /// Replay `source` against `trace` and keep the store and the source.
@@ -65,9 +68,7 @@ pub(crate) fn rules_for(manifest: &Manifest) -> ChainRules {
 /// The store stays at the returned path, under the returned rules, for a
 /// test that reads the chain the run connected. The caller removes it.
 /// `tag` names the store's path: tests run concurrently in one process, so
-/// two replays of one shape must not share a path. The source comes back so
-/// a wrapper that still has to `finish` it — [`UntilRetiredJoin`] is not
-/// part of [`Source`] — can.
+/// two replays of one shape must not share a path.
 pub(crate) async fn replay_open<S, Src>(
     manifest: &Manifest,
     substrate: Arc<S>,
@@ -75,7 +76,7 @@ pub(crate) async fn replay_open<S, Src>(
     tag: &str,
     mut source: Src,
     trace: Arc<Trace>,
-) -> (Result<RunReport, String>, PathBuf, ChainRules, Src)
+) -> (Result<RunReport, String>, PathBuf, ChainRules)
 where
     S: Substrate + Send + Sync + 'static,
     S::Fault: Send + std::fmt::Debug + 'static,
@@ -103,11 +104,11 @@ where
     )
     .await
     .map_err(|e| format!("{e:?}"));
-    (report, path, rules, source)
+    (report, path, rules)
 }
 
 /// [`super::replay_under`] without the cleanup: the committed corpus and
-/// its committed trace, read up to a retired keyless join.
+/// its committed trace.
 pub(crate) async fn replay_keeping_store<S>(
     dir: &std::path::Path,
     manifest: &Manifest,
@@ -121,14 +122,7 @@ where
 {
     let corpus = std::fs::read(dir.join("corpus.e2")).expect("read corpus.e2");
     let trace = std::fs::read(dir.join("trace.e2")).expect("read trace.e2");
-    let source = UntilRetiredJoin::new(
-        CorpusReader::open(std::io::Cursor::new(corpus.as_slice())).expect("open corpus"),
-    );
+    let source = CorpusReader::open(std::io::Cursor::new(corpus.as_slice())).expect("open corpus");
     let trace = Arc::new(Trace::read(std::io::Cursor::new(trace.as_slice())).expect("read trace"));
-    let (report, path, rules, source) =
-        replay_open(manifest, substrate, policy, tag, source, trace).await;
-    if report.is_ok() {
-        source.finish(&manifest.shape);
-    }
-    (report, path, rules)
+    replay_open(manifest, substrate, policy, tag, source, trace).await
 }

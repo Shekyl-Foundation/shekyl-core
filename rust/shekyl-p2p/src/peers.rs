@@ -10,7 +10,7 @@
 use std::path::Path;
 use std::sync::{Arc, Mutex};
 
-use shekyl_dialer::{seeds, Dialer, LoadError, SeedNetwork};
+use shekyl_dialer::{seeds, Dialer, LoadError};
 use shekyl_peerlist::{NetworkAddress, Peerlist};
 use shekyl_relay::owner::SecureRelayRng;
 use shekyl_thread_ledger::{spawn_dedicated, DedicatedThread, ThreadName};
@@ -42,7 +42,7 @@ impl OwnerLoops {
         dialer: &Peers,
         connector: ConnectorId,
         engine: &Handle<MonotonicClock>,
-        seeds_of: SeedNetwork,
+        seeds_of: Option<shekyl_network::Network>,
     ) -> bool {
         if !dialer.claim_owner(connector) {
             tracing::debug!("{connector:?} already has its owner loop; not started again");
@@ -114,10 +114,14 @@ impl OwnerLoops {
     }
 }
 
-/// The compiled seeds for `connector`, admitted as operator addresses.
-fn admit_compiled_seeds(dialer: &Peers, connector: ConnectorId, seeds_of: SeedNetwork) {
+/// The row's seeds for `connector`, admitted as operator addresses.
+fn admit_compiled_seeds(
+    dialer: &Peers,
+    connector: ConnectorId,
+    seeds_of: Option<shekyl_network::Network>,
+) {
     let now = dialer.now();
-    for seed in seeds(seeds_of) {
+    for seed in seeds_of.map(seeds).unwrap_or_default() {
         if Peerlist::connector_of(&seed) != Some(connector) {
             continue;
         }

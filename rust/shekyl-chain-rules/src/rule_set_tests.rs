@@ -11,13 +11,11 @@ use shekyl_address::Network;
 use shekyl_types::{BlockCount, BlockHeight};
 
 use super::{
-    well_formed, AdmissionPolicy, AdmissionPolicyId, FakechainSchedule, FakechainScheduleRefused,
+    well_formed, AdmissionPolicy, AdmissionPolicyId, CappedEpoch, CappedEpochRefused,
     ReorgCapNotInsideEpoch, ReorgCapOutrunsSeedEpoch, ResponseWindowOutrunsAnchor, RuleSchedule,
     RuleSet, RuleSetId, SettlementEpochBlocks, SettlementSchedule,
 };
 use crate::census::{CenRow, RowStatus};
-
-const NETWORKS: [Network; 3] = [Network::Mainnet, Network::Testnet, Network::Stagenet];
 
 const fn height(raw: u64) -> BlockHeight {
     BlockHeight::from_raw(raw)
@@ -27,8 +25,9 @@ const fn height(raw: u64) -> BlockHeight {
 /// Bites: a schedule that names a second rule set before one is issued.
 #[test]
 fn every_schedule_is_the_identity_today() {
-    for network in NETWORKS {
+    for network in Network::ALL {
         let schedule = RuleSchedule::for_network(network);
+        assert!(well_formed(&schedule), "{network:?}");
         for raw in [0, 1, u64::MAX] {
             assert_eq!(
                 schedule.rules_at(height(raw)),
@@ -268,10 +267,10 @@ fn the_maturity_pair_is_the_wallet_sides_lock_windows() {
 // ---- PR #861 review: the reorg cap is rule-set data ----
 // ---- DRS-E4 ARW-15: so is the settlement schedule, and the two are a pair ----
 
-/// `GENESIS` carries `D_MAX` and the genesis epoch; a Fakechain set names
+/// `GENESIS` carries `D_MAX` and the genesis epoch; a levered set names
 /// its own pair through the same witness `Fixed` uses, and the `RuleSetId`
 /// caveat covers it: same id, compared by value.
-/// `fakechain(None, PRODUCTION)` is `GENESIS`.
+/// `with_levers(None, PRODUCTION)` is `GENESIS`.
 #[test]
 fn the_schedule_is_the_rule_sets_and_fakechain_names_its_own() {
     use crate::D_MAX;
@@ -281,10 +280,10 @@ fn the_schedule_is_the_rule_sets_and_fakechain_names_its_own() {
         SettlementSchedule::GENESIS
     );
     assert_eq!(
-        RuleSet::fakechain(None, FakechainSchedule::PRODUCTION),
+        RuleSet::GENESIS.with_levers(None, CappedEpoch::PRODUCTION),
         RuleSet::GENESIS
     );
-    let short = RuleSet::fakechain(None, pair(10_000, 50));
+    let short = RuleSet::GENESIS.with_levers(None, pair(10_000, 50));
     assert_eq!(short.id(), RuleSet::GENESIS.id(), "the caveat: same id");
     assert_ne!(short, RuleSet::GENESIS, "different set, compared by value");
     assert_eq!(short.reorg_cap(), BlockCount::from_raw(50));
@@ -298,13 +297,13 @@ fn the_schedule_is_the_rule_sets_and_fakechain_names_its_own() {
         RuleSet::GENESIS.difficulty(),
         "the cap moves without the target"
     );
-    // The capture schedule the emission-claim vector runs (512/64).
-    let shortened = RuleSet::fakechain(None, pair(512, 64));
+    // The capture schedule the emission walk runs (512/64).
+    let shortened = RuleSet::GENESIS.with_levers(None, pair(512, 64));
     assert_eq!(shortened.settlement_schedule().blocks().get(), 512);
     assert_eq!(shortened.settlement_schedule().epoch_at_height(1025), 2);
     assert_eq!(shortened.reorg_cap(), BlockCount::from_raw(64));
-    // Three Fakechain parameters, one witness.
-    let all = RuleSet::fakechain(core::num::NonZeroU128::new(7), pair(512, 64));
+    // Three lever parameters, one witness.
+    let all = RuleSet::GENESIS.with_levers(core::num::NonZeroU128::new(7), pair(512, 64));
     assert_ne!(all, shortened);
     assert_eq!(all.reorg_cap(), shortened.reorg_cap());
     assert_eq!(all.settlement_schedule(), shortened.settlement_schedule());
@@ -319,8 +318,8 @@ fn a_fakechain_schedule_refuses_a_cap_not_inside_its_epoch() {
     let seb = SettlementEpochBlocks::new(512).expect("non-zero");
     for cap in [0u64, 512, 513, u64::MAX] {
         assert_eq!(
-            FakechainSchedule::new(seb, BlockCount::from_raw(cap)),
-            Err(FakechainScheduleRefused::ReorgCapNotInsideEpoch(
+            CappedEpoch::new(seb, BlockCount::from_raw(cap)),
+            Err(CappedEpochRefused::ReorgCapNotInsideEpoch(
                 ReorgCapNotInsideEpoch {
                     settlement_epoch: seb,
                     reorg_cap: BlockCount::from_raw(cap),
@@ -331,16 +330,16 @@ fn a_fakechain_schedule_refuses_a_cap_not_inside_its_epoch() {
     }
     for cap in [1u64, 64, 511] {
         assert!(
-            FakechainSchedule::new(seb, BlockCount::from_raw(cap)).is_ok(),
+            CappedEpoch::new(seb, BlockCount::from_raw(cap)).is_ok(),
             "cap {cap} against SEB 512"
         );
     }
     assert_eq!(
-        FakechainSchedule::new(
+        CappedEpoch::new(
             SettlementEpochBlocks::new(10_000).expect("non-zero"),
             crate::D_MAX
         ),
-        Ok(FakechainSchedule::PRODUCTION),
+        Ok(CappedEpoch::PRODUCTION),
         "the production pair is what `new` builds from the production numbers"
     );
     assert_eq!(
@@ -377,7 +376,7 @@ fn anchor_boundary() -> AnchorBoundary {
 }
 
 /// `SCS-P32`'s rule-set relation, `W₂ + L ≤` anchor depth, at its exact
-/// boundary and one past it, as `FakechainSchedule::new`'s typed refusal.
+/// boundary and one past it, as `CappedEpoch::new`'s typed refusal.
 /// Every epoch here is computed from `PASS_ANCHOR_DEPTH_BLOCKS`,
 /// `PASS_ANCHOR_LAG_BLOCKS` and `W2_EPOCH_DIVISOR`, so a re-pin of any of
 /// them moves the test with it and cannot leave it asserting about a
@@ -400,7 +399,7 @@ fn a_schedule_whose_window_outruns_the_anchor_is_refused_at_its_boundary() {
             .map(core::num::NonZeroU64::get)
     };
     let build = |seb: u64| {
-        FakechainSchedule::new(
+        CappedEpoch::new(
             SettlementEpochBlocks::new(seb).expect("non-zero"),
             BlockCount::from_raw(1),
         )
@@ -418,7 +417,9 @@ fn a_schedule_whose_window_outruns_the_anchor_is_refused_at_its_boundary() {
         assert!(anchor_depth_covers_response_window(schedule(seb)));
         let pair = build(seb).unwrap_or_else(|e| panic!("SEB {seb} is at the boundary: {e}"));
         assert!(pair.anchor_covers_response_window());
-        assert!(RuleSet::fakechain(None, pair).anchor_covers_response_window());
+        assert!(RuleSet::GENESIS
+            .with_levers(None, pair)
+            .anchor_covers_response_window());
     }
     // One block of window past it, and far past it.
     for seb in [
@@ -432,7 +433,7 @@ fn a_schedule_whose_window_outruns_the_anchor_is_refused_at_its_boundary() {
         assert!(!anchor_depth_covers_response_window(schedule(seb)));
         assert_eq!(
             build(seb),
-            Err(FakechainScheduleRefused::ResponseWindowOutrunsAnchor(
+            Err(CappedEpochRefused::ResponseWindowOutrunsAnchor(
                 ResponseWindowOutrunsAnchor {
                     settlement_epoch: SettlementEpochBlocks::new(seb).expect("non-zero"),
                     response_window: BlockCount::from_raw(wide),
@@ -449,11 +450,11 @@ fn a_schedule_whose_window_outruns_the_anchor_is_refused_at_its_boundary() {
     // The cap is asked first, so a pair that breaks both is refused for
     // the cap: each existing refusal keeps its meaning.
     assert!(matches!(
-        FakechainSchedule::new(
+        CappedEpoch::new(
             SettlementEpochBlocks::new(boundary.first_past).expect("non-zero"),
             BlockCount::ZERO,
         ),
-        Err(FakechainScheduleRefused::ReorgCapNotInsideEpoch(_))
+        Err(CappedEpochRefused::ReorgCapNotInsideEpoch(_))
     ));
 }
 
@@ -465,7 +466,7 @@ fn a_schedule_whose_window_outruns_the_anchor_is_refused_at_its_boundary() {
 #[test]
 fn the_anchor_refusal_says_which_epoch_would_work() {
     let boundary = anchor_boundary();
-    let refused = FakechainSchedule::new(
+    let refused = CappedEpoch::new(
         SettlementEpochBlocks::new(boundary.first_past).expect("non-zero"),
         BlockCount::from_raw(1),
     )
@@ -483,7 +484,7 @@ fn the_anchor_refusal_says_which_epoch_would_work() {
     }
     // The ceiling it names is admitted, and the next epoch is not.
     let at = |seb: u64| {
-        FakechainSchedule::new(
+        CappedEpoch::new(
             SettlementEpochBlocks::new(seb).expect("non-zero"),
             BlockCount::from_raw(1),
         )
@@ -494,8 +495,8 @@ fn the_anchor_refusal_says_which_epoch_would_work() {
 
 /// Every rule set the crate can build satisfies the relation: each issued
 /// set, the set every network's schedule names at any height, and the
-/// production pair. A Fakechain set needs no list of epochs here: a
-/// `FakechainSchedule` exists only if `new` admitted it, so each fixture
+/// production pair. A levered set needs no list of epochs here: a
+/// `CappedEpoch` exists only if `new` admitted it, so each fixture
 /// that builds one — in this crate, the store's or the ingest's — is
 /// checked where it is built, with the epoch it actually uses. Bites if
 /// the compile-time assertion over `ISSUED` is dropped and a set with a
@@ -503,8 +504,10 @@ fn the_anchor_refusal_says_which_epoch_would_work() {
 #[test]
 fn every_rule_set_the_crate_builds_anchors_below_its_block() {
     assert!(RuleSet::GENESIS.anchor_covers_response_window());
-    assert!(FakechainSchedule::PRODUCTION.anchor_covers_response_window());
-    assert!(RuleSet::fakechain(None, FakechainSchedule::PRODUCTION).anchor_covers_response_window());
+    assert!(CappedEpoch::PRODUCTION.anchor_covers_response_window());
+    assert!(RuleSet::GENESIS
+        .with_levers(None, CappedEpoch::PRODUCTION)
+        .anchor_covers_response_window());
     for set in RuleSet::ISSUED {
         assert!(set.anchor_covers_response_window(), "{:?}", set.id());
     }
@@ -522,8 +525,8 @@ fn every_rule_set_the_crate_builds_anchors_below_its_block() {
 }
 
 /// A valid `(SEB, cap)` pair for the tests above.
-fn pair(seb: u64, cap: u64) -> FakechainSchedule {
-    FakechainSchedule::new(
+fn pair(seb: u64, cap: u64) -> CappedEpoch {
+    CappedEpoch::new(
         SettlementEpochBlocks::new(seb).expect("non-zero"),
         BlockCount::from_raw(cap),
     )
@@ -540,11 +543,11 @@ fn a_fakechain_schedule_refuses_a_cap_wider_than_half_a_seed_epoch() {
     assert_eq!(largest, 1023);
     assert!(2 * crate::D_MAX.to_raw() <= 2 * largest, "D_MAX meets it");
     let seb = SettlementEpochBlocks::new(2_048).expect("non-zero");
-    assert!(FakechainSchedule::new(seb, BlockCount::from_raw(largest)).is_ok());
+    assert!(CappedEpoch::new(seb, BlockCount::from_raw(largest)).is_ok());
     for cap in [largest + 1, 2_047] {
         assert_eq!(
-            FakechainSchedule::new(seb, BlockCount::from_raw(cap)),
-            Err(FakechainScheduleRefused::ReorgCapOutrunsSeedEpoch(
+            CappedEpoch::new(seb, BlockCount::from_raw(cap)),
+            Err(CappedEpochRefused::ReorgCapOutrunsSeedEpoch(
                 ReorgCapOutrunsSeedEpoch {
                     reorg_cap: BlockCount::from_raw(cap),
                 }
@@ -553,7 +556,7 @@ fn a_fakechain_schedule_refuses_a_cap_wider_than_half_a_seed_epoch() {
         );
     }
     assert!(matches!(
-        FakechainSchedule::new(seb, BlockCount::from_raw(2_048)),
-        Err(FakechainScheduleRefused::ReorgCapNotInsideEpoch(_))
+        CappedEpoch::new(seb, BlockCount::from_raw(2_048)),
+        Err(CappedEpochRefused::ReorgCapNotInsideEpoch(_))
     ));
 }

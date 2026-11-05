@@ -10,8 +10,9 @@
 //! never added here (rule 83). The REJECTED and RESERVED rows are contract
 //! entries (IG-10): never accepted, never in help, and never deleted as dead.
 
+use shekyl_network::{Lever, Staging};
 use shekyl_options::{
-    Default, Dimension, EndpointRule, Grant, KeyRule, Kind, PeerRule, Row, Surface, Table,
+    Default, DevGate, Dimension, EndpointRule, Grant, KeyRule, Kind, PeerRule, Row, Surface, Table,
     Visibility,
 };
 
@@ -65,9 +66,6 @@ const COUNT: Kind = Kind::Integer {
     keywords: &[],
 };
 
-const TEST_NETWORKS: &[&str] = &["testnet", "stagenet", "regtest"];
-const REGTEST: &[&str] = &["regtest"];
-
 const fn public(
     name: &'static str,
     kind: Kind,
@@ -100,11 +98,14 @@ const fn runtime(name: &'static str, kind: Kind, default: &'static str, help: &'
     }
 }
 
+/// A development row, admitted where the network's row admits `gate`
+/// (`NETWORK_IDENTITY.md` NI-R6, NI-R9). The row decides; this table never
+/// names a network.
 const fn dev(
     name: &'static str,
     kind: Kind,
     default: Default,
-    networks: &'static [&'static str],
+    gate: DevGate,
     help: &'static str,
 ) -> Row {
     Row {
@@ -114,7 +115,7 @@ const fn dev(
         surface: Surface::Both,
         runtime: false,
         grant: Grant::Config,
-        visibility: Visibility::Dev { networks },
+        visibility: Visibility::Dev { gate },
         help,
     }
 }
@@ -232,12 +233,12 @@ const ROWS: &[Row] = &[
     rejected("out-peers", "the outbound degree is a protocol constant"),
     rejected("in-peers", "no operator inbound cap: the descriptor safety bound is the only inbound bound, and the rate rows bound what an operator pays (INPUT_GRAMMAR.md IG-Q40)"),
     rejected("tos-flag", "a traffic-class marking is a label any on-path observer can classify Shekyl traffic by"),
-    dev("dev-clearnet-encrypt", Kind::Switch, Default::Unset, TEST_NETWORKS, "Encrypt the clearnet transport; deleted at the Noise flip."),
-    dev("dev-sync", Kind::OneOf(&["on", "off"]), Default::Value("on"), REGTEST, "Chain synchronisation with peers."),
-    dev("dev-relay-cover", Kind::Switch, Default::Unset, TEST_NETWORKS, "The relay's development cover carrier."),
-    dev("dev-rpc", Kind::Switch, Default::Unset, TEST_NETWORKS, "Serve the armed test levers to the host's administrator."),
+    dev("dev-clearnet-encrypt", Kind::Switch, Default::Unset, DevGate::Staging(Staging::ClearnetEncrypt), "Encrypt the clearnet transport; deleted at the Noise flip."),
+    dev("dev-sync", Kind::OneOf(&["on", "off"]), Default::Value("on"), DevGate::Lever(Lever::Sync), "Chain synchronisation with peers."),
+    dev("dev-relay-cover", Kind::Switch, Default::Unset, DevGate::Staging(Staging::RelayCover), "The relay's development cover carrier."),
+    dev("dev-rpc", Kind::Switch, Default::Unset, DevGate::Lever(Lever::DevRpc), "Serve the armed test levers to the host's administrator."),
     // Core, pool, notify, mine
-    dev("dev-difficulty", COUNT, Default::Unset, REGTEST, "A fixed difficulty."),
+    dev("dev-difficulty", COUNT, Default::Unset, DevGate::Lever(Lever::Difficulty), "A fixed difficulty."),
     rejected("span-limit", SYNC_PROTOCOL_BUDGETS),
     rejected("block-sync-size", SYNC_PROTOCOL_BUDGETS),
     rejected("block-download-max-size", SYNC_PROTOCOL_BUDGETS),
@@ -287,10 +288,10 @@ const ROWS: &[Row] = &[
     rejected("sync-pruned-blocks", NO_PRUNED_SYNC_FLAG),
     rejected("max-connections-per-ip", "no per-host inbound cap: a host is not an operator, and the measured inbound adversary opens one edge per victim (SHEKYL_P2P_PROTOCOL.md PWD-I7)"),
     // Development levers that were environment variables (IG-8)
-    dev("dev-pow-seed-epoch-blocks", COUNT, Default::Unset, REGTEST, "The RandomX seed epoch length, in blocks."),
-    dev("dev-pow-seed-epoch-lag", COUNT, Default::Unset, REGTEST, "The RandomX seed epoch lag, in blocks."),
-    dev("dev-settlement-epoch-blocks", COUNT, Default::Unset, REGTEST, "The settlement epoch length, in blocks."),
-    dev("dev-archival-reorg-depth", COUNT, Default::Unset, REGTEST, "The archival reorg depth, in blocks."),
+    dev("dev-pow-seed-epoch-blocks", COUNT, Default::Unset, DevGate::Lever(Lever::PowSeedEpochBlocks), "The RandomX seed epoch length, in blocks."),
+    dev("dev-pow-seed-epoch-lag", COUNT, Default::Unset, DevGate::Lever(Lever::PowSeedEpochLag), "The RandomX seed epoch lag, in blocks."),
+    dev("dev-settlement-epoch-blocks", COUNT, Default::Unset, DevGate::Lever(Lever::SettlementEpochBlocks), "The settlement epoch length, in blocks."),
+    dev("dev-archival-reorg-depth", COUNT, Default::Unset, DevGate::Lever(Lever::ArchivalReorgDepth), "The archival reorg depth, in blocks."),
     rejected("detach", NO_DAEMONIZE),
     rejected("pidfile", NO_DAEMONIZE),
     rejected("install-service", NO_DAEMONIZE),
@@ -323,9 +324,9 @@ mod tests {
             .find(|r| r.name == "dev-relay-cover")
             .expect("the row");
         match row.visibility {
-            shekyl_options::Visibility::Dev { networks } => {
-                assert!(!networks.contains(&"mainnet"), "{networks:?}");
-                assert!(!networks.is_empty());
+            shekyl_options::Visibility::Dev { gate } => {
+                assert_eq!(gate, DevGate::Staging(Staging::RelayCover));
+                assert!(!gate.admits(shekyl_network::Network::Mainnet));
             }
             other => panic!("dev-relay-cover is a dev row, not {other:?}"),
         }
@@ -489,10 +490,37 @@ mod tests {
     #[test]
     fn mainnet_never_accepts_a_development_lever() {
         for r in TABLE.rows {
-            if let Visibility::Dev { networks } = r.visibility {
-                assert!(!networks.contains(&"mainnet"), "{}", r.name);
+            if let Visibility::Dev { gate } = r.visibility {
+                assert!(!gate.admits(shekyl_network::Network::Mainnet), "{}", r.name);
                 assert!(r.name.starts_with("dev-"), "{}", r.name);
             }
+        }
+    }
+
+    /// NI-R6, NI-R9: each development row names its own gate, and every
+    /// configurable lever and staging flag has a row. The two corpus replay
+    /// writes are levers with no option: a captured chain replays through
+    /// them, and nothing sets them from a configuration.
+    #[test]
+    fn every_gate_has_exactly_one_row() {
+        let gates: Vec<DevGate> = TABLE
+            .rows
+            .iter()
+            .filter_map(|r| match r.visibility {
+                Visibility::Dev { gate } => Some(gate),
+                _ => None,
+            })
+            .collect();
+        for (i, gate) in gates.iter().enumerate() {
+            assert!(!gates[..i].contains(gate), "{gate:?} has two rows");
+        }
+        let configurable = Lever::ALL
+            .into_iter()
+            .filter(|l| !matches!(l, Lever::InjectServeCredit | Lever::IssueDraws))
+            .map(DevGate::Lever)
+            .chain(Staging::ALL.into_iter().map(DevGate::Staging));
+        for gate in configurable {
+            assert!(gates.contains(&gate), "{gate:?} has no row");
         }
     }
 }

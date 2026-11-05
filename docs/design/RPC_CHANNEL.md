@@ -1396,11 +1396,13 @@ can contain either.
   `inject_archival_serve_credit` went with the C++ chain at the DRS-X flip
   (`DRS_X_STORE_FLIP.md` DX-Q3): the method table pins two armed levers,
   and the daemon answers the old name as a method it does not know, armed
-  or not. With the switch armed on testnet or stagenet, `generateblocks`
-  and `/pop_blocks` are served; the regtest e2e test
-  `the_armed_switch_on_testnet_serves_two_levers_and_knows_no_third` holds
-  this on testnet, and stagenet takes the same branch. Under RT-O36 the
-  network narrows what the switch enables and never enables anything.
+  or not. The switch is regtest's alone (`NETWORK_IDENTITY.md` NI-R8): a
+  testnet or stagenet daemon given `dev-rpc` is refused at load
+  (`dev_rpc_is_refused_on_every_network_but_regtest`), and on regtest
+  `generateblocks` and `/pop_blocks` are served, which the e2e test
+  `the_armed_switch_serves_two_levers_and_knows_no_third` holds. Under
+  RT-O36 the network narrows what the switch enables and never enables
+  anything.
 
 *Why each `status` field is out of view.*
 

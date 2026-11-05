@@ -227,8 +227,8 @@ pub enum PendingTxError {
         built: BlockHeight,
         /// `wallet.synced_height` observed at submit time.
         current: BlockHeight,
-        /// Network's `max_reorg_depth` per `NetworkSafetyConstants`
-        /// (after any per-wallet override).
+        /// The wallet's `max_reorg_depth` (`WalletSafetyConstants`, after
+        /// any session override).
         max_reorg: BlockCount,
     },
 

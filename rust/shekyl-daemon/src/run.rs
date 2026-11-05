@@ -300,7 +300,7 @@ fn supervise(
     let supervisor = tor::begin(
         &config.tor,
         config.clearnet_on(),
-        config.network.p2p_port(),
+        config.network.ports().p2p,
         &config.data_dir,
         pool.handle(),
         node.network().clone(),

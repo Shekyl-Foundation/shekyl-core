@@ -18,10 +18,7 @@ use std::net::SocketAddr;
 use std::path::Path;
 
 use shekyl_daemon_config::sections::{Ban, Clearnet, DaemonConfig, Socks, Tor};
-use shekyl_daemon_config::Network as DaemonNet;
-use shekyl_node::{
-    BanTarget, ClearnetPlan, LinkLimits, NetworkPlan, PeerPlan, SeedNetwork, TorPlan,
-};
+use shekyl_node::{BanTarget, ClearnetPlan, LinkLimits, NetworkPlan, PeerPlan, TorPlan};
 use shekyl_options::kind::PeerEndpoint;
 use shekyl_p2p::{
     clearnet_linger_descriptors, dial_profile, ConnectorId, Ipv4Subnet, NetworkAddress,
@@ -179,17 +176,6 @@ fn network_address(peer: &PeerEndpoint) -> NetworkAddress {
     }
 }
 
-/// Which compiled seed list the dialer admits: mainnet's and testnet's
-/// are compiled; stagenet and regtest have none and dial only what the
-/// operator names.
-fn seeds(network: DaemonNet) -> SeedNetwork {
-    match network {
-        DaemonNet::Mainnet => SeedNetwork::Mainnet,
-        DaemonNet::Testnet => SeedNetwork::Testnet,
-        DaemonNet::Stagenet | DaemonNet::Regtest => SeedNetwork::None,
-    }
-}
-
 /// The ban files' entries as the network applies them before its first
 /// accept: a host and a subnet are banned for the life of the process; a
 /// peer entry bans its host.
@@ -238,7 +224,7 @@ pub fn plan(config: &DaemonConfig, network_id: [u8; 16]) -> NetworkPlan {
     };
     NetworkPlan {
         network_id,
-        seeds: seeds(config.network),
+        seeds: Some(config.network),
         allow_local: config.p2p.local,
         reserved_descriptors: reserved_descriptors(config),
         limits: LinkLimits {
@@ -268,6 +254,7 @@ mod tests {
     use super::*;
     use shekyl_daemon_config::platform::Platform;
     use shekyl_daemon_config::sections::build;
+    use shekyl_daemon_config::Network as DaemonNet;
     use shekyl_daemon_config::{choosers, resolve, TABLE};
     use std::ffi::OsString;
     use std::path::PathBuf;
@@ -553,7 +540,7 @@ mod tests {
         assert_eq!(c.p2p.bans.len(), 2);
         let plan = plan(&c, [7; 16]);
         assert_eq!(plan.network_id, [7; 16]);
-        assert_eq!(plan.seeds, SeedNetwork::Mainnet);
+        assert_eq!(plan.seeds, Some(DaemonNet::Mainnet));
         assert_eq!(
             plan.peers.operator,
             [NetworkAddress::Ipv4 {
@@ -577,11 +564,15 @@ mod tests {
             ]
         );
         for (args, seeds) in [
-            (&["--network", "testnet"][..], SeedNetwork::Testnet),
-            (&["--network", "stagenet"][..], SeedNetwork::None),
-            (&["--network", "regtest"][..], SeedNetwork::None),
+            (&["--network", "testnet"][..], DaemonNet::Testnet),
+            (&["--network", "stagenet"][..], DaemonNet::Stagenet),
+            (&["--network", "regtest"][..], DaemonNet::Regtest),
         ] {
-            assert_eq!(super::plan(&config(args), [0; 16]).seeds, seeds, "{args:?}");
+            assert_eq!(
+                super::plan(&config(args), [0; 16]).seeds,
+                Some(seeds),
+                "{args:?}"
+            );
         }
     }
 

@@ -271,12 +271,7 @@ pub(crate) async fn get_wallet_info(
             .encode()
             .map_err(|e| WalletRpcError::InternalError(format!("encode address: {e}")))?;
         let capability = capability_mode_str(engine.capability()).to_owned();
-        let network = match engine.network() {
-            shekyl_engine_core::Network::Mainnet => "MAINNET",
-            shekyl_engine_core::Network::Testnet => "TESTNET",
-            shekyl_engine_core::Network::Stagenet => "STAGENET",
-        }
-        .to_owned();
+        let network = crate::types::network_wire(engine.network()).to_owned();
 
         // WI-RPC-5: the one-glance balance projects its staking fields from
         // the same authoritative view the staking block reads — the two

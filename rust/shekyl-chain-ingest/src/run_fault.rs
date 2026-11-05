@@ -9,7 +9,6 @@
 //! messages share, so a new message maps a fault by calling [`fault_reply`]
 //! rather than growing another copy of the stale arms.
 
-use crate::schedule::ChainRules;
 use crate::source::ServeCredit;
 use shekyl_chain_rules::{Corrupt, Fault, ReferenceMismatch, Retry, Stale, Target, TxSlot};
 use shekyl_chain_store::store::{ChainStore, StoreError, StoreInvariant};
@@ -40,8 +39,8 @@ impl RunEnd {
             | RunFault::HeightClaim { .. }
             | RunFault::NoNextHeight { .. }
             | RunFault::RewindTarget { .. }
-            | RunFault::InjectOffRegtest { .. }
-            | RunFault::IssueOffRegtest { .. }
+            | RunFault::InjectNotPermitted { .. }
+            | RunFault::IssueNotPermitted { .. }
             | RunFault::NotAlternative { .. }
             | RunFault::StalePlan { .. }
             | RunFault::PlanMismatch { .. }
@@ -175,27 +174,27 @@ pub enum RunFault {
         /// The tip at the time.
         tip: Option<BlockHeight>,
     },
-    /// An [`super::Inject`] under rules other than regtest. The out-of-band
-    /// write has one producer — the regtest injector — and no chain but a
-    /// regtest chain can carry one (DRS-E4 §3.8 item 3); refused here,
-    /// before the store sees it, so a source that carries one into a
-    /// scheduled replay is a driver fault and not a store-terminal one.
-    #[error("inject for {persona} (shard {shard}, epoch {epoch}) under {rules:?}: the out-of-band serve credit is regtest-only", persona = credit.persona, shard = credit.shard, epoch = credit.epoch)]
-    InjectOffRegtest {
+    /// An [`super::Inject`] under rules whose network's row does not permit
+    /// the write (DRS-E4 §3.8 item 3; `NETWORK_IDENTITY.md` NI-R6): refused
+    /// here, before the store sees it, so a source that carries one into a
+    /// replay of another network is a driver fault and not a store-terminal
+    /// one.
+    #[error("inject for {persona} (shard {shard}, epoch {epoch}) on {network}: its row does not permit the serve-credit write", persona = credit.persona, shard = credit.shard, epoch = credit.epoch)]
+    InjectNotPermitted {
         /// The credit refused.
         credit: ServeCredit,
-        /// The rules the connector runs under.
-        rules: ChainRules,
+        /// The network the connector runs on.
+        network: shekyl_network::Network,
     },
-    /// An [`super::IssueDraws`] under rules other than regtest: the door has
-    /// one producer, as [`super::Inject`]'s has, and is refused here for the
-    /// same reason.
-    #[error("issue of draws for epoch {epoch} under {rules:?}: the out-of-band draw issue is regtest-only")]
-    IssueOffRegtest {
+    /// An [`super::IssueDraws`] under rules whose network's row does not
+    /// permit the write, refused here for the same reason as
+    /// [`Self::InjectNotPermitted`].
+    #[error("issue of draws for epoch {epoch} on {network}: its row does not permit the issued-draws write")]
+    IssueNotPermitted {
         /// The epoch the draws were for.
         epoch: SettlementEpoch,
-        /// The rules the connector runs under.
-        rules: ChainRules,
+        /// The network the connector runs on.
+        network: shekyl_network::Network,
     },
     /// An [`super::OfferAlt`] for a block whose parent is the recorded tip:
     /// an extension, which is an [`super::Apply`]'s. A driver defect; the

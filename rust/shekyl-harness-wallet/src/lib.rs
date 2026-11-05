@@ -39,12 +39,13 @@
 //! # Determinism
 //!
 //! Every value here is a function of a seed and a height. The miner is
-//! derived from [`HARNESS_SEED`] through the wallet stack's own seed
-//! derivations (`SeedDerivation`, `ml_kem_keypair_from_d_z`), so the same
-//! coinbase bytes come out of every test run and every crate — a fixture
-//! pinned in one place is the fixture every other place builds. The one
-//! thing a production wallet does that this one does not is draw the seed
-//! at random.
+//! derived from [`HARNESS_SEED`] through this crate's own fixed fixture
+//! derivation ([`fixture_expand`]) and the stack's ML-KEM keygen
+//! (`ml_kem_keypair_from_d_z`), so the same coinbase bytes come out of every
+//! test run and every crate — a fixture pinned in one place is the fixture
+//! every other place builds. The fixture derivation is not a wallet's: a
+//! wallet derives through `shekyl_crypto_pq::account` (`NETWORK_IDENTITY.md`
+//! NI-R7), and nothing here may stand in for it.
 
 #![forbid(unsafe_code)]
 
@@ -55,15 +56,32 @@ use std::sync::LazyLock;
 use curve25519_dalek::constants::X25519_BASEPOINT;
 use curve25519_dalek::edwards::EdwardsPoint;
 use curve25519_dalek::scalar::Scalar;
+use hkdf::Hkdf;
+use sha2::Sha512;
 use shekyl_crypto_pq::account::ml_kem_keypair_from_d_z;
 use shekyl_crypto_pq::archival_p::ArchivalPKeys;
-use shekyl_crypto_pq::kem::{HybridKemSecretKey, SeedDerivation};
+use shekyl_crypto_pq::kem::HybridKemSecretKey;
 use zeroize::Zeroizing;
 
 /// The seed the harness miner is derived from. Public on purpose: this
 /// wallet exists so tests can spend what fixtures pay, and a secret that
 /// every test binary carries is not a secret.
 pub const HARNESS_SEED: [u8; 32] = *b"shekyl-harness-wallet-miner-v1\0\0";
+
+/// The fixture derivation's HKDF salt. Fixed, and not a wallet's: wallets
+/// salt by the network's name (`account::salt_for`). Registered test-only in
+/// `CRYPTO_DOMAIN_REGISTRY.tsv`.
+const FIXTURE_DERIVE_SALT: &[u8] = b"shekyl-master-derive-v1";
+
+/// `N` bytes of HKDF-SHA-512 over `seed` under [`FIXTURE_DERIVE_SALT`] and
+/// `info`: the fixture wallet's one derivation.
+fn fixture_expand<const N: usize>(seed: &[u8; 32], info: &[u8]) -> [u8; N] {
+    let hk = Hkdf::<Sha512>::new(Some(FIXTURE_DERIVE_SALT), seed);
+    let mut okm = [0u8; N];
+    hk.expand(info, &mut okm)
+        .expect("a fixture expand is far below HKDF-SHA-512's maximum");
+    okm
+}
 
 /// What a payer needs of a wallet: the three public keys an output is
 /// addressed to.
@@ -144,12 +162,12 @@ pub struct MinerWallet {
 }
 
 impl MinerWallet {
-    /// The wallet `seed` derives, through the stack's own derivations:
-    /// the spend secret is `derive_ed25519_spend`, the X25519 scalar is
-    /// `derive_ed25519_view` (its public key the raw scalar times the
+    /// The fixture wallet `seed` derives: the spend secret is the
+    /// [`fixture_expand`] of `shekyl-ed25519-spend`, the X25519 scalar that
+    /// of `shekyl-ed25519-view` (its public key the raw scalar times the
     /// basepoint, as `HybridX25519MlKem::keypair_generate` forms it), and
-    /// the ML-KEM-768 pair is `ml_kem_keypair_from_d_z` over
-    /// `derive_ml_kem_seed`.
+    /// the ML-KEM-768 pair is `ml_kem_keypair_from_d_z` over the 64-byte
+    /// expand of `shekyl-ml-kem-768`.
     ///
     /// # Panics
     ///
@@ -157,13 +175,15 @@ impl MinerWallet {
     /// is a broken primitive, not a seed to handle.
     #[must_use]
     pub fn from_seed(seed: &[u8; 32]) -> Self {
-        let spend = Zeroizing::new(Scalar::from_bytes_mod_order(
-            SeedDerivation::derive_ed25519_spend(seed),
-        ));
-        let view = Zeroizing::new(Scalar::from_bytes_mod_order(
-            SeedDerivation::derive_ed25519_view(seed),
-        ));
-        let d_z = Zeroizing::new(SeedDerivation::derive_ml_kem_seed(seed));
+        let spend = Zeroizing::new(Scalar::from_bytes_mod_order(fixture_expand::<32>(
+            seed,
+            b"shekyl-ed25519-spend",
+        )));
+        let view = Zeroizing::new(Scalar::from_bytes_mod_order(fixture_expand::<32>(
+            seed,
+            b"shekyl-ed25519-view",
+        )));
+        let d_z = Zeroizing::new(fixture_expand::<64>(seed, b"shekyl-ml-kem-768"));
         let (ml_kem_ek, ml_kem_dk) =
             ml_kem_keypair_from_d_z(&d_z).expect("ML-KEM-768 keygen is total over a 64-byte seed");
         Self {

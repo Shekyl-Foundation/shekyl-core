@@ -16,7 +16,7 @@ use std::time::{Duration, Instant};
 
 use shekyl_rpc_client::Rpc;
 use shekyl_rpc_transport::HttpRpc;
-use shekyl_rpc_types::{DaemonNetwork, GetBlockRequest, GetBlockResponse};
+use shekyl_rpc_types::{GetBlockRequest, GetBlockResponse, Network};
 
 use super::{report, TxShow};
 
@@ -128,9 +128,8 @@ fn a_failed_wallet_read_does_not_ask_the_daemon() {
         crate::rpc_client::RpcSession::connect(&format!("http://127.0.0.1:{port}"), None, false)
             .expect("the dead socket still constructs a session");
     session.set_open("wallet");
-    let client =
-        crate::daemon::DaemonClient::new(&daemon.url, None, None, DaemonNetwork::Fakechain)
-            .expect("daemon client");
+    let client = crate::daemon::DaemonClient::new(&daemon.url, None, None, Network::Regtest)
+        .expect("daemon client");
     let at = daemon.marks();
     let error = super::command(&session, Some(&client), &"ab".repeat(32), false)
         .expect_err("the wallet read fails");
@@ -150,8 +149,8 @@ fn a_failed_wallet_read_does_not_ask_the_daemon() {
 
 /// The §13 words against a difficulty-1 regtest daemon, with blocks mined.
 ///
-/// The CLI cannot name fakechain, so the client is
-/// `DaemonNetwork::Fakechain`. A second client bound to mainnet is refused
+/// The client is on regtest, a network like the others (NI-R1, NI-R4),
+/// as `--network regtest` makes it. A second client bound to mainnet is refused
 /// before it renders: the handshake is `get_version`, and `get_height` is
 /// not asked.
 /// `daemon stop` is last, and the process exits.
@@ -353,7 +352,7 @@ fn section_13_words_answer_a_regtest_daemon() {
     crate::commands::mine::cmd_mine_stop(Some(&client)).expect("mine stop");
 
     let marks = daemon.marks();
-    let wrong = crate::daemon::DaemonClient::new(&daemon.url, None, None, DaemonNetwork::Mainnet)
+    let wrong = crate::daemon::DaemonClient::new(&daemon.url, None, None, Network::Mainnet)
         .expect("a mainnet client of the same daemon");
     let mismatch = crate::console::execute(&wrong, &View::ChainHeight).expect_err("wrong network");
     assert!(mismatch.contains("network mismatch"), "{mismatch}");
@@ -513,12 +512,12 @@ impl Regtest {
     }
 
     fn client(&self) -> crate::daemon::DaemonClient {
-        crate::daemon::DaemonClient::new(&self.url, None, None, DaemonNetwork::Fakechain)
+        crate::daemon::DaemonClient::new(&self.url, None, None, Network::Regtest)
             .expect("daemon client")
     }
 
     fn view_client(&self) -> crate::daemon::DaemonClient {
-        crate::daemon::DaemonClient::new(&self.view_url, None, None, DaemonNetwork::Fakechain)
+        crate::daemon::DaemonClient::new(&self.view_url, None, None, Network::Regtest)
             .expect("view client")
     }
 
@@ -586,11 +585,8 @@ impl Regtest {
         let params = shekyl_engine_core::EngineCreateParams {
             base_path: &wallet_path,
             credentials: &creds,
-            network: shekyl_address::Network::Mainnet,
-            capability: shekyl_engine_core::CapabilityInput::Full {
-                master_seed_64: &SEED,
-                seed_format: shekyl_crypto_pq::account::SeedFormat::Bip39,
-            },
+            network: shekyl_address::Network::Regtest,
+            capability: shekyl_engine_core::CapabilityInput::Full { seed: &SEED },
             creation_timestamp: 0,
             restore_height_hint: 0,
             kdf: shekyl_crypto_pq::wallet_envelope::KdfParams {
@@ -682,18 +678,17 @@ impl Drop for Regtest {
 
 fn regtest_expectation() -> shekyl_engine_core::DaemonExpectation {
     shekyl_engine_core::DaemonExpectation {
-        network: shekyl_address::Network::Mainnet,
-        fakechain: shekyl_engine_core::FakechainPolicy::Accept,
+        network: shekyl_address::Network::Regtest,
     }
 }
 
-const SEED: [u8; shekyl_crypto_pq::account::MASTER_SEED_BYTES] = [0x44; 64];
+const SEED: [u8; shekyl_crypto_pq::account::SEED_BYTES] = [0x44; 32];
 
-fn mine_address(seed: &[u8; shekyl_crypto_pq::account::MASTER_SEED_BYTES]) -> String {
-    use shekyl_crypto_pq::account::{rederive_account, DerivationNetwork, SeedFormat};
-    rederive_account(seed, DerivationNetwork::Mainnet, SeedFormat::Bip39)
+fn mine_address(seed: &[u8; shekyl_crypto_pq::account::SEED_BYTES]) -> String {
+    shekyl_crypto_pq::account::account_from_seed(seed, shekyl_address::Network::Regtest)
         .expect("the wallet's keys")
-        .to_address(shekyl_address::Network::Mainnet)
+        .1
+        .to_address(shekyl_address::Network::Regtest)
         .encode()
         .expect("the address")
 }

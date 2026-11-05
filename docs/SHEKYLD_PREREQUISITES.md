@@ -36,8 +36,8 @@ fee_policy_version daemon-side exposure`.
 
 ### Verdict: PRESENT — usable, with V3-specific caveats
 
-`shekyld` inherits Monero's `FAKECHAIN` network type (`--network
-regtest`), the `generateblocks` JSON-RPC method, and a fixed-difficulty
+`shekyld` has a regtest network (`--network regtest`), the
+`generateblocks` JSON-RPC method, and a fixed-difficulty
 lever (the `dev-difficulty` row, regtest only). A Rust integration-test harness can spawn
 `shekyld` and drive an end-to-end transfer cycle without waiting for
 real-network PoW, but several Shekyl-genesis differences mean the
@@ -45,15 +45,17 @@ regtest path is **not** a free pass on V3 consensus rules.
 
 ### What works today
 
-**Network type.** `FAKECHAIN` is a first-class enum variant alongside
-`MAINNET` / `TESTNET` / `STAGENET`
-(`src/cryptonote_config.h:297–305`). When constructed, `FAKECHAIN`
-borrows mainnet constants for genesis, ports, and network id
-(`src/cryptonote_config.h:338–343`).
+**Network type.** Regtest is a network like the others
+(`NETWORK_IDENTITY.md` NI-Q8): a row of the network table with its own
+genesis, network id, address prefixes and ports
+(`rust/shekyl-network/src/lib.rs:544`), and the C++ core's `REGTEST`
+beside `MAINNET` / `TESTNET` / `STAGENET`
+(`src/cryptonote_config.h:352-359`). It shares no constant with mainnet.
 
-**CLI activation.** `--network regtest` selects `FAKECHAIN`
-(`rust/shekyl-daemon-config/src/network.rs:63`, which `core::init` reads
-at `src/cryptonote_core/cryptonote_core.cpp:101`). The `network` row
+**CLI activation.** `--network regtest` selects `Network::Regtest`; the
+daemon hands its code to the C++ core in the snapshot
+(`rust/shekyl-ffi/src/daemon_snapshot_ffi.rs:84`), which `core::init`
+reads at `src/cryptonote_core/cryptonote_core.cpp:101`. The `network` row
 takes one word, so no second network can be named. Companion rows:
 
 - `--dev-difficulty <N>` — pin difficulty to a constant. Unset means

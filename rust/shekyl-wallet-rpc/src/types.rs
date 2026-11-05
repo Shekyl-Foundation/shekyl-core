@@ -7,7 +7,7 @@
 
 use serde::{Deserialize, Serialize};
 use serde_json::{Map, Value};
-use shekyl_engine_core::Capability;
+use shekyl_engine_core::{Capability, Network};
 use shekyl_rpc_types::Nullable;
 
 use crate::error::WalletRpcError;
@@ -214,6 +214,20 @@ pub fn capability_mode_str(cap: Capability) -> &'static str {
     }
 }
 
+/// The wallet-rpc wire spelling of a network. Uppercase and frozen:
+/// `MAINNET`, `TESTNET`, `STAGENET`, `REGTEST`
+/// (`docs/api/wallet_rpc.yaml`). The operator grammar is
+/// [`Network::name`], lowercase.
+#[must_use]
+pub(crate) fn network_wire(network: Network) -> &'static str {
+    match network {
+        Network::Mainnet => "MAINNET",
+        Network::Testnet => "TESTNET",
+        Network::Stagenet => "STAGENET",
+        Network::Regtest => "REGTEST",
+    }
+}
+
 /// `WalletHandle` returned by lifecycle methods that leave a wallet open.
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub struct WalletHandle {
@@ -221,7 +235,7 @@ pub struct WalletHandle {
     pub name: String,
     /// Capability mode. Always `FULL` — the only capability (rule 23).
     pub capability: String,
-    /// Network (`MAINNET` / `TESTNET` / `STAGENET`).
+    /// Network (`MAINNET` / `TESTNET` / `STAGENET` / `REGTEST`).
     pub network: String,
     /// Present when open reconstructed state from `restore_height_hint`.
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -481,7 +495,7 @@ pub struct GetWalletInfoResult {
     pub name: String,
     /// Capability mode. Always `FULL` — the only capability (rule 23).
     pub capability: String,
-    /// Network (`MAINNET` / `TESTNET` / `STAGENET`).
+    /// Network (`MAINNET` / `TESTNET` / `STAGENET` / `REGTEST`).
     pub network: String,
     /// Primary address.
     pub address: String,

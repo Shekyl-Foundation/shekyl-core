@@ -34,7 +34,7 @@ pub const GENESIS_TOTAL_ATOMIC: u64 =
 #[derive(Debug, serde::Deserialize, serde::Serialize)]
 #[serde(deny_unknown_fields)]
 pub struct RecipientsFile {
-    /// Network name: `"mainnet"` | `"testnet"` | `"stagenet"`.
+    /// Network name: the table row's, `"mainnet"` | `"testnet"` | `"stagenet"` | `"regtest"`.
     pub network: String,
     /// The genesis recipients, in output-index order.
     pub recipients: Vec<RecipientEntry>,
@@ -66,16 +66,6 @@ pub struct Recipient {
     pub label: String,
 }
 
-/// Canonical lowercase network name used in filenames, the recipients file,
-/// and the tx-key derivation preimage.
-///
-/// Thin alias of [`Network::as_str`] so call sites in this crate stay
-/// readable without re-importing the address type's method name.
-#[must_use]
-pub fn network_str(net: Network) -> &'static str {
-    net.as_str()
-}
-
 /// Parse and validate a recipients file body for `expected` network.
 ///
 /// Enforces: network match, exactly [`GENESIS_RECIPIENT_COUNT`] recipients,
@@ -89,7 +79,7 @@ pub fn parse_and_validate(
 ) -> Result<Vec<Recipient>, GenesisToolError> {
     let file: RecipientsFile = serde_json::from_str(json)?;
 
-    let want_net = network_str(expected);
+    let want_net = expected.name();
     if file.network != want_net {
         return Err(invalid(format!(
             "recipients file is for network `{}`, expected `{want_net}`",

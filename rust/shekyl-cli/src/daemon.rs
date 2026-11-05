@@ -18,7 +18,7 @@ use shekyl_rpc_transport::network_posture::{host_of, is_loopback_host};
 use shekyl_rpc_transport::{JsonRpcError, PostFault, SyncDaemon, TransportFault};
 use shekyl_rpc_types::mining::{MinerThreads, MiningStatusResponse, StartMiningRequest};
 use shekyl_rpc_types::{
-    core_rpc_version_string, DaemonNetwork, GetInfoResponse, IdentityExpectation, IdentityMismatch,
+    core_rpc_version_string, GetInfoResponse, IdentityExpectation, IdentityMismatch, Network,
     RpcStatus,
 };
 
@@ -108,7 +108,7 @@ pub struct DaemonClient {
     down_hint: Option<String>,
     /// The network this shell is on. The handshake requires the daemon to
     /// report the same one.
-    network: DaemonNetwork,
+    network: Network,
     rpc: OnceLock<Arc<SyncDaemon>>,
     /// The handshake, computed once and reused (RK-Q6). `version` does not
     /// consult it.
@@ -156,7 +156,7 @@ impl DaemonClient {
         daemon_address: &str,
         proxy: Option<&str>,
         down_hint: Option<String>,
-        network: DaemonNetwork,
+        network: Network,
     ) -> Result<Self, DaemonError> {
         if daemon_address.is_empty() {
             return Err(DaemonError::NotConfigured);
@@ -174,7 +174,7 @@ impl DaemonClient {
 
     /// The network this client handshakes against.
     #[must_use]
-    pub fn network(&self) -> DaemonNetwork {
+    pub fn network(&self) -> Network {
         self.network
     }
 

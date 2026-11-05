@@ -241,8 +241,8 @@ async fn submit(wallet: &Arc<RwLock<Engine<SoloSigner>>>, built: &mut Built) {
 /// The traffic, in the order the registration states it.
 async fn run_cell(cell: &Cell) {
     let out = output_dir(cell);
-    let funder_seed = [cell.funder_seed; shekyl_crypto_pq::account::MASTER_SEED_BYTES];
-    let wallet_seed = [cell.wallet_seed; shekyl_crypto_pq::account::MASTER_SEED_BYTES];
+    let funder_seed = [cell.funder_seed; shekyl_crypto_pq::account::SEED_BYTES];
+    let wallet_seed = [cell.wallet_seed; shekyl_crypto_pq::account::SEED_BYTES];
     let daemon = RegtestDaemon::start_for_seed(&funder_seed).await;
     let upstream = daemon.rpc_port();
 

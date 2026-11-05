@@ -11,7 +11,7 @@ use std::time::{Duration, Instant};
 use shekyl_chain_rules::harness::fixture::{candidate_on, chain_of};
 use shekyl_chain_rules::harness::{expected_seed, expected_target, MockChain, MockSubstrate};
 use shekyl_chain_rules::{
-    form_header, judge_header, seed_height, target_claim, AtHeight, FakechainSchedule, FormAttempt,
+    form_header, judge_header, seed_height, target_claim, AtHeight, CappedEpoch, FormAttempt,
     FormedHeader, HeaderRecord, HeaderView, RuleSet, SettlementEpochBlocks, Tip, Trust,
 };
 use shekyl_difficulty::{CumulativeDifficulty, N};
@@ -32,8 +32,8 @@ fn issued(_: BlockHeight) -> RuleSet {
 fn cap(blocks: u64) -> RuleSet {
     let epoch = SettlementEpochBlocks::new(512).expect("512");
     let schedule =
-        FakechainSchedule::new(epoch, BlockCount::from_raw(blocks)).expect("cap inside the epoch");
-    RuleSet::fakechain(None, schedule)
+        CappedEpoch::new(epoch, BlockCount::from_raw(blocks)).expect("cap inside the epoch");
+    RuleSet::GENESIS.with_levers(None, schedule)
 }
 
 fn wide(_: BlockHeight) -> RuleSet {
@@ -446,9 +446,8 @@ fn a_header_deadline_is_transit_plus_the_response_bound() {
 
 fn fixed_rules() -> RuleSet {
     let epoch = SettlementEpochBlocks::new(512).expect("512");
-    let schedule =
-        FakechainSchedule::new(epoch, BlockCount::from_raw(64)).expect("cap inside the epoch");
-    RuleSet::fakechain(core::num::NonZeroU128::new(1_000), schedule)
+    let schedule = CappedEpoch::new(epoch, BlockCount::from_raw(64)).expect("cap inside the epoch");
+    RuleSet::GENESIS.with_levers(core::num::NonZeroU128::new(1_000), schedule)
 }
 
 /// The next header on `view`, whose tip is `parent`. The seed and the

@@ -201,7 +201,7 @@ use tokio::sync::RwLock as TokioRwLock;
 use crate::engine::test_support::dummy_daemon;
 
 /// This suite's deterministic seed (multiplier 3).
-fn fixed_seed() -> [u8; shekyl_crypto_pq::account::MASTER_SEED_BYTES] {
+fn fixed_seed() -> [u8; shekyl_crypto_pq::account::SEED_BYTES] {
     crate::engine::test_support::fixed_seed(3)
 }
 

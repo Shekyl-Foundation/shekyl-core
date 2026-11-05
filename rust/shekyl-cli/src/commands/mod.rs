@@ -133,7 +133,7 @@ pub fn run(
     }
 
     loop {
-        let prompt = crate::session::prompt(network.as_str(), rpc.open_wallet_name().as_deref());
+        let prompt = crate::session::prompt(network.name(), rpc.open_wallet_name().as_deref());
         let resolved = match next_line(&mut reader, &presentation, &rpc, &prompt) {
             Line::Prompt(raw) => {
                 let line = raw.trim();

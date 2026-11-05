@@ -14,7 +14,8 @@
 //! # Derivation (publish verbatim; `docs/GENESIS_ALLOCATIONS.md`)
 //!
 //! ```text
-//! M = varint(len(net)) ‖ net_ascii            net ∈ {"mainnet","testnet","stagenet"}
+//! M = varint(len(net)) ‖ net_ascii            net = the table row's name:
+//!                                              "mainnet" | "testnet" | "stagenet" | "regtest"
 //!     ‖ varint(n_recipients)
 //!     ‖ for each recipient, in file order:
 //!         spend_pk(32) ‖ view_pk(32)
@@ -47,7 +48,7 @@ use curve25519_dalek::scalar::Scalar;
 use shekyl_address::Network;
 use shekyl_wire::varint::write_varint;
 
-use crate::recipients::{network_str, Recipient};
+use crate::recipients::Recipient;
 
 /// cSHAKE256 customization string for the genesis tx-key derivation.
 ///
@@ -65,7 +66,9 @@ pub const GENESIS_TXKEY_CUSTOMIZATION: &[u8] = b"shekyl/genesis-txkey-v2";
 #[must_use]
 pub fn derive_genesis_tx_secret(net: Network, recipients: &[Recipient]) -> [u8; 32] {
     let mut m: Vec<u8> = Vec::new();
-    let net_str = network_str(net).as_bytes();
+    // The table row's name (`shekyl_network`), never a literal here:
+    // genesis commits to the network's name through this key (NI-R12).
+    let net_str = net.name().as_bytes();
     write_varint(net_str.len(), &mut m).expect("writing to a Vec is infallible");
     m.extend_from_slice(net_str);
     write_varint(recipients.len(), &mut m).expect("writing to a Vec is infallible");

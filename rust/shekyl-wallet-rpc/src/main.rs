@@ -136,7 +136,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
     // the flag, the loopback daemon at this network's RPC port.
     let daemon_address = cli
         .daemon_address
-        .unwrap_or_else(|| format!("http://127.0.0.1:{}", network.daemon_rpc_port()));
+        .unwrap_or_else(|| format!("http://127.0.0.1:{}", network.ports().rpc));
 
     let server = ServerConfig {
         listen,

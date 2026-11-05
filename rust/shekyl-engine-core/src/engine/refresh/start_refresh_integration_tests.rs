@@ -47,9 +47,7 @@ use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 
-use shekyl_crypto_pq::account::{
-    rederive_account, DerivationNetwork, SeedFormat, MASTER_SEED_BYTES,
-};
+use shekyl_crypto_pq::account::{account_from_seed, Network, SEED_BYTES};
 use shekyl_rpc_transport::HttpRpc;
 use tempfile::TempDir;
 use tokio::sync::{watch, RwLock};
@@ -94,7 +92,7 @@ async fn make_engine_arc() -> (Arc<RwLock<Engine<SoloSigner>>>, TempDir) {
     let tmp = tempfile::tempdir().expect("tempdir");
     let base_path = tmp.path().join("wallet");
     let creds = Credentials::password_only(b"start-refresh integration tests");
-    let mut seed = [0u8; MASTER_SEED_BYTES];
+    let mut seed = [0u8; SEED_BYTES];
     for (i, b) in seed.iter_mut().enumerate() {
         *b = u8::try_from(i & 0xff).unwrap_or(0).wrapping_mul(13);
     }
@@ -239,16 +237,16 @@ async fn drop_releases_slot_for_subsequent_start_refresh() {
 //    dropped.
 // 3. Wrap in `Arc<RwLock<…>>` and call `Engine::start_refresh`.
 
-/// Deterministic master seed shared by every hybrid engine built
+/// Deterministic wallet seed shared by every hybrid engine built
 /// via [`make_hybrid_engine_arc`]. Pulled out as a constant (Stage 2)
 /// so tests can re-derive the wallet's [`ViewMaterial`] without an
 /// `Engine::keys()` accessor — that accessor was removed when the
 /// key blob moved into the `KeyActor` (`STAGE_2_KEY_ENGINE_ACTOR.md`
 /// §6). `seed[i] = (i & 0xff) * 17`, matching the prior inline loop.
-const HYBRID_WALLET_SEED: [u8; MASTER_SEED_BYTES] = {
-    let mut seed = [0u8; MASTER_SEED_BYTES];
+const HYBRID_WALLET_SEED: [u8; SEED_BYTES] = {
+    let mut seed = [0u8; SEED_BYTES];
     let mut i = 0usize;
-    while i < MASTER_SEED_BYTES {
+    while i < SEED_BYTES {
         // `i & 0xff` is masked to 0..=255, so the `as u8` cast is
         // exact, never truncating. `u8::try_from` (the runtime form
         // this const replaced) is not const-stable, so the masked
@@ -262,20 +260,16 @@ const HYBRID_WALLET_SEED: [u8; MASTER_SEED_BYTES] = {
 };
 
 /// Re-derive the hybrid wallet's [`ViewMaterial`] from
-/// [`HYBRID_WALLET_SEED`] using the **same** derivation parameters
-/// [`EngineCreateParams::for_test_full`] pins (`Network::Stagenet` →
-/// [`DerivationNetwork::Stagenet`], [`SeedFormat::Bip39`]). This is
+/// [`HYBRID_WALLET_SEED`] through the **same** derivation `Engine::create`
+/// runs ([`account_from_seed`] on the network
+/// [`EngineCreateParams::for_test_full`] pins, `Network::Stagenet`). This is
 /// the Stage-2 replacement for `ViewMaterial::try_from_keys(engine.keys())`:
 /// the orchestrator no longer exposes its keys (they live in the
 /// `KeyActor`), so the test re-derives the byte-identical view
 /// material from the known seed instead.
 fn hybrid_engine_view_material() -> ViewMaterial {
-    let blob = rederive_account(
-        &HYBRID_WALLET_SEED,
-        DerivationNetwork::Stagenet,
-        SeedFormat::Bip39,
-    )
-    .expect("rederive_account for hybrid wallet seed (stagenet/bip39)");
+    let (_master, blob) = account_from_seed(&HYBRID_WALLET_SEED, Network::Stagenet)
+        .expect("account_from_seed for the hybrid wallet seed (stagenet)");
     ViewMaterial::try_from_keys(&blob)
         .expect("ViewMaterial::try_from_keys against re-derived hybrid blob")
 }
@@ -1693,12 +1687,8 @@ fn transaction_paying_the_hybrid_wallet(amount: u64) -> shekyl_wire::Transaction
     use shekyl_scanner::Extra;
     use shekyl_wire::{Ct, CtBase, Input, Output, Transaction, TxPrefix};
 
-    let blob = rederive_account(
-        &HYBRID_WALLET_SEED,
-        DerivationNetwork::Stagenet,
-        SeedFormat::Bip39,
-    )
-    .expect("rederive_account for hybrid wallet seed (stagenet/bip39)");
+    let (_master, blob) = account_from_seed(&HYBRID_WALLET_SEED, Network::Stagenet)
+        .expect("account_from_seed for the hybrid wallet seed (stagenet)");
     let tx_key_secret = [0x2du8; 32];
     let tx_pubkey = &Scalar::from_bytes_mod_order(tx_key_secret) * ED25519_BASEPOINT_TABLE;
     let constructed = construct_output(

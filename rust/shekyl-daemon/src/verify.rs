@@ -33,7 +33,7 @@ pub(crate) struct Walked {
 ///
 /// Whether the account could create the data directory and open the lock
 /// file; the marker, read and not written, against the network's id
-/// ([`shekyl_node::network_id`], derived from the genesis hash: every
+/// (`Network::network_id`, derived from the table's genesis hash: every
 /// network has one, so the host failure IG-Q62 once named is gone);
 /// whether the account could create the log directory and open the log
 /// file; the owner values the table accepted, judged and not latched; a
@@ -48,7 +48,7 @@ pub(crate) fn walk(
 ) -> Result<Walked, Vec<Diagnostic>> {
     let network = config.network;
     Lock::creatable(&config.data_dir).map_err(one)?;
-    let network_id = shekyl_node::network_id(network);
+    let network_id = network.network_id();
     marker::read(&config.data_dir, network, network_id).map_err(one)?;
     log_location_creatable(&config.logging.file).map_err(one)?;
     let dev = &config.dev;
@@ -186,7 +186,7 @@ mod tests {
     /// The network id every check in this module compares the marker
     /// against: regtest's, which is the genesis derivation's.
     fn regtest_id() -> [u8; 16] {
-        shekyl_node::network_id(shekyl_daemon_config::Network::Regtest)
+        shekyl_daemon_config::Network::Regtest.network_id()
     }
 
     fn platform(home: &Path) -> Platform {
@@ -362,7 +362,7 @@ mod tests {
     #[test]
     fn mine_on_with_an_open_declaration_announces_that_the_miner_waits_for_a_view() {
         let address = shekyl_address::ShekylAddress::new(
-            shekyl_address::Network::Mainnet,
+            shekyl_address::Network::Regtest,
             [0xaa; 32],
             [0xbb; 32],
             [0xee; shekyl_address::MSG_SIGN_PK_LEN],

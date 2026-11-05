@@ -199,15 +199,12 @@ impl LocalKeys {
         }
     }
 
-    /// Test-only constructor: derive a wallet from a 32-byte raw seed
-    /// on the testnet.
+    /// Test-only constructor: derive a wallet from a 32-byte seed on
+    /// the testnet.
     ///
-    /// Drives [`shekyl_crypto_pq::account::rederive_account`] with
-    /// `(DerivationNetwork::Testnet, SeedFormat::Raw32)` against a
-    /// 64-byte master seed whose first 32 bytes are `seed`. Produces
-    /// a deterministic [`LocalKeys`] suitable for unit tests; the
-    /// resulting wallet is not usable on mainnet (raw-seed format is
-    /// rejected on mainnet at the derivation layer).
+    /// Drives [`shekyl_crypto_pq::account::account_from_seed`] with
+    /// `Network::Testnet` — the derivation every wallet runs. Produces
+    /// a deterministic [`LocalKeys`] suitable for unit tests.
     ///
     /// Also available to bench targets via the `bench-internals` feature
     /// (`#[cfg(any(test, feature = "bench-internals"))]`) so the
@@ -220,11 +217,10 @@ impl LocalKeys {
     /// confined to the `bench-internals` feature.
     #[cfg(any(test, feature = "bench-internals"))]
     pub fn from_test_seed(seed: [u8; 32]) -> Self {
-        use shekyl_crypto_pq::account::{generate_account_from_raw_seed, DerivationNetwork};
+        use shekyl_crypto_pq::account::{account_from_seed, Network};
 
-        let (_master_seed, blob) =
-            generate_account_from_raw_seed(&seed, DerivationNetwork::Testnet)
-                .expect("test rederivation succeeds for raw32 testnet seeds");
+        let (_master_seed, blob) = account_from_seed(&seed, Network::Testnet)
+            .expect("test derivation succeeds for a testnet seed");
         Self::from_keys_blob(blob)
     }
 

@@ -17,7 +17,8 @@ from pathlib import Path
 GATE = Path(__file__).resolve().parents[1] / "release" / "check_frozen_tuple.py"
 
 DIGEST = 'const PINNED_DIGEST: &str = "{}";\n'
-GENESIS = 'const TESTNET_GENESIS: [u8; 32] =\n    hex32(b"{}");\n'
+LEGACY_GENESIS = 'const TESTNET_GENESIS: [u8; 32] =\n    hex32(b"{}");\n'
+TABLE_GENESIS = "rust/shekyl-network/genesis/testnet.hash"
 
 
 def git(root, *args):
@@ -28,19 +29,23 @@ def git(root, *args):
     )
 
 
-def write(root, digest="a" * 64, genesis="b" * 64, chain=b"chain-one"):
+def write(root, digest="a" * 64, genesis="b" * 64, chain=b"chain-one", legacy=False):
     (root / "rust/shekyl-rpc-types/src").mkdir(parents=True, exist_ok=True)
+    (root / "rust/shekyl-network/genesis").mkdir(parents=True, exist_ok=True)
     (root / "rust/shekyl-chain-ingest/tests/vectors/c").mkdir(parents=True, exist_ok=True)
     (root / "rust/shekyl-rpc-types/build.rs").write_text(DIGEST.format(digest))
-    (root / "rust/shekyl-rpc-types/src/identity.rs").write_text(GENESIS.format(genesis))
+    if legacy:
+        (root / "rust/shekyl-rpc-types/src/identity.rs").write_text(LEGACY_GENESIS.format(genesis))
+    else:
+        (root / TABLE_GENESIS).write_text(genesis + "\n")
     (root / "rust/shekyl-chain-ingest/tests/vectors/c/block").write_bytes(chain)
 
 
-def run(edit):
+def run(edit, legacy_previous=False):
     with tempfile.TemporaryDirectory() as tmp:
         root = Path(tmp)
         git(root, "init", "-q")
-        write(root)
+        write(root, legacy=legacy_previous)
         git(root, "add", "-A")
         git(root, "commit", "-q", "-m", "release")
         git(root, "tag", "prev")
@@ -65,19 +70,28 @@ CASES = [
      lambda r: write(r, digest="c" * 64, genesis="d" * 64), 0, "rotated with it"),
     ("a genesis rotated on its own passes and is reported",
      lambda r: write(r, genesis="d" * 64), 0, "no recorded consensus change"),
+    ("a genesis pin the gate cannot read is a failure, not a pass",
+     lambda r: (r / TABLE_GENESIS).write_text("not a hash\n"),
+     1, "expected exactly one testnet genesis hash"),
     ("a genesis pin the gate cannot find is a failure, not a pass",
-     lambda r: (r / "rust/shekyl-rpc-types/src/identity.rs").write_text("// moved\n"),
-     1, "expected exactly one TESTNET_GENESIS"),
+     lambda r: git(r, "rm", "-q", TABLE_GENESIS),
+     1, "no testnet genesis pin"),
     ("a missing chains directory is a failure, not a pass",
      lambda r: git(r, "rm", "-rq", "rust/shekyl-chain-ingest/tests/vectors"),
      1, "rev-parse"),
+    # The first cut after the network table: the previous release keeps the
+    # pin in the client identity, the candidate in the table's file.
+    ("a previous release's identity pin reads against the table's file",
+     lambda r: write(r), 0, "nothing moved", True),
+    ("across the move, re-captured chains with the genesis left alone are refused",
+     lambda r: write(r, chain=b"chain-two"), 1, "REFUSED", True),
 ]
 
 
 def main():
     failures = 0
-    for name, edit, want, needle in CASES:
-        proc = run(edit)
+    for name, edit, want, needle, *legacy in CASES:
+        proc = run(edit, legacy_previous=bool(legacy and legacy[0]))
         out = proc.stdout + proc.stderr
         if proc.returncode != want or needle not in out:
             failures += 1

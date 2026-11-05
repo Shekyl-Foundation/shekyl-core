@@ -34,7 +34,7 @@ pub struct Cli {
 
 #[derive(Subcommand)]
 enum Commands {
-    /// Offline check that the embedded ADDRESS_DERIVATION_V2 corpus matches
+    /// Offline check that the embedded ADDRESS_DERIVATION_V3 corpus matches
     /// the compile-time manifest hash pin (release / genesis tooling).
     DerivationFreezeSelfCheck,
 
@@ -163,7 +163,7 @@ impl ReplArgs {
             Some(given) => Ok(given.clone()),
             None => Ok(format!(
                 "127.0.0.1:{}",
-                parse_network(self.network_name())?.daemon_rpc_port()
+                parse_network(self.network_name())?.ports().rpc
             )),
         }
     }
@@ -482,7 +482,7 @@ where
 
 fn run_derivation_freeze_self_check() {
     match shekyl_crypto_pq::address_derivation_freeze::address_derivation_manifest_self_check() {
-        Ok(()) => println!("ADDRESS_DERIVATION_V2 corpus OK"),
+        Ok(()) => println!("ADDRESS_DERIVATION_V3 corpus OK"),
         Err(e) => {
             eprintln!("derivation freeze self-check failed: {e}");
             std::process::exit(1);
@@ -493,14 +493,8 @@ fn run_derivation_freeze_self_check() {
 /// Parse the `--network` flag. Unknown values fail loud rather than
 /// defaulting to mainnet.
 fn parse_network(s: &str) -> Result<Network, String> {
-    match s {
-        "mainnet" => Ok(Network::Mainnet),
-        "testnet" => Ok(Network::Testnet),
-        "stagenet" => Ok(Network::Stagenet),
-        other => Err(format!(
-            "invalid --network '{other}': expected mainnet, testnet, or stagenet"
-        )),
-    }
+    s.parse::<Network>()
+        .map_err(|e| format!("invalid --network: {e}"))
 }
 
 /// The daemon-down hint (CU-1, CLI_USABILITY.md §CU-5 F1): when this run
@@ -517,15 +511,14 @@ fn daemon_down_hint(cli: &ReplArgs, address: &str) -> Option<String> {
         return None;
     }
     let network = parse_network(cli.network_name()).ok()?;
+    // Mainnet is the daemon's default network, so its invocation is flagless.
     let flag = match network {
-        Network::Mainnet => "",
-        Network::Testnet => " --network testnet",
-        Network::Stagenet => " --network stagenet",
+        Network::Mainnet => String::new(),
+        other => format!(" --network {other}"),
     };
     Some(format!(
-        "Start the {name} daemon with: shekyld{flag} (its RPC answers on port {port}).",
-        name = cli.network_name(),
-        port = network.daemon_rpc_port(),
+        "Start the {network} daemon with: shekyld{flag} (its RPC answers on port {port}).",
+        port = network.ports().rpc,
     ))
 }
 
@@ -549,7 +542,7 @@ fn run_repl_command(
             &daemon.address,
             cli.proxy.as_deref(),
             daemon_down_hint(cli, &daemon.address),
-            shekyl_rpc_types::DaemonNetwork::from(network),
+            network,
         ) {
             Ok(dc) => Some(dc),
             Err(daemon::DaemonError::NotConfigured) => None,

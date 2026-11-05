@@ -139,7 +139,7 @@ impl<
 
 #[cfg(test)]
 mod tests {
-    use shekyl_crypto_pq::account::MASTER_SEED_BYTES;
+    use shekyl_crypto_pq::account::SEED_BYTES;
     use shekyl_engine_file::SafetyOverrides;
     use shekyl_engine_state::{SetNoteError, TxSecretKey, TX_NOTE_MAX_BYTES};
     use shekyl_rpc_transport::HttpRpc;
@@ -171,8 +171,8 @@ mod tests {
         DaemonClient::new(rpc)
     }
 
-    fn seed(mul: u8) -> [u8; MASTER_SEED_BYTES] {
-        let mut s = [0u8; MASTER_SEED_BYTES];
+    fn seed(mul: u8) -> [u8; SEED_BYTES] {
+        let mut s = [0u8; SEED_BYTES];
         for (i, b) in s.iter_mut().enumerate() {
             *b = u8::try_from(i & 0xff).unwrap_or(0).wrapping_mul(mul);
         }

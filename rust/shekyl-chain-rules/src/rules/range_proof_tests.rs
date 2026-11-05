@@ -285,9 +285,9 @@ fn a_block_short_of_its_proof_of_work_is_refused_before_the_batch_runs() {
     fn misses(_: &[u8], _: &BlockHash) -> Result<PowHash, Faulted> {
         Ok(PowHash::from_bytes([0xff; 32]))
     }
-    let seven = RuleSet::fakechain(
+    let seven = RuleSet::GENESIS.with_levers(
         core::num::NonZeroU128::new(7),
-        crate::FakechainSchedule::PRODUCTION,
+        crate::CappedEpoch::PRODUCTION,
     );
     // Above genesis, so the fixed target applies (block 0's is always one).
     let chain = crate::harness::fixture::spendable_chain();

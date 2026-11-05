@@ -16,9 +16,10 @@
 //!
 //! The daemon is started on the regtest network with a loopback
 //! `clearnet-listen` and Tor off; the handshake speaks the id derived from
-//! regtest's genesis pin. Since 2026-11-05 the daemon's p2p side is the Rust
-//! session layer (`shekyl-p2p-session`), so this is a Rust-to-Rust walk over
-//! the same wire the C++ host once answered; the wire is unchanged.
+//! regtest's own genesis pin (NI-Q8). Since 2026-11-05 the daemon's p2p side
+//! is the Rust session layer (`shekyl-p2p-session`), so this is a
+//! Rust-to-Rust walk over the same wire the C++ host once answered; the wire
+//! is unchanged.
 
 use std::io::{Read, Write};
 use std::net::{SocketAddr, TcpStream};
@@ -32,11 +33,10 @@ use shekyl_levin::{
     COMMAND_TIMED_SYNC, DEFAULT_MAX_PACKET_SIZE,
 };
 
-/// FAKECHAIN (`--regtest`) derives its id from fakechain's genesis pin,
-/// which is mainnet's genesis today.
+/// Regtest (`--network regtest`) derives its id from its own genesis pin.
 fn regtest_network_id() -> shekyl_p2p_transport::NetworkId {
     shekyl_p2p_transport::network_id_from_genesis(&shekyl_rpc_types::genesis_hash_for(
-        shekyl_rpc_types::DaemonNetwork::Fakechain,
+        shekyl_rpc_types::Network::Regtest,
     ))
 }
 

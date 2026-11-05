@@ -29,7 +29,7 @@
 
 use std::path::PathBuf;
 
-use shekyl_crypto_pq::account::{DerivationNetwork, SeedFormat, MASTER_SEED_BYTES};
+use shekyl_crypto_pq::account::{Network, MASTER_SEED_BYTES};
 use shekyl_crypto_pq::archival_p::derive_archival_p_keys;
 
 use super::*;
@@ -41,8 +41,7 @@ const ML_DSA_SIGN_SEED: [u8; 32] = [0x44; 32];
 const ENVELOPE_LEN: usize = 3_385;
 
 fn pinned_keys() -> Keys {
-    let keys = derive_archival_p_keys(&KEY_SEED, DerivationNetwork::Mainnet, SeedFormat::Bip39, 0)
-        .expect("derivation");
+    let keys = derive_archival_p_keys(&KEY_SEED, Network::Mainnet, 0).expect("derivation");
     Keys {
         public: keys.hybrid_bond_id().clone(),
         secret: keys.hybrid_sign_sk.clone(),

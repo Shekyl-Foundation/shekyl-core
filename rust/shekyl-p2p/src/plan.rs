@@ -10,7 +10,6 @@
 use std::net::SocketAddr;
 use std::path::PathBuf;
 
-use shekyl_dialer::SeedNetwork;
 use shekyl_socks::Proxy;
 use shekyl_transport_layer::{ConnectorId, NetworkAddress};
 
@@ -22,8 +21,10 @@ pub struct NetworkPlan {
     /// This node's network id: the handshake's `network_id`, and the
     /// clearnet channel's.
     pub network_id: [u8; 16],
-    /// Which compiled seed list the connectors admit at start.
-    pub seeds: SeedNetwork,
+    /// The network whose row's seeds the connectors admit at start
+    /// (`shekyl_dialer::seeds`); `None` admits none. A row's list may be
+    /// empty (stagenet, regtest).
+    pub seeds: Option<shekyl_network::Network>,
     /// `allow-local-ip`: whether non-global addresses are kept, disclosed
     /// and stored.
     pub allow_local: bool,

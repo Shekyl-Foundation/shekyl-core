@@ -20,8 +20,8 @@ use shekyl_levin::{
 
 use shekyl_p2p::{
     Admit, BanSpan, BanTarget, ClaimCarrier, ClearnetPlan, CoreSyncData, Established, LinkLimits,
-    Network, NetworkParts, NetworkPlan, NodeSync, PeerPlan, PoolDoor, SeedNetwork, Sockets,
-    SyncInbound, SyncOwner, Taken, TorPlan, TxId,
+    Network, NetworkParts, NetworkPlan, NodeSync, PeerPlan, PoolDoor, Sockets, SyncInbound,
+    SyncOwner, Taken, TorPlan, TxId,
 };
 use tokio::sync::watch;
 
@@ -50,7 +50,7 @@ impl PoolDoor for EmptyPool {
 fn plan(dir: &std::path::Path, clearnet: Option<ClearnetPlan>) -> NetworkPlan {
     NetworkPlan {
         network_id: [7; 16],
-        seeds: SeedNetwork::None,
+        seeds: None,
         allow_local: true,
         reserved_descriptors: 8,
         limits: LinkLimits {

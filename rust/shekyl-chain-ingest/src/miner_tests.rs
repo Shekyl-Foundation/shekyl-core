@@ -26,7 +26,7 @@ use std::time::{Duration, Instant};
 use curve25519_dalek::{EdwardsPoint, Scalar};
 use shekyl_address::{Network, ShekylAddress, MSG_SIGN_PK_LEN};
 use shekyl_block_template::MinerKeys;
-use shekyl_chain_rules::{CenRow, FakechainSchedule, Substrate};
+use shekyl_chain_rules::{CappedEpoch, CenRow, Substrate};
 use shekyl_difficulty::{check_hash, Difficulty};
 use shekyl_harness_wallet::MinerWallet;
 use shekyl_miner::{found_blocks, Job, JobBoard, Miner, MinerConfig, MiningAddress, RATE_WINDOW};
@@ -42,10 +42,7 @@ use crate::substrate::ProductionSubstrate;
 static MINER_LANE: tokio::sync::Mutex<()> = tokio::sync::Mutex::const_new(());
 
 /// Regtest at a fixed difficulty of eight: a block takes a search.
-const RULES: ChainRules = ChainRules::Regtest {
-    fixed_difficulty: NonZeroU128::new(8),
-    schedule: FakechainSchedule::PRODUCTION,
-};
+const RULES: ChainRules = ChainRules::harness_regtest(NonZeroU128::new(8), CappedEpoch::PRODUCTION);
 
 /// How long a test waits for a block at difficulty eight before calling the
 /// search broken: generous for a debug build's light-mode hash.

@@ -5,8 +5,8 @@
 
 //! Golden KATs for the deterministic genesis build (rule 30: pinned vectors).
 //!
-//! The fixture is five testnet recipients derived in-test from fixed raw-32
-//! seeds (`[i; 32]`) — self-contained, no committed secrets, independent of
+//! The fixture is five testnet recipients derived in-test from fixed
+//! 32-byte seeds (`[i; 32]`) — self-contained, no committed secrets, independent of
 //! the real allocation files. The pins commit to the whole chain:
 //! tx-key derivation → construct_output (deterministic KEM) → wire encoding
 //! → extra ordering → tx hash → v9 block hash. Any drift in any layer fails
@@ -14,7 +14,7 @@
 
 use sha2::{Digest, Sha256};
 use shekyl_address::Network;
-use shekyl_crypto_pq::account::{generate_account_from_raw_seed, DerivationNetwork};
+use shekyl_crypto_pq::account::account_from_seed;
 use shekyl_genesis_tool::builder::{build_genesis_tx, genesis_block, GENESIS_DRAW_COMMITMENT};
 use shekyl_genesis_tool::recipients::{parse_and_validate, Recipient};
 use shekyl_genesis_tool::txkey::{derive_genesis_tx_secret, tx_pubkey};
@@ -22,14 +22,17 @@ use shekyl_wire::tx_extra::{
     self, TxExtraField, COINBASE_NONCE_BYTES, HYBRID_KEM_CT_BYTES, PQC_LEAF_ENTRY_LEN,
 };
 
-/// Synthetic nonce for the block-id pin. It was testnet's `GENESIS_NONCE`
-/// until the nonce was rotated; nothing here depends on the config, so the
-/// vector stays as recorded.
-const KAT_NONCE: u32 = 10101;
-
 // --- pinned vectors (recaptured 2026-08-16: genesis-txkey-v2 payment identity) ---
-const KAT_TX_SECRET_HEX: &str = "f5c1a3a255f52bdb04fe23448d941ed4ec70fea47a9eee658f4468f79617a602";
-const KAT_TX_PUB_HEX: &str = "6e78259c37b956a355c36e67c72037279170d260a4ea0e6ebbc8c3a7d711eac1";
+// Re-pinned 2026-11-03 with "One secret, one derivation" (NI-R7, NI-R10,
+// `docs/V3_WALLET_DECISION_LOG.md`): the fixture recipients' keys are now
+// `account_from_seed` under the v2 network salt, so their addresses moved, and
+// with them every value below that commits to the recipients (the tx secret
+// and pubkey, the serialized bytes, the tx hash, the block id). The length is
+// unchanged: no layout moved. Re-pinned again 2026-11-04 for the salt
+// `name_id ‖ shekyl-master-derive-v3` (`V3_WALLET_DECISION_LOG.md`
+// 2026-11-04): the same values moved for the same reason, the length did not.
+const KAT_TX_SECRET_HEX: &str = "92b429a2dfcb758815c0dead2208157aa0307f8da93718e217f4f4709ee39e0e";
+const KAT_TX_PUB_HEX: &str = "ed3fe6ab6003124ce9c293b43992c55c5d68d50456cc5d49b9a51b97dd81e87f";
 // Re-pinned 2026-10-11 with `SO-D12i` (`ARCHIVAL_SETTLEMENT_WRITER.md` §16.8):
 // the genesis extra gained the `0x0C` draw commitment (32 zero bytes) after the
 // nonce, +33 bytes (tag ‖ 32), so the blob, its sha256, the tx hash and the
@@ -38,20 +41,22 @@ const KAT_TX_PUB_HEX: &str = "6e78259c37b956a355c36e67c72037279170d260a4ea0e6ebb
 // the pubkey, +10 bytes (tag ‖ length ‖ 8), so the blob, its sha256, the tx
 // hash and the block id all moved. Before that, 2026-09-14 with `PL-D3`
 // (`docs/V3_WALLET_DECISION_LOG.md`): the `0x07` field grew from 32 to 64
-// bytes per output. tx secret / pubkey are unchanged by construction.
+// bytes per output. tx secret / pubkey were unchanged by those layout moves.
 const KAT_BLOB_LEN: usize = 6466;
 const KAT_BLOB_SHA256_HEX: &str =
-    "9be9e91b9e0787c1091658257b872a309e3ddc7498b2ef200b9bb60a828a3251";
-const KAT_TX_HASH_HEX: &str = "b76c848de768e39dd4af64bdfc616b74cd8db44cec863104fc04bfc9ad235e8e";
-const KAT_BLOCK_ID_HEX: &str = "04f8e7366a8a3f7b3d73f4c86bc141ac2a35ca272d32197e41cbfc428a072994";
+    "7a3fe5d85e64fbdfa76685a14c16efeed7ba76c4bc4fc9ec33cb691c1571dd8f";
+const KAT_TX_HASH_HEX: &str = "6b35c61276dcafbcd404cdec416b50149270046fd9ff9b1005b1bbaf17cf655a";
+// The block id is the genesis header over the tx, nonce 0 on every network
+// (NI-Q1); the tx pins above do not depend on the header.
+const KAT_BLOCK_ID_HEX: &str = "5d182464edb02e4f1bf517b61d22482b41eab780b67327492d00840b729d7308";
 // ----------------------------------------------------------------------------
 
 fn fixture_recipients() -> Vec<Recipient> {
     let entries: Vec<serde_json::Value> = (1..=5u8)
         .map(|i| {
             let seed = [i; 32];
-            let (_master, blob) = generate_account_from_raw_seed(&seed, DerivationNetwork::Testnet)
-                .expect("fixture account");
+            let (_master, blob) =
+                account_from_seed(&seed, Network::Testnet).expect("fixture account");
             let address = blob
                 .to_address(Network::Testnet)
                 .encode()
@@ -77,7 +82,7 @@ fn golden_kat() {
     let built = build_genesis_tx(Network::Testnet, &recipients).expect("build");
     let blob = built.tx.serialize();
     let blob_sha256 = hex::encode(Sha256::digest(&blob));
-    let block = genesis_block(built.tx, KAT_NONCE).expect("block");
+    let block = genesis_block(built.tx).expect("block");
 
     // Capture aid: on any mismatch the actual values are printed here.
     eprintln!("tx_secret      = {}", hex::encode(tx_secret));

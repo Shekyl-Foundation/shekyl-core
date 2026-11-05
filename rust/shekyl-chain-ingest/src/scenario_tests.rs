@@ -197,13 +197,14 @@ async fn a_chain_mines_under_the_production_substrate() {
 fn the_scenario_rules_are_regtest_at_difficulty_one() {
     // Pinned so the free longhash and a real one agree: any hash satisfies
     // a target of one, and the subject of every scenario stays the chain.
-    assert!(matches!(
-        RULES,
-        crate::schedule::ChainRules::Regtest {
-            fixed_difficulty: Some(d),
-            schedule,
-        } if d.get() == 1 && schedule.is_production()
-    ));
+    assert_eq!(RULES.network(), shekyl_network::Network::Regtest);
+    assert_eq!(
+        RULES.fixed_difficulty().map(core::num::NonZeroU128::get),
+        Some(1)
+    );
+    assert!(RULES.schedule().is_production());
+    // The driver mines its own block 0, so its chain is held to none.
+    assert_eq!(RULES.trust(), shekyl_chain_rules::Trust::UNPINNED);
 }
 
 /// DRS-E3 commit 7 (`DRS_E3_CURVE_WRITER.md` §2.3, §6 row 7): the driver

@@ -71,13 +71,12 @@ mod producer;
 mod sync_owner;
 
 pub use facts::free_bytes;
-pub use genesis::network_id;
 pub use mining::{MiningControl, MiningRefused, MiningStatus, PostedJob};
 pub use producer::descriptors as producer_descriptors;
 pub use shekyl_chain_sync::Declaration;
 pub use shekyl_chain_sync_runtime::owner::{EndCause, Ended as SyncEnded};
 pub use shekyl_p2p::{
-    BanTarget, ClearnetPlan, LinkLimits, Network, NetworkPlan, PeerPlan, SeedNetwork, TorPlan,
+    BanTarget, ClearnetPlan, LinkLimits, Network, NetworkPlan, PeerPlan, TorPlan,
 };
 
 use std::num::NonZeroUsize;
@@ -89,9 +88,9 @@ use shekyl_chain_ingest::follower::{JobSeat, MinerFeed, NoJob, Posting};
 use shekyl_chain_ingest::service::{
     ArrivalTag, Follow, PoolWiring, Reply, Service, ServiceConfig, ServiceFault,
 };
-use shekyl_chain_ingest::{Chain, ChainRules, Metrics, ProductionSubstrate, SubstrateFault};
+use shekyl_chain_ingest::{ChainRules, Metrics, ProductionSubstrate, SubstrateFault};
 pub use shekyl_chain_ingest::{ChainTip, TipChanged};
-use shekyl_chain_rules::{AdmissionPolicy, FakechainSchedule, GenesisPin, RuleSet};
+use shekyl_chain_rules::{AdmissionPolicy, CappedEpoch, GenesisPin, RuleSet};
 use shekyl_chain_store::apply_policy::ApplyPolicy;
 use shekyl_chain_store::pool::PoolOpen;
 use shekyl_chain_store::store::{ChainStore, CutShort, Horizons, SnapshotView};
@@ -114,7 +113,7 @@ use tokio::sync::Notify;
 use crate::facts::{
     BansBridge, ChainBridge, DoorBridge, DoorEntry, PoolBridge, StopBridge, Surroundings,
 };
-use crate::genesis::{daemon_network, pinned_genesis};
+use crate::genesis::pinned_genesis;
 use crate::pool_door::{Departures, NodePoolDoor};
 
 /// The runtime's blocking threads for `permits` hasher permits and an
@@ -334,7 +333,7 @@ impl Node {
             ml_kem_ek: address.ml_kem.clone(),
         });
         let miner_address = mine_address
-            .map(|address| MiningAddress::decode(&address.text, nettype.address_network()))
+            .map(|address| MiningAddress::decode(&address.text, nettype))
             .transpose()
             .map_err(|refused| OpenError::Rules(format!("the mine-address row: {refused}")))?;
         // Every template draws its `0x0C` commitment from this ring, and the
@@ -582,7 +581,7 @@ impl Node {
             Arc::new(RulesOf(rules)),
             surroundings,
             NodeIdentity {
-                nettype: daemon_network(nettype),
+                nettype,
                 release_build: args.release_build,
                 version: args.version,
                 start_time: started_at,
@@ -904,25 +903,20 @@ const fn node_sync_of(state: SyncState) -> NodeSync {
 }
 
 fn rules_of(config: &DaemonConfig) -> Result<ChainRules, OpenError> {
-    let chain = match config.network {
-        shekyl_daemon_config::Network::Mainnet => Chain::Public(shekyl_address::Network::Mainnet),
-        shekyl_daemon_config::Network::Testnet => Chain::Public(shekyl_address::Network::Testnet),
-        shekyl_daemon_config::Network::Stagenet => Chain::Public(shekyl_address::Network::Stagenet),
-        shekyl_daemon_config::Network::Regtest => Chain::Regtest,
-    };
     let fixed = config
         .dev
         .difficulty
         .map(|n| std::num::NonZeroU128::new(u128::from(n)).expect("zero is refused at parse"));
     let schedule = schedule_of(&config.dev)?;
-    ChainRules::new(chain, fixed, schedule).map_err(|error| OpenError::Rules(error.to_string()))
+    ChainRules::new(config.network, fixed, schedule)
+        .map_err(|error| OpenError::Rules(error.to_string()))
 }
 
-fn schedule_of(dev: &Dev) -> Result<FakechainSchedule, OpenError> {
-    // Each omitted lever is the production value. `FakechainSchedule::new`
+fn schedule_of(dev: &Dev) -> Result<CappedEpoch, OpenError> {
+    // Each omitted lever is the production value. `CappedEpoch::new`
     // is the one check, including a single lever against the other side's
     // production value. `new` of the production pair equals `PRODUCTION`.
-    let production = FakechainSchedule::PRODUCTION;
+    let production = CappedEpoch::PRODUCTION;
     let blocks = dev
         .settlement_epoch_blocks
         .unwrap_or_else(|| production.settlement().blocks().get());
@@ -931,7 +925,7 @@ fn schedule_of(dev: &Dev) -> Result<FakechainSchedule, OpenError> {
         .unwrap_or_else(|| production.reorg_cap().to_raw());
     let epoch = shekyl_chain_rules::SettlementEpochBlocks::new(blocks)
         .ok_or_else(|| OpenError::Rules("the settlement epoch length is zero".to_owned()))?;
-    FakechainSchedule::new(epoch, shekyl_types::BlockCount::from_raw(cap))
+    CappedEpoch::new(epoch, shekyl_types::BlockCount::from_raw(cap))
         .map_err(|error| OpenError::Rules(error.to_string()))
 }
 
@@ -1035,15 +1029,10 @@ fn store_durability_line() -> String {
     )
 }
 
+/// The store is held to the network's table genesis, every network alike
+/// (NI-Q8): the pin `validate` holds block 0 to.
 fn genesis_pin_of(rules: ChainRules) -> GenesisPin {
-    match rules {
-        ChainRules::Scheduled(net) => GenesisPin::for_network(net),
-        // Regtest's block 0 is as deterministic as any network's, so its
-        // store is pinned too (S1, design review 2026-11-03). `validate`'s
-        // CEN-E1 leaves regtest unpinned (`ChainRules::trust`): harness
-        // chains mine their own genesis.
-        ChainRules::Regtest { .. } => GenesisPin::FAKECHAIN,
-    }
+    GenesisPin::for_network(rules.network())
 }
 
 fn open_pool(

@@ -47,5 +47,5 @@ pub use judge::{closes_the_bracket, judge, Judgement, Observations};
 pub use link_tally::{TallySink, TorLinkTally};
 pub use owner::{session_of, Applied, Dialer, Launch, NotReady, OwnerRng, Shared};
 pub use pace::{attempts_per_test, draw, next_wake_nanos, retry_wait_nanos};
-pub use seeds::{seeds, SeedNetwork};
+pub use seeds::seeds;
 pub use store::{AddressStore, LoadError, STORE_INTERVAL_NANOS};

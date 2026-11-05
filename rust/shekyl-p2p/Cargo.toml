@@ -13,6 +13,8 @@ shekyl-capped-stream = { path = "../shekyl-capped-stream" }
 shekyl-clearnet = { path = "../shekyl-clearnet" }
 shekyl-dialer = { path = "../shekyl-dialer" }
 shekyl-draw-rng = { path = "../shekyl-draw-rng" }
+# The network whose row's seeds the connectors admit (`NetworkPlan::seeds`).
+shekyl-network = { path = "../shekyl-network" }
 shekyl-onion-v3 = { path = "../shekyl-onion-v3" }
 shekyl-p2p-session = { path = "../shekyl-p2p-session" }
 shekyl-peer-policy = { path = "../shekyl-peer-policy" }

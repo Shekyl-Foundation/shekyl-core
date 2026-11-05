@@ -1,7 +1,7 @@
 # Shekyl Wallet Preferences — Categorization & Storage Policy
 
 **Status:** implemented. Commits `2k.1` … `2k.5` landed the three user-facing
-layers (`NetworkSafetyConstants`, the `shekyl-engine-prefs` TOML crate, CLI
+layers (`WalletSafetyConstants`, the `shekyl-engine-prefs` TOML crate, CLI
 overrides); §2.4 adds the fourth — **sealed wallet state** — to align this
 policy with the tier-4 staking storage (`StakingBlock`). The first-draft
 sealed-settings monolith (`shekyl-crypto-pq/src/wallet_state/`) was an orphan and
@@ -49,7 +49,7 @@ That shape is wrong for Shekyl V3:
 
 This document pins the replacement. The decomposition is now complete in
 code: the sealed-settings monolith no longer exists — its funds-relevant half
-became tier-1 `NetworkSafetyConstants`, its advisory half the tier-3
+became tier-1 `WalletSafetyConstants`, its advisory half the tier-3
 `shekyl-engine-prefs` TOML, its funds-load-bearing state the tier-4 sealed
 blocks (§2.4), and the abandoned first-draft `wallet_state` module was deleted.
 
@@ -96,7 +96,7 @@ any normal workflow.
 - **Principle:** any tampering with these values threatens funds
   (wallet accepts a reorg that should be rejected, wallet reuses view
   secrets across txs, wallet silently skips scanning, …).
-- **Storage:** `const fn` constructors on `NetworkSafetyConstants`.
+- **Storage:** the one constant set `WalletSafetyConstants::DEFAULTS`, the same on every network.
 - **Why not CLI-override for all of them:** "always on" is safer than
   "on by default, user can disable." For fields with zero legitimate
   reason to deviate, removing the knob removes the attack surface.
@@ -183,17 +183,19 @@ in. Rows are grouped by layer for readability.
 
 ### 3.1 Hardcoded constants
 
-Implemented in `shekyl_engine_state::safety_constants::NetworkSafetyConstants`
-(commit 2k.1). Fields marked **invariant** admit no CLI override at any
-layer; fields marked **base** supply the per-network default that the
-`SafetyOverrides` struct from §3.3 overlays on at wallet open.
+Implemented in `shekyl_engine_state::safety_constants::WalletSafetyConstants`
+(commit 2k.1). There is one set, the same on every network
+(`NETWORK_IDENTITY.md` NI-R4; Rick, 2026-11-03): no field differs by
+network. Fields marked **invariant** admit no CLI override at any layer;
+fields marked **base** supply the default that the `SafetyOverrides`
+struct from §3.3 overlays on at wallet open.
 
-| Field                              | Mainnet | Testnet | Stagenet | Kind      | Rationale |
-|------------------------------------|---------|---------|----------|-----------|-----------|
-| `key_reuse_mitigation2`            | `true`  | `true`  | `true`   | invariant | Defense against view-key-reuse linkability; always on. No legitimate reason to disable in normal operation. Research use cases run debug builds with a source-level flag. |
-| `max_reorg_depth`                  | `10`    | `6`     | `10`     | base      | Minimum confirmations before a transfer is final. Testnet is tuned for fast iteration; stagenet mirrors mainnet because its purpose is to exercise mainnet parameters. CLI override: see §3.3. |
-| `default_skip_to_height`           | `0`     | `0`     | `0`      | base      | One-shot import hint (starting height for the first scan). CLI override: see §3.3. Once a `SyncStateBlock` exists its stored `restore_from_height` supersedes this default. |
-| `default_refresh_from_block_height`| `0`     | `0`     | `0`      | base      | Refresh cursor used when the wallet opens without a `SyncStateBlock` (lost-`.wallet` recovery path). CLI override: see §3.3. |
+| Field                              | Value   | Kind      | Rationale |
+|------------------------------------|---------|-----------|-----------|
+| `key_reuse_mitigation2`            | `true`  | invariant | Defense against view-key-reuse linkability; always on. No legitimate reason to disable in normal operation. Research use cases run debug builds with a source-level flag. |
+| `max_reorg_depth`                  | `10`    | base      | Minimum confirmations before a transfer is final: `shekyl_consensus::DEFAULT_LOCK_WINDOW`, referenced, not restated. An output cannot be spent until that many blocks have passed, so a wallet treating a transfer as final sooner would report finality the chain does not grant. CLI override (raise only): see §3.3. |
+| `default_skip_to_height`           | `0`     | base      | One-shot import hint (starting height for the first scan). CLI override: see §3.3. Once a `SyncStateBlock` exists its stored `restore_from_height` supersedes this default. |
+| `default_refresh_from_block_height`| `0`     | base      | Refresh cursor used when the wallet opens without a `SyncStateBlock` (lost-`.wallet` recovery path). CLI override: see §3.3. |
 
 **Monero-lineage fields deliberately absent.** `segregation_pre_fork_outputs`
 and `segregation_height` reflect Monero's post-key-reuse-mitigation fork
@@ -247,9 +249,9 @@ where no pre-fork output set exists. Per rule
 
 ### 3.3 CLI-ephemeral overrides
 
-| Field                        | Network default         | Override flag                               | Rationale |
+| Field                        | Default                 | Override flag                               | Rationale |
 |------------------------------|-------------------------|---------------------------------------------|-----------|
-| `max_reorg_depth`            | `10` (mainnet)          | `--max-reorg-depth N`                       | Advanced chain-analysis or test workflows may legitimately raise or lower this. |
+| `max_reorg_depth`            | `10` (the lock window)  | `--max-reorg-depth N`                       | Raise only: a user may ask for more caution for a session. `ReorgDepthOverride::new` refuses a depth below the lock window with its reason (`ReorgDepthBelowLockWindow`), since a shallower depth means nothing the chain respects. |
 | `skip_to_height`             | `0`                     | `--skip-to-height N`                        | One-shot bootstrap parameter; after the first scan `SyncStateBlock.restore_from_height` takes over. |
 | `refresh_from_block_height`  | `0`                     | `--refresh-from-block-height N`             | Same category as `skip_to_height`: one-shot import hint. Not persistent in the new world. |
 
@@ -426,11 +428,12 @@ open-time `WARN` lines still give the user a chance to notice.
 
 ## 8. Reference implementation pointer
 
-- `shekyl_engine_state::safety_constants::NetworkSafetyConstants` —
-  §2.1 / §3.1 constants (`2k.1`). Landed in `shekyl-engine-state`
+- `shekyl_engine_state::safety_constants::WalletSafetyConstants` —
+  §2.1 / §3.1 constants (`2k.1`), and `ReorgDepthOverride`, the
+  raise-only reorg-depth override. Landed in `shekyl-engine-state`
   rather than `shekyl-consensus` because
   `70-modular-consensus.mdc` scopes the latter to PoW proof validation;
-  per-network wallet safety policy is wallet-state concern.
+  wallet safety policy is a wallet-state concern.
 - `shekyl_engine_file::SafetyOverrides` — §2.3 runtime type (`2k.2`).
 - `shekyl-engine-prefs` crate — §2.2 TOML types, HMAC, parser (`2k.3`).
 - `shekyl_ffi::wallet_prefs_ffi` — C ABI for the TOML layer (`2k.4`).

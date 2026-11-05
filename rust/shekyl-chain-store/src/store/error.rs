@@ -340,7 +340,7 @@ pub enum StoreCannot {
     /// set it runs under (S-CHAIN-W SCW-7: retention `≥ D_max`, or a legal
     /// reorg returns [`PopBelowFloor`](Self::PopBelowFloor)). Refused at
     /// open against the cap the caller names, and by `connect` against the
-    /// set in force at every height — a Fakechain regtest runs a rule set
+    /// set in force at every height — a levered regtest runs a rule set
     /// whose cap fits its retention, never a store field the validator
     /// defers to (PR #861 review).
     RetentionBelowReorgCap {
@@ -360,7 +360,7 @@ pub enum StoreCannot {
         /// The height the block would have been recorded at.
         height: u64,
         /// The rule set the verdict was minted under — the set, not its id:
-        /// two Fakechain sets share `RuleSetId::GENESIS`, and the refusal
+        /// two levered sets share `RuleSetId::GENESIS`, and the refusal
         /// must be able to say which differed (RD-Q10). Boxed, as
         /// `shekyl_chain_rules::Stale::RuleSet`'s are: two sets by value
         /// sized every `Result` in the store past clippy's 128 bytes once
@@ -373,14 +373,17 @@ pub enum StoreCannot {
     /// `pop`, or the regtest injection, on a store with no block recorded
     /// (nothing to pop; no tip to attribute an injected bit to).
     ChainEmpty,
-    /// The regtest serve-credit injection
-    /// (`ChainStore::regtest_inject_serve_credit`, DRS-E4 §3.8 item 3) was
-    /// asked for under a [`Trust`](shekyl_chain_rules::Trust) that pins a
-    /// genesis. The door writes a bit the rules did not admit and opens
-    /// only for [`Trust::UNPINNED`](shekyl_chain_rules::Trust::UNPINNED),
-    /// which is what a Fakechain run is. The C++ refuses the same door off
-    /// `FAKECHAIN` (`blockchain.cpp:4715`).
-    InjectionOffFakechain,
+    /// A replay write (`ChainStore::regtest_inject_serve_credit`,
+    /// `regtest_issue_draws`; DRS-E4 §3.8 item 3) was handed a network
+    /// row's permit for another lever. Each door writes what the rules did
+    /// not admit and opens only on its own lever's permit, which only
+    /// regtest's row grants (`NETWORK_IDENTITY.md` NI-R6).
+    PermitForAnotherLever {
+        /// The lever the permit is for.
+        given: shekyl_network::Lever,
+        /// The lever the write needs.
+        wanted: shekyl_network::Lever,
+    },
     /// The regtest serve-credit injection named a persona with no bond
     /// record. The door writes the one row the rules did not admit, but
     /// it does not mint a file the reads refuse: every serve-credit read
@@ -590,9 +593,11 @@ impl core::fmt::Display for StoreCannot {
                  force at height {height}; re-validate under the rule set in force"
             ),
             Self::ChainEmpty => f.write_str("the chain store has no block recorded"),
-            Self::InjectionOffFakechain => f.write_str(
-                "regtest injection refused: the node's trust pins a genesis, so this is not an \
-                 unpinned Fakechain",
+            Self::PermitForAnotherLever { given, wanted } => write!(
+                f,
+                "a replay write needs the permit for {}; it was handed the permit for {}",
+                wanted.name(),
+                given.name()
             ),
             Self::InjectionForUnbondedPersona { persona } => write!(
                 f,
@@ -633,8 +638,8 @@ impl core::fmt::Display for StoreCannot {
             } => write!(
                 f,
                 "undo-log retention {} is below the in-force rule set's reorg cap of {}: a legal \
-                 reorg would meet PopBelowFloor (S-CHAIN-W SCW-7); raise the retention, or run a \
-                 Fakechain rule set whose cap fits it",
+                 reorg would meet PopBelowFloor (S-CHAIN-W SCW-7); raise the retention, or shorten \
+                 the reorg cap so it fits inside the retention",
                 retention.to_raw(),
                 reorg_cap.to_raw()
             ),

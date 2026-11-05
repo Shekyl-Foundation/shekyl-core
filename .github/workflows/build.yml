@@ -635,8 +635,11 @@ jobs:
           # daemon-rpc, ffi and process floors were re-set at the p2p cutover
           # (2026-11-05), which deleted the seam-facts and p2p halves of the
           # first two and moved the hardening tests into the third: Linux
-          # lib counts were 182, 116 and 3.
-          $floors = @{ 'shekyl_options-' = 25; 'shekyl_daemon-' = 30; 'shekyl_daemon_config-' = 60; 'shekyl_daemon_rpc-' = 170; 'shekyl_ffi-' = 100; 'shekyl_process-' = 2 }
+          # lib counts were 182, 116 and 3. shekyl-ffi's account and KEM
+          # exports went with the C++ wallet account code
+          # (NETWORK_IDENTITY.md NI-R7) and their 19 tests with them; the
+          # merged lib ran at 97 on Linux.
+          $floors = @{ 'shekyl_options-' = 25; 'shekyl_daemon-' = 30; 'shekyl_daemon_config-' = 60; 'shekyl_daemon_rpc-' = 170; 'shekyl_ffi-' = 80; 'shekyl_process-' = 2 }
           $lines = Get-Content daemon-crates.out
           foreach ($crate in $floors.Keys) {
             $at = ($lines | Select-String -Pattern ("Running unittests .*\\" + [regex]::Escape($crate)) | Select-Object -First 1).LineNumber

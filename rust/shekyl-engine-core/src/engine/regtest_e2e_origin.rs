@@ -102,11 +102,13 @@ impl StemSinkPair {
     /// height, and an unsynchronized node withholds a local origin instead
     /// of stemming it.
     /// Spawn the pair mining coinbase to `seed`'s primary address (N2).
-    pub(super) async fn start_for_seed(seed: &[u8; 64]) -> StemSinkPair {
+    pub(super) async fn start_for_seed(
+        seed: &[u8; shekyl_crypto_pq::account::SEED_BYTES],
+    ) -> StemSinkPair {
         let serial = serial_lock().lock_owned().await;
         let origin_p2p = RegtestDaemon::free_port();
         let sink_p2p = RegtestDaemon::free_port_excluding(&[origin_p2p]);
-        let mine_address = mine_address_from_seed(seed, shekyl_address::Network::Mainnet);
+        let mine_address = mine_address_from_seed(seed, shekyl_address::Network::Regtest);
         let sink = RegtestDaemon::spawn(RegtestSpawn::new(None).with_peering(Peering::Linked {
             p2p_port: sink_p2p,
             peer_p2p_port: origin_p2p,
@@ -387,7 +389,7 @@ async fn restricted_listener_hides_a_transaction_this_node_has_not_broadcast() {
     const MINE_BATCH_BLOCKS: u64 = 10;
     const MAX_MINE_BATCHES: usize = 24;
 
-    let seed = [0x5eu8; shekyl_crypto_pq::account::MASTER_SEED_BYTES];
+    let seed = [0x5eu8; shekyl_crypto_pq::account::SEED_BYTES];
     let pair = StemSinkPair::start_for_seed(&seed).await;
     let origin = pair.origin();
     let restricted = HttpRpc::new(origin.restricted_url().to_owned())
@@ -632,7 +634,7 @@ async fn restricted_listener_names_a_transaction_this_node_shows() {
     const MINE_BATCH_BLOCKS: u64 = 10;
     const MAX_MINE_BATCHES: usize = 24;
 
-    let seed = [0x5fu8; shekyl_crypto_pq::account::MASTER_SEED_BYTES];
+    let seed = [0x5fu8; shekyl_crypto_pq::account::SEED_BYTES];
     let daemon = RegtestDaemon::start_for_seed_with_restricted_listener(&seed).await;
     let restricted = HttpRpc::new(daemon.restricted_url().to_owned())
         .await
@@ -690,11 +692,11 @@ async fn restricted_listener_names_a_transaction_this_node_shows() {
 }
 
 /// `daemon status`, `chain difficulty`, `version` and `txpool stats`
-/// answer through `shekyl-cli` on an offline testnet daemon.
+/// answer through `shekyl-cli` on an offline regtest daemon.
 #[tokio::test]
 #[ignore = "requires SHEKYLD_BIN and SHEKYL_CLI_BIN; spawns a live daemon"]
 async fn daemon_words_answer_through_shekyl_cli() {
-    let daemon = RegtestDaemon::start_on_testnet().await;
+    let daemon = RegtestDaemon::start().await;
     let info: GetInfoResponse = daemon
         .rpc()
         .json_rpc_call("get_info", None)

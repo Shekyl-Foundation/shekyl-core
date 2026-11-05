@@ -96,16 +96,15 @@
 //! is the writer's own test hook — the door the C++'s
 //! `regtest_inject_archival_serve_credit` (`blockchain.cpp:4708`) opened,
 //! writing a serve-credit bit the rules did not admit, attributed to the
-//! tip's height, refused off Fakechain. It lives beside the phase bodies
+//! tip's height, refused off regtest. It lives beside the phase bodies
 //! because it writes their table and nothing else may. It is **not
 //! journaled**: it runs in its own transaction outside any block's
 //! recording, so no `undo_log` row names it, and a pop below its height
 //! leaves the bit — the C++'s behaviour, and the corpus's `Inject` event
 //! (commit 7) is a pipeline barrier for the same reason.
 
-use shekyl_chain_rules::{
-    ArchivalDelta, ChainValid, ChainView, GenesisPin, RecordWriteKind, Trust,
-};
+use shekyl_chain_rules::{ArchivalDelta, ChainValid, ChainView, RecordWriteKind};
+use shekyl_network::{Lever, Permit};
 use shekyl_types::archival::{AttestationWitness, IndexedDraw, IssuedDigest};
 use shekyl_types::{BlockHeight, PCanonicalId, SettlementEpoch, ShardId};
 use shekyl_units::AtomicUnits;
@@ -677,17 +676,27 @@ impl<'id> WriteBatch<'_, 'id> {
     }
 }
 
+/// A replay write runs on its own lever's permit and no other.
+fn require(permit: Permit, wanted: Lever) -> Result<(), StoreError> {
+    if permit.lever() == wanted {
+        Ok(())
+    } else {
+        Err(StoreCannot::PermitForAnotherLever {
+            given: permit.lever(),
+            wanted,
+        }
+        .into())
+    }
+}
+
 impl ChainStore {
     /// The regtest injector: `archival_serve_credit[(persona, shard, epoch,
     /// tip)] = Present`, a bit no block earned, attributed to the tip's
-    /// height — the C++'s `regtest_inject_archival_serve_credit`
-    /// (`blockchain.cpp:4708`), the Gate-6 stand-in that lets a regtest
-    /// reach a closed epoch with a credit in it. Refused unless `trust` is
-    /// [`Trust::UNPINNED`], which is what a Fakechain run is and a public
-    /// network's `trust()` never is ([`GenesisPin`] has no constructor a
-    /// public network can use to mint an empty pin). The store holds no
-    /// nettype (rule 71); it reads the pin the caller runs under, and the
-    /// ingest maps `ChainRules::Regtest` to `Trust::UNPINNED`.
+    /// height — the Gate-6 stand-in that lets a regtest reach a closed
+    /// epoch with a credit in it. It runs only on the network row's
+    /// `permit` for [`Lever::InjectServeCredit`] (`NETWORK_IDENTITY.md`
+    /// NI-R6), which only regtest's row grants: the store holds the
+    /// permit, never the network (rule 71).
     ///
     /// Its own transaction, **not journaled** (module doc): a pop below the
     /// returned height leaves the bit, as the C++'s does. Returns the
@@ -695,8 +704,8 @@ impl ChainStore {
     ///
     /// # Errors
     ///
-    /// [`StoreCannot::InjectionOffFakechain`] if `trust` pins a genesis;
-    /// [`StoreCannot::ChainEmpty`] with no block recorded (no tip
+    /// [`StoreCannot::PermitForAnotherLever`] if `permit` is not for this
+    /// write; [`StoreCannot::ChainEmpty`] with no block recorded (no tip
     /// to attribute the bit to); [`StoreCannot::InjectionForUnbondedPersona`]
     /// if `persona` has no bond record — every serve-credit read arms
     /// SI-15, so a bit for a stranger would be a file the reads refuse
@@ -706,14 +715,12 @@ impl ChainStore {
     /// engine errors of [`write`](Self::write).
     pub fn regtest_inject_serve_credit(
         &self,
-        trust: Trust,
+        permit: Permit,
         persona: PCanonicalId,
         shard: ShardId,
         epoch: SettlementEpoch,
     ) -> Result<BlockHeight, StoreError> {
-        if *trust.genesis_pin() != GenesisPin::NONE {
-            return Err(StoreCannot::InjectionOffFakechain.into());
-        }
+        require(permit, Lever::InjectServeCredit)?;
         self.write(|batch| {
             let tip = {
                 let info = batch.open_insert_table(BLOCK_INFO, StoreInvariant::TipMismatch)?;
@@ -745,9 +752,9 @@ impl ChainStore {
     /// (`ARCHIVAL_SETTLEMENT_WRITER.md` `SO-D10f`). The stand-in for
     /// admission until admission exists: it lets a regtest chain reach a
     /// slash pass with draws to settle, each already marked passed or not.
-    /// Refused off Fakechain exactly as
+    /// It runs only on the row's permit for [`Lever::IssueDraws`], as
     /// [`regtest_inject_serve_credit`](Self::regtest_inject_serve_credit)
-    /// is.
+    /// does on its own.
     ///
     /// **The caller folds the digest.** The store computes none of the
     /// archival state it holds (`ARW-Q1`): `digest` is the cell's
@@ -762,21 +769,19 @@ impl ChainStore {
     ///
     /// # Errors
     ///
-    /// [`StoreCannot::InjectionOffFakechain`] if `trust` pins a genesis;
-    /// [`StoreCannot::InjectionForUnbondedPersona`] if a draw names
+    /// [`StoreCannot::PermitForAnotherLever`] if `permit` is not for this
+    /// write; [`StoreCannot::InjectionForUnbondedPersona`] if a draw names
     /// a persona with no bond record; [`StoreCannot::DrawAlreadyIssued`]
     /// if the index holds one of the draws; the admission and engine
     /// errors of [`write`](Self::write).
     pub fn regtest_issue_draws(
         &self,
-        trust: Trust,
+        permit: Permit,
         epoch: SettlementEpoch,
         draws: &[IndexedDraw],
         digest: IssuedDigest,
     ) -> Result<(), StoreError> {
-        if *trust.genesis_pin() != GenesisPin::NONE {
-            return Err(StoreCannot::InjectionOffFakechain.into());
-        }
+        require(permit, Lever::IssueDraws)?;
         self.write(|batch| {
             let mut index = batch.open_upsert_table(ARCHIVAL_ISSUED_DRAW)?;
             for draw in draws {

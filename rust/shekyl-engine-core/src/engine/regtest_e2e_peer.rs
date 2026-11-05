@@ -173,7 +173,7 @@ impl Shared {
 /// The regtest network id the daemon checks on every handshake.
 fn network_id() -> [u8; 16] {
     shekyl_p2p_transport::network_id_from_genesis(&shekyl_rpc_types::genesis_hash_for(
-        shekyl_rpc_types::DaemonNetwork::Fakechain,
+        shekyl_rpc_types::Network::Regtest,
     ))
 }
 
@@ -184,7 +184,7 @@ fn sync_data() -> CoreSyncData {
         current_height: 1,
         cumulative_difficulty: 1,
         cumulative_difficulty_top64: 0,
-        top_id: shekyl_rpc_types::genesis_hash_for(shekyl_rpc_types::DaemonNetwork::Fakechain),
+        top_id: shekyl_rpc_types::genesis_hash_for(shekyl_rpc_types::Network::Regtest),
     }
 }
 

@@ -90,7 +90,7 @@ use crate::core::{ConnectionsSnapshot, P2pRead, PeerEntry};
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct DaemonIdentity {
     /// The network this daemon runs.
-    pub nettype: shekyl_rpc_types::DaemonNetwork,
+    pub nettype: shekyl_rpc_types::Network,
     /// Hash of block 0.
     pub genesis_hash: BlockHash,
 }

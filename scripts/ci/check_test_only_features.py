@@ -299,6 +299,13 @@ CONSUMER_OWNED: dict[tuple[str, str], tuple[str, str]] = {
 # trace writer alone with `default-features = false`).
 PERMANENT: dict[tuple[str, str], str] = {
     (
+        "shekyl-network",
+        "serde",
+    ): "the network's lowercase name on the wire and in files: shekyl-address "
+    "and shekyl-rpc-types serialize the one Network type with it (the RPC's "
+    "`regtest`, NETWORK_IDENTITY.md NI-Q1). A production surface, not a test "
+    "seam",
+    (
         "shekyl-chain-sync",
         "cs2-long-run",
     ): "the floor-device job's selector: the cs2-long-run workflow passes it "
@@ -385,6 +392,7 @@ GOVERNED_OWNERS: frozenset[str] = frozenset(
         "shekyl-mempool",
         "shekyl-bundle-producer",
         "shekyl-curve-tree",
+        "shekyl-network",
     }
 )
 

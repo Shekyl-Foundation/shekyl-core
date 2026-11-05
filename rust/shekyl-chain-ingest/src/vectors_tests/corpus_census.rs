@@ -24,7 +24,7 @@ use crate::mutation::{ArchivalKind, Before, Environment, Mutation, Unmutable};
 use crate::source::{IngestEvent, Source};
 use crate::test_support::h;
 
-use super::{captured_chains, shape_of, UntilRetiredJoin};
+use super::captured_chains;
 
 /// What one mutation can do on one captured chain: apply at some height,
 /// or report why it cannot at every height.
@@ -53,9 +53,8 @@ fn note(causes: &mut Vec<Unmutable>, cause: Unmutable) {
 /// did not move).
 fn corpus_candidates(dir: &Path) -> Vec<(u64, Candidate, Before)> {
     let corpus = std::fs::read(dir.join("corpus.e2")).expect("read corpus.e2");
-    let mut reader = UntilRetiredJoin::new(
-        CorpusReader::open(std::io::Cursor::new(corpus.as_slice())).expect("open corpus"),
-    );
+    let mut reader =
+        CorpusReader::open(std::io::Cursor::new(corpus.as_slice())).expect("open corpus");
     let mut height = reader.first_height().to_raw();
     let mut chain: Vec<(u64, Candidate, Before)> = Vec::new();
     let mut below = Before::default();
@@ -84,7 +83,6 @@ fn corpus_candidates(dir: &Path) -> Vec<(u64, Candidate, Before)> {
             IngestEvent::Inject(_) => {}
         }
     }
-    reader.finish(&shape_of(dir));
     chain
 }
 

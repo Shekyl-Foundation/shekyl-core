@@ -16,12 +16,12 @@ use shekyl_types::{BlockHash, TxHash};
 fn run(args: &[&str], address: Option<&str>) -> Result<String, String> {
     // Mainnet: these harnesses drive the dispatch, not the handshake, and
     // their fake daemons answer mainnet.
-    run_on(shekyl_rpc_types::DaemonNetwork::Mainnet, args, address)
+    run_on(shekyl_rpc_types::Network::Mainnet, args, address)
 }
 
 /// [`run`], as a console started for `network`.
 fn with_daemon(
-    network: shekyl_rpc_types::DaemonNetwork,
+    network: shekyl_rpc_types::Network,
     address: Option<&str>,
     call: impl FnOnce(&DaemonClient) -> Result<String, String>,
 ) -> Result<String, String> {
@@ -32,7 +32,7 @@ fn with_daemon(
 }
 
 fn run_on(
-    network: shekyl_rpc_types::DaemonNetwork,
+    network: shekyl_rpc_types::Network,
     args: &[&str],
     address: Option<&str>,
 ) -> Result<String, String> {
@@ -85,9 +85,9 @@ fn agreeing_get_version() -> String {
         current_height: 1,
         target_height: shekyl_rpc_types::Nullable::NULL,
         consensus_constants_digest: shekyl_rpc_types::CONSENSUS_CONSTANTS_DIGEST_HASH,
-        nettype: shekyl_rpc_types::DaemonNetwork::Mainnet,
+        nettype: shekyl_rpc_types::Network::Mainnet,
         genesis_hash: shekyl_rpc_types::HashHex::from_bytes(
-            shekyl_rpc_types::genesis_hash_for(shekyl_rpc_types::DaemonNetwork::Mainnet),
+            shekyl_rpc_types::genesis_hash_for(shekyl_rpc_types::Network::Mainnet),
         ),
         },
     })
@@ -1613,13 +1613,27 @@ fn the_sync_percentage_never_rounds_up_to_a_hundred() {
     assert!((sync_percentage(0, 0) - 0.0).abs() < f64::EPSILON);
 }
 
+/// The status line names a network by its row's name, regtest included: a
+/// regtest daemon is `regtest`, never `mainnet` (NI-Q8; the label once
+/// mapped the regtest network to mainnet's name).
+#[test]
+fn the_network_label_is_the_rows_name() {
+    assert_eq!(
+        super::info::network_label(shekyl_rpc_types::Network::Regtest),
+        "regtest"
+    );
+    for network in shekyl_rpc_types::Network::ALL {
+        assert_eq!(super::info::network_label(network), network.name());
+    }
+}
+
 /// **The status line's network is the one `get_version` named** (RK-Q6).
 /// `get_info` carries no network, so there is nothing else for the line to
 /// read: a testnet console against a testnet daemon says testnet, and the
 /// handshake's reply is reused — `get_version` is asked once.
 #[test]
 fn the_status_line_names_the_network_get_version_reported() {
-    use shekyl_rpc_types::DaemonNetwork::Testnet;
+    use shekyl_rpc_types::Network::Testnet;
     let (address, log) = route_server_recording(vec![
         ("/get_info", info_reply(100)),
         ("/mining_status", mining_reply(false, MineSpeed::NONE)),
@@ -1907,9 +1921,9 @@ fn get_version_but(edit: impl FnOnce(&mut shekyl_rpc_types::GetVersionResponse))
         current_height: 1,
         target_height: shekyl_rpc_types::Nullable::NULL,
         consensus_constants_digest: shekyl_rpc_types::CONSENSUS_CONSTANTS_DIGEST_HASH,
-        nettype: shekyl_rpc_types::DaemonNetwork::Mainnet,
+        nettype: shekyl_rpc_types::Network::Mainnet,
         genesis_hash: shekyl_rpc_types::HashHex::from_bytes(shekyl_rpc_types::genesis_hash_for(
-            shekyl_rpc_types::DaemonNetwork::Mainnet,
+            shekyl_rpc_types::Network::Mainnet,
         )),
     };
     edit(&mut reply);
@@ -1973,7 +1987,7 @@ fn a_wrong_network_daemon_is_refused_even_though_every_other_axis_agrees() {
     // same digest and the same RPC version. Three of four axes are blind here.
     let addr = route_server(vec![(
         "json_rpc:get_version",
-        get_version_but(|r| r.nettype = shekyl_rpc_types::DaemonNetwork::Testnet),
+        get_version_but(|r| r.nettype = shekyl_rpc_types::Network::Testnet),
     )]);
     let out = run(&["chain", "height"], Some(&addr)).expect_err("refused");
     assert!(out.contains("network mismatch"), "{out}");
@@ -1986,7 +2000,7 @@ fn a_wrong_network_daemon_is_refused_even_though_every_other_axis_agrees() {
 fn a_mutating_word_refuses_a_wrong_network_daemon_before_it_posts() {
     let (addr, log) = route_server_recording(vec![(
         "json_rpc:get_version",
-        get_version_but(|r| r.nettype = shekyl_rpc_types::DaemonNetwork::Testnet),
+        get_version_but(|r| r.nettype = shekyl_rpc_types::Network::Testnet),
     )]);
     let out = run(&["option", "set", "log-level", "info"], Some(&addr)).expect_err("refused");
     assert!(out.contains("network mismatch"), "{out}");

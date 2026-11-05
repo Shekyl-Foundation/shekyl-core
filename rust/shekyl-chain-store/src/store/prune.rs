@@ -182,7 +182,7 @@ pub(super) const FIRST_PRUNING_EPOCH: u64 = 2;
 /// pair here as it hands the set to `connect`, and the set carries the
 /// same pair (`RuleSet::settlement_schedule`, `RuleSet::reorg_cap`).
 /// Production runs `D_max` on both sides; a regtest under a shortened
-/// epoch runs a Fakechain rule set naming that epoch and a cap inside it.
+/// epoch runs a levered rule set naming that epoch and a cap inside it.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct Horizons {
     epoch: SettlementEpochBlocks,
@@ -227,7 +227,7 @@ impl Horizons {
     /// # Errors
     ///
     /// [`StoreCannot::RetentionNotInsideEpoch`] if `epoch ≤ D_max` — a
-    /// shortened schedule runs a Fakechain rule set and names its retention
+    /// shortened schedule runs a levered rule set and names its retention
     /// against that set's cap.
     pub fn production(epoch: SettlementEpochBlocks) -> Result<Self, StoreCannot> {
         let cap = RuleSet::GENESIS.reorg_cap();
@@ -238,7 +238,7 @@ impl Horizons {
     /// settlement epoch, and an undo retention of exactly its reorg cap —
     /// the least retention `connect` accepts under it
     /// ([`Self::check_against`]). `under(&RuleSet::GENESIS)` is
-    /// [`production`](Self::production) at the genesis epoch; a Fakechain
+    /// [`production`](Self::production) at the genesis epoch; a levered
     /// set under a shortened schedule gets the horizons that schedule
     /// implies, so a replay driver and a test open a store the same way a
     /// daemon does — off the set, not off a second copy of its numbers.
@@ -246,7 +246,7 @@ impl Horizons {
     /// # Errors
     ///
     /// As [`new`](Self::new); a well-formed set's pair
-    /// (`FakechainSchedule` holds `0 < cap < SEB`) does not fail it.
+    /// (`CappedEpoch` holds `0 < cap < SEB`) does not fail it.
     pub fn under(in_force: &RuleSet) -> Result<Self, StoreCannot> {
         let cap = in_force.reorg_cap();
         Self::new(in_force.settlement_schedule().blocks(), cap, cap)
@@ -885,7 +885,7 @@ mod horizon_tests {
                 Horizons::production(seb(50)),
                 Err(StoreCannot::RetentionNotInsideEpoch { .. })
             ),
-            "a shortened epoch runs a Fakechain set and names its retention against its cap"
+            "a shortened epoch runs a levered set and names its retention against its cap"
         );
     }
 

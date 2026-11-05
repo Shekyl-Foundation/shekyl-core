@@ -7,7 +7,7 @@
 //! block's [`ArchivalDelta`] leaves in the store, read back through the
 //! production snapshot API and compared with the **verdict** that produced
 //! it — never with a figure the test planted. The join and its credit
-//! (phase 2), the accrual (9a), the epoch close (9c) on a short Fakechain
+//! (phase 2), the accrual (9a), the epoch close (9c) on a short levered epoch
 //! schedule, the attestation witness (5), the regtest injector door
 //! (`ChainStore::regtest_inject_serve_credit`), ARW-9's skip-and-widen
 //! under a stubbed family, and CEN-L7's `NotSettled` arm over a
@@ -34,9 +34,8 @@ use std::collections::BTreeSet;
 
 use shekyl_chain_rules::harness::{assert_refused, fixture};
 use shekyl_chain_rules::{
-    form, validate, ArchivalDelta, AtHeight, Candidate, CenRow, FakechainSchedule, Fault,
-    FormAttempt, GenesisPin, HeaderView, Locus, RecordWriteKind, ReferenceClaims, RuleSet, Trust,
-    TxSlot, Verdict,
+    form, validate, ArchivalDelta, AtHeight, Candidate, CappedEpoch, CenRow, Fault, FormAttempt,
+    HeaderView, Locus, RecordWriteKind, ReferenceClaims, RuleSet, Trust, TxSlot, Verdict,
 };
 use shekyl_types::archival::{AttestationWitness, IndexedDraw, IssuedDigest, IssuedDraw};
 use shekyl_types::{BlockCount, BlockHeight, PCanonicalId, SettlementEpoch, ShardId};
@@ -48,7 +47,7 @@ use super::connect_fixtures::{
     anchor, batch_root_going_into, body, candidate_over, connect_chain, credited, expected_seed,
     expected_target, priced, spendable_prefix, FixtureSubstrate, Grown, Listed, FIRST_SPEND_HEIGHT,
 };
-use super::store_tests::{cleanup, tmp, TestErr, EPOCH};
+use super::store_tests::{cleanup, inject_permit, issue_permit, tmp, TestErr, EPOCH};
 use super::view::BatchView;
 use super::*;
 use crate::apply_policy::{ApplyPolicy, ArchivalFamily};
@@ -77,11 +76,11 @@ fn shard(n: u64) -> ShardId {
 
 /// A `(SEB, cap)` pair at compile time; a bad one is a compile error
 /// (`prune_tests.rs`'s shape).
-const fn pair(seb: u64, cap: u64) -> FakechainSchedule {
+const fn pair(seb: u64, cap: u64) -> CappedEpoch {
     let Some(epoch) = SettlementEpochBlocks::new(seb) else {
         panic!("a zero epoch");
     };
-    match FakechainSchedule::new(epoch, BlockCount::from_raw(cap)) {
+    match CappedEpoch::new(epoch, BlockCount::from_raw(cap)) {
         Ok(pair) => pair,
         Err(_) => panic!("the cap is not inside the epoch"),
     }
@@ -111,7 +110,7 @@ const CREDIT_HEIGHT: u64 = CREDIT_EPOCH * SHORT_SEB + 2;
 const CLOSING_HEIGHT: u64 = (CREDIT_EPOCH + 1) * SHORT_SEB - 1;
 const _: () = assert!(FIRST_SPEND_HEIGHT < CREDIT_HEIGHT && CREDIT_HEIGHT < CLOSING_HEIGHT);
 const SHORT_RETENTION: u64 = 8;
-const SHORT: RuleSet = RuleSet::fakechain(None, pair(SHORT_SEB, 4));
+const SHORT: RuleSet = RuleSet::GENESIS.with_levers(None, pair(SHORT_SEB, 4));
 
 fn short_store(path: &std::path::Path) -> ChainStore {
     let horizons = Horizons::new(
@@ -526,7 +525,7 @@ fn the_injector_opens_only_unanchored_and_writes_an_unjournaled_bit_at_the_tip()
     let p = persona(P_SLOT);
 
     let empty = store
-        .regtest_inject_serve_credit(Trust::UNPINNED, p, shard(3), epoch(0))
+        .regtest_inject_serve_credit(inject_permit(), p, shard(3), epoch(0))
         .unwrap_err();
     assert!(
         matches!(empty, StoreError::Cannot(StoreCannot::ChainEmpty)),
@@ -538,7 +537,7 @@ fn the_injector_opens_only_unanchored_and_writes_an_unjournaled_bit_at_the_tip()
         connect_empty(&store, &mut grown, RuleSet::GENESIS);
     }
     let stranger = store
-        .regtest_inject_serve_credit(Trust::UNPINNED, p, shard(3), epoch(0))
+        .regtest_inject_serve_credit(inject_permit(), p, shard(3), epoch(0))
         .unwrap_err();
     assert!(
         matches!(
@@ -555,12 +554,18 @@ fn the_injector_opens_only_unanchored_and_writes_an_unjournaled_bit_at_the_tip()
     );
     let tip = BlockHeight::from_raw(FIRST_SPEND_HEIGHT);
 
-    let anchored = Trust::full(GenesisPin::for_tests(Some(grown.hashes[0])));
+    // A permit for another lever opens no door: the write runs on its own.
     let off = store
-        .regtest_inject_serve_credit(anchored, p, shard(3), epoch(0))
+        .regtest_inject_serve_credit(issue_permit(), p, shard(3), epoch(0))
         .unwrap_err();
     assert!(
-        matches!(off, StoreError::Cannot(StoreCannot::InjectionOffFakechain)),
+        matches!(
+            off,
+            StoreError::Cannot(StoreCannot::PermitForAnotherLever {
+                given: shekyl_network::Lever::IssueDraws,
+                wanted: shekyl_network::Lever::InjectServeCredit,
+            })
+        ),
         "{off:?}"
     );
     assert!(
@@ -574,7 +579,7 @@ fn the_injector_opens_only_unanchored_and_writes_an_unjournaled_bit_at_the_tip()
     );
 
     let at = store
-        .regtest_inject_serve_credit(Trust::UNPINNED, p, shard(3), epoch(0))
+        .regtest_inject_serve_credit(inject_permit(), p, shard(3), epoch(0))
         .expect("Fakechain, a tip recorded, a record held");
     assert_eq!(at, tip, "attributed to the tip");
     let snap = store.begin_read().expect("read");
@@ -617,7 +622,7 @@ fn the_injector_is_refused_when_serve_credits_are_stubbed() {
     let mut grown = Grown::new();
     connect_empty(&store, &mut grown, RuleSet::GENESIS);
     let err = store
-        .regtest_inject_serve_credit(Trust::UNPINNED, persona(0x1f), shard(0), epoch(0))
+        .regtest_inject_serve_credit(inject_permit(), persona(0x1f), shard(0), epoch(0))
         .unwrap_err();
     assert!(
         matches!(
@@ -829,7 +834,7 @@ fn the_draw_issue_opens_only_unanchored_for_a_bonded_persona_and_adds_each_draw_
         connect_empty(&store, &mut grown, RuleSet::GENESIS);
     }
     let stranger = store
-        .regtest_issue_draws(Trust::UNPINNED, epoch(0), &[draw(0, false)], digest)
+        .regtest_issue_draws(issue_permit(), epoch(0), &[draw(0, false)], digest)
         .unwrap_err();
     assert!(
         matches!(
@@ -844,12 +849,17 @@ fn the_draw_issue_opens_only_unanchored_for_a_bonded_persona_and_adds_each_draw_
         &[Listed::Join { slot: P_SLOT }],
         RuleSet::GENESIS,
     );
-    let anchored = Trust::full(GenesisPin::for_tests(Some(grown.hashes[0])));
     let off = store
-        .regtest_issue_draws(anchored, epoch(0), &[draw(0, false)], digest)
+        .regtest_issue_draws(inject_permit(), epoch(0), &[draw(0, false)], digest)
         .unwrap_err();
     assert!(
-        matches!(off, StoreError::Cannot(StoreCannot::InjectionOffFakechain)),
+        matches!(
+            off,
+            StoreError::Cannot(StoreCannot::PermitForAnotherLever {
+                given: shekyl_network::Lever::InjectServeCredit,
+                wanted: shekyl_network::Lever::IssueDraws,
+            })
+        ),
         "{off:?}"
     );
     let read = |e: u64| {
@@ -868,7 +878,7 @@ fn the_draw_issue_opens_only_unanchored_for_a_bonded_persona_and_adds_each_draw_
 
     store
         .regtest_issue_draws(
-            Trust::UNPINNED,
+            issue_permit(),
             epoch(0),
             &[draw(1, true), draw(0, false)],
             digest,
@@ -889,7 +899,7 @@ fn the_draw_issue_opens_only_unanchored_for_a_bonded_persona_and_adds_each_draw_
     // writes nothing: not the fresh draw listed before it, not the digest.
     let again = store
         .regtest_issue_draws(
-            Trust::UNPINNED,
+            issue_permit(),
             epoch(0),
             &[draw(2, false), draw(1, false)],
             IssuedDigest::ZERO,

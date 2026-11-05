@@ -70,13 +70,13 @@ const DERIVED: &[Derived] = &[
     Derived::Listen {
         name: "rpc-admin-listen",
         addr: ADMIN_BIND,
-        port: Network::rpc_port,
+        port: rpc_port,
         when: When::Always,
     },
     Derived::Listen {
         name: "clearnet-listen",
         addr: CLEARNET_BIND,
-        port: Network::p2p_port,
+        port: p2p_port,
         when: When::ClearnetNotOff,
     },
 ];
@@ -151,4 +151,14 @@ fn fill_listen(resolved: &mut Resolved, name: &'static str, addr: Ipv4Addr, port
         port,
     ))]);
     resolved.values.insert(name, (value, Source::Default));
+}
+
+/// The network's default RPC port: its row's.
+const fn rpc_port(network: Network) -> u16 {
+    network.ports().rpc
+}
+
+/// The network's default P2P port: its row's.
+const fn p2p_port(network: Network) -> u16 {
+    network.ports().p2p
 }

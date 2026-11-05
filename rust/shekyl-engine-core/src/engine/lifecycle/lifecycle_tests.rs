@@ -16,7 +16,6 @@ use super::*;
 use std::path::PathBuf;
 
 use shekyl_address::Network;
-use shekyl_crypto_pq::account::SeedFormat;
 use shekyl_crypto_pq::wallet_envelope::KdfParams;
 use shekyl_engine_prefs::hmac_key::FILE_KEK_BYTES;
 use tempfile::TempDir;
@@ -25,11 +24,11 @@ use zeroize::Zeroizing;
 use crate::engine::test_support::dummy_daemon;
 
 /// This suite's deterministic seed (multiplier 7).
-fn fixed_seed() -> [u8; MASTER_SEED_BYTES] {
+fn fixed_seed() -> [u8; SEED_BYTES] {
     crate::engine::test_support::fixed_seed(7)
 }
 
-fn fixed_seed_other() -> [u8; MASTER_SEED_BYTES] {
+fn fixed_seed_other() -> [u8; SEED_BYTES] {
     let mut s = fixed_seed();
     s[0] ^= 0x55;
     s[31] ^= 0xAA;
@@ -1371,7 +1370,7 @@ fn for_test_full_helper_produces_creatable_params() {
     let fix = make_create_fixture();
     let password: &[u8] = b"hunter2";
     let creds = Credentials::password_only(password);
-    let seed = [0xAAu8; MASTER_SEED_BYTES];
+    let seed = [0xAAu8; SEED_BYTES];
 
     let params = EngineCreateParams::for_test_full(&fix.base_path, &creds, &seed);
     // Field assertions: pinned defaults from the helper.
@@ -1379,13 +1378,7 @@ fn for_test_full_helper_produces_creatable_params() {
     assert_eq!(params.creation_timestamp, 0);
     assert_eq!(params.restore_height_hint, 0);
     match params.capability {
-        CapabilityInput::Full {
-            seed_format,
-            master_seed_64,
-        } => {
-            assert_eq!(seed_format, SeedFormat::Bip39);
-            assert_eq!(master_seed_64, &seed);
-        }
+        CapabilityInput::Full { seed: carried } => assert_eq!(carried, &seed),
     }
     // KDF profile is the minimum-wall-clock fast variant.
     let _: KdfParams = params.kdf;

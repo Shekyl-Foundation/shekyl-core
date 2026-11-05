@@ -31,7 +31,7 @@ async fn an_origin_with_no_alternate_fluffs_at_its_first_fire_and_is_mined() {
     const MINE_BATCH_BLOCKS: u64 = 10;
     const MAX_MINE_BATCHES: usize = 24;
 
-    let seed = [0x5du8; shekyl_crypto_pq::account::MASTER_SEED_BYTES];
+    let seed = [0x5du8; shekyl_crypto_pq::account::SEED_BYTES];
     let pair = StemSinkPair::start_for_seed(&seed).await;
     let origin = pair.origin();
     let (wallet, _tmp, address) = mainnet_wallet(origin.rpc_port(), 0x5d).await;
@@ -118,12 +118,12 @@ async fn an_origin_whose_successor_drops_re_stems_to_its_alternate_and_never_flu
     ];
     let origin_p2p =
         RegtestDaemon::free_port_excluding(&[droppers[0].addr.port(), droppers[1].addr.port()]);
-    let seed = [0x5cu8; shekyl_crypto_pq::account::MASTER_SEED_BYTES];
+    let seed = [0x5cu8; shekyl_crypto_pq::account::SEED_BYTES];
     let origin = RegtestDaemon::spawn(
         RegtestSpawn::new(Some(serial))
             .with_mine_address(mine_address_from_seed(
                 &seed,
-                shekyl_address::Network::Mainnet,
+                shekyl_address::Network::Regtest,
             ))
             .with_peering(Peering::Closed {
                 p2p_port: origin_p2p,

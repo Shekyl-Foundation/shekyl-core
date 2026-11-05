@@ -110,7 +110,7 @@ impl<'id, V: ChainView<'id>> ChainValid<'id, V> {
     }
 
     /// The rule set the block was judged under — the set, not only its
-    /// id. A Fakechain `Fixed` target reuses [`RuleSetId::GENESIS`], so
+    /// id. A levered `Fixed` target reuses [`RuleSetId::GENESIS`], so
     /// `connect` compares this with the issued set `in_force` names.
     #[must_use]
     pub const fn rule_set(&self) -> RuleSet {

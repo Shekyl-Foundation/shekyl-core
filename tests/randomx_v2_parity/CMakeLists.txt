@@ -87,6 +87,10 @@ set_property(TARGET randomx-v2-full-parity randomx-v2-miner-kat
 # KAT anchor; `miner_kat` re-derives that anchor in the independent
 # miner-shaped process; `corpus_seed_<i>` re-checks the Phase 2g
 # canonical pins for nightly seed group <i> under C-full-dataset.
+# The genesis case reads the network table's mainnet genesis transaction
+# (NETWORK_IDENTITY.md NI-Q3).
+set_property(SOURCE randomx_v2_full_parity.cpp APPEND PROPERTY COMPILE_DEFINITIONS
+  MAINNET_GENESIS_TX_HEX_PATH="${CMAKE_SOURCE_DIR}/rust/shekyl-network/genesis/mainnet.tx.hex")
 add_test(
   NAME    randomx_v2_full_parity_genesis
   COMMAND randomx-v2-full-parity genesis)

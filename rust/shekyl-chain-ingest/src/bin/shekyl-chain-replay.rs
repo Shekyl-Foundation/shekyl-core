@@ -51,7 +51,7 @@ use std::process::ExitCode;
 use std::sync::Arc;
 
 use clap::{Args, Parser, Subcommand};
-use shekyl_chain_ingest::corpus::{CorpusNet, CorpusReader, CorpusWriter};
+use shekyl_chain_ingest::corpus::{CorpusReader, CorpusWriter};
 use shekyl_chain_ingest::fetch::fetch_corpus;
 use shekyl_chain_ingest::height_digests;
 use shekyl_chain_ingest::metrics::Metrics;
@@ -61,9 +61,10 @@ use shekyl_chain_ingest::schedule::ChainRules;
 use shekyl_chain_ingest::source::Injection;
 use shekyl_chain_ingest::substrate::ProductionSubstrate;
 use shekyl_chain_ingest::trace::Trace;
-use shekyl_chain_rules::{FakechainSchedule, SettlementEpochBlocks};
+use shekyl_chain_rules::{CappedEpoch, SettlementEpochBlocks};
 use shekyl_chain_store::apply_policy::ApplyPolicy;
 use shekyl_chain_store::store::{ChainStore, Horizons};
+use shekyl_network::Network;
 use shekyl_pow_randomx::CacheStore;
 use shekyl_rpc_transport::HttpRpc;
 use shekyl_types::{BlockCount, BlockHeight};
@@ -96,8 +97,8 @@ enum Command {
         daemon: String,
         /// Which chain the daemon serves; written into the corpus header
         /// and checked by `replay --chain`.
-        #[arg(long, value_enum)]
-        chain: CorpusNet,
+        #[arg(long, value_parser = parse_network)]
+        chain: Network,
         /// First height.
         #[arg(long, default_value_t = 0)]
         from: u64,
@@ -150,8 +151,8 @@ enum Command {
         #[arg(long)]
         store: PathBuf,
         /// The chain whose rules the store was written under.
-        #[arg(long, value_enum)]
-        chain: CorpusNet,
+        #[arg(long, value_parser = parse_network)]
+        chain: Network,
         /// As `replay`'s.
         #[arg(long)]
         fixed_difficulty: Option<NonZeroU128>,
@@ -177,8 +178,8 @@ struct RunFlags {
     store: PathBuf,
     /// Which chain's rules the corpus is judged under; must be the chain
     /// the corpus is tagged with.
-    #[arg(long, value_enum)]
-    chain: CorpusNet,
+    #[arg(long, value_parser = parse_network)]
+    chain: Network,
     /// Fix the difficulty target, as `shekyld --regtest --fixed-difficulty n`
     /// does. Accepted with `--chain regtest` only.
     #[arg(long)]
@@ -246,7 +247,7 @@ async fn real_main(cli: Cli) -> Result<(), Failure> {
             reorg_cap,
         } => {
             let schedule = schedule_flags(settlement_epoch_blocks, reorg_cap)?;
-            let rules = ChainRules::new(chain.into(), fixed_difficulty, schedule)?;
+            let rules = ChainRules::new(chain, fixed_difficulty, schedule)?;
             digest(&store, &rules)
         }
     }
@@ -255,6 +256,12 @@ async fn real_main(cli: Cli) -> Result<(), Failure> {
 /// Print `store`'s recorded tip, its hash and the logical-state digest,
 /// read-only, as `{"tip": <height or null>, "hash": "<hex or empty>",
 /// "digest": "<hex>"}`.
+/// `--chain`: a network by its one name (mainnet, testnet, stagenet,
+/// regtest), the corpus header's tag.
+fn parse_network(name: &str) -> Result<Network, String> {
+    Network::from_name(name).ok_or_else(|| format!("`{name}` names no network"))
+}
+
 fn digest(store: &std::path::Path, rules: &ChainRules) -> Result<(), Failure> {
     let horizons = Horizons::under(&rules.in_force(BlockHeight::from_raw(0)))?;
     let store = ChainStore::open_read_only(store, horizons)?;
@@ -280,7 +287,7 @@ struct Prepared {
 
 fn prepare(flags: &RunFlags) -> Result<Prepared, Failure> {
     let schedule = schedule_flags(flags.settlement_epoch_blocks, flags.reorg_cap)?;
-    let rules = ChainRules::new(flags.chain.into(), flags.fixed_difficulty, schedule)?;
+    let rules = ChainRules::new(flags.chain, flags.fixed_difficulty, schedule)?;
     let horizons = Horizons::under(&rules.in_force(BlockHeight::from_raw(0)))?;
     Ok(Prepared {
         rules,
@@ -410,20 +417,17 @@ async fn baseline(
 /// the production pair when neither. A cap not strictly inside the epoch
 /// is refused here, as the daemon refuses it at arm, and so is an epoch
 /// long enough that its response window outruns the pass anchor: both are
-/// `FakechainSchedule::new`'s typed refusals, printed as the tool's error.
+/// `CappedEpoch::new`'s typed refusals, printed as the tool's error.
 fn schedule_flags(
     settlement_epoch_blocks: Option<NonZeroU64>,
     reorg_cap: Option<NonZeroU64>,
-) -> Result<FakechainSchedule, Failure> {
+) -> Result<CappedEpoch, Failure> {
     match (settlement_epoch_blocks, reorg_cap) {
         (Some(epoch), Some(cap)) => {
             let epoch = SettlementEpochBlocks::new(epoch.get()).expect("NonZeroU64 is non-zero");
-            Ok(FakechainSchedule::new(
-                epoch,
-                BlockCount::from_raw(cap.get()),
-            )?)
+            Ok(CappedEpoch::new(epoch, BlockCount::from_raw(cap.get()))?)
         }
-        (None, None) => Ok(FakechainSchedule::PRODUCTION),
+        (None, None) => Ok(CappedEpoch::PRODUCTION),
         // `requires` on both flags makes this unreachable from the command
         // line; a programmatic caller that pairs them apart is a bug.
         (Some(_), None) | (None, Some(_)) => Err(
@@ -434,7 +438,7 @@ fn schedule_flags(
 
 async fn fetch(
     daemon: String,
-    chain: CorpusNet,
+    chain: Network,
     heights: std::ops::Range<u64>,
     batch: NonZeroUsize,
     injections: &[Injection],
@@ -519,9 +523,6 @@ fn agreed(report: &RunReport) -> Result<(), Failure> {
 
 #[cfg(test)]
 mod tests {
-    use shekyl_address::Network;
-    use shekyl_chain_ingest::schedule::Chain;
-
     use super::*;
 
     fn parse(args: &[&str]) -> Result<Cli, clap::Error> {
@@ -547,12 +548,7 @@ mod tests {
         let Command::Replay { flags, .. } = cli.command else {
             panic!("replay");
         };
-        assert_eq!(
-            flags.chain,
-            CorpusNet::Fakechain,
-            "--chain regtest is the tag"
-        );
-        assert_eq!(Chain::from(flags.chain), Chain::Regtest);
+        assert_eq!(flags.chain, Network::Regtest, "--chain regtest is the tag");
         assert_eq!(flags.fixed_difficulty, NonZeroU128::new(7));
         assert_eq!(flags.window, PipelineConfig::DEFAULT_WINDOW);
         assert_eq!(flags.hashers, PipelineConfig::default_hashers());
@@ -648,17 +644,14 @@ mod tests {
 
     #[test]
     fn the_levers_off_regtest_are_refused_where_the_rules_are_built() {
-        let production = FakechainSchedule::PRODUCTION;
-        let refused = ChainRules::new(
-            Chain::Public(Network::Testnet),
-            NonZeroU128::new(7),
-            production,
-        );
+        let production = CappedEpoch::PRODUCTION;
+        let refused = ChainRules::new(Network::Testnet, NonZeroU128::new(7), production);
         assert!(refused.is_err());
-        let ok = ChainRules::new(Chain::Regtest, NonZeroU128::new(7), production).expect("regtest");
+        let ok =
+            ChainRules::new(Network::Regtest, NonZeroU128::new(7), production).expect("regtest");
         assert_eq!(
             ok.in_force(BlockHeight::from_raw(3)),
-            shekyl_chain_rules::RuleSet::fakechain(NonZeroU128::new(7), production)
+            shekyl_chain_rules::RuleSet::GENESIS.with_levers(NonZeroU128::new(7), production)
         );
     }
 
@@ -719,14 +712,14 @@ mod tests {
             schedule_flags(flags.settlement_epoch_blocks, flags.reorg_cap).expect("inside");
         assert_eq!(schedule.settlement().blocks().get(), 512);
         assert_eq!(schedule.reorg_cap(), BlockCount::from_raw(64));
-        let rules = ChainRules::new(Chain::Regtest, None, schedule).expect("regtest");
+        let rules = ChainRules::new(Network::Regtest, None, schedule).expect("regtest");
         let horizons = Horizons::under(&rules.in_force(BlockHeight::from_raw(0))).expect("pair");
         assert_eq!(horizons.epoch().get(), 512);
 
         // Neither flag: the production pair, and the production horizons.
         assert_eq!(
             schedule_flags(None, None).expect("production"),
-            FakechainSchedule::PRODUCTION
+            CappedEpoch::PRODUCTION
         );
         // One without the other is refused by clap, and by the builder.
         assert!(parse(&[&base[..], &["--settlement-epoch-blocks", "512"]].concat()).is_err());
@@ -784,7 +777,7 @@ mod tests {
         else {
             panic!("baseline");
         };
-        assert_eq!(flags.chain, CorpusNet::Fakechain);
+        assert_eq!(flags.chain, Network::Regtest);
         assert_eq!(flags.fixed_difficulty, NonZeroU128::new(7));
         assert_eq!(flags.settlement_epoch_blocks, NonZeroU64::new(512));
         assert_eq!(flags.reorg_cap, NonZeroU64::new(64));

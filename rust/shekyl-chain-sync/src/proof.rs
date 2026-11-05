@@ -22,7 +22,7 @@ use std::time::{Duration, Instant};
 use shekyl_chain_ingest::{Metrics, ProductionSubstrate};
 use shekyl_chain_rules::harness::fixture::{candidate_on, chain_of};
 use shekyl_chain_rules::{
-    form_header, AtHeight, FakechainSchedule, FormAttempt, HeaderView, InvalidBlock, RuleSet,
+    form_header, AtHeight, CappedEpoch, FormAttempt, HeaderView, InvalidBlock, RuleSet,
     SettlementEpochBlocks, Substrate, Trust,
 };
 use shekyl_difficulty::CumulativeDifficulty;
@@ -67,8 +67,8 @@ pub(crate) fn prove_item(
 pub(crate) fn fixed(target: u128, blocks: u64) -> RuleSet {
     let epoch = SettlementEpochBlocks::new(512).expect("512");
     let schedule =
-        FakechainSchedule::new(epoch, BlockCount::from_raw(blocks)).expect("cap inside the epoch");
-    RuleSet::fakechain(core::num::NonZeroU128::new(target), schedule)
+        CappedEpoch::new(epoch, BlockCount::from_raw(blocks)).expect("cap inside the epoch");
+    RuleSet::GENESIS.with_levers(core::num::NonZeroU128::new(target), schedule)
 }
 
 struct NoDraw;

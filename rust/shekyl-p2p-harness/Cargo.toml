@@ -14,6 +14,9 @@ repository.workspace = true
 publish = false
 
 [dependencies]
+# The network the captured corpora run on, and its levers' row
+# (NETWORK_IDENTITY.md NI-R6).
+shekyl-network = { path = "../shekyl-network" }
 shekyl-clearnet = { path = "../shekyl-clearnet" }
 # The Tor connector's stream-end table: the scripted dialer stamps as each connector does.
 shekyl-tor = { path = "../shekyl-tor" }

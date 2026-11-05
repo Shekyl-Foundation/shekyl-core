@@ -167,8 +167,8 @@
 //! [`RuleSet::anchor_covers_response_window`], and it is held where rule
 //! sets are made, not here: on the production constants where they are
 //! defined (`shekyl-archival-retention`, `pass_anchor.rs`), on every
-//! issued set at compile time, and on a Fakechain set by
-//! `FakechainSchedule::new`, which refuses a pair that breaks it with a
+//! issued set at compile time, and on a levered set by
+//! `CappedEpoch::new`, which refuses a pair that breaks it with a
 //! typed error. So every `rule_set` this function can be
 //! handed satisfies it. [`verify_bundle`] does not re-check it: under a
 //! set that broke it the rule would still be the rule, and honest

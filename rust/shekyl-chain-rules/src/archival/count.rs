@@ -479,9 +479,9 @@ mod tests {
     #[test]
     fn a_windowless_schedule_records_a_zero_row_without_a_set() {
         let blocks = SettlementEpochBlocks::new(2).expect("non-zero");
-        let paired = crate::FakechainSchedule::new(blocks, BlockCount::from_raw(1))
+        let paired = crate::CappedEpoch::new(blocks, BlockCount::from_raw(1))
             .expect("the cap is inside the epoch");
-        let rules = RuleSet::fakechain(None, paired);
+        let rules = RuleSet::GENESIS.with_levers(None, paired);
         let chain = chain_of(1);
         chain.with_view(|view| {
             let mut coverage = RuleCoverage::EMPTY;

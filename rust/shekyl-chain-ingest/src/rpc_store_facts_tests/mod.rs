@@ -163,7 +163,7 @@ impl NodeFacts for TestNode {
 
 fn identity() -> NodeIdentity {
     NodeIdentity {
-        nettype: shekyl_rpc_types::DaemonNetwork::Mainnet,
+        nettype: shekyl_rpc_types::Network::Mainnet,
         release_build: false,
         version: "3.1.0-test".to_owned(),
         start_time: 1_700_000_000,
@@ -683,9 +683,7 @@ async fn the_store_facts_report_the_baseline_on_every_captured_chain() {
         ))
         .expect("trace");
         // The corpus's blocks, as the C++ RPC served them — read as far as
-        // the replay connected: past a chain's retired keyless join the
-        // corpus holds bodies this tree no longer parses
-        // (`retired_keyless_join`), and the replay stopped before them.
+        // the replay connected.
         let corpus = std::fs::read(dir.join("corpus.e2")).expect("read corpus");
         let mut reader = crate::corpus::CorpusReader::open(std::io::Cursor::new(corpus.as_slice()))
             .expect("open corpus");

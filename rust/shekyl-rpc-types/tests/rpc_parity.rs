@@ -18,14 +18,14 @@
 
 use serde_json::Value;
 use shekyl_rpc_types::{
-    ArchivedTx, BlockHeader, ChainSyncState, ConnectionInfo, DaemonNetwork, GetBlockCountResponse,
+    ArchivedTx, BlockHeader, ChainSyncState, ConnectionInfo, GetBlockCountResponse,
     GetBlockHeaderByHashResponse, GetBlockHeaderByHeightResponse, GetBlockHeadersRangeResponse,
     GetBlockResponse, GetConnectionsResponse, GetHeightResponse, GetLastBlockHeaderResponse,
     GetNetStatsResponse, GetPeerListRequest, GetPeerListResponse, GetTransactionsRequest,
     GetTransactionsResponse, GetVersionResponse, HashHex, HexU128, IsKeyImageSpentRequest,
-    IsKeyImageSpentResponse, KeyImageStatus, Nullable, P2pReply, Peer, RpcStatus, SyncBodyRequest,
-    SyncHeaderRequest, SyncInfoPeer, SyncInfoResponse, SyncMode, TxEntry, TxLocation,
-    CORE_RPC_VERSION,
+    IsKeyImageSpentResponse, KeyImageStatus, Network, Nullable, P2pReply, Peer, RpcStatus,
+    SyncBodyRequest, SyncHeaderRequest, SyncInfoPeer, SyncInfoResponse, SyncMode, TxEntry,
+    TxLocation, CORE_RPC_VERSION,
 };
 
 /// The emitter's stand-ins for the two strings C++ still produces (RK-D11).
@@ -221,7 +221,7 @@ fn get_version_absent_target_matches_the_oracle() {
         current_height: 1_234_567,
         target_height: Nullable::NULL,
         consensus_constants_digest: fixture_digest(),
-        nettype: DaemonNetwork::Mainnet,
+        nettype: Network::Mainnet,
         genesis_hash: fixture_genesis(),
     };
     assert_version_parity(
@@ -244,7 +244,7 @@ fn get_version_syncing_matches_the_oracle() {
         current_height: 1000,
         target_height: Nullable::value(2_000_000),
         consensus_constants_digest: fixture_digest(),
-        nettype: DaemonNetwork::Mainnet,
+        nettype: Network::Mainnet,
         genesis_hash: fixture_genesis(),
     };
     assert_version_parity(
@@ -262,7 +262,7 @@ fn get_version_all_defaults_matches_the_oracle() {
         current_height: 0,
         target_height: Nullable::NULL,
         consensus_constants_digest: fixture_digest(),
-        nettype: DaemonNetwork::Mainnet,
+        nettype: Network::Mainnet,
         genesis_hash: fixture_genesis(),
     };
     assert_version_parity(

@@ -58,6 +58,12 @@ struct Prepared {
     anchor_hash: BlockHash,
     /// The count row the drawing block stored.
     count: u32,
+    /// The support seats the drawing block stored. Which complete trees a
+    /// block seats is a hash of each persona's id
+    /// (`shekyl_archival_retention::support_seated_at`), so it moves with
+    /// the personas' keys: the fixture reads it from the chain and states
+    /// it, rather than assuming the block seated nobody.
+    support: u32,
 }
 
 fn prepare(label: &str) -> Prepared {
@@ -83,6 +89,14 @@ fn prepare(label: &str) -> Prepared {
     let linked = connect_committed(&mut chain, &mut memo, commitment);
     let count = linked.draws.count;
     assert_eq!(count, 1, "epoch 2's tenth block draws once");
+    let seats = chain
+        .store
+        .begin_read()
+        .expect("read")
+        .support_block_seats(drawing_height(), BlockDrawsFloor::NONE)
+        .expect("read")
+        .expect("the drawing block wrote its seat row");
+    let support = u32::try_from(seats.len()).expect("a block seats fewer than 2^32 trees");
     Prepared {
         chain,
         memo,
@@ -90,6 +104,7 @@ fn prepare(label: &str) -> Prepared {
         hash: linked.hash,
         anchor_hash,
         count,
+        support,
     }
 }
 
@@ -198,8 +213,13 @@ fn produce(prepared: &Prepared) -> (BundleRef, BundleBody) {
         PassStream::Economy,
         &nonce,
     );
-    let (reference, body) = world.assemble(
+    // The support stream is stated at the width the block issued, with no
+    // support pass: zero seats is an empty bitmap, and a seated tree is an
+    // observation this producer did not pass. Either way the bundle carries
+    // the one economy record and nothing else.
+    let (reference, body) = world.assemble_support(
         PassBitmap::from_passes(prepared.count, [0]).expect("one pass"),
+        PassBitmap::from_passes(prepared.support, []).expect("no support pass"),
         &[record],
     );
     (reference, body)
@@ -217,6 +237,14 @@ fn admit(prepared: &mut Prepared) -> (Vec<shekyl_chain_rules::Admitted>, BlockDr
         let refs = [reference];
         let bodies = [body];
         let root = bundle_root(&refs).expect("one reference");
+        assert_eq!(
+            bundle_view
+                .support_count(refs[0].h())
+                .expect("the read")
+                .expect("the seat row"),
+            prepared.support,
+            "the bundle states the support width the store issued"
+        );
         let verdict = judge_bundles(&refs, &bodies, &root, height, &bundle_view, &RULES)
             .expect("the store view admits the fixture bundle");
         let txs = prepared.chain.grown.realise(&[]);
@@ -276,6 +304,15 @@ fn a_verified_bundle_is_what_the_store_writes_and_pop_restores() {
     let (admitted, counted) = admit(&mut prepared);
     let one = &admitted[0];
     assert_eq!(one.draws.len(), 1);
+    assert_eq!(
+        one.support.len(),
+        usize::try_from(prepared.support).expect("fits"),
+        "one observation per issued support seat"
+    );
+    assert!(
+        one.support.iter().all(|seat| !seat.passed),
+        "the fixture passes no support draw"
+    );
     let epoch = RULES.settlement_schedule().epoch_at(h);
     let rows = index_of(&prepared.chain, epoch);
     assert_eq!(rows.len(), 1);

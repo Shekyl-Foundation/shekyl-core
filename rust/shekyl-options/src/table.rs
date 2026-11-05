@@ -8,6 +8,7 @@
 
 use crate::diagnostic::{Code, Diagnostic, Source};
 use crate::kind::Kind;
+use shekyl_network::{Lever, Network, Staging};
 
 /// Where a row may be given (IG-7).
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -45,11 +46,11 @@ pub use shekyl_rpc_grants::Grant;
 pub enum Visibility {
     /// Accepted and in help.
     Public,
-    /// A development lever (IG-8): accepted only on the named networks,
-    /// never on mainnet, hidden from help, announced when set.
+    /// A development lever (IG-8): accepted only on the networks whose row
+    /// admits its gate, hidden from help, announced when set.
     Dev {
-        /// The networks the lever is accepted on.
-        networks: &'static [&'static str],
+        /// What admits it: the network's row decides (NI-R6, NI-R9).
+        gate: DevGate,
     },
     /// A feature deliberately refused (IG-10); never accepted.
     Rejected {
@@ -61,6 +62,41 @@ pub enum Visibility {
         /// What the name is held for, and where that is ruled.
         reason: &'static str,
     },
+}
+
+/// What admits a development row: a lever the network's row permits
+/// (`NETWORK_IDENTITY.md` NI-R6), or a staging flag it stages (NI-R9). The
+/// row is the one place that answers; mainnet's row admits nothing, which
+/// `shekyl-network`'s invariant tests hold.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum DevGate {
+    /// A test lever.
+    Lever(Lever),
+    /// A candidate mainnet behaviour staged on the test networks.
+    Staging(Staging),
+}
+
+impl DevGate {
+    /// Whether `network`'s row admits it.
+    #[must_use]
+    pub fn admits(self, network: Network) -> bool {
+        match self {
+            Self::Lever(lever) => network.permits(lever),
+            Self::Staging(flag) => network.stages(flag),
+        }
+    }
+
+    /// The networks that admit it, by name, comma-separated: what a refusal
+    /// and the rendered table say.
+    #[must_use]
+    pub fn networks(self) -> String {
+        Network::ALL
+            .into_iter()
+            .filter(|n| self.admits(*n))
+            .map(Network::name)
+            .collect::<Vec<_>>()
+            .join(", ")
+    }
 }
 
 /// A row's default (IG-9).
@@ -221,14 +257,9 @@ impl Table {
                     "`{name}` is a file-only kind given another surface"
                 ));
             }
-            if let Visibility::Dev { networks } = row.visibility {
+            if let Visibility::Dev { .. } = row.visibility {
                 if !name.starts_with("dev-") {
                     out.push(format!("`{name}` is a development lever not under `dev`"));
-                }
-                if networks.is_empty() || networks.contains(&"mainnet") {
-                    out.push(format!(
-                        "development lever `{name}` must name networks, never mainnet"
-                    ));
                 }
             } else if name.starts_with("dev-") && row.is_live() {
                 out.push(format!(
@@ -294,7 +325,7 @@ mod tests {
             runtime: false,
             grant: Grant::Config,
             visibility: Visibility::Dev {
-                networks: &["regtest"],
+                gate: DevGate::Lever(Lever::Difficulty),
             },
             help: "",
         },
@@ -415,7 +446,7 @@ mod tests {
                 runtime: false,
                 grant: Grant::Config,
                 visibility: Visibility::Dev {
-                    networks: &["mainnet"],
+                    gate: DevGate::Lever(Lever::Sync),
                 },
                 help: "",
             },
@@ -438,7 +469,6 @@ mod tests {
         let all = defects.join("\n");
         for needle in [
             "must default to off",
-            "never mainnet",
             "runtime and a secret",
             "no default value",
             "file-only kind",

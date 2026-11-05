@@ -51,7 +51,7 @@
 use redb::ReadableTable;
 use shekyl_chain_rules::harness::fixture;
 use shekyl_chain_rules::{
-    BlockDrawsFloor, Candidate, EpochFloor, FakechainSchedule, ReleaseJournalFloor, RuleSet,
+    BlockDrawsFloor, Candidate, CappedEpoch, EpochFloor, ReleaseJournalFloor, RuleSet,
     SlashLogFloor,
 };
 use shekyl_types::{ArchivalLength, BlockCount, BlockHash, BlockHeight, ShardId, SHARD_LENGTH};
@@ -72,20 +72,20 @@ use crate::schema::{ARCHIVAL_SLASH_LOG, BLOCK_INFO, PROPERTIES, TXS_ARCHIVAL_LEN
 
 const SEB: u64 = 100;
 const RETENTION: u64 = 50;
-/// The Fakechain rule set this schedule runs: the genesis rules under a
+/// The levered rule set this schedule runs: the genesis rules under a
 /// 100-block epoch with a reorg cap that fits the retention (SCW-7) — a
 /// regtest wanting a 50-block retention gets a rule set whose cap is at
 /// most 50, not a store field the validator defers to (PR #861 review),
 /// and one whose epoch is the store's, or `connect` refuses it (SCW-2,
 /// `ARW-15`).
-const RULES: RuleSet = RuleSet::fakechain(None, pair(SEB, RETENTION));
+const RULES: RuleSet = RuleSet::GENESIS.with_levers(None, pair(SEB, RETENTION));
 
 /// A `(SEB, cap)` pair at compile time; a bad one is a compile error.
-const fn pair(seb: u64, cap: u64) -> FakechainSchedule {
+const fn pair(seb: u64, cap: u64) -> CappedEpoch {
     let Some(epoch) = SettlementEpochBlocks::new(seb) else {
         panic!("a zero epoch");
     };
-    match FakechainSchedule::new(epoch, BlockCount::from_raw(cap)) {
+    match CappedEpoch::new(epoch, BlockCount::from_raw(cap)) {
         Ok(pair) => pair,
         Err(_) => panic!("the cap is not inside the epoch"),
     }
@@ -1068,9 +1068,9 @@ fn h_scarce_is_the_last_discarded_shards_close_height() {
     cleanup(&path);
 }
 
-/// The Fakechain set for the ten-block schedule the `SHT-Q2` boundary and
+/// The levered set for the ten-block schedule the `SHT-Q2` boundary and
 /// SI-13 / SI-24 tests run.
-const SHORT: RuleSet = RuleSet::fakechain(None, pair(SHORT_SEB, 3));
+const SHORT: RuleSet = RuleSet::GENESIS.with_levers(None, pair(SHORT_SEB, 3));
 
 /// The ten-block schedule's epoch.
 const SHORT_SEB: u64 = 10;
@@ -1963,7 +1963,7 @@ fn a_retention_below_the_in_force_cap_is_refused_at_open_and_at_connect() {
 /// open refused the same mismatch against the epoch the caller named.
 #[test]
 fn a_set_naming_another_epoch_is_refused_at_connect() {
-    let other = RuleSet::fakechain(None, pair(200, RETENTION));
+    let other = RuleSet::GENESIS.with_levers(None, pair(200, RETENTION));
     assert_eq!(other.reorg_cap(), RULES.reorg_cap(), "the cap is covered");
     let path = tmp("prune-epoch-at-connect");
     let store =
@@ -1988,7 +1988,7 @@ fn a_set_naming_another_epoch_is_refused_at_connect() {
 }
 
 /// `Horizons::under` is the set's own pair read back: the genesis set gives
-/// the production horizons, and a Fakechain set under a shortened schedule
+/// the production horizons, and a levered set under a shortened schedule
 /// gives horizons `connect` accepts under that set — the one way a replay
 /// driver and a test open a store, off the set rather than off a second
 /// copy of its numbers.
@@ -1999,7 +1999,7 @@ fn horizons_under_a_set_are_the_ones_its_connect_accepts() {
         Horizons::under(&RuleSet::GENESIS),
         Horizons::production(epoch),
     );
-    let short = RuleSet::fakechain(None, pair(512, 64));
+    let short = RuleSet::GENESIS.with_levers(None, pair(512, 64));
     let under = Horizons::under(&short).expect("a well-formed pair");
     assert_eq!(
         under.epoch(),
@@ -2239,7 +2239,7 @@ fn a_connected_serve_credit_stays_in_the_domain_across_a_prune() {
 /// floor and the heights planted around it are all read off the window.
 const WINDOW_SEB: u64 = 10;
 const WINDOW_CAP: u64 = 5;
-const WINDOW_RULES: RuleSet = RuleSet::fakechain(None, pair(WINDOW_SEB, WINDOW_CAP));
+const WINDOW_RULES: RuleSet = RuleSet::GENESIS.with_levers(None, pair(WINDOW_SEB, WINDOW_CAP));
 /// The window under the pair, in blocks.
 const WINDOW: u64 = match SlashLogFloor::window(
     WINDOW_RULES.settlement_schedule().blocks(),

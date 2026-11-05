@@ -40,23 +40,14 @@ use std::process::{Child, Command, Stdio};
 use std::sync::{Arc, OnceLock};
 use std::time::{Duration, Instant};
 
-/// What a wallet requires of the `shekyld --network regtest` daemon these tests spawn.
-///
-/// **The only place `FakechainPolicy::Accept` is selected outside unit tests**
-/// (`VC-R3`): the harness constructs the client in-process, so the affordance
-/// needs no operator surface and none ships. A `fakechain` daemon reports
-/// mainnet's genesis hash and mainnet's constants digest — it is the same
-/// build — so `nettype` is the only axis that distinguishes it, which is
-/// exactly why the acceptance has to be explicit here rather than implied by
-/// a lever somewhere else.
-///
-/// These wallets are `Network::Mainnet` because fakechain shares mainnet's
-/// address format and the address enum has no fourth variant
-/// (`V3_WALLET_DECISION_LOG.md` :1397).
+/// What a wallet requires of the `shekyld --network regtest` daemon these
+/// tests spawn: the same as on any network. Regtest has its own genesis,
+/// prefixes and network id (`NETWORK_IDENTITY.md` NI-Q8), so a regtest
+/// wallet is `Network::Regtest` and checks a regtest daemon exactly as a
+/// mainnet wallet checks a mainnet one.
 fn regtest_expectation() -> super::DaemonExpectation {
     super::DaemonExpectation {
-        network: shekyl_address::Network::Mainnet,
-        fakechain: super::FakechainPolicy::Accept,
+        network: shekyl_address::Network::Regtest,
     }
 }
 
@@ -163,9 +154,11 @@ pub(super) struct RegtestDaemon {
     /// asked for. `None` for the ordinary spawn, so no existing test grows a
     /// listener it did not ask for.
     restricted_url: Option<String>,
-    /// The network `shekyl-cli` is given when a test runs a §13 word.
-    /// `None` on regtest: the CLI has no name for a fakechain daemon.
-    cli_network: Option<&'static str>,
+    /// The network `shekyl-cli` is given when a test runs a §13 word: the
+    /// daemon's own, regtest included (NI-R1, NI-R4).
+    cli_network: &'static str,
+    /// Whether this daemon was given `--dev-rpc` (regtest only, NI-R8).
+    armed: bool,
     /// The schedule levers this daemon was spawned under, if any — recorded
     /// so a captured chain's manifest states the `(SEB, cap)` its blocks
     /// were mined under (`DRS_E4_ARCHIVAL_WRITER.md` `ARW-15`: the replay
@@ -254,10 +247,13 @@ enum SpawnNetwork {
 
 /// A full address on `network`, from `seed`. Same derivation the wallet
 /// uses for its primary address, so a spawn can pay coinbase to that wallet.
-pub(super) fn mine_address_from_seed(seed: &[u8; 64], network: shekyl_address::Network) -> String {
-    use shekyl_crypto_pq::account::{rederive_account, DerivationNetwork, SeedFormat};
-    rederive_account(seed, DerivationNetwork::Mainnet, SeedFormat::Bip39)
+pub(super) fn mine_address_from_seed(
+    seed: &[u8; shekyl_crypto_pq::account::SEED_BYTES],
+    network: shekyl_address::Network,
+) -> String {
+    shekyl_crypto_pq::account::account_from_seed(seed, network)
         .expect("the keys")
+        .1
         .to_address(network)
         .encode()
         .expect("encodes")
@@ -265,10 +261,10 @@ pub(super) fn mine_address_from_seed(seed: &[u8; 64], network: shekyl_address::N
 
 fn default_mine_address(network: SpawnNetwork) -> String {
     let address_network = match network {
-        SpawnNetwork::Regtest => shekyl_address::Network::Mainnet,
+        SpawnNetwork::Regtest => shekyl_address::Network::Regtest,
         SpawnNetwork::Testnet => shekyl_address::Network::Testnet,
     };
-    mine_address_from_seed(&[0x5a; 64], address_network)
+    mine_address_from_seed(&[0x5a; 32], address_network)
 }
 
 /// How one regtest daemon is spawned.
@@ -494,16 +490,20 @@ impl RegtestDaemon {
     }
 
     /// Spawn mining coinbase to `seed`'s primary address.
-    pub(super) async fn start_for_seed(seed: &[u8; 64]) -> RegtestDaemon {
+    pub(super) async fn start_for_seed(
+        seed: &[u8; shekyl_crypto_pq::account::SEED_BYTES],
+    ) -> RegtestDaemon {
         Self::start_for_seed_with_schedule(seed, None).await
     }
 
     /// [`Self::start_for_seed`] with the restricted listener bound as well:
     /// an offline daemon mining to `seed`'s address, whose own transactions
     /// are shown at once (no route, RD's NoRoute fluff at the origin).
-    pub(super) async fn start_for_seed_with_restricted_listener(seed: &[u8; 64]) -> RegtestDaemon {
+    pub(super) async fn start_for_seed_with_restricted_listener(
+        seed: &[u8; shekyl_crypto_pq::account::SEED_BYTES],
+    ) -> RegtestDaemon {
         let serial = serial_lock().lock_owned().await;
-        let mine_address = mine_address_from_seed(seed, shekyl_address::Network::Mainnet);
+        let mine_address = mine_address_from_seed(seed, shekyl_address::Network::Regtest);
         Self::spawn(
             RegtestSpawn::new(Some(serial))
                 .with_mine_address(mine_address)
@@ -514,11 +514,11 @@ impl RegtestDaemon {
 
     /// [`Self::start_for_seed`] with a levered regtest schedule.
     pub(super) async fn start_for_seed_with_schedule(
-        seed: &[u8; 64],
+        seed: &[u8; shekyl_crypto_pq::account::SEED_BYTES],
         schedule: Option<RegtestSchedule>,
     ) -> RegtestDaemon {
         let serial = serial_lock().lock_owned().await;
-        let mine_address = mine_address_from_seed(seed, shekyl_address::Network::Mainnet);
+        let mine_address = mine_address_from_seed(seed, shekyl_address::Network::Regtest);
         Self::spawn(
             RegtestSpawn::new(Some(serial))
                 .with_schedule(schedule)
@@ -556,8 +556,9 @@ impl RegtestDaemon {
         Self::spawn(RegtestSpawn::new(Some(serial)).with_restricted_listener()).await
     }
 
-    /// Spawn the daemon offline on testnet, with the armed switch set as on
-    /// every spawn. It has no fixed difficulty, which is regtest's.
+    /// Spawn the daemon offline on testnet. It is not armed: only regtest's
+    /// row permits `dev-rpc` (NI-R8), and it has no fixed difficulty, which
+    /// is regtest's too. A test that needs a lever runs on regtest.
     pub(super) async fn start_on_testnet() -> RegtestDaemon {
         let serial = serial_lock().lock_owned().await;
         Self::spawn(RegtestSpawn::new(Some(serial)).on_network(SpawnNetwork::Testnet)).await
@@ -570,7 +571,7 @@ impl RegtestDaemon {
     /// add). The pair moves together: the daemon refuses
     /// an epoch that is not strictly above the reorg cap (`SEB > D_max` is
     /// an invariant of every valid configuration; a shortened epoch runs a
-    /// Fakechain rule set whose cap fits inside it). The emission e2e
+    /// levered rule set whose cap fits inside it). The emission e2e
     /// passes `Some(schedule)` so epoch closes land in minutes; the wallet
     /// process arms the same pair in-process (it does its own epoch
     /// arithmetic when it assembles a claim, and gates on the lever —
@@ -635,8 +636,16 @@ impl RegtestDaemon {
         // The grammar's spellings (INPUT_GRAMMAR.md §5). Tor is off on
         // every spawn: regtest's default is the managed Tor, and a test
         // daemon has no business launching one.
+        //
+        // The armed test levers (`generateblocks`, `pop_blocks`) are
+        // served only with `--dev-rpc` set (`RPC_CHANNEL.md` §6.1), and only
+        // regtest's row permits it (NI-R8): a testnet daemon given it
+        // refuses to start, so a testnet spawn never passes it. The daemon
+        // announces the lever at start, and `await_ready` holds it to that.
         match network {
-            SpawnNetwork::Regtest => cmd.args(["--network", "regtest", "--dev-difficulty", "1"]),
+            SpawnNetwork::Regtest => {
+                cmd.args(["--network", "regtest", "--dev-difficulty", "1", "--dev-rpc"])
+            }
             SpawnNetwork::Testnet => cmd.args(["--network", "testnet"]),
         };
         cmd.args([
@@ -658,12 +667,6 @@ impl RegtestDaemon {
             // daemon rejected instead of a bare `Malformed`.
             "--log-level",
             "info",
-            // The armed test levers (`generateblocks`, `pop_blocks`,
-            // `inject_archival_serve_credit`) are served only with this
-            // switch set (`RPC_CHANNEL.md` §6.1): the RPC layer refuses
-            // them otherwise, on every network. The daemon announces it at
-            // start, and `await_ready` holds it to that.
-            "--dev-rpc",
         ]);
         let mine_address = mine_address.unwrap_or_else(|| default_mine_address(network));
         cmd.args(["--mine-address", &mine_address]);
@@ -743,9 +746,10 @@ impl RegtestDaemon {
             restricted_url: restricted_port.map(|p| format!("http://127.0.0.1:{p}")),
             schedule,
             cli_network: match network {
-                SpawnNetwork::Regtest => None,
-                SpawnNetwork::Testnet => Some("testnet"),
+                SpawnNetwork::Regtest => "regtest",
+                SpawnNetwork::Testnet => "testnet",
             },
+            armed: matches!(network, SpawnNetwork::Regtest),
             offline,
             posts_at_open: offline,
             keep_data,
@@ -812,12 +816,16 @@ impl RegtestDaemon {
                         "get_info's P2P state must be the daemon's configuration; got {state:?}"
                     );
                     assert_eq!(info.health.p2p.is_offline(), self.offline);
-                    // The armed row is set and the daemon said so at start
-                    // (IG-8's announcement, written before RPC binds).
+                    // The armed row is set on regtest and the daemon said so
+                    // at start (IG-8's announcement, written before RPC
+                    // binds); a testnet daemon is not armed and says nothing.
                     let log = std::fs::read_to_string(&log_path).unwrap_or_default();
-                    assert!(
+                    assert_eq!(
                         log.contains(ARMED_ROW_ANNOUNCEMENT),
-                        "the daemon did not announce `{ARMED_ROW_ANNOUNCEMENT}` at start; log tail:\n{}",
+                        self.armed,
+                        "the daemon's `{ARMED_ROW_ANNOUNCEMENT}` announcement must match \
+                         its spawn (armed: {}); log tail:\n{}",
+                        self.armed,
                         log_tail(&log_path)
                     );
                     if self.posts_at_open {
@@ -1061,16 +1069,10 @@ impl RegtestDaemon {
     /// Run one §13 word through `shekyl-cli` against this daemon.
     ///
     /// The C++ console is gone, so the harness spawns the binary. The
-    /// binary is `SHEKYL_CLI_BIN`. A regtest daemon is fakechain, which
-    /// the CLI cannot name; those words are covered by `shekyl-cli`'s
-    /// ignored regtest, which builds the renderer with `Fakechain` directly.
+    /// binary is `SHEKYL_CLI_BIN`, given the daemon's own network with
+    /// `--network`, regtest included (NI-R1, NI-R4).
     pub(super) fn console(&self, command: &str) -> String {
-        let Some(network) = self.cli_network else {
-            panic!(
-                "shekyl-cli cannot name a regtest daemon; run the word from \
-                 shekyl-cli's ignored regtest"
-            );
-        };
+        let network = self.cli_network;
         let bin = std::env::var_os("SHEKYL_CLI_BIN").unwrap_or_else(|| {
             panic!(
                 "SHEKYL_CLI_BIN not set. Build shekyl-cli and pass the binary, \
@@ -1605,13 +1607,13 @@ async fn regtest_daemon_spawns_and_mines_to_wallet_address() {
     use super::lifecycle::{CapabilityInput, Credentials, EngineCreateParams};
     use super::{DaemonClient, Engine, SoloSigner};
     use shekyl_address::Network;
-    use shekyl_crypto_pq::account::{SeedFormat, MASTER_SEED_BYTES};
+    use shekyl_crypto_pq::account::SEED_BYTES;
     use shekyl_crypto_pq::wallet_envelope::KdfParams;
     use shekyl_engine_file::SafetyOverrides;
     use shekyl_engine_prefs::WalletPrefs;
 
-    let seed = [0x11u8; MASTER_SEED_BYTES];
-    let mine_address = mine_address_from_seed(&seed, Network::Mainnet);
+    let seed = [0x11u8; SEED_BYTES];
+    let mine_address = mine_address_from_seed(&seed, Network::Regtest);
     let serial = serial_lock().lock_owned().await;
     let daemon =
         RegtestDaemon::spawn(RegtestSpawn::new(Some(serial)).with_mine_address(mine_address)).await;
@@ -1625,15 +1627,12 @@ async fn regtest_daemon_spawns_and_mines_to_wallet_address() {
     let creds = Credentials::password_only(b"track2-test");
 
     // FAKECHAIN uses mainnet config/address format (cryptonote_config.h:372), so
-    // the wallet is Mainnet + Bip39 (the only permitted seed format for Mainnet).
+    // the wallet is Mainnet.
     let params = EngineCreateParams {
         base_path: &wallet_path,
         credentials: &creds,
-        network: Network::Mainnet,
-        capability: CapabilityInput::Full {
-            master_seed_64: &seed,
-            seed_format: SeedFormat::Bip39,
-        },
+        network: Network::Regtest,
+        capability: CapabilityInput::Full { seed: &seed },
         creation_timestamp: 0,
         restore_height_hint: 0,
         kdf: KdfParams {
@@ -1668,16 +1667,17 @@ async fn regtest_daemon_spawns_and_mines_to_wallet_address() {
     assert!(after >= before + 3, "chain should advance by >= 3 blocks");
 }
 
-/// The armed switch on a shared test network (`RPC_CHANNEL.md` §6.1,
-/// RT-O36). On testnet, with `dev-rpc` set, `generateblocks` and
-/// `/pop_blocks` pass the armed gate and are served; the network narrows
-/// what the switch enables and never enables a lever. The third lever the
+/// The armed switch (`RPC_CHANNEL.md` §6.1, RT-O36). On regtest, the one
+/// network whose row permits `dev-rpc` (NI-R8; a testnet daemon given it is
+/// refused at load, `dev_rpc_is_refused_on_every_network_but_regtest`),
+/// `generateblocks` and `/pop_blocks` pass the armed gate and are served.
+/// The third lever the
 /// C++ served, `inject_archival_serve_credit`, was deleted with the C++
 /// chain (`DRS_X_STORE_FLIP.md` DX-Q3): the daemon knows no such method,
 /// armed or not.
 ///
-/// Zero blocks keeps the probes cheap: a testnet daemon has no fixed
-/// difficulty, and the claim is about admission, not mining. A gate
+/// Zero blocks keeps the probes cheap: the claim is about admission, not
+/// mining. A gate
 /// refusal would be the grant class (-32002); what is asserted is the
 /// handler's own answer, after the gate: `generateblocks` refuses a zero
 /// count as `BadParams` (-32602) with the diagnostic `block.count_zero`,
@@ -1687,11 +1687,11 @@ async fn regtest_daemon_spawns_and_mines_to_wallet_address() {
 /// the handler's own error.
 #[tokio::test(flavor = "multi_thread")]
 #[ignore = "Track-2 regtest: requires SHEKYLD_BIN; spawns a live daemon"]
-async fn the_armed_switch_on_testnet_serves_two_levers_and_knows_no_third() {
+async fn the_armed_switch_serves_two_levers_and_knows_no_third() {
     const OUTSIDE_THE_GRANT: i64 = -32_002;
     const BAD_PARAMS: i64 = -32_602;
     const METHOD_NOT_FOUND: i64 = -32_601;
-    let daemon = RegtestDaemon::start_on_testnet().await;
+    let daemon = RegtestDaemon::start().await;
     let call = |method: &'static str, params: serde_json::Value| {
         let rpc = &daemon.rpc;
         async move {
@@ -1708,7 +1708,7 @@ async fn the_armed_switch_on_testnet_serves_two_levers_and_knows_no_third() {
     let error = &generated["error"];
     assert_eq!(
         error["code"], BAD_PARAMS,
-        "generateblocks is served on armed testnet and refuses a zero count as its own \
+        "generateblocks is served on armed regtest and refuses a zero count as its own \
          BadParams: {generated}"
     );
     assert_eq!(
@@ -1724,7 +1724,7 @@ async fn the_armed_switch_on_testnet_serves_two_levers_and_knows_no_third() {
         .expect("pop_blocks");
     assert!(
         popped.get("error").is_none() && popped["status"] == "OK",
-        "/pop_blocks is served on armed testnet: {popped}"
+        "/pop_blocks is served on armed regtest: {popped}"
     );
 
     let injected = call(
@@ -1764,7 +1764,7 @@ async fn e2e_refresh_scans_coinbase_balance() {
     use shekyl_scanner::WalletLedgerExt;
     use shekyl_units::AtomicUnits;
 
-    let seed = [0x44u8; shekyl_crypto_pq::account::MASTER_SEED_BYTES];
+    let seed = [0x44u8; shekyl_crypto_pq::account::SEED_BYTES];
     let daemon = RegtestDaemon::start_for_seed(&seed).await;
 
     // Create the wallet (FAKECHAIN = mainnet address format; see the get_curve_tree test).
@@ -1777,11 +1777,8 @@ async fn e2e_refresh_scans_coinbase_balance() {
     let params = super::lifecycle::EngineCreateParams {
         base_path: &wallet_path,
         credentials: &creds,
-        network: shekyl_address::Network::Mainnet,
-        capability: super::lifecycle::CapabilityInput::Full {
-            master_seed_64: &seed,
-            seed_format: shekyl_crypto_pq::account::SeedFormat::Bip39,
-        },
+        network: shekyl_address::Network::Regtest,
+        capability: super::lifecycle::CapabilityInput::Full { seed: &seed },
         creation_timestamp: 0,
         restore_height_hint: 0,
         kdf: shekyl_crypto_pq::wallet_envelope::KdfParams {
@@ -1861,7 +1858,7 @@ async fn e2e_fcmp_spend_accepted_by_daemon() {
     use shekyl_scanner::WalletLedgerExt;
     use shekyl_units::AtomicUnits;
 
-    let seed = [0x33u8; shekyl_crypto_pq::account::MASTER_SEED_BYTES];
+    let seed = [0x33u8; shekyl_crypto_pq::account::SEED_BYTES];
     let daemon = RegtestDaemon::start_for_seed(&seed).await;
 
     // Create the wallet (FAKECHAIN = mainnet address format; see the get_curve_tree
@@ -1880,7 +1877,7 @@ async fn e2e_fcmp_spend_accepted_by_daemon() {
     let wallet = Engine::<SoloSigner>::open_full(
         &wallet_path,
         &creds,
-        shekyl_address::Network::Mainnet,
+        shekyl_address::Network::Regtest,
         DaemonClient::verifying(rpc, regtest_expectation()),
         shekyl_engine_file::SafetyOverrides::none(),
     )
@@ -2034,7 +2031,7 @@ async fn e2e_fcmp_spend_reorg_restores_pool_and_fee() {
     use shekyl_units::AtomicUnits;
     use shekyl_wire::{Input, Transaction};
 
-    let seed = [0x35u8; shekyl_crypto_pq::account::MASTER_SEED_BYTES];
+    let seed = [0x35u8; shekyl_crypto_pq::account::SEED_BYTES];
     let daemon = RegtestDaemon::start_for_seed(&seed).await;
     let creds = super::lifecycle::Credentials::password_only(b"track2-spend-reorg");
     let (created, tmp) = create_wallet(daemon.rpc_port, &seed, b"track2-spend-reorg").await;
@@ -2047,7 +2044,7 @@ async fn e2e_fcmp_spend_reorg_restores_pool_and_fee() {
     let wallet = Engine::<SoloSigner>::open_full(
         &wallet_path,
         &creds,
-        shekyl_address::Network::Mainnet,
+        shekyl_address::Network::Regtest,
         DaemonClient::verifying(rpc, regtest_expectation()),
         shekyl_engine_file::SafetyOverrides::none(),
     )
@@ -2209,22 +2206,19 @@ async fn e2e_fcmp_spend_reorg_restores_pool_and_fee() {
     );
 }
 
-/// Mainnet [`EngineCreateParams`](super::lifecycle::EngineCreateParams) for the
-/// regtest wallets: FAKECHAIN uses the mainnet address format, and the KDF is
-/// the minimum-wall-clock relaxation the wallet-file tests share.
-fn mainnet_params<'a>(
+/// Regtest [`EngineCreateParams`](super::lifecycle::EngineCreateParams) for
+/// the regtest wallets; the KDF is the minimum-wall-clock relaxation the
+/// wallet-file tests share.
+fn regtest_params<'a>(
     base_path: &'a std::path::Path,
     creds: &'a super::lifecycle::Credentials<'a>,
-    seed: &'a [u8; shekyl_crypto_pq::account::MASTER_SEED_BYTES],
+    seed: &'a [u8; shekyl_crypto_pq::account::SEED_BYTES],
 ) -> super::lifecycle::EngineCreateParams<'a> {
     super::lifecycle::EngineCreateParams {
         base_path,
         credentials: creds,
-        network: shekyl_address::Network::Mainnet,
-        capability: super::lifecycle::CapabilityInput::Full {
-            master_seed_64: seed,
-            seed_format: shekyl_crypto_pq::account::SeedFormat::Bip39,
-        },
+        network: shekyl_address::Network::Regtest,
+        capability: super::lifecycle::CapabilityInput::Full { seed },
         creation_timestamp: 0,
         restore_height_hint: 0,
         kdf: shekyl_crypto_pq::wallet_envelope::KdfParams {
@@ -2244,7 +2238,7 @@ async fn mainnet_wallet(
     rpc_port: u16,
     seed_byte: u8,
 ) -> (super::Engine<super::SoloSigner>, tempfile::TempDir, String) {
-    let seed = [seed_byte; shekyl_crypto_pq::account::MASTER_SEED_BYTES];
+    let seed = [seed_byte; shekyl_crypto_pq::account::SEED_BYTES];
     let (wallet, tmp) = create_wallet(rpc_port, &seed, b"track2").await;
     let address = wallet.primary_address().encode().expect("encode address");
     (wallet, tmp, address)
@@ -2252,12 +2246,12 @@ async fn mainnet_wallet(
 
 /// The shared create step behind [`mainnet_wallet`] and [`staker_wallet`]:
 /// tempdir, credentials, wallet RPC against the daemon port, and
-/// `Engine::create` over [`mainnet_params`]. Callers layer their own
+/// `Engine::create` over [`regtest_params`]. Callers layer their own
 /// follow-ons (address derivation; the staker's persist → close → reopen).
 /// The wallet base path is `tmp.path().join("wallet")`.
 async fn create_wallet(
     rpc_port: u16,
-    seed: &[u8; shekyl_crypto_pq::account::MASTER_SEED_BYTES],
+    seed: &[u8; shekyl_crypto_pq::account::SEED_BYTES],
     password: &'static [u8],
 ) -> (super::Engine<super::SoloSigner>, tempfile::TempDir) {
     let rpc = HttpRpc::new(format!("http://127.0.0.1:{rpc_port}"))
@@ -2266,7 +2260,7 @@ async fn create_wallet(
     let tmp = tempfile::tempdir().expect("wallet tempdir");
     let wallet_path = tmp.path().join("wallet");
     let creds = super::lifecycle::Credentials::password_only(password);
-    let params = mainnet_params(&wallet_path, &creds, seed);
+    let params = regtest_params(&wallet_path, &creds, seed);
     let wallet = super::Engine::<super::SoloSigner>::create(
         params,
         super::DaemonClient::verifying(rpc, regtest_expectation()),
@@ -2318,8 +2312,7 @@ async fn e2e_fcmp_spend_over_depth3_tree() {
     const MAX_MINE_BATCHES: usize = 60; // up to 1200 blocks (684 leaves ≈ 745)
 
     let daemon =
-        RegtestDaemon::start_for_seed(&[0x44u8; shekyl_crypto_pq::account::MASTER_SEED_BYTES])
-            .await;
+        RegtestDaemon::start_for_seed(&[0x44u8; shekyl_crypto_pq::account::SEED_BYTES]).await;
     let (wallet, _tmp, address) = mainnet_wallet(daemon.rpc_port, 0x44).await;
 
     // Mine (no refresh needed — depth is the daemon's, not the wallet's) until the
@@ -2633,8 +2626,7 @@ async fn e2e_a_rust_block_at_the_consensus_bound_is_judged_by_the_cxx() {
     use zeroize::Zeroizing;
 
     let daemon =
-        RegtestDaemon::start_for_seed(&[0x79u8; shekyl_crypto_pq::account::MASTER_SEED_BYTES])
-            .await;
+        RegtestDaemon::start_for_seed(&[0x79u8; shekyl_crypto_pq::account::SEED_BYTES]).await;
     let (wallet, _tmp, address) = mainnet_wallet(daemon.rpc_port, 0x79).await;
     let arc = Arc::new(RwLock::new(wallet));
     let Overfilled {
@@ -2933,8 +2925,7 @@ async fn e2e_a_rust_block_at_the_consensus_bound_is_judged_by_the_cxx() {
 #[ignore = "Track-2 regtest: requires SHEKYLD_BIN; ~50 spends into the pool, several min"]
 async fn e2e_cxx_template_fills_to_its_median() {
     let daemon =
-        RegtestDaemon::start_for_seed(&[0x77u8; shekyl_crypto_pq::account::MASTER_SEED_BYTES])
-            .await;
+        RegtestDaemon::start_for_seed(&[0x77u8; shekyl_crypto_pq::account::SEED_BYTES]).await;
     let (wallet, _tmp, address) = mainnet_wallet(daemon.rpc_port, 0x77).await;
     let arc = Arc::new(RwLock::new(wallet));
     let Overfilled {
@@ -3109,8 +3100,7 @@ async fn e2e_trim_curve_tree_restores_grow_root() {
     }
 
     let daemon =
-        RegtestDaemon::start_for_seed(&[0x44u8; shekyl_crypto_pq::account::MASTER_SEED_BYTES])
-            .await;
+        RegtestDaemon::start_for_seed(&[0x44u8; shekyl_crypto_pq::account::SEED_BYTES]).await;
 
     // Grow to depth-2 with >= 2 Selene leaf chunks, then record the anchor state.
     let mut anchor = None;
@@ -3195,8 +3185,7 @@ async fn generate_ct2_tier_b_fixture() {
     const REORG_DEPTH: u64 = 8;
 
     let daemon =
-        RegtestDaemon::start_for_seed(&[0x44u8; shekyl_crypto_pq::account::MASTER_SEED_BYTES])
-            .await;
+        RegtestDaemon::start_for_seed(&[0x44u8; shekyl_crypto_pq::account::SEED_BYTES]).await;
     let (wallet, _tmp, _) = mainnet_wallet(daemon.rpc_port, 0x44).await;
     // A second wallet for its address only — the spend recipient (a real
     // non-change regular output, distinct from the self-send change).
@@ -3477,7 +3466,7 @@ type StakerWallet = (
 /// encoded primary address.
 pub(super) async fn staker_wallet(
     rpc_port: u16,
-    seed: &[u8; shekyl_crypto_pq::account::MASTER_SEED_BYTES],
+    seed: &[u8; shekyl_crypto_pq::account::SEED_BYTES],
     slot: super::stake_engine::PSlot,
 ) -> StakerWallet {
     let creds = super::lifecycle::Credentials::password_only(b"pr4-staker");
@@ -3494,7 +3483,7 @@ pub(super) async fn staker_wallet(
     let opened = super::Engine::<super::SoloSigner>::open_full(
         &base_path,
         &creds,
-        shekyl_address::Network::Mainnet,
+        shekyl_address::Network::Regtest,
         super::DaemonClient::verifying(rpc, regtest_expectation()),
         shekyl_engine_file::SafetyOverrides::none(),
     )
@@ -3508,18 +3497,18 @@ pub(super) async fn staker_wallet(
     (Arc::new(RwLock::new(engine)), tmp, address)
 }
 
-/// The persona's payment destination, derived in-test from the same master
-/// seed the wallet holds. The production wallet derives the identical bundle
+/// The persona's payment destination, derived in-test from the master seed
+/// the wallet expands its seed into. The production wallet derives the identical bundle
 /// at open (`prepare_stake_engine_if_staker` → `derive_archival_p_keys`); the
 /// harness takes only its public keys, for the one walk that pays a persona
 /// outside `stake_in` (the emission claim's post-bond fee input).
 pub(super) fn persona_destination(
-    seed: &[u8; shekyl_crypto_pq::account::MASTER_SEED_BYTES],
+    seed: &[u8; shekyl_crypto_pq::account::SEED_BYTES],
     slot: u32,
 ) -> super::pending::TxDestination {
-    use shekyl_crypto_pq::account::{DerivationNetwork, SeedFormat};
+    use shekyl_crypto_pq::account::{normalize_seed, Network};
     use shekyl_crypto_pq::archival_p::derive_archival_p_keys;
-    let keys = derive_archival_p_keys(seed, DerivationNetwork::Mainnet, SeedFormat::Bip39, slot)
+    let keys = derive_archival_p_keys(&normalize_seed(seed), Network::Regtest, slot)
         .expect("derive persona keys");
     super::pending::TxDestination::OwnPersona(keys.payment_destination())
 }
@@ -3761,7 +3750,7 @@ enum FixtureStake {
 /// parent, and the pool door judges it at commit.
 async fn stake_persona_to_confirmed_bond(
     daemon: &RegtestDaemon,
-    seed: &[u8; shekyl_crypto_pq::account::MASTER_SEED_BYTES],
+    seed: &[u8; shekyl_crypto_pq::account::SEED_BYTES],
     slot_raw: u32,
     funding_cushion: u64,
     stake_entry: FixtureStake,
@@ -3851,7 +3840,7 @@ async fn stake_persona_to_confirmed_bond(
 /// the confirmed-bond fixture and the FND-20 tripwire.
 async fn stake_persona_and_submit_bond(
     daemon: &RegtestDaemon,
-    seed: &[u8; shekyl_crypto_pq::account::MASTER_SEED_BYTES],
+    seed: &[u8; shekyl_crypto_pq::account::SEED_BYTES],
     slot_raw: u32,
     funding_cushion: u64,
     stake_entry: FixtureStake,
@@ -4157,7 +4146,7 @@ async fn e2e_staker_bond_post_accepted_and_applied() {
     /// (the emission-claim e2e sizes its own, larger cushion).
     const FUNDING_CUSHION: u64 = 200_000_000;
 
-    let seed = [0x44u8; shekyl_crypto_pq::account::MASTER_SEED_BYTES];
+    let seed = [0x44u8; shekyl_crypto_pq::account::SEED_BYTES];
     let daemon = RegtestDaemon::start_for_seed(&seed).await;
     // Schedule guard (serial lock now held): this test's wallet epoch
     // arithmetic must run on the genesis pin. A sibling e2e that armed the
@@ -4338,7 +4327,7 @@ async fn e2e_emission_claim_accepted_and_applied() {
     // either direction is a loud named failure, never silent bleed. Run
     // the regtest e2es in separate processes (the module docs' one-test
     // invocation) for green runs.
-    let seed = [0x55u8; shekyl_crypto_pq::account::MASTER_SEED_BYTES];
+    let seed = [0x55u8; shekyl_crypto_pq::account::SEED_BYTES];
     let daemon = RegtestDaemon::start_for_seed_with_schedule(&seed, Some(SCHEDULE)).await;
     // The levers are set and deliberately NOT restored afterwards: they are the
     // only input `arm` reads, and once armed the schedule latch is
@@ -4382,9 +4371,7 @@ async fn e2e_emission_claim_accepted_and_applied() {
     // market-excluded (E-2), so its Σwork is zero forever — surfaced by
     // this e2e's first close. A chain this walk captures now carries the
     // fill, the close and the pricing pass before the join, so the Rust
-    // validator admits it whole; the `vectors_tests` `PREDATES` record for
-    // `emission-claim` describes the capture made before the fill existed
-    // and retires with the next capture.
+    // validator admits it whole.
     let market_holdings = shekyl_archival_retention::HoldingsDescriptor {
         kind: shekyl_archival_retention::HoldingsKind::ShardSetCompact,
         shard_ids: shekyl_archival_retention::ShardSet::new(vec![SHARD_ID])
@@ -5021,7 +5008,7 @@ async fn e2e_drain_wire_shape_matches_a_real_transfer() {
     /// byte-diff below compares against the 1-in/2-out transfer.
     const FUNDING_CUSHION: u64 = 40_000_000_000;
 
-    let seed = [0x66u8; shekyl_crypto_pq::account::MASTER_SEED_BYTES];
+    let seed = [0x66u8; shekyl_crypto_pq::account::SEED_BYTES];
     let daemon = RegtestDaemon::start_for_seed(&seed).await;
     // Schedule guard (serial lock now held): a sibling e2e that armed the SEB
     // lever in this process would bleed its schedule in silently (the
@@ -5323,7 +5310,7 @@ async fn e2e_release_accepted_and_connected() {
     // Arm the levered schedule BEFORE any wallet-side epoch arithmetic
     // (the claim e2e's arming shape and its containment caveats: the
     // latch is irreversible and per-process — run this walk alone).
-    let seed = [0x66u8; shekyl_crypto_pq::account::MASTER_SEED_BYTES];
+    let seed = [0x66u8; shekyl_crypto_pq::account::SEED_BYTES];
     let daemon = RegtestDaemon::start_for_seed_with_schedule(&seed, Some(SCHEDULE)).await;
     SCHEDULE.set_in_process_env();
     let armed = shekyl_archival_retention::arm_settlement_epoch_override_for_regtest()
@@ -5550,7 +5537,7 @@ async fn e2e_unstake_collect_retire_composed_arc() {
     // Arm the levered schedule BEFORE any wallet-side epoch arithmetic (the
     // claim e2e's arming shape, and its containment caveats verbatim: the
     // latch is irreversible and per-process — run this walk alone).
-    let seed = [0x77u8; shekyl_crypto_pq::account::MASTER_SEED_BYTES];
+    let seed = [0x77u8; shekyl_crypto_pq::account::SEED_BYTES];
     let daemon = RegtestDaemon::start_for_seed_with_schedule(&seed, Some(SCHEDULE)).await;
     SCHEDULE.set_in_process_env();
     let armed = shekyl_archival_retention::arm_settlement_epoch_override_for_regtest()
@@ -5843,7 +5830,7 @@ async fn e2e_arm3_phantom_slot_collected_at_open() {
     use super::stake_engine::PSlot;
 
     const SLOT: u32 = 0;
-    let seed = [0x45u8; shekyl_crypto_pq::account::MASTER_SEED_BYTES];
+    let seed = [0x45u8; shekyl_crypto_pq::account::SEED_BYTES];
     let daemon = RegtestDaemon::start_for_seed(&seed).await;
     // Schedule guard (see the bond e2e): wallet epoch arithmetic here must
     // run on the genesis pin; a sibling-armed levered schedule fails loudly.
@@ -5907,7 +5894,7 @@ async fn e2e_arm3_phantom_slot_collected_at_open() {
     let reopened = super::Engine::<super::SoloSigner>::open_full(
         &tmp.path().join("wallet"),
         &creds,
-        shekyl_address::Network::Mainnet,
+        shekyl_address::Network::Regtest,
         super::DaemonClient::verifying(rpc, regtest_expectation()),
         shekyl_engine_file::SafetyOverrides::none(),
     )
@@ -6271,7 +6258,7 @@ async fn maybe_capture_chain_vector(
     // harness pulled them, the genesis pair otherwise. The replay opens
     // its store and judges every block under a rule set naming exactly
     // this pair (`ARW-15`); recorded, not remembered, like the difficulty.
-    let production = shekyl_chain_rules::FakechainSchedule::PRODUCTION;
+    let production = shekyl_chain_rules::CappedEpoch::PRODUCTION;
     let (settlement_epoch_blocks, reorg_cap_blocks) = match daemon.schedule {
         Some(levers) => (levers.seb, levers.reorg_cap),
         None => (
@@ -6706,12 +6693,12 @@ async fn native_handlers_apply_their_own_request_caps() {
 /// `tx show` and `chain spent` answer through `shekyl-cli`.
 ///
 /// The daemon's own console is deleted. The words run as a one-shot
-/// `shekyl-cli` against this daemon (`SHEKYL_CLI_BIN`). The daemon is
-/// testnet because the CLI cannot name a fakechain daemon.
+/// `shekyl-cli` against this daemon (`SHEKYL_CLI_BIN`), given
+/// `--network regtest` (NI-R1, NI-R4).
 #[tokio::test]
 #[ignore = "requires SHEKYLD_BIN and SHEKYL_CLI_BIN; spawns a live daemon"]
 async fn tx_show_and_chain_spent_answer_through_shekyl_cli() {
-    let daemon = RegtestDaemon::start_on_testnet().await;
+    let daemon = RegtestDaemon::start().await;
 
     // The genesis coinbase is the one transaction a fresh regtest chain has,
     // and it is reachable without mining or spending.
@@ -6740,11 +6727,11 @@ async fn tx_show_and_chain_spent_answer_through_shekyl_cli() {
     );
 }
 
-/// The peer words answer through `shekyl-cli` on an offline testnet daemon.
+/// The peer words answer through `shekyl-cli` on an offline regtest daemon.
 #[tokio::test]
 #[ignore = "requires SHEKYLD_BIN and SHEKYL_CLI_BIN; spawns a live daemon"]
 async fn peer_words_answer_through_shekyl_cli() {
-    let daemon = RegtestDaemon::start_on_testnet().await;
+    let daemon = RegtestDaemon::start().await;
 
     // This daemon runs offline, so each peer command prints the state,
     // not an empty table (Rick, 2026-10-14).

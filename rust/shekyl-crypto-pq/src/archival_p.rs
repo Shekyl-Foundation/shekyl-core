@@ -3,15 +3,15 @@
 // All rights reserved.
 // BSD-3-Clause
 
-//! `ARCHIVAL_P_DERIVE_V1`: frozen derivation of an archival staking persona `P`.
+//! `ARCHIVAL_P_DERIVE_V2`: frozen derivation of an archival staking persona `P`.
 //!
 //! This module is the **single source of truth** for how a Shekyl archival
 //! staking persona (`P`) derives its keys from a wallet's `master_seed_64`.
 //! It is the cryptographic foundation of the archival-bond construction flow
 //! (`docs/design/ARCHIVAL_BOND_CONSTRUCTION.md`) and the firewall gate-6 design
 //! (`docs/design/ARCHIVAL_FIREWALL_GATE6.md` §§9.3–9.6). The derivation is
-//! frozen and pinned in CI by the `ARCHIVAL_P_DERIVE_V1` KAT suite
-//! (`docs/test_vectors/ARCHIVAL_P_DERIVE_V1/`).
+//! frozen and pinned in CI by the `ARCHIVAL_P_DERIVE_V2` KAT suite
+//! (`docs/test_vectors/ARCHIVAL_P_DERIVE_V2/`).
 //!
 //! # Why this is genesis-frozen
 //!
@@ -26,7 +26,7 @@
 //! # Pipeline overview
 //!
 //! ```text
-//!  master_seed_64  ──HKDF-SHA-512(salt_for(net,fmt), info = LABEL ‖ 0x00 ‖ p_slot_le32)──┐
+//!  master_seed_64  ──HKDF-SHA-512(salt_for(net), info = LABEL ‖ 0x00 ‖ p_slot_le32)──┐
 //!                                                                                        │
 //!   ┌─── Payment keys (scalar consumers) ───────────────────────────────────────────────┤
 //!   │  spend_wide (L=64) ── wide_reduce ── Ed25519 spend scalar ─→ spend_pk/spend_sk      │
@@ -135,8 +135,7 @@ use sha2::Sha512;
 use zeroize::Zeroizing;
 
 use crate::account::{
-    ml_kem_keypair_from_d_z, salt_for, wide_reduce_to_scalar, DerivationNetwork, SeedFormat,
-    MASTER_SEED_BYTES,
+    ml_kem_keypair_from_d_z, salt_for, wide_reduce_to_scalar, Network, MASTER_SEED_BYTES,
 };
 use crate::derivation::keygen_from_seed;
 use crate::fn_dsa_hybrid::{FnDsaHybridPublicKey, FnDsaHybridSecretKey, HybridEd25519FnDsa};
@@ -182,7 +181,7 @@ pub const ARCHIVAL_P_BOND_SPEND_ML_DSA_INFO: &[u8] = b"shekyl-archival-p-bond-sp
 ///
 /// The `.onion` is `p_slot`-bound and seed-derived, so it rotates with the persona
 /// and never bridges a rotation. Like every sibling label it is **network-scoped**
-/// (`salt = salt_for(net, fmt)`): the same wallet serves at *different* `.onion`s on
+/// (`salt = salt_for(net)`): the same wallet serves at *different* `.onion`s on
 /// mainnet vs testnet/stagenet, so a persona's serving identity never links across
 /// networks. That is a deliberate, frozen choice — not incidental — and the KAT's
 /// `hs_id_network_separation` vector pins it un-regenerate-around-ably. **Hyphen-
@@ -227,18 +226,17 @@ fn p_info(label: &[u8], p_slot: u32) -> Vec<u8> {
     out
 }
 
-/// HKDF-Expand `master_seed` to `N` bytes under `(net, fmt)` salt and the
+/// HKDF-Expand `master_seed` to `N` bytes under `(net)` salt and the
 /// `(label, p_slot)` info. The output is written into the `Zeroizing` it is
 /// returned in. A bare array filled and then wrapped would be `Copy`, so the
 /// wrap would leave the first copy on the stack.
 fn p_expand<const N: usize>(
     master_seed: &[u8; MASTER_SEED_BYTES],
-    net: DerivationNetwork,
-    fmt: SeedFormat,
+    net: Network,
     label: &[u8],
     p_slot: u32,
 ) -> Zeroizing<[u8; N]> {
-    let salt = salt_for(net, fmt);
+    let salt = salt_for(net);
     let info = p_info(label, p_slot);
     let hk = Hkdf::<Sha512>::new(Some(&salt), master_seed);
     let mut out = Zeroizing::new([0u8; N]);
@@ -250,23 +248,21 @@ fn p_expand<const N: usize>(
 /// HKDF-Expand to the 64-byte form scalar consumers wide-reduce.
 fn p_expand_64(
     master_seed: &[u8; MASTER_SEED_BYTES],
-    net: DerivationNetwork,
-    fmt: SeedFormat,
+    net: Network,
     label: &[u8],
     p_slot: u32,
 ) -> Zeroizing<[u8; 64]> {
-    p_expand(master_seed, net, fmt, label, p_slot)
+    p_expand(master_seed, net, label, p_slot)
 }
 
 /// HKDF-Expand to the 32-byte form an RFC 8032 or ML-DSA keygen seed takes.
 fn p_expand_32(
     master_seed: &[u8; MASTER_SEED_BYTES],
-    net: DerivationNetwork,
-    fmt: SeedFormat,
+    net: Network,
     label: &[u8],
     p_slot: u32,
 ) -> Zeroizing<[u8; 32]> {
-    p_expand(master_seed, net, fmt, label, p_slot)
+    p_expand(master_seed, net, label, p_slot)
 }
 
 // --- per-row intermediate derivations (KAT Tier-1 pins) ----------------------
@@ -275,83 +271,70 @@ fn p_expand_32(
 #[must_use]
 pub fn derive_p_spend_wide(
     master_seed: &[u8; MASTER_SEED_BYTES],
-    net: DerivationNetwork,
-    fmt: SeedFormat,
+    net: Network,
     p_slot: u32,
 ) -> Zeroizing<[u8; 64]> {
-    p_expand_64(master_seed, net, fmt, ARCHIVAL_P_SPEND_INFO, p_slot)
+    p_expand_64(master_seed, net, ARCHIVAL_P_SPEND_INFO, p_slot)
 }
 
 /// `P` payment view 64-byte intermediate; wide-reduce via [`wide_reduce_to_scalar`].
 #[must_use]
 pub fn derive_p_view_wide(
     master_seed: &[u8; MASTER_SEED_BYTES],
-    net: DerivationNetwork,
-    fmt: SeedFormat,
+    net: Network,
     p_slot: u32,
 ) -> Zeroizing<[u8; 64]> {
-    p_expand_64(master_seed, net, fmt, ARCHIVAL_P_VIEW_INFO, p_slot)
+    p_expand_64(master_seed, net, ARCHIVAL_P_VIEW_INFO, p_slot)
 }
 
 /// `P` ML-KEM `d_z` 64-byte intermediate; feeds [`ml_kem_keypair_from_d_z`].
 #[must_use]
 pub fn derive_p_kem_d_z(
     master_seed: &[u8; MASTER_SEED_BYTES],
-    net: DerivationNetwork,
-    fmt: SeedFormat,
+    net: Network,
     p_slot: u32,
 ) -> Zeroizing<[u8; 64]> {
-    p_expand_64(master_seed, net, fmt, ARCHIVAL_P_KEM_INFO, p_slot)
+    p_expand_64(master_seed, net, ARCHIVAL_P_KEM_INFO, p_slot)
 }
 
 /// `P` identity Ed25519 RFC 8032 seed (32 B).
 #[must_use]
 pub fn derive_p_account_sign_seed(
     master_seed: &[u8; MASTER_SEED_BYTES],
-    net: DerivationNetwork,
-    fmt: SeedFormat,
+    net: Network,
     p_slot: u32,
 ) -> Zeroizing<[u8; 32]> {
-    p_expand_32(master_seed, net, fmt, ARCHIVAL_P_ACCOUNT_SIGN_INFO, p_slot)
+    p_expand_32(master_seed, net, ARCHIVAL_P_ACCOUNT_SIGN_INFO, p_slot)
 }
 
 /// `P` identity ML-DSA-65 keygen seed (32 B).
 #[must_use]
 pub fn derive_p_ml_dsa_seed(
     master_seed: &[u8; MASTER_SEED_BYTES],
-    net: DerivationNetwork,
-    fmt: SeedFormat,
+    net: Network,
     p_slot: u32,
 ) -> Zeroizing<[u8; 32]> {
-    p_expand_32(master_seed, net, fmt, ARCHIVAL_P_ML_DSA_INFO, p_slot)
+    p_expand_32(master_seed, net, ARCHIVAL_P_ML_DSA_INFO, p_slot)
 }
 
 /// GF-1 `bond_spend` Ed25519 RFC 8032 seed (32 B).
 #[must_use]
 pub fn derive_p_bond_spend_ed_seed(
     master_seed: &[u8; MASTER_SEED_BYTES],
-    net: DerivationNetwork,
-    fmt: SeedFormat,
+    net: Network,
     p_slot: u32,
 ) -> Zeroizing<[u8; 32]> {
-    p_expand_32(master_seed, net, fmt, ARCHIVAL_P_BOND_SPEND_ED_INFO, p_slot)
+    p_expand_32(master_seed, net, ARCHIVAL_P_BOND_SPEND_ED_INFO, p_slot)
 }
 
 /// GF-1 `bond_spend` ML-DSA-65 keygen seed (32 B).
 #[must_use]
 pub fn derive_p_bond_spend_ml_dsa_seed(
     master_seed: &[u8; MASTER_SEED_BYTES],
-    net: DerivationNetwork,
-    fmt: SeedFormat,
+    net: Network,
     p_slot: u32,
 ) -> Zeroizing<[u8; 32]> {
-    p_expand_32(
-        master_seed,
-        net,
-        fmt,
-        ARCHIVAL_P_BOND_SPEND_ML_DSA_INFO,
-        p_slot,
-    )
+    p_expand_32(master_seed, net, ARCHIVAL_P_BOND_SPEND_ML_DSA_INFO, p_slot)
 }
 
 /// `P` serving-side v3 onion (HS) identity Ed25519 RFC 8032 seed (32 B) — GF-9.
@@ -362,7 +345,7 @@ pub fn derive_p_bond_spend_ml_dsa_seed(
 ///
 /// **Premise REFUTED 2026-08-12 (SH-2) — this IS an [`ArchivalPKeys`] field
 /// now.** The prior ruling was "serving-only, deliberately *not* an
-/// `ArchivalPKeys` field … rederived from `(master_seed, net, fmt, p_slot)` on
+/// `ArchivalPKeys` field … rederived from `(master_seed, net, p_slot)` on
 /// each serve, exactly like the other secrets". That is a coherent design for a
 /// serving path co-resident with the wallet, which is the architecture that
 /// existed when it was written. Model D then put the serving host on the far
@@ -407,45 +390,36 @@ pub fn derive_p_bond_spend_ml_dsa_seed(
 ///
 /// The derived Ed25519 **public** key (`SigningKey::from_bytes(seed)
 /// .verifying_key()`) is the v3 onion address's public key; the
-/// `ARCHIVAL_P_DERIVE_V1` KAT pins both the seed and that public key, since a
+/// `ARCHIVAL_P_DERIVE_V2` KAT pins both the seed and that public key, since a
 /// cross-arch divergence there would leave an ARM user's persona unreachable at
 /// its advertised `.onion`.
 #[must_use]
 pub fn derive_p_hs_id_seed(
     master_seed: &[u8; MASTER_SEED_BYTES],
-    net: DerivationNetwork,
-    fmt: SeedFormat,
+    net: Network,
     p_slot: u32,
 ) -> Zeroizing<[u8; 32]> {
-    p_expand_32(master_seed, net, fmt, ARCHIVAL_P_HS_ID_INFO, p_slot)
+    p_expand_32(master_seed, net, ARCHIVAL_P_HS_ID_INFO, p_slot)
 }
 
 /// Receipt-key Ed25519 RFC 8032 seed (32 B).
 #[must_use]
 pub fn derive_p_receipt_ed_seed(
     master_seed: &[u8; MASTER_SEED_BYTES],
-    net: DerivationNetwork,
-    fmt: SeedFormat,
+    net: Network,
     p_slot: u32,
 ) -> Zeroizing<[u8; 32]> {
-    p_expand_32(master_seed, net, fmt, ARCHIVAL_P_RECEIPT_ED_INFO, p_slot)
+    p_expand_32(master_seed, net, ARCHIVAL_P_RECEIPT_ED_INFO, p_slot)
 }
 
 /// Receipt-key FN-DSA-1024 keygen seed (32 B).
 #[must_use]
 pub fn derive_p_receipt_fn_dsa_seed(
     master_seed: &[u8; MASTER_SEED_BYTES],
-    net: DerivationNetwork,
-    fmt: SeedFormat,
+    net: Network,
     p_slot: u32,
 ) -> Zeroizing<[u8; 32]> {
-    p_expand_32(
-        master_seed,
-        net,
-        fmt,
-        ARCHIVAL_P_RECEIPT_FN_DSA_INFO,
-        p_slot,
-    )
+    p_expand_32(master_seed, net, ARCHIVAL_P_RECEIPT_FN_DSA_INFO, p_slot)
 }
 
 // --- hybrid keypair assembly -------------------------------------------------
@@ -492,7 +466,7 @@ fn build_hybrid(
 /// **not** a field: it is computed downstream by
 /// `shekyl-archival-retention::id::p_canonical_id_from_hybrid_pubkey` over
 /// [`Self::hybrid_bond_id`]'s canonical bytes (`crypto-pq` must not depend on
-/// `archival-retention`). The `ARCHIVAL_P_DERIVE_V1` KAT pins the id and the
+/// `archival-retention`). The `ARCHIVAL_P_DERIVE_V2` KAT pins the id and the
 /// `archival-retention` cross-check proves the two cSHAKE paths agree.
 ///
 /// # Wipe-on-drop
@@ -721,31 +695,23 @@ impl BondPostKeys<'_> {
 
 /// Derive the full `ArchivalPKeys` bundle for persona slot `p_slot`.
 ///
-/// `master_seed` is the wallet's normalized 64-byte master seed; `(net, fmt)`
-/// must be a permitted pair (same gate as [`crate::account::rederive_account`]).
+/// `master_seed` is the wallet's normalized 64-byte master seed.
 /// Byte-for-byte deterministic across architectures — pinned by the
-/// `ARCHIVAL_P_DERIVE_V1` KAT on the `aarch64` qemu lane.
+/// `ARCHIVAL_P_DERIVE_V2` KAT on the `aarch64` qemu lane.
 pub fn derive_archival_p_keys(
     master_seed: &[u8; MASTER_SEED_BYTES],
-    net: DerivationNetwork,
-    fmt: SeedFormat,
+    net: Network,
     p_slot: u32,
 ) -> Result<ArchivalPKeys, CryptoError> {
-    if !net.permitted_seed_format(fmt) {
-        return Err(CryptoError::InvalidInput(format!(
-            "{net:?} does not permit {fmt:?} seed format"
-        )));
-    }
-
     // --- Payment keys: Ed25519 spend (scalar consumer) ---
-    let spend_wide = derive_p_spend_wide(master_seed, net, fmt, p_slot);
+    let spend_wide = derive_p_spend_wide(master_seed, net, p_slot);
     let spend_scalar = wide_reduce_to_scalar(&spend_wide);
     let spend_sk = SpendSecret::from_bytes(*spend_scalar.as_bytes());
     let spend_pub = ED25519_BASEPOINT_TABLE * &spend_scalar;
     let spend_pk = SpendPublicKey::from_canonical_bytes(*spend_pub.compress().as_bytes());
 
     // --- Payment keys: Ed25519 view (scalar consumer) ---
-    let view_wide = derive_p_view_wide(master_seed, net, fmt, p_slot);
+    let view_wide = derive_p_view_wide(master_seed, net, p_slot);
     let view_scalar = wide_reduce_to_scalar(&view_wide);
     let view_sk = ViewSecret::from_bytes(*view_scalar.as_bytes());
     let view_pub = ED25519_BASEPOINT_TABLE * &view_scalar;
@@ -753,25 +719,25 @@ pub fn derive_archival_p_keys(
     let x25519_pk = montgomery::ed25519_pk_to_x25519_pk(view_pk.as_canonical_bytes())?;
 
     // --- Payment keys: ML-KEM-768 (SHA3-ChaCha intermediary) ---
-    let d_z = derive_p_kem_d_z(master_seed, net, fmt, p_slot);
+    let d_z = derive_p_kem_d_z(master_seed, net, p_slot);
     let (ml_kem_ek, ml_kem_dk) = ml_kem_keypair_from_d_z(&d_z)?;
 
     // --- Public identity hybrid (seed consumers) ---
-    let account_sign_seed = derive_p_account_sign_seed(master_seed, net, fmt, p_slot);
-    let ml_dsa_seed = derive_p_ml_dsa_seed(master_seed, net, fmt, p_slot);
+    let account_sign_seed = derive_p_account_sign_seed(master_seed, net, p_slot);
+    let ml_dsa_seed = derive_p_ml_dsa_seed(master_seed, net, p_slot);
     let (hybrid_sign_pk, hybrid_sign_sk) = build_hybrid(&account_sign_seed, &ml_dsa_seed)?;
 
     // --- GF-9 serving-side onion identity seed (expanded by shekyl-tor-control-client) ---
-    let hs_id_seed = derive_p_hs_id_seed(master_seed, net, fmt, p_slot);
+    let hs_id_seed = derive_p_hs_id_seed(master_seed, net, p_slot);
 
     // --- GF-1 bond-debit authorizer hybrid (seed consumers) ---
-    let bond_ed_seed = derive_p_bond_spend_ed_seed(master_seed, net, fmt, p_slot);
-    let bond_ml_dsa_seed = derive_p_bond_spend_ml_dsa_seed(master_seed, net, fmt, p_slot);
+    let bond_ed_seed = derive_p_bond_spend_ed_seed(master_seed, net, p_slot);
+    let bond_ml_dsa_seed = derive_p_bond_spend_ml_dsa_seed(master_seed, net, p_slot);
     let (bond_spend_pk, bond_spend_sk) = build_hybrid(&bond_ed_seed, &bond_ml_dsa_seed)?;
 
     // --- Receipt key: Ed25519 + FN-DSA-1024 (seed consumers) ---
-    let receipt_ed_seed = derive_p_receipt_ed_seed(master_seed, net, fmt, p_slot);
-    let receipt_fn_dsa_seed = derive_p_receipt_fn_dsa_seed(master_seed, net, fmt, p_slot);
+    let receipt_ed_seed = derive_p_receipt_ed_seed(master_seed, net, p_slot);
+    let receipt_fn_dsa_seed = derive_p_receipt_fn_dsa_seed(master_seed, net, p_slot);
     let (receipt_sign_pk, receipt_sign_sk) =
         HybridEd25519FnDsa::keypair_from_seeds(&receipt_ed_seed, &receipt_fn_dsa_seed)?;
 
@@ -812,17 +778,11 @@ pub fn derive_archival_p_keys(
 /// `ZeroizeOnDrop`, so nothing secret outlives the call.
 pub fn derive_archival_p_identity_pk(
     master_seed: &[u8; MASTER_SEED_BYTES],
-    net: DerivationNetwork,
-    fmt: SeedFormat,
+    net: Network,
     p_slot: u32,
 ) -> Result<HybridPublicKey, CryptoError> {
-    if !net.permitted_seed_format(fmt) {
-        return Err(CryptoError::InvalidInput(format!(
-            "{net:?} does not permit {fmt:?} seed format"
-        )));
-    }
-    let account_sign_seed = derive_p_account_sign_seed(master_seed, net, fmt, p_slot);
-    let ml_dsa_seed = derive_p_ml_dsa_seed(master_seed, net, fmt, p_slot);
+    let account_sign_seed = derive_p_account_sign_seed(master_seed, net, p_slot);
+    let ml_dsa_seed = derive_p_ml_dsa_seed(master_seed, net, p_slot);
     let (hybrid_sign_pk, _hybrid_sign_sk) = build_hybrid(&account_sign_seed, &ml_dsa_seed)?;
     Ok(hybrid_sign_pk)
 }

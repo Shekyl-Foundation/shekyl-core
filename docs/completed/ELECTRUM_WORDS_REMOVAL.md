@@ -1282,7 +1282,7 @@ named-criteria principle.
 
 The mainnet-broken behavior derives from the raw-seed-on-mainnet
 restriction in
-[`src/cryptonote_basic/account.cpp:443–446`](../../src/cryptonote_basic/account.cpp),
+`src/cryptonote_basic/account.cpp:443–446`,
 **not from Electrum-words infrastructure**. The restriction
 rejects raw-seed wallet generation on Mainnet/Stagenet
 regardless of the encoding the seed bytes arrived in.

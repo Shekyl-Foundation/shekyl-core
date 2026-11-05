@@ -342,7 +342,7 @@ pub enum CheckedReserveProof {
 /// verification of an honest proof).
 pub fn canonical_address_bytes(address: &ShekylAddress) -> Vec<u8> {
     let mut out = Vec::with_capacity(1 + 32 + 32 + address.ml_kem_encap_key.len());
-    out.push(address.network.as_u8());
+    out.push(address.network.code());
     out.extend_from_slice(&address.spend_key);
     out.extend_from_slice(&address.view_key);
     out.extend_from_slice(&address.ml_kem_encap_key);

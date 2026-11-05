@@ -14,6 +14,9 @@ description = "Wallet-daemon RPC wire-contract types: the SubmitVerdict/RejectCa
 
 [dependencies]
 serde = { workspace = true }
+# The network type `nettype` carries (`get_version`, `get_info`), with its
+# lowercase serde names.
+shekyl-network = { path = "../shekyl-network", features = ["serde"] }
 # Reading a JSON-RPC error object (class + diagnostic) is this crate's,
 # so a client does not grow a second parser (RK-D1, RW-Q3).
 serde_json = { workspace = true }

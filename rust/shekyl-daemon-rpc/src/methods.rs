@@ -1409,7 +1409,7 @@ pub(crate) mod tests {
         fn identity(&self) -> Result<DaemonIdentity, FactsFault> {
             self.identity.clone().unwrap_or_else(|| {
                 Ok(DaemonIdentity {
-                    nettype: shekyl_rpc_types::DaemonNetwork::Mainnet,
+                    nettype: shekyl_rpc_types::Network::Mainnet,
                     genesis_hash: shekyl_types::BlockHash::from_bytes([0x11; 32]),
                 })
             })
@@ -1904,7 +1904,7 @@ pub(crate) mod tests {
             shekyl_rpc_types::CONSENSUS_CONSTANTS_DIGEST_HASH,
             "the reply must carry this build's own digest, not a stored one"
         );
-        assert_eq!(out.nettype, shekyl_rpc_types::DaemonNetwork::Mainnet);
+        assert_eq!(out.nettype, shekyl_rpc_types::Network::Mainnet);
         assert_eq!(
             out.genesis_hash,
             shekyl_rpc_types::HashHex::from_bytes([0x11; 32]),

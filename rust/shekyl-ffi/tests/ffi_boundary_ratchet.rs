@@ -60,7 +60,8 @@ use std::path::Path;
 /// endorsement: raw `from_raw_parts` sites each hand-own the byte-bound
 /// precondition, and the pins exist so their number can only shrink.
 const BASELINE: &[(&str, usize, usize)] = &[
-    ("account_ffi.rs", 7, 0),
+    // RETIRED (NI-R7, 2026-11-03): `account_ffi.rs` was deleted with the
+    // C++ account class it served; no wallet key material crosses the FFI.
     // with_capacity 2 -> 1 (2026-10-06): the admission body moved to
     // shekyl-archival-retention::attestation_admission (E6 slice 8 row 10
     // c1); the header-parse buffer went with it. The file is the shim.

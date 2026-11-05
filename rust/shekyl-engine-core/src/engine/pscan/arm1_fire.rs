@@ -39,7 +39,7 @@
 
 use std::collections::{BTreeMap, BTreeSet};
 
-use shekyl_crypto_pq::account::{DerivationNetwork, SeedFormat, MASTER_SEED_BYTES};
+use shekyl_crypto_pq::account::{normalize_seed, MASTER_SEED_BYTES, SEED_BYTES};
 use shekyl_crypto_pq::archival_p::{derive_archival_p_keys, ArchivalPKeys};
 use shekyl_crypto_pq::kem::HybridKemPublicKey;
 use shekyl_scanner::bench_fixtures::{
@@ -85,11 +85,18 @@ pub struct Arm1FireReport {
     pub sweep_refuses_after_prune: bool,
 }
 
-const SEED: [u8; MASTER_SEED_BYTES] = [0x5Au8; MASTER_SEED_BYTES];
+/// The harness wallet's seed.
+const SEED: [u8; SEED_BYTES] = [0x5Au8; SEED_BYTES];
 const SLOT: u32 = 0;
 
+/// The master seed the wallet derives from [`SEED`]: every key, the
+/// personas included, expands from it.
+fn master_seed() -> zeroize::Zeroizing<[u8; MASTER_SEED_BYTES]> {
+    normalize_seed(&SEED)
+}
+
 fn persona() -> Result<ArchivalPKeys, String> {
-    derive_archival_p_keys(&SEED, DerivationNetwork::Fakechain, SeedFormat::Raw32, SLOT)
+    derive_archival_p_keys(&master_seed(), Network::Regtest, SLOT)
         .map_err(|e| format!("derive persona: {e}"))
 }
 
@@ -299,15 +306,12 @@ pub async fn run_arm3_fire(scratch_dir: &std::path::Path) -> Result<Arm3FireRepo
     // Explicit production-shape construction (the RPC/CLI construction path,
     // not the cfg(test) convenience — which does not exist in this
     // compilation). Minimum-wall-clock KDF so the lane runs under a debug
-    // build; Stagenet+Bip39 is a permitted pair.
+    // build.
     let params = EngineCreateParams {
         base_path: &base,
         credentials: &creds,
         network: Network::Stagenet,
-        capability: CapabilityInput::Full {
-            master_seed_64: &SEED,
-            seed_format: SeedFormat::Bip39,
-        },
+        capability: CapabilityInput::Full { seed: &SEED },
         creation_timestamp: 0,
         restore_height_hint: 0,
         kdf: KdfParams {
@@ -365,16 +369,11 @@ pub async fn run_arm3_fire(scratch_dir: &std::path::Path) -> Result<Arm3FireRepo
     // Build confirmed-absence evidence through the production path: scan a
     // chained fixture range (no bond posts anywhere) with the persona's real
     // scanner, then seal it with the production pscan seal.
-    // The WALLET's persona (same seed, the wallet's own network/format pair)
-    // — the derive-equivalence discipline: one primitive, the wallet's
+    // The WALLET's persona (same seed, the wallet's own network) — the
+    // derive-equivalence discipline: one primitive, the wallet's
     // parameters.
-    let keys = derive_archival_p_keys(
-        &SEED,
-        crate::engine::lifecycle::network_to_derivation(network),
-        SeedFormat::Bip39,
-        SLOT,
-    )
-    .map_err(|e| format!("derive wallet persona: {e}"))?;
+    let keys = derive_archival_p_keys(&master_seed(), network, SLOT)
+        .map_err(|e| format!("derive wallet persona: {e}"))?;
     let scanner = crate::engine::pscan::persona_scanner::guaranteed_scanner_for_persona(&keys)
         .map_err(|e| format!("scanner: {e}"))?;
     let b0 = chain(build_typical_case_scannable_block(1), BlockHash::NULL);

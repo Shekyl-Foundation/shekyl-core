@@ -9,7 +9,7 @@
 //! A client establishes, once per connection, that the daemon it dialed is
 //! the daemon it was built for, on four axes: **wire**
 //! ([`CORE_RPC_VERSION`]), **rules** ([`CONSENSUS_CONSTANTS_DIGEST`]),
-//! **network** ([`DaemonNetwork`]) and **genesis** (block 0's hash, added by
+//! **network** ([`Network`]) and **genesis** (block 0's hash, added by
 //! `VC-R2`). This module carries the second and third.
 //!
 //! `VC-2` publishes both on `get_version`. [`crate::identity`] compares them
@@ -17,10 +17,6 @@
 //! and network pins, not a staged placeholder.
 //!
 //! [`CORE_RPC_VERSION`]: crate::CORE_RPC_VERSION
-
-use std::fmt;
-
-use serde::{Deserialize, Serialize};
 
 use crate::hash::HashHex;
 
@@ -58,85 +54,13 @@ include!(concat!(env!("OUT_DIR"), "/consensus_constants_digest.rs"));
 pub const CONSENSUS_CONSTANTS_DIGEST_HASH: HashHex =
     HashHex::from_bytes(CONSENSUS_CONSTANTS_DIGEST_BYTES);
 
-/// The network a daemon reports it runs, as `get_version.nettype` will carry
-/// it (`VC-2`) and as `/get_info.nettype` carries it today.
-///
-/// A **wire-side** type: it has the fourth variant the daemon can report
-/// (`cryptonote::FAKECHAIN`, `shekyld --regtest`), which
-/// `shekyl_address::Network` deliberately does not — adding it there is the
-/// workspace-wide change `V3_WALLET_DECISION_LOG.md` :1397 deferred, and this
-/// type exists so the handshake does not need it. The mapping between the two
-/// is the network-axis comparison in `VC-4` (design §3.6.4): equal networks
-/// pass; `Fakechain` passes only under a typed `FakechainPolicy::Accept`.
-///
-/// Serialises as the daemon's lowercase strings. An unknown string is a
-/// deserialisation error, never a default — a daemon reporting a network this
-/// build does not know is a daemon this build cannot vouch for.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
-#[serde(rename_all = "lowercase")]
-pub enum DaemonNetwork {
-    /// `cryptonote::MAINNET`.
-    Mainnet,
-    /// `cryptonote::TESTNET`.
-    Testnet,
-    /// `cryptonote::STAGENET`.
-    Stagenet,
-    /// `cryptonote::FAKECHAIN` — `shekyld --regtest`.
-    Fakechain,
-}
-
-impl DaemonNetwork {
-    /// The daemon's spelling, as `get_info`'s `nettype` carries it.
-    #[must_use]
-    pub const fn as_str(self) -> &'static str {
-        match self {
-            Self::Mainnet => "mainnet",
-            Self::Testnet => "testnet",
-            Self::Stagenet => "stagenet",
-            Self::Fakechain => "fakechain",
-        }
-    }
-
-    /// `cryptonote::network_type`: MAINNET=0, TESTNET=1, STAGENET=2,
-    /// FAKECHAIN=3. Unknown codes are `None`, never a default.
-    #[must_use]
-    pub const fn from_cryptonote(code: u8) -> Option<Self> {
-        match code {
-            0 => Some(Self::Mainnet),
-            1 => Some(Self::Testnet),
-            2 => Some(Self::Stagenet),
-            3 => Some(Self::Fakechain),
-            _ => None,
-        }
-    }
-
-    /// Inverse of [`Self::from_cryptonote`].
-    #[must_use]
-    pub const fn to_cryptonote(self) -> u8 {
-        match self {
-            Self::Mainnet => 0,
-            Self::Testnet => 1,
-            Self::Stagenet => 2,
-            Self::Fakechain => 3,
-        }
-    }
-}
-
-impl fmt::Display for DaemonNetwork {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        f.write_str(self.as_str())
-    }
-}
-
-impl From<shekyl_address::Network> for DaemonNetwork {
-    fn from(network: shekyl_address::Network) -> Self {
-        match network {
-            shekyl_address::Network::Mainnet => Self::Mainnet,
-            shekyl_address::Network::Testnet => Self::Testnet,
-            shekyl_address::Network::Stagenet => Self::Stagenet,
-        }
-    }
-}
+/// The network a daemon reports it runs, as `get_version.nettype` and
+/// `/get_info.nettype` carry it: the network table's one type
+/// (`NETWORK_IDENTITY.md` NI-Q8). Serialises as the network's name; an
+/// unknown string is a deserialisation error, never a default — a daemon
+/// reporting a network this build does not know is a daemon this build
+/// cannot vouch for.
+pub use shekyl_network::Network;
 
 #[cfg(test)]
 #[path = "../build_support/consensus_canonical.rs"]
@@ -464,24 +388,24 @@ mod tests {
     #[test]
     fn daemon_network_round_trips_the_daemons_spellings() {
         for (variant, text) in [
-            (DaemonNetwork::Mainnet, "\"mainnet\""),
-            (DaemonNetwork::Testnet, "\"testnet\""),
-            (DaemonNetwork::Stagenet, "\"stagenet\""),
-            (DaemonNetwork::Fakechain, "\"fakechain\""),
+            (Network::Mainnet, "\"mainnet\""),
+            (Network::Testnet, "\"testnet\""),
+            (Network::Stagenet, "\"stagenet\""),
+            (Network::Regtest, "\"regtest\""),
         ] {
             assert_eq!(serde_json::to_string(&variant).unwrap(), text);
-            let back: DaemonNetwork = serde_json::from_str(text).unwrap();
+            let back: Network = serde_json::from_str(text).unwrap();
             assert_eq!(back, variant);
             assert_eq!(format!("\"{variant}\""), text);
-            assert_eq!(variant.as_str(), text.trim_matches('"'));
+            assert_eq!(variant.name(), text.trim_matches('"'));
         }
     }
 
     #[test]
     fn daemon_network_refuses_a_spelling_this_build_does_not_know() {
-        for text in ["\"regtest\"", "\"Mainnet\"", "\"\"", "0", "null"] {
+        for text in ["\"fakechain\"", "\"Mainnet\"", "\"\"", "0", "null"] {
             assert!(
-                serde_json::from_str::<DaemonNetwork>(text).is_err(),
+                serde_json::from_str::<Network>(text).is_err(),
                 "{text} must not parse as a network"
             );
         }
@@ -489,31 +413,19 @@ mod tests {
 
     #[test]
     fn daemon_network_from_cryptonote_is_strict() {
-        assert_eq!(
-            DaemonNetwork::from_cryptonote(0),
-            Some(DaemonNetwork::Mainnet)
-        );
-        assert_eq!(
-            DaemonNetwork::from_cryptonote(1),
-            Some(DaemonNetwork::Testnet)
-        );
-        assert_eq!(
-            DaemonNetwork::from_cryptonote(2),
-            Some(DaemonNetwork::Stagenet)
-        );
-        assert_eq!(
-            DaemonNetwork::from_cryptonote(3),
-            Some(DaemonNetwork::Fakechain)
-        );
-        assert_eq!(DaemonNetwork::from_cryptonote(4), None);
-        assert_eq!(DaemonNetwork::from_cryptonote(255), None);
+        assert_eq!(Network::from_code(0), Some(Network::Mainnet));
+        assert_eq!(Network::from_code(1), Some(Network::Testnet));
+        assert_eq!(Network::from_code(2), Some(Network::Stagenet));
+        assert_eq!(Network::from_code(3), Some(Network::Regtest));
+        assert_eq!(Network::from_code(4), None);
+        assert_eq!(Network::from_code(255), None);
         for n in [
-            DaemonNetwork::Mainnet,
-            DaemonNetwork::Testnet,
-            DaemonNetwork::Stagenet,
-            DaemonNetwork::Fakechain,
+            Network::Mainnet,
+            Network::Testnet,
+            Network::Stagenet,
+            Network::Regtest,
         ] {
-            assert_eq!(DaemonNetwork::from_cryptonote(n.to_cryptonote()), Some(n));
+            assert_eq!(Network::from_code(n.code()), Some(n));
         }
     }
 }

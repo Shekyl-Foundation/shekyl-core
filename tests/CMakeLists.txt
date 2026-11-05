@@ -84,7 +84,6 @@ else ()
   endif()
 endif()
 
-
 set(hash_targets_sources
   hash-target.cpp)
 

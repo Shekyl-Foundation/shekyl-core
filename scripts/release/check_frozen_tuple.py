@@ -14,9 +14,11 @@ That is the hazard this gate is for. When a cut changes what a valid chain
 is, and the genesis does not change with it, the old fleet and the new
 build share one network id. They connect, each rejects the other's blocks,
 and they ban each other, until someone works out that the two "same network"
-halves were never one network. The remedy costs one integer: move
-`config::testnet::GENESIS_NONCE`, which moves the hash and the id, and the
-old and new builds stop seeing each other at the handshake.
+halves were never one network. A network's genesis is fixed for its life
+(`docs/design/NETWORK_IDENTITY.md` NI-R5): the remedy is the handshake rules
+check (NI-Q10), which refuses an incompatible build at the handshake, and
+this gate shrinks to what `PINNED_DIGEST` enforces or goes in that change.
+Until then, a refusal here means: do not cut.
 
 So, between the previous release tag and the candidate:
 
@@ -58,9 +60,20 @@ from pathlib import Path
 
 DIGEST_FILE = "rust/shekyl-rpc-types/build.rs"
 DIGEST_RE = re.compile(r'const PINNED_DIGEST: &str = "([0-9a-f]{64})";')
-GENESIS_FILE = "rust/shekyl-rpc-types/src/identity.rs"
-GENESIS_RE = re.compile(
-    r'const TESTNET_GENESIS: \[u8; 32\] =\s*hex32\(b"([0-9a-f]{64})"\);'
+# Where a ref keeps testnet's genesis hash: the network table's pin file
+# (`shekyl-network`, NI-Q3), or, in a release from before the table, the
+# client identity's constant. The first that exists at a ref is read.
+GENESIS_SOURCES = (
+    (
+        "rust/shekyl-network/genesis/testnet.hash",
+        re.compile(r"\A([0-9a-f]{64})\n?\Z"),
+        "testnet genesis hash",
+    ),
+    (
+        "rust/shekyl-rpc-types/src/identity.rs",
+        re.compile(r'const TESTNET_GENESIS: \[u8; 32\] =\s*hex32\(b"([0-9a-f]{64})"\);'),
+        "TESTNET_GENESIS",
+    ),
 )
 CHAINS_DIR = "rust/shekyl-chain-ingest/tests/vectors"
 
@@ -88,11 +101,28 @@ def pinned(root, ref, path, pattern, what):
     return matches[0]
 
 
+def exists(root, ref, path):
+    proc = subprocess.run(
+        ["git", "-C", str(root), "cat-file", "-e", f"{ref}:{path}"], capture_output=True
+    )
+    return proc.returncode == 0
+
+
+def testnet_genesis(root, ref):
+    for path, pattern, what in GENESIS_SOURCES:
+        if exists(root, ref, path):
+            return pinned(root, ref, path, pattern, what)
+    raise Unreadable(
+        f"{ref}: no testnet genesis pin at "
+        + " or ".join(path for path, _, _ in GENESIS_SOURCES)
+    )
+
+
 def record(root, ref):
     return {
         "digest": pinned(root, ref, DIGEST_FILE, DIGEST_RE, "PINNED_DIGEST"),
         "chains": git(root, "rev-parse", f"{ref}:{CHAINS_DIR}").strip(),
-        "genesis": pinned(root, ref, GENESIS_FILE, GENESIS_RE, "TESTNET_GENESIS"),
+        "genesis": testnet_genesis(root, ref),
     }
 
 
@@ -131,8 +161,9 @@ def main(argv=None):
         print(
             "frozen tuple: REFUSED. The consensus surface moved and the testnet "
             "genesis did not, so this build and the previous release share a "
-            "network id while disagreeing about the chain. Move "
-            "config::testnet::GENESIS_NONCE and re-record its pins "
+            "network id while disagreeing about the chain. Do not cut: the "
+            "handshake rules check (docs/design/NETWORK_IDENTITY.md NI-Q10) is "
+            "what refuses the old fleet, and it has to land first "
             "(docs/RELEASE_PROMOTION.md §6).",
             file=sys.stderr,
         )

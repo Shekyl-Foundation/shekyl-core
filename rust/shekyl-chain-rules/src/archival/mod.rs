@@ -56,7 +56,7 @@
 //!   carries — never off the process-latched free functions
 //!   (`settlement_epoch_at_height`, …), which are the daemon's and the
 //!   FFI's entry points. The validator reads no environment; a chain
-//!   captured under a shortened regtest epoch replays under a Fakechain
+//!   captured under a shortened regtest epoch replays under a levered
 //!   set naming that epoch, in any process.
 //! - **Zero is a value** (`ARW-Q4`, §3.6). The gather writes an `RMarket`
 //!   for **every shard of its universe**, zeros included; the C++ skipped

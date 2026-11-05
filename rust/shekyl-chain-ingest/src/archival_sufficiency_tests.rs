@@ -13,7 +13,7 @@
 //! says, family by family, where it is not:
 //!
 //! 1. **Census.** Which families the corpus actually exercises, per chain,
-//!    read off the six committed `0x04` records and asserted in **both**
+//!    read off the committed `0x04` records and asserted in **both**
 //!    directions against the table pre-declared in E4 §6 row 8 before this
 //!    ran. A family the table says is exercised and is not, or one that is
 //!    and the table omits, fails here — the corpus is enumerated, not
@@ -36,9 +36,13 @@
 //! rows of every `0x04` record are a pre-declared fact of the corpus, not a
 //! silence the oracle happens to agree with. One cell cuts across that
 //! line and the first census run found it: the slash **watermark** is the
-//! deadline scan's progress, not a slash, and the epoch-crossing chain
+//! deadline scan's progress, not a slash, and a chain that crosses an epoch
 //! carries it — so the `SlashLog` *gate* has a stub witness through the
-//! watermark while the slash *rows* have none.
+//! watermark while the slash *rows* have none. No captured chain crosses an
+//! epoch until SO-D12 4b's evidence run recaptures `emission-claim`
+//! (`docs/FOLLOWUPS.md`); until then the epoch-close families and the
+//! watermark are declared unwitnessed and the watermark's stub test is
+//! ignored.
 //!
 //! **A witness chain that predates a rule suspends its stub half.** The
 //! stub half needs the replay to reach the tip or to be ended by the
@@ -47,8 +51,7 @@
 //! refusal equal to its record is **not** the stub being noticed — it is
 //! read as `Suspended`, reported, and counted for nothing. The census half
 //! is unaffected (it reads the committed `0x04` record, not a replay).
-//! Today that is `emission-claim`'s four families and the watermark: their
-//! stub witnesses resume when the chain is regenerated against CEN-J15.
+//! No captured chain predates a rule today.
 
 // A whole-file test module, gated at `lib.rs` by
 // `#[cfg(all(test, feature = "pipeline"))]`. The inner attribute is the
@@ -89,6 +92,10 @@ enum Witness {
     Excluded(&'static str),
 }
 
+/// Why the epoch-close families have no corpus witness.
+const EPOCH_CLOSE_UNWITNESSED: &str =
+    "no captured chain crosses a settlement epoch until SO-D12 4b recaptures emission-claim (docs/FOLLOWUPS.md)";
+
 /// The witness table, exhaustive over the X-macro. Pre-declared in E4 §6
 /// row 8 (2026-10-02) before the census ran.
 const fn witness(family: ArchivalFamily) -> Witness {
@@ -97,23 +104,23 @@ const fn witness(family: ArchivalFamily) -> Witness {
             shape: "bond-post",
             rows: SnapshotFamily::Bond,
         },
-        // The one chain that crosses an epoch (SEB 512) and carries the one
-        // out-of-band credit: the close and everything it writes live here.
-        ArchivalFamily::ServeCredit => Witness::Corpus {
-            shape: "emission-claim",
+        // The epoch close and everything it writes: witnessed only by a
+        // chain that crosses an epoch.
+        ArchivalFamily::ServeCredit => Witness::Unwitnessed {
             rows: SnapshotFamily::ServeCredit,
+            why: EPOCH_CLOSE_UNWITNESSED,
         },
-        ArchivalFamily::RMarket => Witness::Corpus {
-            shape: "emission-claim",
+        ArchivalFamily::RMarket => Witness::Unwitnessed {
             rows: SnapshotFamily::RMarket,
+            why: EPOCH_CLOSE_UNWITNESSED,
         },
-        ArchivalFamily::SigmaWork => Witness::Corpus {
-            shape: "emission-claim",
+        ArchivalFamily::SigmaWork => Witness::Unwitnessed {
             rows: SnapshotFamily::SigmaWork,
+            why: EPOCH_CLOSE_UNWITNESSED,
         },
-        ArchivalFamily::Budget => Witness::Corpus {
-            shape: "emission-claim",
+        ArchivalFamily::Budget => Witness::Unwitnessed {
             rows: SnapshotFamily::Budget,
+            why: EPOCH_CLOSE_UNWITNESSED,
         },
         // Every chain carries the open epoch's one accruing row; the
         // smallest is the witness.
@@ -123,8 +130,7 @@ const fn witness(family: ArchivalFamily) -> Witness {
         },
         ArchivalFamily::AttestationWitness => Witness::Unwitnessed {
             rows: SnapshotFamily::AttestationWitness,
-            why: "no captured chain carries an attestation transaction; the serve credit the \
-                  corpus has is injected (`IngestEvent::Inject`), not attested",
+            why: "no captured chain carries an attestation transaction",
         },
         ArchivalFamily::SlashLog => Witness::Unwitnessed {
             rows: SnapshotFamily::SlashLog,
@@ -133,8 +139,8 @@ const fn witness(family: ArchivalFamily) -> Witness {
                   by the store's slash witness; the m-of-n fixture is evidence of the two \
                   writers' disagreement (ARW-26 / ARW-Q17), not a corpus witness. The \
                   family's *gate* is seen through the watermark cell \
-                  (`stubbing_the_slash_log_is_noticed_through_the_watermark_alone`); its \
-                  rows are not",
+                  (`stubbing_the_slash_log_is_noticed_through_the_watermark_alone`) once a \
+                  captured chain crosses an epoch (SO-D12 4b); its rows are not",
         },
         ArchivalFamily::SlashApplied => Witness::Unwitnessed {
             rows: SnapshotFamily::SlashApplied,
@@ -157,31 +163,15 @@ const fn witness(family: ArchivalFamily) -> Witness {
 /// The census pre-declared in E4 §6 row 8: which snapshot families carry
 /// rows on which captured chain.
 ///
-/// `LastSlashEpoch` has no X-macro family. The pre-declaration (written
-/// before this ran) put it with the slash rows — on no chain — and the
-/// first census run refuted that: the watermark is the **deadline scan's
-/// progress**, moved when an epoch's slash deadline passes whether or not
-/// anything was slashed, so `emission-claim` (the one chain that crosses
-/// an epoch) carries it with no slash behind it. Corrected 2026-10-02 in
-/// E4 §6 row 8; the slash *rows* stay on no chain, as pre-declared.
+/// `LastSlashEpoch` has no X-macro family. The watermark is the **deadline
+/// scan's progress**, moved when an epoch's slash deadline passes whether
+/// or not anything was slashed, so a chain that crosses an epoch carries it
+/// with no slash behind it (E4 §6 row 8). No captured chain crosses one, so
+/// it is on no chain; the slash *rows* are on no chain, as pre-declared.
 fn expected_census() -> BTreeMap<&'static str, Vec<SnapshotFamily>> {
-    use SnapshotFamily::{
-        Bond, Budget, BudgetAccruing, LastSlashEpoch, RMarket, ServeCredit, SigmaWork,
-    };
+    use SnapshotFamily::{Bond, BudgetAccruing};
     BTreeMap::from([
         ("bond-post", vec![Bond, BudgetAccruing]),
-        (
-            "emission-claim",
-            vec![
-                Bond,
-                ServeCredit,
-                RMarket,
-                SigmaWork,
-                Budget,
-                BudgetAccruing,
-                LastSlashEpoch,
-            ],
-        ),
         ("limit-full", vec![BudgetAccruing]),
         ("median-full", vec![BudgetAccruing]),
         ("spend-1in-2out", vec![BudgetAccruing]),
@@ -242,10 +232,10 @@ fn every_family_has_a_witness_that_matches_its_disposition() {
     }
 }
 
-/// Census, both directions: the six committed `0x04` records carry rows of
+/// Census, both directions: the committed `0x04` records carry rows of
 /// exactly the families E4 §6 row 8 pre-declared, chain by chain; every
 /// corpus witness is on its named chain; every no-corpus family is empty
-/// everywhere — the slash rows of all six are empty, as pre-declared.
+/// everywhere — the slash rows of every chain are empty, as pre-declared.
 #[test]
 fn the_corpus_exercises_exactly_the_predeclared_families() {
     let expected = expected_census();
@@ -291,19 +281,18 @@ fn the_corpus_exercises_exactly_the_predeclared_families() {
         }
     }
     // The watermark cell sits exactly where a slash deadline passed and
-    // nowhere a slash happened: on the epoch-crossing chain alone, beside
-    // empty slash rows. A watermark on a chain whose epoch never closed, or
-    // a slash row anywhere, is a corpus change this table must learn first.
+    // nowhere a slash happened. No captured chain crosses an epoch, so no
+    // chain carries it; SO-D12 4b's recapture of `emission-claim` restores
+    // the witness, and this table learns it first.
     let with_watermark: Vec<&String> = actual
         .iter()
         .filter(|(_, f)| f.contains(&SnapshotFamily::LastSlashEpoch))
         .map(|(shape, _)| shape)
         .collect();
-    assert_eq!(
-        with_watermark,
-        vec!["emission-claim"],
-        "the slash watermark is the deadline scan's progress, carried by the one chain that \
-         crosses an epoch"
+    assert!(
+        with_watermark.is_empty(),
+        "the slash watermark is the deadline scan's progress, and no captured chain crosses an \
+         epoch — yet {with_watermark:?} carry it: a corpus change this table must learn"
     );
 }
 
@@ -311,38 +300,36 @@ fn the_corpus_exercises_exactly_the_predeclared_families() {
 /// with no X-macro family; its write is gated by `SlashLog`'s apply
 /// (`archival_write.rs` `write_slashes`: `if log_applies`). So the
 /// `SlashLog` *gate* has a corpus witness even though the slash *rows* do
-/// not — stubbing `SlashLog` on `emission-claim` must go red on the
-/// watermark and on nothing else, which is the exact shape of the declared
-/// red: the gate is seen, the rows are not.
+/// not — stubbing `SlashLog` on the first captured chain whose `0x04`
+/// record carries the watermark must go red on the watermark and on nothing
+/// else, which is the exact shape of the declared red: the gate is seen,
+/// the rows are not.
+///
+/// Unwitnessed while no captured chain carries the watermark
+/// ([`EPOCH_CLOSE_UNWITNESSED`]), like the families the witness table
+/// declares unwitnessed. That absence is not silent:
+/// `the_corpus_exercises_exactly_the_predeclared_families` asserts no chain
+/// carries the watermark, so the capture that brings one fails there first,
+/// and this test then runs on it unchanged.
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn stubbing_the_slash_log_is_noticed_through_the_watermark_alone() {
     let substrate = mock_with_the_real_clock();
     let chains = captured_chains();
-    let (dir, manifest) = chains
+    let Some((dir, manifest)) = chains
         .iter()
-        .find(|(_, m)| m.shape == "emission-claim")
-        .expect("emission-claim is captured");
+        .find(|(dir, m)| captured_snapshot(dir, m).contains(&SnapshotFamily::LastSlashEpoch))
+    else {
+        eprintln!("SlashLog gate: UNWITNESSED — {EPOCH_CLOSE_UNWITNESSED}");
+        return;
+    };
     let policy = ApplyPolicy::stubbed(&[ArchivalFamily::SlashLog]).expect("non-empty");
     let report = replay_under(dir, manifest, substrate, policy)
         .await
         .expect("no row the chain's blocks need is behind the slash log's gate");
-    // The watermark is written at the epoch close (512); a chain refused
-    // below it by a rule it predates never gets there, stubbed or not. The
+    // The watermark is written at the epoch close; a chain refused below
+    // it by a rule it predates never gets there, stubbed or not. The
     // witness is suspended, pinned to the record, and resumes the day the
     // record is deleted (module doc).
-    // Likewise a chain that stops at a retired keyless JoinMarket
-    // (`vectors_tests/retired_keyless_join.rs`, `RETIRED_KEYLESS_JOINS`): the run ends at 98, far
-    // below the close, with nothing refused.
-    if let Some(retired) = crate::vectors_tests::retired_keyless_join(&manifest.shape) {
-        assert!(report.refused.is_none(), "{:?}", report.refused);
-        assert_eq!(report.connected.len() as u64, retired.at.to_raw());
-        eprintln!(
-            "SlashLog stubbed on `{}`: watermark witness SUSPENDED — the chain is read only \
-             below its retired keyless JoinMarket at {:?}; resumes when it is re-captured",
-            manifest.shape, retired.at
-        );
-        return;
-    }
     if let Some(record) = predates(&manifest.shape) {
         assert_eq!(report.refused, Some(record.refused), "{}", record.why);
         eprintln!(
@@ -358,8 +345,8 @@ async fn stubbing_the_slash_log_is_noticed_through_the_watermark_alone() {
     assert_eq!(
         diverged,
         vec![SnapshotFamily::LastSlashEpoch],
-        "SlashLog stubbed on `emission-claim`: the watermark is the one row the corpus has \
-         behind this gate"
+        "SlashLog stubbed on `{}`: the watermark is the one row the corpus has behind this gate",
+        manifest.shape
     );
 }
 
@@ -403,11 +390,6 @@ async fn stubbing_each_witnessed_family_is_noticed() {
                     Red::Suspended
                 }
                 (Some(refused), _) => Red::Cascade(format!("refused: {refused:?}")),
-                // The run ended at a retired keyless JoinMarket, stub or
-                // no stub: not the stub's doing, and nothing was compared.
-                (None, None) if crate::vectors_tests::retired_keyless_join(shape).is_some() => {
-                    Red::Suspended
-                }
                 // Neither red nor compared is not a stub's doing — the
                 // trace or the run lost the tip. A finding, not an outcome.
                 (None, None) => panic!(
