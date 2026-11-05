@@ -61,8 +61,8 @@ genesis below is not the one mainnet launches with.
 Genesis identity:
 
 ```text
-tx hash        a0fdfc7e4dab84e393f79ccf2c2f3783a95a9c1cdd9268c8d6221fdd9d582a90
-block id       b5d7806b89f44f8b554dc280703ea37b2deb4703c9aa0098a8cac1844fccbd43
+tx hash        027cd4eab42c68d4906a5106d6015de2c5b7e9c7fd9b1bbad6ab311ee3e5d7ab
+block id       cdd7233fc45420c24b5e4eeae8636bb5a8c52b4e0d7efd92ed397e3cc89e2a55
 ```
 
 ### stagenet
@@ -80,8 +80,8 @@ Source of truth: [`config/genesis_recipients.stagenet.json`](../config/genesis_r
 Genesis identity:
 
 ```text
-tx hash        fdeccc30c952ae308c082326d9af330bc2e840e544d2f52b47b142b5d8b49177
-block id       01f60443d2905d2833b613e77acdedd27332d6b0fd592485b9082b16284ce783
+tx hash        3396d303a926c50e8dc745915d91597ecdb7c20aebd8245cf2e8c1ad57b5688d
+block id       d986a79ea2320037878ff1b862af04a0827148b54e9f7f10283ca1bc038b87d2
 ```
 
 ### testnet
@@ -99,8 +99,8 @@ Source of truth: [`config/genesis_recipients.testnet.json`](../config/genesis_re
 Genesis identity:
 
 ```text
-tx hash        87f5ef16ac6b358e43935db1877b8e18ce0c7ba31b49048cad74d2054ef5fb4e
-block id       03b9ae1330f670dc3c27b6786281b26eec00e1f59d916076a388fa7b90f7775e
+tx hash        a4ce0b6b0a434e77a5b31f58d2cc6516b5e224335bc397b371b3fa6715e82344
+block id       bb826da27e019532f22c199d366812e39c2e33de1b5bbae3f6352bccf4caaa7b
 ```
 
 ### regtest
@@ -123,8 +123,8 @@ value and exist on no other network.
 Genesis identity:
 
 ```text
-tx hash        187c7c7ea8095838497498e297a47da31e8fb3e739db4e9887eb6cad77a6e64d
-block id       80074ff9d70c6f5ddd43268b4df4c240dcb482d3464271f752274406e10aa965
+tx hash        3a96f09b3b1cabc7b4bf7e3b0d91dbd9410f3f7180ee0874ec26503be1753b6e
+block id       a55e00d6677d3ad7f07e76e2255102ea761623bac23cc94d4185a0667b8a3825
 ```
 
 Addresses are truncated above for readability only — the full strings are
@@ -168,22 +168,24 @@ founding block.
 Derivation (implemented in `rust/shekyl-genesis-tool/src/txkey.rs`):
 
 ```text
-M = varint(len(net)) ‖ net_ascii            net = the network's name:
-                                            mainnet | testnet | stagenet | regtest
-    ‖ varint(n_recipients)
+R = varint(n_recipients)
     ‖ for each recipient, in file order:
         spend_pk(32) ‖ view_pk(32)
         ‖ varint(len(ek)) ‖ ek              ML-KEM-768 encap key
         ‖ amount_atomic as u64 little-endian
 
-seed      = cSHAKE256-32(customization = "shekyl/genesis-txkey-v2", input = M)
+seed      = frame("shekyl/genesis-txkey-v3", name_id, [R])     32 bytes
 tx_secret = seed reduced mod ℓ
 tx_pub    = tx_secret · G                   (the tx_extra 0x01 field)
 ```
 
-This is how genesis commits to the network's name (NI-R12): the same
-recipients under another name give another key, so another transaction
-and another block.
+`frame` is the signing envelope's: cSHAKE256 under the customization,
+over the 16-byte binding and then each field behind its u64
+little-endian length. The binding is the network's `name_id`, derived
+from its name (`shekyl/network-name-v1`), the value every key derivation
+is salted with. This is how genesis commits to the network's name
+(NI-R12): the same recipients under another name give another key, so
+another transaction and another block.
 
 ## 4. Key custody
 

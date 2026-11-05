@@ -39,13 +39,13 @@ GENESIS_DIR = ROOT / "rust/shekyl-network/genesis"
 NETWORKS = ("mainnet", "testnet", "stagenet", "regtest")
 NETWORK_ID_DST = b"shekyl/p2p-network-id-v1"
 
-# The ids PR 1 recorded (rust/shekyl-ffi/src/network_id_ffi.rs), written out:
+# The recorded ids (rust/shekyl-ffi/src/network_id_ffi.rs), written out:
 # the derivation below must reproduce them before it is trusted.
 RECORDED_IDS = {
-    "mainnet": "cf9f4283032b6ca19545f2696a228d80",
-    "testnet": "ff927a109aba9400d681e9f9934c7860",
-    "stagenet": "6ac79895e519d701c3076deae5eef0d8",
-    "regtest": "724b36a3b46f9ccd5e50c63b6fb6e731",
+    "mainnet": "9e77dd8ef64faef2c43c42b1cf5bc554",
+    "testnet": "4e948cf2481473d8949da645692464de",
+    "stagenet": "3a6b9b9ff5b7327cb44b192cc1d98ec8",
+    "regtest": "399064298436b76e7349df0a18cfbadf",
 }
 
 # ---- Keccak-f[1600] -------------------------------------------------------
@@ -223,4 +223,4 @@ def anchor() -> None:
     anchor_sponge()
     for name in NETWORKS:
         if network_id(name).hex() != RECORDED_IDS[name]:
-            sys.exit(f"{name}: the derived network id is not the one PR 1 recorded")
+            sys.exit(f"{name}: the derived network id is not the recorded one")

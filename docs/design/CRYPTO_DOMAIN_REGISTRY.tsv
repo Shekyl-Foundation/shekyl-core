@@ -96,7 +96,7 @@
 # mech	literal	file	const	status	key	notes
 #
 # ── Mechanism 1 — cSHAKE256 customization ─────────────────────────────
-1	shekyl/genesis-txkey-v2	rust/shekyl-genesis-tool/src/txkey.rs	GENESIS_TXKEY_CUSTOMIZATION	shekyl-live		pre-genesis remint: preimage is payment identity (spend/view/ek), not Bech32m spelling; v1 retired unused
+1	shekyl/genesis-txkey-v3	rust/shekyl-genesis-tool/src/txkey.rs	GENESIS_TXKEY	shekyl-live		the deterministic genesis tx key: frame(this domain, name_id, [recipients]) read to 32 bytes, reduced mod l; the recipients field is payment identity (spend/view/ek) and amount, never an address's spelling; genesis commits to the network's name through name_id (NI-R12; the signing envelope §2.4)
 1	shekyl/multisig-address-v3	rust/shekyl-address/src/multisig_address.rs	MULTISIG_ADDRESS_FINGERPRINT	shekyl-live		the multisig group's fingerprint: frame(this domain, name_id, [canonical payload]) (the signing envelope §2.1, §2.6; NI-R15: derived from keys, so the name); replaces -v2, whose input was len(tag) ‖ tag ‖ payload
 1	shekyl/ek-bind-v1	rust/shekyl-address/src/address.rs	EK_BIND_DST	shekyl-live
 1	shekyl/archival-serve-challenge-leaf-v2	rust/shekyl-archival-retention/src/challenge.rs	CHALLENGE_LEAF_CUSTOMIZATION	shekyl-live		PC-D3: preimage gained block_hash(h-1) so a pair-epoch's challenges draw their leaves independently (collisions mod leaf count allowed - independence, not distinctness, is the guarantee); -v1 label retired below

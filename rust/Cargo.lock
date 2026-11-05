@@ -4750,7 +4750,6 @@ dependencies = [
  "shekyl-address",
  "shekyl-archival-retention",
  "shekyl-consensus",
- "shekyl-crypto-hash",
  "shekyl-crypto-pq",
  "shekyl-fcmp",
  "shekyl-network",

@@ -437,7 +437,12 @@ count_pattern() {
 # records under shekyl/archival-serve-credit-bundle-v2 and the network id
 # at 64 bytes. The #[cfg(test)] site in bundle_tests.rs that rebuilt the
 # -v1 preimage by hand goes with it.
-MECH1_EXPECTED=77
+# Genesis tx key on the envelope (2026-11-05, Rick; the signing envelope
+# §2.4): 77 -> 76. `derive_genesis_tx_secret` in
+# rust/shekyl-genesis-tool/src/txkey.rs called cshake256_32 under
+# shekyl/genesis-txkey-v2 over the name string and the recipients; it frames
+# the recipients under shekyl/genesis-txkey-v3 and the network's name_id.
+MECH1_EXPECTED=76
 mech1=$(count_pattern 'cshake256_(?:32|64)\(|CShake256Core::new\(')
 if [[ "$mech1" != "$MECH1_EXPECTED" ]]; then
   echo "COUNT DRIFT mech 1 (cSHAKE call sites): found $mech1, pinned $MECH1_EXPECTED." >&2

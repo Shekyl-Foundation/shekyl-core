@@ -209,15 +209,17 @@ reserved or earmarked for this purpose at launch.
 20,000 SHEKYL split on **every** network (the earlier single combined
 treasury output on mainnet/stagenet is retired). The genesis coinbase is
 built by the Rust `geblock` tool (`rust/shekyl-genesis-tool`) from the
-committed recipients files `config/genesis_recipients.{mainnet,testnet,stagenet}.json`,
+committed recipients files `config/genesis_recipients.{mainnet,testnet,stagenet,regtest}.json`,
 with a **deterministic transaction key** derived from the recipients file
-itself (cSHAKE256, customization `shekyl/genesis-txkey-v2`; full spec in
-the tool's `txkey` module). Genesis is transparent by design — CT type
-Null, cleartext amounts, published recipients — so the public derivation
-discloses nothing beyond this document, and it makes the pinned
-`GENESIS_TX` byte-reproducible by anyone: `geblock verify` rebuilds all
-three networks from the committed files and byte-compares against
-`src/cryptonote_config.h`.
+itself under the network's `name_id` (the signing envelope's frame,
+customization `shekyl/genesis-txkey-v3`; full spec in the tool's `txkey`
+module and `GENESIS_ALLOCATIONS.md` §3). Genesis is transparent by
+design — CT type Null, cleartext amounts, published recipients — so the
+public derivation discloses nothing beyond this document, and it makes
+each network's pinned genesis byte-reproducible by anyone: `geblock
+verify` rebuilds all four networks from the committed files and
+byte-compares against the network table's pins
+(`rust/shekyl-network/genesis/`).
 
 **The allocations are final and published.** The recipient wallets were
 generated with fresh operating-system entropy, restore-verified from their
