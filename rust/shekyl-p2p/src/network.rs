@@ -198,9 +198,12 @@ impl Network {
             );
         }
 
-        // The inbound ceiling, resolved once before the listeners bind, as
-        // the seam resolved it; the plan's reservation covers them.
-        let ceiling = descriptors::inbound_ceiling(plan.reserved_descriptors);
+        // The inbound ceiling, resolved once before the listeners bind:
+        // the reservation counts them with what the daemon promised.
+        let ceiling = descriptors::inbound_ceiling(
+            plan.reserved_descriptors
+                .saturating_add(plan.listener_descriptors()),
+        );
         tracing::info!(?ceiling, "inbound ceiling");
 
         // The peers owner.

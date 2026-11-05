@@ -60,6 +60,21 @@ impl NetworkPlan {
         }
         connectors
     }
+
+    /// The listening sockets the connectors bind: one per clearnet listen
+    /// address, the managed Tor's forward listener, and the operator's
+    /// onion forward when one is named. The inbound ceiling is resolved
+    /// before they bind, so they are reserved with the rest.
+    #[must_use]
+    pub fn listener_descriptors(&self) -> u64 {
+        let clearnet = self.clearnet.as_ref().map_or(0, |c| c.listen.len());
+        let tor = match &self.tor {
+            TorPlan::None => 0,
+            TorPlan::Managed => 1,
+            TorPlan::Operator { onion_listen, .. } => usize::from(onion_listen.is_some()),
+        };
+        u64::try_from(clearnet + tor).unwrap_or(u64::MAX)
+    }
 }
 
 /// Upload and download bounds in bytes per second; `None` is unlimited.
@@ -116,4 +131,58 @@ pub struct PeerPlan {
     pub exclusive: Vec<NetworkAddress>,
     /// Disclose addresses before the white diversity floor is reached.
     pub disclose_early: bool,
+}
+
+#[cfg(test)]
+mod tests {
+    use std::net::{Ipv4Addr, SocketAddr};
+    use std::path::PathBuf;
+
+    use shekyl_socks::Proxy;
+
+    use super::{ClearnetPlan, LinkLimits, NetworkPlan, PeerPlan, TorPlan};
+
+    fn plan(listen: usize, tor: TorPlan) -> NetworkPlan {
+        let at = SocketAddr::from((Ipv4Addr::LOCALHOST, 0));
+        NetworkPlan {
+            network_id: [7; 16],
+            seeds: None,
+            allow_local: true,
+            reserved_descriptors: 8,
+            limits: LinkLimits::default(),
+            relay_noise: false,
+            clearnet: (listen > 0).then(|| ClearnetPlan {
+                listen: vec![at; listen],
+                proxy: None,
+                encrypt: false,
+                own: Vec::new(),
+            }),
+            tor,
+            peers: PeerPlan {
+                address_file: PathBuf::from("p2pstate.bin"),
+                operator: Vec::new(),
+                exclusive: Vec::new(),
+                disclose_early: false,
+            },
+            bans: Vec::new(),
+        }
+    }
+
+    /// Every listener the connectors bind is counted: the ceiling is
+    /// resolved before they exist.
+    #[test]
+    fn every_listener_the_connectors_bind_is_reserved() {
+        let socks = Proxy::unauthenticated(SocketAddr::from((Ipv4Addr::LOCALHOST, 9050)));
+        let operator = |onion_listen| TorPlan::Operator {
+            socks: socks.clone(),
+            onion_listen,
+            own: Vec::new(),
+        };
+        assert_eq!(plan(0, TorPlan::None).listener_descriptors(), 0);
+        assert_eq!(plan(2, TorPlan::None).listener_descriptors(), 2);
+        assert_eq!(plan(1, TorPlan::Managed).listener_descriptors(), 2);
+        assert_eq!(plan(0, operator(None)).listener_descriptors(), 0);
+        let forward = SocketAddr::from((Ipv4Addr::LOCALHOST, 18083));
+        assert_eq!(plan(1, operator(Some(forward))).listener_descriptors(), 2);
+    }
 }

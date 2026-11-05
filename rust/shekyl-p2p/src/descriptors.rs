@@ -8,8 +8,9 @@
 //! `shekyl-peer-policy` owns the arithmetic ([`InboundCeiling::resolve`]).
 //! This module owns the observation: `getrlimit` on POSIX, `/proc/self/fd`
 //! on Linux, and the named absence of a per-process ceiling on Windows. The
-//! probe describes the process at the moment of the call, so the network
-//! takes it once its listeners are bound and before it accepts.
+//! probe describes the process at the moment of the call. The network takes
+//! it once, before its listeners bind, and reserves them with the rest
+//! ([`crate::NetworkPlan::listener_descriptors`]).
 //!
 //! The one `unsafe` in this crate is `getrlimit`; it is scoped to this
 //! module.
