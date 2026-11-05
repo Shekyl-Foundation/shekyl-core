@@ -223,10 +223,16 @@ impl Dial for Connectors {
     }
 
     fn stamp_stream_end(&self, connector: ConnectorId, end: StreamEnd) -> DialFailure {
-        match connector {
-            ConnectorId::Clearnet => shekyl_clearnet::stamp_stream_end(end),
-            ConnectorId::Tor => shekyl_tor::stamp_stream_end(end),
-        }
+        stamp(connector, end)
+    }
+}
+
+/// A stream end shared code observed, stamped from the row's connector's
+/// own table: the composition gives it no meaning of its own.
+fn stamp(connector: ConnectorId, end: StreamEnd) -> DialFailure {
+    match connector {
+        ConnectorId::Clearnet => shekyl_clearnet::stamp_stream_end(end),
+        ConnectorId::Tor => shekyl_tor::stamp_stream_end(end),
     }
 }
 
@@ -317,5 +323,34 @@ async fn recv_admitted<T>(
             Ok(end) => Err(end),
             Err(_) => Err(DialEnd::local_close()),
         },
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use shekyl_transport_layer::{ConnectorId, StreamEnd};
+
+    use super::stamp;
+
+    /// Every end on every connector is that connector's own stamp. Red on
+    /// dispatching to the other connector's table.
+    #[test]
+    fn each_stream_end_is_stamped_from_its_connectors_table() {
+        for end in [
+            StreamEnd::PeerClosed,
+            StreamEnd::IoError,
+            StreamEnd::SendQueueFull,
+        ] {
+            assert_eq!(
+                stamp(ConnectorId::Clearnet, end),
+                shekyl_clearnet::stamp_stream_end(end),
+                "clearnet {end:?}"
+            );
+            assert_eq!(
+                stamp(ConnectorId::Tor, end),
+                shekyl_tor::stamp_stream_end(end),
+                "tor {end:?}"
+            );
+        }
     }
 }

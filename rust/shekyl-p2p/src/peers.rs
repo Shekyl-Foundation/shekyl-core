@@ -176,3 +176,52 @@ pub(crate) fn note_own_onion(dialer: &Peers, service_id: &str, virtual_port: u16
         }],
     );
 }
+
+#[cfg(test)]
+mod tests {
+    use std::sync::Arc;
+
+    use shekyl_dialer::{seeds, Dialer};
+    use shekyl_peerlist::{Peerlist, RefusedSet};
+    use shekyl_relay::owner::SecureRelayRng;
+    use shekyl_timing_engine::{EngineService, MonotonicClock};
+    use shekyl_transport_layer::{ConnectorId, Links, Sockets};
+
+    use super::admit_compiled_seeds;
+
+    /// A connector's start admits the row's seeds that are its own and no
+    /// other: a Tor-only node gets the onion seeds and not the clearnet
+    /// ones. Red on admitting every seed, or only clearnet's.
+    #[test]
+    fn a_tor_start_admits_the_onion_seeds_and_no_clearnet_one() {
+        let engine = EngineService::start(MonotonicClock::new());
+        let dialer = Arc::new(Dialer::new(
+            engine.handle(),
+            Arc::new(Links::new()),
+            &Sockets::new(),
+            RefusedSet::NON_GLOBAL,
+            Box::new(SecureRelayRng),
+        ));
+        let network = shekyl_network::Network::Testnet;
+        admit_compiled_seeds(&dialer, ConnectorId::Tor, Some(network));
+
+        let (onions, clearnet): (Vec<_>, Vec<_>) = seeds(network)
+            .into_iter()
+            .partition(|seed| Peerlist::connector_of(seed) == Some(ConnectorId::Tor));
+        assert!(!onions.is_empty(), "the row has onion seeds");
+        assert!(!clearnet.is_empty(), "the row has clearnet seeds");
+        let shared = dialer.shared();
+        for onion in &onions {
+            assert!(
+                shared.lists.is_gray(onion),
+                "an onion seed was not admitted: {onion:?}"
+            );
+        }
+        for seed in &clearnet {
+            assert!(
+                !shared.lists.is_gray(seed) && !shared.lists.is_white(seed),
+                "a clearnet seed was admitted on a Tor start: {seed:?}"
+            );
+        }
+    }
+}
