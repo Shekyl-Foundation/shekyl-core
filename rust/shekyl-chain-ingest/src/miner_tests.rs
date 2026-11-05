@@ -283,11 +283,15 @@ async fn the_miner_mines_through_the_connector_and_leaves_a_superseded_job() {
 
 /// A miner started [`SearchBound::Until`] a height mines no block above
 /// it (`generateblocks`' exact count). The bound is height one: posted
-/// that height's job, it finds the block, which connects. Posted the next
-/// template's, at height two, every worker parks: after a full rate
-/// window the miner has hashed nothing and found nothing. Red edit: drop
-/// the bound check in the worker loop; the job at height two is searched
-/// and its block found.
+/// that height's job, the one worker finds the block, which connects.
+/// Posted the next template's, at height two, that worker parks: after a
+/// full rate window the miner has hashed nothing and found nothing. One
+/// worker, because a second can still be hashing the bound-height job
+/// when the block is delivered, and that hash is recorded when it
+/// finishes — inside the later window — before the superseded generation
+/// is dropped. Red edit: drop the bound check in the worker loop; the job
+/// at height two is searched and its block found. Red edit: start a
+/// second worker.
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn a_miner_searching_until_a_height_mines_no_block_above_it() {
     let _lane = MINER_LANE.lock().await;
@@ -303,7 +307,7 @@ async fn a_miner_searching_until_a_height_mines_no_block_above_it() {
         &MinerConfig {
             address: MiningAddress::decode(&harness_address(), Network::Mainnet)
                 .expect("the harness address"),
-            threads: NonZeroUsize::new(2).expect("two"),
+            threads: NonZeroUsize::MIN,
             bound: SearchBound::Until(until),
         },
         Arc::clone(&board),
@@ -343,7 +347,7 @@ async fn a_miner_searching_until_a_height_mines_no_block_above_it() {
     assert_eq!(
         miner.status().rate.hashes,
         0,
-        "the workers parked on the job above the bound: not one hash in a full window"
+        "the worker parked on the job above the bound: not one hash in a full window"
     );
 
     miner.stop().join();

@@ -42,8 +42,20 @@ use tokio::sync::watch;
 pub enum MiningRefused {
     /// No `mine-address` row: there is no one for a coinbase to pay.
     NoAddress,
-    /// The miner is already running.
+    /// The miner is already running, and it searches a job at the height
+    /// this start asked for — or this start asked for every job. That
+    /// miner is left as it is.
     Running,
+    /// A miner is already running under [`SearchBound::Until`], and that
+    /// bound does not search a job at `height`. An unbounded miner cannot
+    /// be short: it searches every height. The running miner is left as
+    /// it is.
+    Short {
+        /// The height the running miner searches through.
+        until: BlockHeight,
+        /// The height this start asked to search through.
+        height: BlockHeight,
+    },
     /// More threads than the host runs at once: each holds a ring and a
     /// stack, and a count past the host's parallelism only adds threads
     /// that wait.
@@ -64,6 +76,12 @@ impl core::fmt::Display for MiningRefused {
         match self {
             Self::NoAddress => f.write_str("no mine-address is set; set it and restart the node"),
             Self::Running => f.write_str("the miner is already running"),
+            Self::Short { until, height } => write!(
+                f,
+                "the miner already running searches {}, which does not reach height {}",
+                SearchBound::Until(*until),
+                height.to_raw(),
+            ),
             Self::TooManyThreads { asked, host } => write!(
                 f,
                 "{asked} threads asked for; this host runs {host} at once"
@@ -75,6 +93,24 @@ impl core::fmt::Display for MiningRefused {
 }
 
 impl std::error::Error for MiningRefused {}
+
+/// What a second start hears when a miner is already in the slot.
+///
+/// An unbounded start never rebinds that miner. A bounded start whose
+/// height the running miner already searches — it is unbounded, or its
+/// bound is at least that height — is [`MiningRefused::Running`]: the
+/// caller waits, and does not stop a miner it did not start. A bounded
+/// start the running miner does not search is [`MiningRefused::Short`],
+/// so the caller is not left waiting for a height that miner will never
+/// reach.
+fn refusal_for_running(running: SearchBound, asked: SearchBound) -> MiningRefused {
+    match (running, asked) {
+        (SearchBound::Until(until), SearchBound::Until(height)) if !running.allows(height) => {
+            MiningRefused::Short { until, height }
+        }
+        (SearchBound::Unbounded | SearchBound::Until(_), _) => MiningRefused::Running,
+    }
+}
 
 /// The posted job, as `mining_status` reports it.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -121,10 +157,20 @@ pub(crate) struct Watched {
 
 /// What the miner slot holds. `Arming` is the stop flag, published before
 /// any worker runs, so [`MiningControl::close`] can signal it without
-/// waiting for the spawn. `Mining` is the running workers.
+/// waiting for the spawn. `Mining` is the running workers. Both carry the
+/// bound those workers search: a second start reads it before the spawn
+/// finishes, and the bound does not change for the miner's life.
 enum Resident {
-    Arming(MinerStop),
-    Mining(Miner),
+    Arming { stop: MinerStop, bound: SearchBound },
+    Mining { miner: Miner, bound: SearchBound },
+}
+
+impl Resident {
+    fn bound(&self) -> SearchBound {
+        match self {
+            Self::Arming { bound, .. } | Self::Mining { bound, .. } => *bound,
+        }
+    }
 }
 
 /// The running miner. A poisoned lock still holds it: a panicked holder
@@ -148,7 +194,7 @@ struct ClearArming<'a> {
 impl Drop for ClearArming<'_> {
     fn drop(&mut self) {
         let mut slot = lock_miner(self.slot);
-        if matches!(slot.as_ref(), Some(Resident::Arming(_))) {
+        if matches!(slot.as_ref(), Some(Resident::Arming { .. })) {
             *slot = None;
         }
     }
@@ -230,19 +276,19 @@ impl MiningControl {
         let mut running = lock_miner(&self.miner);
         self.closed.store(true, Ordering::Release);
         match running.take() {
-            Some(Resident::Mining(miner)) => {
+            Some(Resident::Mining { miner, .. }) => {
                 // The miner lock is held across the park, so a start cannot
                 // publish between the take and it. `defer` does not take the
                 // gate and does not join.
                 self.drain.defer(miner.stop());
             }
-            Some(Resident::Arming(flag)) => {
+            Some(Resident::Arming { stop, .. }) => {
                 // The threads are not spawned yet, or are still being
                 // spawned by the start that holds the join gate. Signaling
                 // here is what makes a block unable to leave after this
                 // returns. That start parks the threads; deferring an
                 // empty set here would be a second park.
-                flag.signal();
+                stop.signal();
             }
             None => {}
         }
@@ -276,8 +322,11 @@ impl MiningControl {
 
     /// Start the miner searching no job above `height`
     /// ([`SearchBound::Until`]). The thread count is [`Self::start`] with
-    /// `None`. A miner already running is [`MiningRefused::Running`]: this
-    /// does not bound it.
+    /// `None`. A miner already running is left as it is. When it searches
+    /// a job at `height`, the refusal is [`MiningRefused::Running`]. When
+    /// it does not, the refusal is [`MiningRefused::Short`]: this call
+    /// does not wait for a height that miner will never reach, and it
+    /// does not stop or rebind a miner it did not start.
     ///
     /// # Errors
     ///
@@ -321,8 +370,8 @@ impl MiningControl {
                 if closed.load(Ordering::Acquire) {
                     return Err(MiningRefused::NodeStopped);
                 }
-                if running.is_some() {
-                    return Err(MiningRefused::Running);
+                if let Some(resident) = running.as_ref() {
+                    return Err(refusal_for_running(resident.bound(), bound));
                 }
                 drop(running);
                 PreparedMiner::arm(
@@ -344,10 +393,13 @@ impl MiningControl {
                 if closed.load(Ordering::Acquire) {
                     return Err(MiningRefused::NodeStopped);
                 }
-                if running.is_some() {
-                    return Err(MiningRefused::Running);
+                if let Some(resident) = running.as_ref() {
+                    return Err(refusal_for_running(resident.bound(), bound));
                 }
-                *running = Some(Resident::Arming(flag.clone()));
+                *running = Some(Resident::Arming {
+                    stop: flag.clone(),
+                    bound,
+                });
             }
             // Past this, a panic drops the flag if this start still owns
             // it. Close may already have taken it.
@@ -371,7 +423,7 @@ impl MiningControl {
             // signal the flag while this runs; it does not take the gate.
             let spawned = prepared.spawn();
             let mut running = lock_miner(miner);
-            if !matches!(running.as_ref(), Some(Resident::Arming(_))) {
+            if !matches!(running.as_ref(), Some(Resident::Arming { .. })) {
                 drop(running);
                 if let Ok(started) = spawned {
                     drain.defer(started.stop());
@@ -380,7 +432,10 @@ impl MiningControl {
             }
             match spawned {
                 Ok(started) => {
-                    *running = Some(Resident::Mining(started));
+                    *running = Some(Resident::Mining {
+                        miner: started,
+                        bound,
+                    });
                     Ok(())
                 }
                 Err(refused) => {
@@ -403,13 +458,13 @@ impl MiningControl {
         self.drain.retire(|| {
             let mut running = lock_miner(miner);
             let stopped = match running.take() {
-                Some(Resident::Mining(miner)) => Some(miner.stop()),
+                Some(Resident::Mining { miner, .. }) => Some(miner.stop()),
                 // The start that published this holds the gate `retire`
                 // is waiting on, so this arm is the start's own panic
                 // having left the flag. Signal it; there are no threads
                 // in the slot to park.
-                Some(Resident::Arming(flag)) => {
-                    flag.signal();
+                Some(Resident::Arming { stop, .. }) => {
+                    stop.signal();
                     None
                 }
                 None => None,
@@ -421,14 +476,17 @@ impl MiningControl {
 
     /// Whether the miner is running.
     pub fn running(&self) -> bool {
-        matches!(lock_miner(&self.miner).as_ref(), Some(Resident::Mining(_)))
+        matches!(
+            lock_miner(&self.miner).as_ref(),
+            Some(Resident::Mining { .. })
+        )
     }
 
     /// The miner's state, the posted job, and why none is posted.
     pub fn status(&self) -> MiningStatus {
         let miner = match lock_miner(&self.miner).as_ref() {
-            Some(Resident::Mining(miner)) => Some(miner.status()),
-            Some(Resident::Arming(_)) | None => None,
+            Some(Resident::Mining { miner, .. }) => Some(miner.status()),
+            Some(Resident::Arming { .. }) | None => None,
         };
         let job = self.board.posted().map(|(_, job)| PostedJob {
             height: job.height,
@@ -448,6 +506,7 @@ fn refusal_diagnostic(refused: &MiningRefused) -> Diagnostic {
     let code = match refused {
         MiningRefused::NoAddress => codes::NO_ADDRESS,
         MiningRefused::Running => codes::RUNNING,
+        MiningRefused::Short { .. } => codes::BOUND_SHORT,
         MiningRefused::TooManyThreads { .. } => codes::TOO_MANY_THREADS,
         MiningRefused::NodeStopped => codes::STOPPING,
         MiningRefused::Start(MinerStartRefused::OnePermit) => codes::ONE_PERMIT,
@@ -458,7 +517,13 @@ fn refusal_diagnostic(refused: &MiningRefused) -> Diagnostic {
         MiningRefused::TooManyThreads { asked, host } => diagnostic
             .param("threads", asked.to_string())
             .param("parallelism", host.to_string()),
-        _ => diagnostic,
+        MiningRefused::Short { until, height } => diagnostic
+            .param("until", until.to_raw().to_string())
+            .param("height", height.to_raw().to_string()),
+        MiningRefused::NoAddress
+        | MiningRefused::Running
+        | MiningRefused::NodeStopped
+        | MiningRefused::Start(_) => diagnostic,
     }
 }
 
@@ -688,5 +753,69 @@ mod diagnostic_tests {
         let retry = NoJob::Unbuilt(Unbuilt::Retry(Rebuild::BodyGone));
         assert!(retry.transient());
         assert!(Posting::Withdrawn(retry).refusal().is_none());
+    }
+}
+
+#[cfg(test)]
+mod bound_tests {
+    use super::{refusal_diagnostic, refusal_for_running, MiningRefused};
+    use shekyl_daemon_rpc::mining_methods::codes;
+    use shekyl_miner::SearchBound;
+    use shekyl_types::BlockHeight;
+
+    /// A running bound that does not search the asked height is its own
+    /// refusal. A bound that covers it, an unbounded miner, and an
+    /// unbounded start are the same "already running": the caller waits
+    /// and does not stop a miner it did not start. Red edit: return
+    /// `Running` for every occupied slot.
+    #[test]
+    fn a_running_miner_that_stops_short_is_its_own_refusal() {
+        let short = SearchBound::Until(BlockHeight::from_raw(1));
+        let target = SearchBound::Until(BlockHeight::from_raw(2));
+        assert!(matches!(
+            refusal_for_running(short, target),
+            MiningRefused::Short { until, height }
+                if until == BlockHeight::from_raw(1) && height == BlockHeight::from_raw(2)
+        ));
+        let covers = SearchBound::Until(BlockHeight::from_raw(4));
+        assert!(matches!(
+            refusal_for_running(covers, target),
+            MiningRefused::Running
+        ));
+        assert!(matches!(
+            refusal_for_running(covers, SearchBound::Until(BlockHeight::from_raw(4))),
+            MiningRefused::Running
+        ));
+        assert!(matches!(
+            refusal_for_running(SearchBound::Unbounded, target),
+            MiningRefused::Running
+        ));
+        assert!(matches!(
+            refusal_for_running(short, SearchBound::Unbounded),
+            MiningRefused::Running
+        ));
+    }
+
+    /// The short refusal names both heights, so a caller can tell a miner
+    /// that stops at 1 from one asked to reach 2. Red edit: report it as
+    /// `mine.running`.
+    #[test]
+    fn a_short_bound_names_both_heights() {
+        let diagnostic = refusal_diagnostic(&MiningRefused::Short {
+            until: BlockHeight::from_raw(1),
+            height: BlockHeight::from_raw(2),
+        });
+        assert_eq!(diagnostic.code, codes::BOUND_SHORT);
+        assert_eq!(
+            diagnostic.params,
+            vec![
+                ("until".to_owned(), "1".to_owned()),
+                ("height".to_owned(), "2".to_owned()),
+            ]
+        );
+        assert_eq!(
+            diagnostic.message,
+            "the miner already running searches no job above height 1, which does not reach height 2"
+        );
     }
 }

@@ -53,8 +53,11 @@ pub mod codes {
     pub const STOPPING: &str = "mine.stopping";
     /// The template could not be built.
     pub const UNBUILT: &str = "mine.unbuilt";
-    /// The miner is already running.
+    /// The miner is already running, and it searches the height asked for.
     pub const RUNNING: &str = "mine.running";
+    /// A miner is already running, and its bound does not search the height
+    /// asked for.
+    pub const BOUND_SHORT: &str = "mine.bound_short";
     /// The miner is not running.
     pub const STOPPED: &str = "mine.stopped";
     /// A one-permit host never mines.
@@ -408,10 +411,12 @@ impl Drop for StartedMiner {
 /// that miner with [`MiningFacts::start_until`] at the target height, so
 /// no worker searches a job above it, and the block a worker could
 /// otherwise find between the target connecting and the stop does not
-/// exist. A miner already running (`start_mining`) is not this call's to
-/// bound — `start_until` refuses, and the running miner stays unbounded.
-/// The tip is then at least `count` higher, and the reply's `height` says
-/// where it is.
+/// exist. A miner already running is left running. When it searches a job
+/// at the target — `start_mining`, or a bound at least that high — this
+/// call waits and does not stop it: the tip is then at least `count`
+/// higher, and the reply's `height` says where it is. When that miner's
+/// bound stops short of the target, the call is refused
+/// ([`codes::BOUND_SHORT`]) and waits for nothing.
 ///
 /// It is refused at once while [`MiningFacts::refusal`] is `Some` (not
 /// synced, no address, the pool retired, a build that stayed withdrawn),
@@ -459,6 +464,9 @@ pub async fn generateblocks(
     let started = {
         let guard_mining = std::sync::Arc::clone(mining);
         match on_a_blocking_thread(mining, move |facts| {
+            // `mine.running` covers the target, so wait and leave that
+            // miner running. Any other refusal, `mine.bound_short`
+            // included, is returned: waiting would not move the tip.
             Ok(match facts.start_until(target)? {
                 Ok(()) => Ok(StartedMiner(Some(guard_mining))),
                 Err(running) if running.code == codes::RUNNING => Ok(StartedMiner(None)),
@@ -756,6 +764,89 @@ mod tests {
             vec![shekyl_types::BlockHeight::from_raw(3)],
             "start_until once, at the target tip"
         );
+    }
+
+    /// `start_until` answers `mine.bound_short`: the miner already running
+    /// cannot reach the target.
+    struct ShortOfTarget;
+
+    impl MiningFacts for ShortOfTarget {
+        fn running(&self) -> Result<bool, FactsFault> {
+            Ok(true)
+        }
+        fn template(
+            &self,
+        ) -> Result<Result<crate::mining_facts::PostedTemplate, Diagnostic>, FactsFault> {
+            unreachable!("generateblocks reads no template before it starts")
+        }
+        fn start(
+            &self,
+            _threads: Option<NonZeroUsize>,
+        ) -> Result<Result<(), Diagnostic>, FactsFault> {
+            unreachable!("generateblocks bounds the miner it starts")
+        }
+        fn start_until(
+            &self,
+            _height: shekyl_types::BlockHeight,
+        ) -> Result<Result<(), Diagnostic>, FactsFault> {
+            Ok(Err(Diagnostic::new(
+                codes::BOUND_SHORT,
+                "the miner already running searches no job above height 1, which does not reach height 2",
+            )))
+        }
+        fn stop(&self) -> Result<bool, FactsFault> {
+            unreachable!("a refused start stops nothing")
+        }
+        fn status(&self) -> Result<crate::mining_facts::MiningState, FactsFault> {
+            unreachable!("generateblocks reads no status")
+        }
+        fn refusal(&self) -> Result<Option<Diagnostic>, FactsFault> {
+            Ok(None)
+        }
+        fn withdrawn(&self) -> crate::mining_facts::Pending<'_, Diagnostic> {
+            unreachable!("a short bound is refused before the wait")
+        }
+    }
+
+    /// A door whose tip wait must not be polled: the short refusal returns
+    /// first.
+    struct Unreached;
+
+    impl DoorFacts for Unreached {
+        fn room(&self) -> Result<usize, FactsFault> {
+            unreachable!("generateblocks takes no room")
+        }
+        fn offer_local(&self, _block: Vec<u8>) -> crate::mining_facts::Pending<'_, LocalOutcome> {
+            unreachable!("generateblocks offers nothing")
+        }
+        fn pop(&self, _count: u64) -> crate::mining_facts::Pending<'_, PopOutcome> {
+            unreachable!("generateblocks pops nothing")
+        }
+        fn tip_at_least(
+            &self,
+            _height: shekyl_types::BlockHeight,
+        ) -> crate::mining_facts::Pending<'_, ()> {
+            unreachable!("a short bound is refused before the wait")
+        }
+    }
+
+    /// The refusal is returned, and the tip is not waited on: that wait
+    /// would not end. Red edit: treat `mine.bound_short` as `mine.running`.
+    #[tokio::test]
+    async fn generateblocks_refuses_a_miner_bound_short_of_the_target() {
+        let mining: MiningHandle = std::sync::Arc::new(ShortOfTarget);
+        let row = shekyl_rpc_types::methods::json_rpc("generateblocks").expect("a row");
+        let refused = generateblocks(
+            &mining,
+            &Unreached,
+            &Genesis,
+            shekyl_rpc_types::methods::admit_armed(row, true).expect("armed"),
+            GenerateBlocksRequest { count: 1 },
+        )
+        .await
+        .expect_err("a miner that cannot reach the target is refused");
+        assert_eq!(refused.class, ErrorClass::RefusedByMethod);
+        assert_eq!(refused.diagnostic.code, codes::BOUND_SHORT);
     }
 
     /// `start_until` blocks until released. Dropping `generateblocks` while

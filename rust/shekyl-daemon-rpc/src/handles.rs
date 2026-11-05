@@ -226,10 +226,13 @@ pub trait MiningFacts: Send + Sync {
     fn start(&self, threads: Option<NonZeroUsize>) -> Result<Result<(), Diagnostic>, FactsFault>;
 
     /// Start the built-in miner searching no block above `height`. The
-    /// thread count is [`Self::start`] with `None`. Already running is a
-    /// refusal, and that miner stays unbounded: this call does not bound a
-    /// miner it did not start. Joins nothing, but spawns threads: a caller
-    /// on a runtime calls it from a blocking thread.
+    /// thread count is [`Self::start`] with `None`. A miner already
+    /// running is a refusal, and that miner is left as it is. When its
+    /// search covers `height`, the diagnostic is `mine.running` and the
+    /// caller may wait. When it does not, the diagnostic is
+    /// `mine.bound_short`: waiting would not reach `height`. This call
+    /// does not bound a miner it did not start. Joins nothing, but spawns
+    /// threads: a caller on a runtime calls it from a blocking thread.
     ///
     /// # Errors
     ///

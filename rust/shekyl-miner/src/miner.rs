@@ -78,6 +78,15 @@ impl SearchBound {
     }
 }
 
+impl core::fmt::Display for SearchBound {
+    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+        match self {
+            Self::Unbounded => f.write_str("every posted job"),
+            Self::Until(until) => write!(f, "no job above height {}", until.to_raw()),
+        }
+    }
+}
+
 /// What the miner is started with: where it pays, how many threads it
 /// searches with, and how far it searches.
 #[derive(Debug, Clone)]
@@ -462,5 +471,7 @@ mod tests {
         assert!(until.allows(BlockHeight::from_raw(1)));
         assert!(!until.allows(BlockHeight::from_raw(2)));
         assert!(SearchBound::Unbounded.allows(BlockHeight::from_raw(u64::MAX)));
+        assert_eq!(until.to_string(), "no job above height 1");
+        assert_eq!(SearchBound::Unbounded.to_string(), "every posted job");
     }
 }
