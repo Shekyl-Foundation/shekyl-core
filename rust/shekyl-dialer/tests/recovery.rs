@@ -262,6 +262,13 @@ fn a_connector_under_target_redials_its_cooling_configured_address_no_faster_tha
     );
     assert_eq!(gray(dialer), vec![peer(2)], "the failed draw stays gray");
     assert!(dialer.shared().lists.is_cooling(&peer(2)), "and cools");
+    // The refused session leaves the board when its task ends, which can
+    // trail the dial's answer; while it is there its host is not drawn
+    // (no redial of a host with a session). Wait for it, so the draw below
+    // reads the cooldown and nothing else.
+    rig::wait_until("the refused session left the board", || {
+        rig.layer.board().rows().len() == 1
+    });
 
     // Under the target with nothing drawable: every wake inside the
     // cooldown is recovery, re-admits nothing new, and draws nothing.
@@ -441,6 +448,16 @@ fn a_gained_session_closes_the_episode_on_the_following_wake() {
             None,
             "the dead address fails its test and cools"
         );
+        // Each refused session leaves the board when its task ends, which can
+        // trail the dial's answer; while it is there its host is not drawn.
+        // Wait for the two kept sessions alone, so each draw below reads the
+        // cooldown and nothing else.
+        let settled = || {
+            rig::wait_until("the refused session left the board", || {
+                rig.layer.board().rows().len() == 2
+            })
+        };
+        settled();
         for _ in 0..DEAD_DRAWS {
             assert!(
                 !dialer.wake(CLEARNET, &mut rng),
@@ -451,6 +468,7 @@ fn a_gained_session_closes_the_episode_on_the_following_wake() {
                 dialer.wake(CLEARNET, &mut rng),
                 "past the cooldown the dead address is drawn"
             );
+            settled();
         }
     });
 
