@@ -404,12 +404,16 @@ channel, imported at recipient end.
 send confirmation:
 
 ```
-address_fingerprint = cSHAKE256(len(tag) ‖ tag ‖ canonical(MultisigAddressPayload),
-                                customization = "shekyl/multisig-address-v2")
-tag = "shekyl/<network>"   # one length byte, then the name
+address_fingerprint = frame("shekyl/multisig-address-v3", name_id,
+                            [canonical(MultisigAddressPayload)])
+name_id = cSHAKE256(S = "shekyl/network-name-v1", X = "shekyl/<network>")[..16]
 ```
 
-Vectors: `docs/test_vectors/MULTISIG_FINGERPRINT_V2.json`, rebuilt by
+`frame` is the signing envelope (`NETWORK_IDENTITY.md` §2.4.2): cSHAKE256
+under the domain, over the 16-byte binding then each field behind its u64
+little-endian length.
+
+Vectors: `docs/test_vectors/MULTISIG_FINGERPRINT_V3.json`, rebuilt by
 `scripts/kat/multisig_fingerprint_oracle.py`.
 
 The address is on **no consensus path** (no C++ mirror, no FFI, no leaf), so

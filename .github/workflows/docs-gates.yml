@@ -800,11 +800,11 @@ jobs:
         run: python3 -I scripts/kat/emission_auth_msg_oracle.py
 
       - name: Run the multisig fingerprint oracle
-        # NETWORK_IDENTITY.md NI-R15: a multisig address fingerprint is
-        # cSHAKE256-32 of the network's name (length-prefixed, byte 0) and the
-        # canonical group payload. This rebuilds the payload, anchors the
+        # NETWORK_IDENTITY.md NI-R15: a multisig address fingerprint is the
+        # signing envelope's frame of the canonical group payload, bound to
+        # the network's name_id. This rebuilds the payload, anchors the
         # builder on the -v1 fingerprint pinned before the name entered, and
-        # requires docs/test_vectors/MULTISIG_FINGERPRINT_V2.json to equal its
+        # requires docs/test_vectors/MULTISIG_FINGERPRINT_V3.json to equal its
         # output; exit 1 on a mismatch, 2 when the file pins nothing (rule 47).
         if: '!cancelled()'
         run: python3 -I scripts/kat/multisig_fingerprint_oracle.py

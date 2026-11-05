@@ -4,13 +4,13 @@
 # BSD-3-Clause
 """Independent oracle for the multisig address fingerprint (NETWORK_IDENTITY.md NI-R15).
 
-`docs/test_vectors/MULTISIG_FINGERPRINT_V2.json` pins, per network, the
-fingerprint of one fixed 2-of-2 group payload:
+`docs/test_vectors/MULTISIG_FINGERPRINT_V3.json` pins, per network, the
+fingerprint of one fixed 2-of-2 group payload (the signing envelope §2.6):
 
-    fingerprint = cSHAKE256-32(S = "shekyl/multisig-address-v2",
-                               X = len(tag) || tag || canonical payload)
+    fingerprint = frame("shekyl/multisig-address-v3", name_id, [canonical payload])
 
-with `tag` the network's name, `shekyl/<network>`. The canonical payload is
+with `name_id` the network's 16-byte name binding,
+cSHAKE256(S = "shekyl/network-name-v1", X = "shekyl/<network>")[..16]. The canonical payload is
 `version(1) || group_version(1) || spend_auth_version(1) || network_code(1) ||
 n(1) || m(1) || B(32) || Y(32) || kem_pk[0] || kem_pk[1]` (`multisig_address.rs`),
 built here from the fixture's values. Before trusting that builder, this script
@@ -39,8 +39,8 @@ _SPEC = importlib.util.spec_from_file_location("stdlib_cshake", _HERE / "stdlib_
 cs = importlib.util.module_from_spec(_SPEC)
 _SPEC.loader.exec_module(cs)
 
-VECTORS = cs.ROOT / "docs/test_vectors/MULTISIG_FINGERPRINT_V2.json"
-CUSTOMIZATION = b"shekyl/multisig-address-v2"
+VECTORS = cs.ROOT / "docs/test_vectors/MULTISIG_FINGERPRINT_V3.json"
+CUSTOMIZATION = b"shekyl/multisig-address-v3"
 PRIOR_V1_CUSTOMIZATION = b"shekyl/multisig-address-v1"
 # The mainnet fixture's fingerprint as pinned before NI-R15 (multisig_address.rs).
 PRIOR_V1_MAINNET = "ed49a839c9ef73911770ac15cd5b1110d08bebf6b3e7d9d6f2ed3ac9661f6f2e"
@@ -53,10 +53,6 @@ N, M = 2, 2
 B_GROUP, Y_GROUP = b"\xb1" * 32, b"\x71" * 32
 
 
-def tag(name: str) -> bytes:
-    return f"shekyl/{name}".encode()
-
-
 def payload(name: str) -> bytes:
     header = bytes([MULTISIG_ADDRESS_VERSION, GROUP_VERSION, SPEND_AUTH_VERSION, CODES[name], N, M])
     kems = b"".join(bytes([i]) * HYBRID_KEM_PUBKEY_LEN for i in range(N))
@@ -64,16 +60,15 @@ def payload(name: str) -> bytes:
 
 
 def fingerprint(name: str) -> str:
-    t = tag(name)
-    return cs.cshake256(bytes([len(t)]) + t + payload(name), 32, s=CUSTOMIZATION).hex()
+    return cs.frame(CUSTOMIZATION, cs.name_id(name), [payload(name)]).hex()
 
 
 def build() -> dict:
     return {
         "description": (
-            "Multisig address fingerprints (NETWORK_IDENTITY.md NI-R15): "
-            "cSHAKE256-32(S = shekyl/multisig-address-v2, X = len(tag) || tag || "
-            "canonical payload), tag = shekyl/<network>, for one fixed 2-of-2 payload "
+            "Multisig address fingerprints (NETWORK_IDENTITY.md NI-R15; the signing "
+            "envelope §2.6): frame(shekyl/multisig-address-v3, name_id, [canonical "
+            "payload]), name_id the network's name binding, for one fixed 2-of-2 payload "
             "(B = 0xB1 x32, Y = 0x71 x32, KEM key i = byte i x1216) on each network. "
             "Written and checked by scripts/kat/multisig_fingerprint_oracle.py; read by "
             "shekyl-address's address_fingerprint_kat."

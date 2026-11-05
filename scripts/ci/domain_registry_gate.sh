@@ -414,7 +414,12 @@ count_pattern() {
 # hashed the message under shekyl/msg-hash-v1 and the preimage under
 # shekyl/msg-sign-v1; it frames [mode, segment, message] under
 # shekyl/msg-sign-v2, and msg-hash-v1 is retired.
-MECH1_EXPECTED=88
+# Multisig fingerprint on the envelope (2026-11-04, the signing envelope
+# §2.6): 88 -> 85. `address_fingerprint` in
+# rust/shekyl-address/src/multisig_address.rs frames the payload under
+# shekyl/multisig-address-v3 and the name_id; its cshake256_32 site and the
+# two #[cfg(test)] sites that rebuilt the -v2 input by hand are gone.
+MECH1_EXPECTED=85
 mech1=$(count_pattern 'cshake256_(?:32|64)\(|CShake256Core::new\(')
 if [[ "$mech1" != "$MECH1_EXPECTED" ]]; then
   echo "COUNT DRIFT mech 1 (cSHAKE call sites): found $mech1, pinned $MECH1_EXPECTED." >&2
