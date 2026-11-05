@@ -226,6 +226,13 @@ pub(crate) fn rng() -> SplitMix64 {
     SplitMix64::new(0x5EED)
 }
 
+/// The session layer's draw, a second sequence from the owner's [`rng`].
+/// Fixed: the library cannot name `SplitMix64` (the generator is test-only),
+/// so the seed lives with the tests that pass it.
+pub(crate) fn session_rng() -> SplitMix64 {
+    SplitMix64::new(0x5e55_1011)
+}
+
 /// A peer's handshake claim: its block count and cumulative work.
 pub(crate) fn claim(count: u64, work: u128, top: BlockHash) -> CoreSyncData {
     CoreSyncData {

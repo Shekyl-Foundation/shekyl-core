@@ -34,7 +34,7 @@ use shekyl_chain_sync::SyncState;
 use shekyl_chain_sync_runtime::executor::Executor;
 use shekyl_chain_sync_runtime::owner::{self, OwnerParts, Running};
 use shekyl_chain_sync_runtime::port;
-use shekyl_draw_rng::{RelayRng, SplitMix64};
+use shekyl_draw_rng::RelayRng;
 use shekyl_hash_budget::Budget;
 use shekyl_levin::{GetTxpoolComplement, NewTransactions, PeerlistEntry};
 use shekyl_miner::{FoundBlocks, JobBoard};
@@ -178,23 +178,27 @@ pub fn substrate() -> (ProductionSubstrate, Arc<Metrics>) {
 
 impl Node {
     /// Start a node over a fresh store under `rules`, holding the `before`
-    /// steps first, drawing from `rng`. Call from inside a multi-thread
-    /// runtime.
+    /// steps first. `rng` is the sync owner's draw; `session_rng` is the
+    /// session layer's, for its nonces and timed-sync jitter. They are two
+    /// sequences: the layer's is not the owner's. Call from inside a
+    /// multi-thread runtime.
     ///
     /// # Panics
     ///
     /// A part does not start.
-    pub async fn start<R>(
+    pub async fn start<R, S>(
         tag: &str,
         rules: shekyl_chain_ingest::ChainRules,
         before: &[super::chain::Step],
         permits: usize,
         rng: R,
+        session_rng: S,
     ) -> Self
     where
         R: RelayRng + Send + 'static,
+        S: RelayRng + Send + 'static,
     {
-        Self::start_seated(tag, rules, before, permits, rng, None).await
+        Self::start_seated(tag, rules, before, permits, rng, session_rng, None).await
     }
 
     /// [`Node::start`], with the tip follower's job seated: templates pay
@@ -203,30 +207,34 @@ impl Node {
     /// # Panics
     ///
     /// A part does not start.
-    pub async fn start_mining<R>(
+    pub async fn start_mining<R, S>(
         tag: &str,
         rules: shekyl_chain_ingest::ChainRules,
         before: &[super::chain::Step],
         permits: usize,
         rng: R,
+        session_rng: S,
         keys: MinerKeys,
     ) -> Self
     where
         R: RelayRng + Send + 'static,
+        S: RelayRng + Send + 'static,
     {
-        Self::start_seated(tag, rules, before, permits, rng, Some(keys)).await
+        Self::start_seated(tag, rules, before, permits, rng, session_rng, Some(keys)).await
     }
 
-    async fn start_seated<R>(
+    async fn start_seated<R, S>(
         tag: &str,
         rules: shekyl_chain_ingest::ChainRules,
         before: &[super::chain::Step],
         permits: usize,
         rng: R,
+        session_rng: S,
         keys: Option<MinerKeys>,
     ) -> Self
     where
         R: RelayRng + Send + 'static,
+        S: RelayRng + Send + 'static,
     {
         let (substrate, metrics) = substrate();
         let budget = Budget::new(NonZeroUsize::new(permits).expect("non-zero"));
@@ -325,7 +333,7 @@ impl Node {
             timing: timing.clone(),
             tip: tip_rx,
             runtime: tokio::runtime::Handle::current(),
-            rng: Box::new(SplitMix64::new(0x5e55_1011)),
+            rng: Box::new(session_rng),
         });
         let parts = OwnerParts {
             store: Arc::clone(&chain.store),

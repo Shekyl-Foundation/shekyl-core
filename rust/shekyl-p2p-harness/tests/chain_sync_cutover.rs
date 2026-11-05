@@ -30,7 +30,8 @@ use shekyl_wire::Block;
 mod support;
 
 use support::{
-    claim, claim_of, logs, rng, source, spend, wait_synced, LIMIT, PROFILES, RESPONSES, SEATED,
+    claim, claim_of, logs, rng, session_rng, source, spend, wait_synced, LIMIT, PROFILES,
+    RESPONSES, SEATED,
 };
 
 /// **A sync times every phase of each block** (CS-5 §8, the per-block
@@ -62,7 +63,15 @@ async fn a_sync_times_every_phase_of_each_block() {
     let (corpus, steps) = spend();
     let held = source("profile-src", &corpus, &steps).await;
     let (count, _, _) = held.tip().expect("a chain");
-    let mut node = Node::start("profile", corpus.rules(), &steps[..1], 2, rng()).await;
+    let mut node = Node::start(
+        "profile",
+        corpus.rules(),
+        &steps[..1],
+        2,
+        rng(),
+        session_rng(),
+    )
+    .await;
     let (peer, _asked) = ServingPeer::new(Arc::clone(&held.store), Bodies::Honest);
     node.connect(Box::new(peer), Some(claim_of(&held))).await;
     wait_synced(&node, count).await;
@@ -253,7 +262,16 @@ async fn a_node_posts_no_template_while_it_is_behind() {
             ml_kem_ek: recipient.ml_kem_ek.clone(),
         }
     };
-    let mut node = Node::start_mining("posting", corpus.rules(), &steps[..1], 2, rng(), keys).await;
+    let mut node = Node::start_mining(
+        "posting",
+        corpus.rules(),
+        &steps[..1],
+        2,
+        rng(),
+        session_rng(),
+        keys,
+    )
+    .await;
     let opened = node.count();
     let heard = Arc::new(Mutex::new(Vec::new()));
     let state_watcher = {
@@ -365,7 +383,15 @@ async fn the_last_supplier_closing_stalls_and_a_new_claim_recovers() {
     let held = source("stall-src", &corpus, &steps).await;
     let (count, _, _) = held.tip().expect("a chain");
     let full = claim_of(&held);
-    let mut node = Node::start("stall", corpus.rules(), &steps[..1], 2, rng()).await;
+    let mut node = Node::start(
+        "stall",
+        corpus.rules(),
+        &steps[..1],
+        2,
+        rng(),
+        session_rng(),
+    )
+    .await;
     let (own, work, top) = node.chain.tip().expect("a chain");
     let (level, _) = ServingPeer::new(Arc::clone(&held.store), Bodies::Honest);
     node.connect(Box::new(level), Some(claim(own, work, top)))
@@ -412,7 +438,15 @@ async fn the_last_supplier_closing_stalls_and_a_new_claim_recovers() {
 async fn a_retired_chain_request_is_refused_by_the_ingress() {
     logs();
     let (corpus, steps) = spend();
-    let mut node = Node::start("retired", corpus.rules(), &steps[..1], 1, rng()).await;
+    let mut node = Node::start(
+        "retired",
+        corpus.rules(),
+        &steps[..1],
+        1,
+        rng(),
+        session_rng(),
+    )
+    .await;
     let (peer, _) = HeaderChainPeer::new(Vec::new(), 0);
     let id = node.connect(Box::new(peer), None).await;
     assert!(node.inject(id, notify(2006, b"chain")).await);
@@ -455,7 +489,15 @@ impl SyncPeer for CompactAsker {
 async fn the_owner_serves_a_missing_tx_request_and_closes_on_its_faults() {
     logs();
     let (corpus, steps) = spend();
-    let mut node = Node::start("missing-tx", corpus.rules(), &steps, 1, rng()).await;
+    let mut node = Node::start(
+        "missing-tx",
+        corpus.rules(),
+        &steps,
+        1,
+        rng(),
+        session_rng(),
+    )
+    .await;
     let (hash, listed) = {
         let snap = node.chain.store.begin_read().expect("a snapshot");
         let tip = snap.tip().expect("a tip").recorded.expect("a chain");
@@ -543,7 +585,15 @@ fn frame_notify(command: u32, message: &impl PortableMap) -> Vec<u8> {
 async fn an_owner_whose_engine_closes_reports_the_cause() {
     logs();
     let (corpus, steps) = spend();
-    let node = Node::start("owner-end-engine", corpus.rules(), &steps[..1], 2, rng()).await;
+    let node = Node::start(
+        "owner-end-engine",
+        corpus.rules(),
+        &steps[..1],
+        2,
+        rng(),
+        session_rng(),
+    )
+    .await;
     let mut ended = node.ended();
     assert_eq!(*ended.borrow(), None, "a running owner has ended");
     node.close_engine();
@@ -561,7 +611,15 @@ async fn an_owner_whose_engine_closes_reports_the_cause() {
 async fn an_owner_asked_to_stop_reports_a_stop() {
     logs();
     let (corpus, steps) = spend();
-    let node = Node::start("owner-end-stop", corpus.rules(), &steps[..1], 2, rng()).await;
+    let node = Node::start(
+        "owner-end-stop",
+        corpus.rules(),
+        &steps[..1],
+        2,
+        rng(),
+        session_rng(),
+    )
+    .await;
     let ended = node.ended();
     assert_eq!(*ended.borrow(), None, "a running owner has ended");
     node.stop().await;

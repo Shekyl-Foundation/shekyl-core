@@ -22,10 +22,9 @@ use std::thread::{self, JoinHandle};
 
 use shekyl_capped_stream::{InboundEnd, QueueHold, StreamEnds};
 use shekyl_levin::{
-    response, BasicNodeData, BucketReader, CoreSyncData, HandshakeResponse, PortableMap, Received,
-    TimedSyncResponse, DEFAULT_MAX_PACKET_SIZE,
+    invoke, response, BasicNodeData, BucketReader, CoreSyncData, HandshakeRequest,
+    HandshakeResponse, PortableMap, Received, TimedSyncResponse, DEFAULT_MAX_PACKET_SIZE,
 };
-use shekyl_p2p_session::harness::handshake_request;
 use shekyl_p2p_session::{admit, Channel, Command, ConnectFuture, Dial, Endpoint};
 use shekyl_peer_policy::InboundCeiling;
 use shekyl_timing_engine::Tick;
@@ -48,6 +47,22 @@ impl SyncPeer for Silent {
     fn on_message(&mut self, _command: u32, _payload: &[u8]) -> Vec<Vec<u8>> {
         Vec::new()
     }
+}
+
+/// The node's 1001, the frame `shekyl_p2p_session::harness::handshake_request`
+/// builds. It is written out here so this library does not enable that
+/// crate's `harness` feature: the feature is test-only, and a normal
+/// dependency edge would compile it into every build of this crate
+/// (`check_test_only_features.py`).
+fn handshake_request(network_id: [u8; 16], nonce: [u8; 32], tip: CoreSyncData) -> Vec<u8> {
+    let payload = HandshakeRequest {
+        node_data: BasicNodeData { network_id },
+        payload_data: tip,
+        nonce,
+    }
+    .store()
+    .expect("request stores");
+    invoke(Command::Handshake.wire_id(), &payload)
 }
 
 /// The claim a peer with none makes: height zero, no work.

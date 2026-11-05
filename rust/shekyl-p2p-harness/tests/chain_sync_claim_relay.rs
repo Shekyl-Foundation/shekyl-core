@@ -21,7 +21,7 @@ use shekyl_p2p_session::harness::timed_sync_request;
 #[path = "chain_sync/support.rs"]
 mod support;
 
-use support::{claim, claim_of, logs, rng, source, spend, wait_synced, LIMIT};
+use support::{claim, claim_of, logs, rng, session_rng, source, spend, wait_synced, LIMIT};
 
 /// An inbound session's claim arrives in its handshake request and in
 /// every timed sync, and the session layer hands each to the owner
@@ -34,7 +34,15 @@ async fn an_inbound_session_serves_the_sync_after_its_claim() {
     let (corpus, steps) = spend();
     let held = source("inbound-src", &corpus, &steps).await;
     let (count, _, _) = held.tip().expect("a chain");
-    let mut node = Node::start("inbound", corpus.rules(), &steps[..1], 2, rng()).await;
+    let mut node = Node::start(
+        "inbound",
+        corpus.rules(),
+        &steps[..1],
+        2,
+        rng(),
+        session_rng(),
+    )
+    .await;
     let (peer, seen) = ServingPeer::new(Arc::clone(&held.store), Bodies::Honest);
     let id = node.accept(Box::new(peer), None).await;
     tokio::time::sleep(Duration::from_secs(2)).await;
@@ -59,7 +67,15 @@ async fn a_connected_announcement_is_relayed_to_every_other_session() {
     let held = source("relay-src", &corpus, &steps).await;
     let (count, _, _) = held.tip().expect("a chain");
     // The node holds every block but the last.
-    let mut node = Node::start("relay", corpus.rules(), &steps[..steps.len() - 1], 2, rng()).await;
+    let mut node = Node::start(
+        "relay",
+        corpus.rules(),
+        &steps[..steps.len() - 1],
+        2,
+        rng(),
+        session_rng(),
+    )
+    .await;
     let (_, work, top) = node.chain.tip().expect("a chain");
     let mut seen = Vec::new();
     let mut ids = Vec::new();
@@ -116,6 +132,7 @@ async fn a_block_fetched_by_sync_is_relayed_to_all_but_its_supplier() {
         &steps[..steps.len() - 1],
         2,
         rng(),
+        session_rng(),
     )
     .await;
     let (_, work, top) = node.chain.tip().expect("a chain");
@@ -167,7 +184,15 @@ async fn a_block_this_node_mined_is_relayed_to_every_session() {
     let Some((Step::Block { block, bodies }, before)) = steps.split_last() else {
         panic!("the corpus ends in a block");
     };
-    let mut node = Node::start("mined-relay", corpus.rules(), before, 2, rng()).await;
+    let mut node = Node::start(
+        "mined-relay",
+        corpus.rules(),
+        before,
+        2,
+        rng(),
+        session_rng(),
+    )
+    .await;
     let (_, work, top) = node.chain.tip().expect("a chain");
     let mut seen = Vec::new();
     for _ in 0..3 {

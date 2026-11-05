@@ -60,6 +60,11 @@ fn rng() -> SplitMix64 {
     SplitMix64::new(0x5EED)
 }
 
+/// The session layer's draw. See `chain_sync/support.rs`.
+fn session_rng() -> SplitMix64 {
+    SplitMix64::new(0x5e55_1011)
+}
+
 fn claim_of(chain: &Chain) -> CoreSyncData {
     let (count, work, top) = chain.tip().expect("a chain");
     CoreSyncData {
@@ -192,6 +197,7 @@ async fn body_phase_on_the_captured_corpora() {
             &steps[..1],
             4,
             rng(),
+            session_rng(),
         )
         .await;
         let started = Instant::now();
