@@ -297,6 +297,12 @@ Legend — **R** rename or fold (no trace), **K** kept as is, **X** REJECTED row
 
 ### Environment levers (regtest only, IG-8)
 
+The `Today` column is the environment read as it stood when the row was
+ruled; the C++ files it cites are deleted (the p2p remnant cutover,
+2026-11-05), the environment reads with them, and the levers are the
+`dev-` rows alone, parsed by `shekyl-daemon`'s `levers.rs` (what each row
+arms is that row's own status in the table).
+
 | Today | New | Kind |
 |---|---|---|
 | `SEEDHASH_EPOCH_BLOCKS` (`pow_randomx_ffi.rs:350`) | `dev-pow-seed-epoch-blocks` | integer |
