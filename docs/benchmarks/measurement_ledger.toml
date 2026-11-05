@@ -636,6 +636,9 @@ stale_through = [
   { through = "91073c960d", note = "The Windows SYN retry cap is narrowed to direct dials: a dial to the operator's SOCKS proxy keeps the system's retries, as before 496c6d8858. Linux I/O is unchanged and no span moved. Not re-measured." },
   { through = "9864bff631", note = "Tests only: the Windows refusal-timing tests hold the port bound instead of dropping the listener first. No dial, handshake or gap I/O changes, and no span moved. Not re-measured." },
   { through = "f4b32aa2a8", note = "Tests only: the Windows refusal test names Ipv4Addr by its path, so the Windows build resolves it. No dial I/O changes and no span moved. Not re-measured." },
+  { through = "6945d00c70", note = "levin: the two command enums (DefinedCommand, SyncCommand) become one Command; shekyl-clearnet's sizes.rs classifies a wire id with one match in place of two lookups. A release build constructs no size record. The dial, the handshake and the gap do the same I/O. Not re-measured." },
+  { through = "dd41e79476", note = "p2p-session: cause.rs gains two close kinds the session layer closes with (NetworkMismatch, InvokeTimeout). An enum table only; the connectors' dial, handshake and gap are unchanged. Not re-measured." },
+  { through = "a45484558e", note = "p2p: the C++ host is deleted. In these paths cause.rs drops the C projection of CloseKind (c_name, name_nul, c_header) and lib.rs its re-export; no close kind, deadline or dial I/O changes. The spans the connectors read are unchanged. Not re-measured; the clearnet rows stay stale from the capture." },
 ]
 
 [[constant]]
@@ -764,6 +767,8 @@ cleared = [
   { through = "2e51e0f20d", reason = "A comment in the dial profile: clearnet corroboration is a byte on an outbound session, as OE-D5 already ruled, where the comment still said the ruling was open. The judging row is unchanged. The Tor dial, the gap, the shutdown wait and their I/O are unchanged, so the 2026-10-14 capture still prices this tree." },
   { through = "93a1e8ff42", reason = "One commit path for a ban: the four ban methods become one, and the ban API moves beside the occupancy table. A store that changes nothing closes nothing. Bookkeeping on a ban, a lift or an expiry, not on a dial. The Tor dial, the gap, the shutdown wait and their I/O are unchanged, so the 2026-10-14 capture still prices this tree." },
   { through = "c9fb52ee4b", reason = "The socket table claims one ban timer for the process engine it registers on, and the node starts that timer at open, so a finite ban expires with no zone host. The claim is taken when the timer starts, not on a dial. The Tor dial, the gap, the shutdown wait and their I/O are unchanged, so the 2026-10-14 capture still prices this tree." },
+  { through = "dd41e79476", reason = "p2p-session: cause.rs gains two close kinds the session layer closes with (NetworkMismatch, InvokeTimeout). An enum table only; the Tor dial, the gap and the shutdown wait are unchanged." },
+  { through = "a45484558e", reason = "p2p: the C++ host is deleted. In these paths cause.rs drops the C projection of CloseKind (c_name, name_nul, c_header) and lib.rs its re-export; no close kind, deadline or dial I/O changes, and the Tor spans are unchanged. The RustPath captures still describe the code: the connectors they measured are the ones running under the Rust session layer." },
 ]
 
 [[constant]]

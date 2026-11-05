@@ -17,12 +17,17 @@
 # result it exists to test.
 #
 # What is asserted, and why it is sufficient WITHOUT provoking a failure:
-# `Connect failed to` and `Failed to HANDSHAKE with peer` are LOG_INFO_CC ->
-# MINFO in src/p2p/net_node.inl, whose translation unit sets
-# SHEKYL_DEFAULT_LOG_CATEGORY to "net.p2p" (line 70). The idle path in the same
-# file logs MINFO "No available peer in ... list" (line 1650) continuously on a
-# healthy node. Same file, same category, same level -- so ANY net.p2p INFO
-# line proves the channel a burn would travel is live. A synthetic dead-onion
+# a dial that ends without a session is recorded by the Rust dialer as
+# `DEBUG shekyl_dialer::owner::flight: <connector> dial <address> ended: ...`
+# (rust/shekyl-dialer/src/owner/flight.rs), and the idle path of the same
+# crate logs `DEBUG shekyl_dialer::owner::wake: <connector> wake: no rule
+# applies (...)` on every wake of a saturated, healthy node. Same crate, same
+# level -- so ANY `DEBUG shekyl_dialer::` line proves the channel a burn would
+# travel is live, PROVIDED the run's `log-category` directive is the crate's
+# (`shekyl_dialer=debug`), not one module's. The C++ host this gate first read
+# (`net.p2p` at INFO, deleted 2026-11-05) logged dial failures at INFO; the
+# Rust dialer logs them at DEBUG, so a fleet run that leaves the category at
+# its default is not recording and this gate refuses it. A synthetic dead-onion
 # canary would prove the same thing while spending a candidate slot and
 # perturbing the measurement, so it is not used.
 #
@@ -76,7 +81,7 @@ while read -r host port label; do
   hosts=$((hosts + 1))
 
   # One round trip per host. Emits one line per instance:
-  #   <path> <age-seconds> <net.p2p-INFO-line-count>
+  #   <path> <age-seconds> <shekyl_dialer-DEBUG-line-count>
   # and a trailing COUNT line, so a host that matched no logs at all is
   # distinguishable from one that was never asked.
   report=$(timeout 60 ssh -n -o BatchMode=yes -o ConnectTimeout=10 "$host" "
@@ -89,7 +94,7 @@ while read -r host port label; do
       # emits a SECOND 0 and splits this record across two lines -- and it does
       # so only when the count is zero, which is the one case this gate exists
       # to catch. It read as a phantom extra instance with a blank age.
-      c=\$(grep -c 'net::p2p' \"\$f\" 2>/dev/null); [ -n \"\$c\" ] || c=0
+      c=\$(grep -c 'DEBUG shekyl_dialer::' \"\$f\" 2>/dev/null); [ -n \"\$c\" ] || c=0
       echo \"\$f \$((now-m)) \$c\"
     done
     echo \"COUNT \$n\"" 2>/dev/null)
@@ -118,7 +123,7 @@ while read -r host port label; do
       hostbad=$((hostbad + 1)); continue ;;
     esac
     case "${lines:-}" in ''|*[!0-9]*)
-      printf '  %-10s %-18s REFUSE: unreadable net.p2p count (%q)\n' "$label" "$inst" "${lines:-}"
+      printf '  %-10s %-18s REFUSE: unreadable shekyl_dialer count (%q)\n' "$label" "$inst" "${lines:-}"
       hostbad=$((hostbad + 1)); continue ;;
     esac
     if [ "$age" -gt "$STALE_S" ]; then
@@ -126,7 +131,7 @@ while read -r host port label; do
       hostbad=$((hostbad + 1)); continue
     fi
     if [ "$lines" -lt 1 ]; then
-      printf '  %-10s %-18s REFUSE: no net.p2p INFO lines -- a burn would not be logged\n' "$label" "$inst"
+      printf '  %-10s %-18s REFUSE: no DEBUG shekyl_dialer lines -- a burn would not be logged\n' "$label" "$inst"
       hostbad=$((hostbad + 1)); continue
     fi
   done <<EOF

@@ -3,7 +3,7 @@
 // All rights reserved.
 // BSD-3-Clause
 
-//! Live Rust Levin client ↔ C++ `shekyld` (`LV2_PORTABLE_STORAGE.md` §12 step 4).
+//! Live Rust Levin client ↔ a running `shekyld` (`LV2_PORTABLE_STORAGE.md` §12 step 4).
 //!
 //! Proves the LV-2b maps round-trip on the real wire. Does **not** rewire
 //! daemon emit/recv (that is LV-3). `#[ignore]`d: requires `SHEKYLD_BIN`.
@@ -14,9 +14,11 @@
 //!   cargo test -p shekyl-levin --test dual_stack -- --ignored --nocapture
 //! ```
 //!
-//! `--offline` skips the p2p bind (`net_node.inl`); this harness uses
-//! `--p2p-bind-ip 127.0.0.1` plus `--out-peers 0`. `--regtest` (FAKECHAIN)
-//! speaks the id derived from fakechain's genesis pin.
+//! The daemon is started on the regtest network with a loopback
+//! `clearnet-listen` and Tor off; the handshake speaks the id derived from
+//! regtest's genesis pin. Since 2026-11-05 the daemon's p2p side is the Rust
+//! session layer (`shekyl-p2p-session`), so this is a Rust-to-Rust walk over
+//! the same wire the C++ host once answered; the wire is unchanged.
 
 use std::io::{Read, Write};
 use std::net::{SocketAddr, TcpStream};

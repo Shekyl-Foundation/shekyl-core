@@ -242,8 +242,8 @@ namespace
 TEST(tor_address, unknown_is_not_a_host)
 {
     // An `unknown()` address encodes "there is nothing to know" — it is the
-    // per-zone default handed to every inbound anonymity connection
-    // (net_node.inl:677, one call per zone). It must never report *sameness*:
+    // per-zone default the C++ p2p host handed to every inbound anonymity
+    // connection (one call per zone). It must never report *sameness*:
     // two connections whose remote is unknown are not the same host, they are
     // two peers whose host is unknown. Reading absence-of-information as
     // equality collapses an entire zone into one host, which is what made

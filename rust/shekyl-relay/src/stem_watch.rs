@@ -56,17 +56,15 @@
 //! `/get_stem_tallies` carries that connector on the row.
 //!
 //! ```text
-//! levin_notify.cpp  dandelionpp_notify        <- every zone, noise-off
-//!         |
-//!         v
-//! levin_notify.cpp  record_stem_observation
-//!         |
-//!         v
-//! shekyl-ffi        shekyl_relay_zone_record_stem
+//! shekyl-relay      owner::actor  (a stem forwarded to a successor)
 //!         |
 //!         v
 //! shekyl-relay      Relay::record_stem  ->  StemWatch::stemmed
 //! ```
+//!
+//! (Until 2026-11-05 the first two hops were `levin_notify.cpp`'s
+//! `dandelionpp_notify` → `record_stem_observation` and `shekyl-ffi`'s
+//! `shekyl_relay_zone_record_stem`; the relay owner took their place.)
 //!
 //! **An empty tally for a connector that is not configured still means "no
 //! stems", not "no drops".** The two read identically off [`StemTally`] and

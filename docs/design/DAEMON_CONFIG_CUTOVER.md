@@ -724,15 +724,18 @@ a chain.
 
 ### 5.2 Gates
 
-`scripts/ci/check_dial_path_freeze.py`: PR-3 retired its function rows; its
-shrink rows stay on `src/p2p/net_node.inl`, `src/p2p/net_node.h` and
-`src/cryptonote_protocol/levin_notify.cpp` until those files are deleted
-([`scripts/ci/dial_path_freeze.tsv`](../../scripts/ci/dial_path_freeze.tsv)).
-The cutover's deletions there are free; a line it edits there rather than
-deletes carries a dated UNFREEZE line in the dialer brief.
-`scripts/ci/check_ffi_signatures.sh` covers every signature in §2.3 and
-§4.2. `scripts/ci/check_network_uniformity.sh`: the FAKECHAIN arms are
-outside its fence; this cutover deletes three and adds none. The Windows job's daemon smoke test (Rick, 2026-10-14), which replaces
+`scripts/ci/check_dial_path_freeze.py` (deleted 2026-11-05 with the p2p
+remnant cutover, its subject gone — rule 47): PR-3 retired its function
+rows; its shrink rows stayed on `src/p2p/net_node.inl`, `src/p2p/net_node.h`
+and `src/cryptonote_protocol/levin_notify.cpp` until those files were
+deleted (`scripts/ci/dial_path_freeze.tsv`, gone with it). This cutover's
+deletions there were free; a line it edited there rather than deleted
+carried a dated UNFREEZE line in the dialer brief.
+`scripts/ci/check_ffi_signatures.sh` covered every signature in §2.3 and
+§4.2 (one surface left after the p2p remnant cutover, `tx_extra_codec`).
+`scripts/ci/check_network_uniformity.sh` (deleted 2026-11-05, the C++ it
+fenced gone): the FAKECHAIN arms were outside its fence; this cutover
+deleted three and added none. The Windows job's daemon smoke test (Rick, 2026-10-14), which replaces
 the daemonizer-removal step on today's spellings ahead of the cutover,
 boots the built `shekyld.exe` offline on regtest with a fresh data
 directory and a free RPC port, waits for `get_info`, stops it over RPC and

@@ -8,8 +8,8 @@
 //! [`super::json_rpc`] is the HTTP frame: it admits the caller and
 //! returns the JSON-RPC object. This module is the dispatch. Three
 //! shapes stay a match, because they are three different runtimes:
-//! [`on_chain`] reads the store on a worker, [`run_blocking`] reads what
-//! the C++ p2p remnant still holds (connections, net stats), and
+//! [`on_chain`] reads the store on a worker, [`run_blocking`] reads the
+//! network's facts off the node handle (connections, net stats), and
 //! [`from_error`] / [`blocking`] cover mining, bans, and the pool.
 
 use crate::authority::Authority;
@@ -78,8 +78,8 @@ pub(super) fn native_method_for(method: &str) -> Option<NativeMethod> {
         "sync_info" => NativeMethod::SyncInfo,
         "get_connections" => NativeMethod::Connections,
         // RK-5b. Both spellings of each, as the C++ table carried them
-        // (`core_rpc_ffi.cpp:269-283`); `get_fee_estimate` had only one
-        // there and gains none here.
+        // (`core_rpc_ffi.cpp`, deleted 2026-11-05); `get_fee_estimate` had
+        // only one there and gains none here.
         "get_last_block_header" | "getlastblockheader" => NativeMethod::LastBlockHeader,
         "get_block_header_by_hash" | "getblockheaderbyhash" => NativeMethod::BlockHeaderByHash,
         "get_block_headers_range" | "getblockheadersrange" => NativeMethod::BlockHeadersRange,

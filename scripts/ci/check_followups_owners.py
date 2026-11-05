@@ -95,8 +95,11 @@ DESIGN_DIR = os.path.join(ROOT, "docs", "design")
 # C++-anchored gates, `bi_cum_rct`) merged with it, the list's length;
 # 285 on 2026-11-03 when CS-5's two rows (the 2004 continuation closed as
 # built, the bucket-length row given an owner) merged with dev's
-# unbond-journal close (#1237), the list's length.
-GRANDFATHER_CEILING = 285
+# unbond-journal close (#1237), the list's length; 284 on 2026-11-05 when
+# the truncated credit-wire headline (already re-filed under the
+# attestation-ordering row) went with the C++ file it linked (the p2p
+# remnant cutover), the list's length.
+GRANDFATHER_CEILING = 284
 # How far the ceiling may sit above the list before the gate demands it be
 # lowered. Small enough that a burn-down is locked in within a few rows.
 GRANDFATHER_SLACK = 5

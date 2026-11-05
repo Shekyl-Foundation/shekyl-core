@@ -149,7 +149,8 @@ The test reproduces the syscall, not the C++ path, because a Rust test
 cannot link `tools::spawn` and the defect is the disposition, whoever sets
 it. It is a binary of its own because a disposition is process-wide.
 Commit (d) added the positive twin,
-[`rust/shekyl-ffi/tests/dc_f12_runner_reaps_its_children.rs`](../../rust/shekyl-ffi/tests/dc_f12_runner_reaps_its_children.rs):
+[`rust/shekyl-daemon/tests/dc_f12_runner_reaps_its_children.rs`](../../rust/shekyl-daemon/tests/dc_f12_runner_reaps_its_children.rs)
+(under `shekyl-ffi` until the p2p remnant cutover, 2026-11-05):
 the Rust runner runs one command of each kind and awaits each, and a tokio
 child spawned afterwards still returns its status from `wait()`. A binary
 of its own, for the same reason as the negative one.
@@ -312,7 +313,8 @@ of its own, for the same reason as the negative one.
   and is absent from both; `option_show` refuses it by name with
   `config.dev.network`, the startup parse's own refusal.
 - **The notify runner (commit (d), §2.10, DC-Q14).** The runner
-  ([`rust/shekyl-ffi/src/notify_ffi.rs`](../../rust/shekyl-ffi/src/notify_ffi.rs))
+  ([`rust/shekyl-daemon/src/notify.rs`](../../rust/shekyl-daemon/src/notify.rs);
+  `shekyl-ffi`'s `notify_ffi.rs` until the p2p remnant cutover, 2026-11-05)
   is installed by the Rust `main()` from the notify section beside the RPC
   configure, before the core exists, and its children run on the signal
   owner's runtime, so they are awaited by the process that spawned them and

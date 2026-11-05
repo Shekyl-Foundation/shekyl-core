@@ -1006,22 +1006,29 @@ For other retired designs that are easy to mistake for current SoT, prefer
 deletion (or a CLOSED-as-record file in `docs/completed/` only) over a
 `design/` stub.
 
-## Relay layer → C++ dependency inventory (p2p migration cost)
+## Relay layer → C++ dependency inventory (p2p migration cost) — DISCHARGED 2026-11-05
+
+**DISCHARGED 2026-11-05 by the p2p remnant cutover
+([`P2P_3_REMNANT_CUTOVER_BRIEF.md`](P2P_3_REMNANT_CUTOVER_BRIEF.md)): the
+C++ host is deleted, the relay owner (`shekyl-relay::owner`) owns the relay
+state, and the connection table is the session layer's board
+(`shekyl-p2p-session`). The two rows below are the pre-cutover record
+(records-was); their files no longer exist.**
 
 **Measured 2026-08-02 from the §55 work, recorded here rather than in the
 relay doc because this is where someone costing the p2p migration would
-look.** The relay layer is Rust-owned except for exactly two dependencies,
-and **both are containment, not entanglement** — which is what makes the
+look.** The relay layer was Rust-owned except for exactly two dependencies,
+and **both were containment, not entanglement** — which is what made the
 migration schedulable rather than something to negotiate mid-flight.
 
 | # | dependency | where |
 | --- | --- | --- |
-| 1 | **Relay handle lifetime** — one `RelayZoneHandle` covers every configured connector; C++ creates and owns it | [`levin_notify.cpp`](../../src/cryptonote_protocol/levin_notify.cpp) `make_relay`, held in `detail::zone::relay` |
-| 2 | **Connection table** — the `ConnectionId` → peer/address join, keyed by connector | [`net_node.inl`](../../src/p2p/net_node.inl) `m_network_zones`, `for_each_connection` |
+| 1 | **Relay handle lifetime** — one `RelayZoneHandle` covered every configured connector; C++ created and owned it | `levin_notify.cpp` (deleted 2026-11-05) `make_relay`, held in `detail::zone::relay` |
+| 2 | **Connection table** — the `ConnectionId` → peer/address join, keyed by connector | `net_node.inl` (deleted 2026-11-05) `m_network_zones`, `for_each_connection` |
 
-**Decay warning: this is a claim about code state and it ages at the code's
-rate, not the estimate's.** The visible symptom is `/get_stem_tallies`'
-round trip — Rust relay → FFI → C++ → FFI → Rust RPC — which exists only to
-cross (1), and which will recur for every relay-facing readout added before
-the migration. If a third dependency appears, add it here; if the list is
-still two when p2p is scheduled, the estimate still holds.
+**Decay warning (pre-cutover): this was a claim about code state and it aged at the code's
+rate, not the estimate's.** The visible symptom was `/get_stem_tallies`'
+round trip — Rust relay → FFI → C++ → FFI → Rust RPC — which existed only to
+cross (1). The list was still two when p2p was scheduled, and the cutover
+removed both; `/get_stem_tallies` now reads the relay owner's tallies off
+the node handle.

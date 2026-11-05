@@ -58,7 +58,7 @@ use std::sync::{Arc, Condvar, Mutex, MutexGuard, OnceLock};
 use shekyl_draw_rng::RelayRng;
 use shekyl_levin::PeerlistEntry;
 use shekyl_p2p_session::{
-    Board, Direction, Endpoint, Established, PeerOwner, SessionFacts, SessionLayer,
+    Board, Endpoint, Established, PeerOwner, SessionFacts, SessionLayer,
 };
 use shekyl_peerlist::{
     dial_profile, white_diversity_floor, ConnectionId, ConnectorId, DialOutcome, ListName,
@@ -1008,7 +1008,7 @@ impl<C: Clock + Clone + Send + Sync + 'static> PeerOwner for Dialer<C> {
 
     /// An inbound Tor session finished its handshake: it is held.
     fn on_established(&self, session: &Established) {
-        if session.connector() == ConnectorId::Tor && session.direction() == Direction::Inbound {
+        if *session.endpoint() == Endpoint::TorInbound {
             self.note_inbound_tor();
         }
     }

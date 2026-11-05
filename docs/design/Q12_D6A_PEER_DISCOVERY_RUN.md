@@ -1156,7 +1156,7 @@ already has both, in the shipped binary.**
 
 | property R10 requires | stagenet, at source |
 | --- | --- |
-| distinct `NETWORK_ID` | `network_id_from_genesis` of stagenet's genesis block hash and of testnet's differ; the KAT in [`network_id_ffi.rs`](../../rust/shekyl-ffi/src/network_id_ffi.rs) records both |
+| distinct `NETWORK_ID` | `network_id_from_genesis` of stagenet's genesis block hash and of testnet's differ; the KAT in [`genesis.rs`](../../rust/shekyl-node/src/genesis.rs) (`shekyl-node`; `shekyl-ffi`'s `network_id_ffi.rs` until 2026-11-05) records both |
 | no compiled IP seeds | Stagenet admits no compiled seeds (`SeedNetwork::None` in `shekyl-dialer`'s `seeds`). *Records-was, 2026-08-11:* `get_ip_seed_nodes()`'s `STAGENET` branch was empty at `net_node.inl`. |
 | no compiled Tor seeds | Stagenet admits no compiled Tor seeds. Testnet's six are compiled (Q12-R1, landed 2026-10-21) and are the canonical Tor bootstrap. *Records-was:* `get_seed_nodes()` returned nothing for Tor on every network, and this row called that connector anon. |
 

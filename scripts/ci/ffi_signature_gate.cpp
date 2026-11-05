@@ -19,8 +19,9 @@
 //
 // Negative-controlled at introduction (both injected into a copy of the
 // hand-written header and observed to fail): dropping a parameter from
-// shekyl_relay_zone_poll -> "conflicting declaration of C function";
-// changing now_ms from uint64_t to uint32_t -> same error class. And, when
+// the relay zone's poll export (since deleted with the C++ host,
+// 2026-11-05) -> "conflicting declaration of C function"; changing its
+// now_ms from uint64_t to uint32_t -> same error class. And, when
 // the tx_extra codec joined the gate (SO-D12 increment 1): a parameter added
 // to the Rust shekyl_coinbase_extra and not to the hand-written declaration
 // -> the same error, before any C++ call site was touched. That parameter
@@ -32,21 +33,12 @@
 // is reported and the gate exits non-zero.
 //
 // Order matters: the hand-written header comes first so its type
-// definitions (ShekylRelayBlob, the callback typedefs, the #define flag
-// values) exist before the generated declarations reference them.
+// definitions (the codec's structs, the #define flag values) exist before
+// the generated declarations reference them.
 
 #include "shekyl/shekyl_ffi.h"
 
-#include "shekyl_ffi_generated_relay.h"
 #include "shekyl_ffi_generated_tx_extra_codec.h"
-#include "shekyl_ffi_generated_rpc_peerlist.h"
-#include "shekyl_ffi_generated_close_cause.h"
-#include "shekyl_ffi_generated_daemon_stop.h"
-#include "shekyl_ffi_generated_daemon_rpc.h"
-#include "shekyl_ffi_generated_notify.h"
-#include "shekyl_ffi_generated_data_dir.h"
-#include "shekyl_ffi_generated_daemon_snapshot.h"
-#include "shekyl_ffi_generated_chain_sync.h"
 
 int main()
 {

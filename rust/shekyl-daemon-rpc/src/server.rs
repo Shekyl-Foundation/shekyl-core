@@ -159,9 +159,12 @@ fn cors_layer(origins: &[String]) -> CorsLayer {
 //     lists that could both contain it.
 //
 // Handlers stay out of the table (and out of anything a unit test calls)
-// because naming a handler pulls `core_rpc_ffi_*` into the link set; lib tests
-// link no C++ remnant. `assemble`'s generic handler parameter is what keeps
-// that true while still letting a test route the real table.
+// so a test can route the real table without an `AppState` behind it: the
+// handlers read the node handle, which a route test has no business
+// building. (Until 2026-11-05 naming a handler also pulled the C++ remnant's
+// `core_rpc_ffi_*` exports into the link set; that half is gone, the shape
+// stays.) `assemble`'s generic handler parameter is what keeps that true
+// while still letting a test route the real table.
 //
 // The tests assert against a specification written out separately (§70): an
 // oracle that iterates this table cannot fail when the table changes.
@@ -207,7 +210,7 @@ pub(crate) struct Route {
 
 /// The daemon RPC route table — the single source of *what is served where*.
 ///
-/// Handler-free so tests can read it without linking `core_rpc_ffi_*`.
+/// Handler-free so tests can read it without an `AppState`.
 /// [`build_router`] registers every row; the request layer admits each path.
 pub(crate) const ROUTES: &[Route] = &[
     Route {
@@ -313,9 +316,9 @@ pub(crate) fn served_paths() -> impl Iterator<Item = &'static str> {
 /// the same mistake a startup abort — green CI, then a daemon that does not
 /// come up (§70.1).
 ///
-/// Deliberately not called from unit tests — naming a handler pulls
-/// `core_rpc_ffi_*` into the test binary (`#[ignore]` skips execution, not
-/// linking), which is why [`assemble`] takes the binding as a parameter.
+/// Deliberately not called from unit tests — a real handler needs the
+/// `AppState` behind it, which is why [`assemble`] takes the binding as a
+/// parameter.
 fn handler_for(endpoint: Endpoint) -> MethodRouter<Arc<AppState>> {
     match endpoint {
         Endpoint::JsonRpc => post(json_rpc::handle),
@@ -355,7 +358,7 @@ fn handler_for(endpoint: Endpoint) -> MethodRouter<Arc<AppState>> {
 ///
 /// Generic over the handler binding **so tests can build the real router**.
 /// [`build_router`] passes [`handler_for`]; the gate tests pass a dummy
-/// handler, which keeps `core_rpc_ffi_*` out of the test link set while still
+/// handler, which keeps the `AppState` out of the test while still
 /// exercising the thing that ships: `Router::route` over every row.
 /// Route selection is then asserted by *serving requests* rather than by
 /// re-reading a const — and axum's duplicate-path panic fires here as a test
@@ -712,8 +715,8 @@ mod tests {
     /// A router with the real route table, the real gate and dummy handlers.
     ///
     /// This is [`build_router`]'s own assembly — the same [`assemble`] and
-    /// [`gate`] calls — with only the handler binding swapped, because naming
-    /// a real handler pulls `core_rpc_ffi_*` into the test link set. Both
+    /// [`gate`] calls — with only the handler binding swapped, because a
+    /// real handler needs the `AppState` behind it. Both
     /// methods are bound so an unrouted path answers 404 rather than 405.
     fn probe_router(authority: Authority) -> Router {
         gate(
@@ -827,8 +830,7 @@ mod tests {
 
     #[tokio::test]
     async fn cors_default_deny_omits_allow_origin() {
-        // Exercise `cors_layer` without `AppState` / C++ FFI (lib tests cannot
-        // link `core_rpc_ffi_*`).
+        // Exercise `cors_layer` without an `AppState`.
         let app = Router::new()
             .route("/get_info", get(|| async { "ok" }))
             .layer(cors_layer(&[]));

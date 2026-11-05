@@ -33,7 +33,7 @@
 //!
 //! **No residual.** The C++ `tools::spawn` (DC-F12's subject) is deleted; the
 //! daemon's notify commands are spawned by the Rust runner, under this lock
-//! (`shekyl-ffi` `notify_ffi.rs`).
+//! (`shekyl-daemon` `notify.rs`).
 
 use std::process::{Child, Command, ExitStatus, Output, Stdio};
 use std::sync::{Mutex, PoisonError};

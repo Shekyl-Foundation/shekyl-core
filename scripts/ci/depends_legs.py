@@ -73,9 +73,7 @@ CFG_TEST = re.compile(r"#\[\s*cfg\s*\(\s*test\s*\)\s*\]")
 # Crates whose src/ declares an export today. The census reads the tree;
 # this set is what `--selftest` pins, so a comment that starts matching, or
 # a real export that appears, fails here instead of drifting.
-EXPORT_CRATES = frozenset(
-    {"shekyl-daemon", "shekyl-daemon-rpc", "shekyl-ffi", "shekyl-logging"}
-)
+EXPORT_CRATES = frozenset({"shekyl-ffi", "shekyl-logging"})
 
 
 def matches(path, patterns):
@@ -237,7 +235,7 @@ def selftest():
         {"name": "Win64", "host": MINGW},
         {"name": "x86_64 Linux", "host": "x86_64-unknown-linux-gnu"},
     ]
-    crates = {"shekyl-ffi", "shekyl-daemon"}
+    crates = {"shekyl-ffi", "shekyl-logging"}
     cases = {
         "a depends package": (["contrib/depends/packages/boost.mk"], "all"),
         "the Makefile": (["Makefile"], "all"),
@@ -247,11 +245,11 @@ def selftest():
         "a nested CMakeLists.txt": (["src/blockchain_utilities/CMakeLists.txt"], "mingw"),
         "a cmake module": (["cmake/BuildRust.cmake"], "mingw"),
         "an FFI header": (["src/shekyl/shekyl_ffi.h"], "mingw"),
-        "an export crate's file": (["rust/shekyl-daemon/src/run.rs"], "mingw"),
+        "an export crate's file": (["rust/shekyl-logging/src/ffi.rs"], "mingw"),
         "an export crate's manifest": (["rust/shekyl-ffi/Cargo.toml"], "mingw"),
         "a crate with no export": (["rust/shekyl-dialer/src/lib.rs"], "none"),
         "docs only": (["docs/FOLLOWUPS.md"], "none"),
-        "C++ outside the headers": (["src/p2p/net_node.inl"], "none"),
+        "C++ outside the headers": (["src/cryptonote_basic/account.cpp"], "none"),
         "depends beats link": (["CMakeLists.txt", "Makefile"], "all"),
         "an empty change set runs everything": ([], "all"),
     }

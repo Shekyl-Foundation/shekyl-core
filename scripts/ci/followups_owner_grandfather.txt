@@ -143,7 +143,6 @@ F5 pruning inherits two constraints from the CompleteTree round
 The wallet-RPC server parses every request into a `serde_json::Value`
 Q11 balance-exclusion KAT — blob-boundary invariant arm
 Single-sig address decode enforces the Bech32m variant
-Credit-wire cutover has two preconditions the Phase-2 verify cannot satisfy [`cryptonote_core.cpp`](../src/cryptonote_core/cryptonote_core.cpp)
 Raw-import archival/burn bookkeeping parity
 Serve-credit decision-site flip: Rust becomes the primary decision site for `blockchain.cpp:4247`/`:4312`/`:4889–4910`
 `tests/performance_tests/` — rule-15 deletion-or-adoption audit

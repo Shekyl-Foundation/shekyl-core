@@ -40,16 +40,16 @@ GROUPS = [
         "namespace": "rust_ffi",
         "headers": ["src/shekyl/shekyl_ffi.h"],
         "bounds": [
-            "rust/shekyl-seam/src/endpoint.rs",
             "rust/shekyl-archival-retention/src/pass_anchor.rs",
         ],
         # Its array bounds are aliases of constants in shekyl-crypto-pq and
         # shekyl-address, which alias further constants; see EXEMPT.
         "exclude": ["ShekylAllKeysBlob"],
+        # The daemon's pairs (the configuration snapshot, the relay blob and
+        # stem tallies, the seam's rows, the RPC facts) went with the C++
+        # host on 2026-11-05; what crosses now is the wallet, PQ, economics
+        # and curve-tree surface the test binaries and utilities link.
         "pairs": {
-            # The configuration snapshot the C++ remnant reads, and the
-            # importer's and core_tests' (daemon_snapshot_ffi.rs, §2.9).
-            "ShekylDaemonSnapshot": "ShekylDaemonSnapshot",
             "ShekylBuffer": "ShekylBuffer",
             "ShekylPqcKeypair": "ShekylPqcKeypair",
             "ShekylPqcSignatureResult": "ShekylPqcSignatureResult",
@@ -62,44 +62,6 @@ GROUPS = [
             "ShekylCurveTreeReplicaTx": "ShekylCurveTreeReplicaTx",
             "ShekylSignResult": "ShekylSignResult",
             "ShekylU128": "shekyl_u128",
-            "ShekylRelayBlob": "ShekylRelayBlob",
-            "ShekylInboundCeiling": "shekyl_inbound_ceiling",
-            "ShekylStemTallyRow": "ShekylStemTallyRow",
-            "ShekylSeamAddress": "shekyl_seam_address",
-            "ShekylSeamObserved": "shekyl_seam_observed",
-            "ShekylSeamBoardRow": "shekyl_seam_board_row",
-            "ShekylSeamHandshakeResult": "shekyl_seam_handshake_result",
-            "ShekylRpcPeerFacts": "shekyl_rpc_peer_facts",
-            "ShekylBanView": "shekyl_ban_view",
-            "ShekylSyncPayload": "shekyl_sync_payload",
-        },
-    },
-    {
-        # The daemon RPC's twins of the C++ facts it still reads. The peer
-        # list is an owned Rust row, so it is not paired here; `shekyl-ffi`
-        # pairs that C export. Session counts have no C export.
-        "crate": "rust/shekyl-daemon-rpc/src/lib.rs",
-        "namespace": "rust_daemon_rpc",
-        "headers": [
-            "src/shekyl/shekyl_ffi.h",
-            "src/rpc/rpc_facts_ffi.h",
-        ],
-        "bounds": [],
-        # Opaque: C++ holds only its pointer, and its members are Rust types.
-        "exclude": ["ShekylDaemonRpcHandle"],
-        "pairs": {
-            "IdentityFactsFfi": "shekyl_rpc_identity_facts",
-            "ChainTipFactsFfi": "shekyl_rpc_chain_tip_facts",
-            "BlockHashFactsFfi": "shekyl_rpc_block_hash_facts",
-            "BlockHeaderFactsFfi": "shekyl_rpc_block_header_facts",
-            "BlockPayloadFfi": "shekyl_rpc_block_payload",
-            "BlockEntryFfi": "shekyl_rpc_block_entry",
-            "NetStatsFactsFfi": "shekyl_rpc_net_stats_facts",
-            "ConnectionFactsFfi": "shekyl_rpc_connection_facts",
-            "FeeEstimateFactsFfi": "shekyl_rpc_fee_estimate_facts",
-            "InfoChainFactsFfi": "shekyl_rpc_info_chain_facts",
-            "InfoStatusFactsFfi": "shekyl_rpc_info_status_facts",
-            "InfoPeersFactsFfi": "shekyl_rpc_info_peers_facts",
         },
     },
 ]
@@ -112,11 +74,6 @@ EXEMPT = {
         "constants that alias further ones, the cross-crate limitation the "
         "FOLLOWUPS entry names; its Rust layout is pinned by "
         "struct_layout_matches in account_ffi.rs"
-    ),
-    "shekyl_close_cause": (
-        "CloseKind is declared through a macro, which cbindgen does not expand "
-        "on stable; the pair is pinned both ways by the CLOSE_CAUSE_* constants "
-        "in shekyl-transport-layer's cause.rs and the header's static_asserts"
     ),
 }
 

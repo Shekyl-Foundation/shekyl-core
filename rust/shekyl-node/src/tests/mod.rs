@@ -232,7 +232,7 @@ fn config_on(dir: &Path, network: &str, extra: &[&str]) -> DaemonConfig {
 }
 /// A configuration on an open network: clearnet left on, no closed peer
 /// list (`Declaration::Open`). An in-process node binds nothing: the
-/// seam is the C++ remnant's, which these tests do not start.
+/// `Network` is built by the daemon, which these tests do not start.
 fn config_open(dir: &Path, network: &str, extra: &[&str]) -> DaemonConfig {
     config_with(dir, network, &[], extra)
 }

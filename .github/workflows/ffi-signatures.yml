@@ -13,8 +13,9 @@
 # conflicting-declaration compile error. Mechanism note and the negative
 # controls run at introduction: scripts/ci/ffi_signature_gate.cpp.
 #
-# Scope is the file list in the gate script (SURFACES): the relay surface
-# and the tx_extra codec with the coinbase writer. A second limb compares
+# Scope is the file list in the gate script (SURFACES): the tx_extra codec
+# with the coinbase writer, the one gated file left since the daemon went
+# all-Rust (2026-11-05). A second limb compares
 # every crossing struct a header under src/ defines against its #[repr(C)]
 # twin (ffi_layout_gate.py GROUPS): member names in order, size,
 # alignment, and each member's offset and type. Mechanism note and
@@ -51,10 +52,6 @@ on:
       - "scripts/ci/cbindgen-ffi-bounds.toml"
       - "scripts/ci/ffi_layout_gate.py"
       - "scripts/ci/ffi_layout_gate.cpp"
-      # The snapshot-reader gate reads every C++ source under src/.
-      - "src/**/*.cpp"
-      - "src/**/*.inl"
-      - "scripts/ci/check_snapshot_readers.py"
       - ".github/workflows/ffi-signatures.yml"
 
 concurrency:
@@ -71,11 +68,6 @@ jobs:
     steps:
       - uses: actions/checkout@v5
 
-      # The layout TU includes src/rpc/rpc_facts_ffi.h, whose C++ half
-      # includes crypto/hash.h: Boost and libsodium headers, nothing linked.
-      - name: Install the headers the layout TU includes
-        run: sudo apt-get update && sudo apt-get install -y --no-install-recommends libboost-dev libsodium-dev
-
       # Version-pinned: cbindgen's generated output differs across versions,
       # and the gate compares generated output against a hand-written header.
       # Pin lives in the gate script (--print-pin) so install and check cannot
@@ -85,10 +77,3 @@ jobs:
 
       - name: Run FFI signature gate
         run: scripts/ci/check_ffi_signatures.sh
-      # The daemon snapshot holds only values a C++ reader still needs:
-      # every member has a read under src/, and the two pinned counts match
-      # the structure (DAEMON_CONFIG_CUTOVER.md §2.9).
-      - name: Run snapshot reader gate
-        run: |
-          python3 scripts/ci/check_snapshot_readers.py --selftest
-          python3 scripts/ci/check_snapshot_readers.py

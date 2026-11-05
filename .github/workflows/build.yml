@@ -364,10 +364,9 @@ jobs:
         shell: bash
         run: scripts/ci/check_randomx_symbol_isolation.sh build/bin/shekyld
       # The hardening the link flags claim, read off the staged ELF binaries
-      # (PIE, non-executable stack, full RELRO, no run path). shekyld is a
-      # Rust binary linking the C++ remnant (DAEMON_CONFIG_CUTOVER.md DC-Q19,
-      # DC-Q21); the flags reach it through Corrosion, not CMAKE_EXE_LINKER_FLAGS,
-      # so the result is what is asserted. readelf is binutils.
+      # (PIE, non-executable stack, full RELRO, no run path). The three are
+      # Rust binaries built by one cargo invocation; no CMake flag list
+      # reaches them, so the result is what is asserted. readelf is binutils.
       - name: binary hardening on the staged binaries (readelf)
         if: needs.changes.outputs.docs_only != 'true'
         shell: bash
@@ -617,7 +616,7 @@ jobs:
       # ld and lld drop the unreferenced ones) and nine tests whose fixtures
       # assumed `/` paths and LF line ends. BLOCKING, with a floor per lib
       # test binary so a crate whose tests were cfg'd away or filtered out
-      # fails here instead of passing as nothing run (rule 47). shekyl-ffi's
+      # fails here instead of passing as nothing run (rule 47). shekyl-process's
       # `dc_q21_a_fault_ends_with_its_code` writes a scratch per-application
       # `LocalDumps` policy under HKLM for its own binary (DC-F44) and so
       # needs an elevated session, which this runner is; it refuses with the
@@ -627,14 +626,17 @@ jobs:
         working-directory: rust
         run: |
           $PSNativeCommandUseErrorActionPreference = $false
-          cargo test --locked -p shekyl-options -p shekyl-daemon-config -p shekyl-daemon -p shekyl-daemon-rpc -p shekyl-ffi --no-fail-fast *> daemon-crates.out
+          cargo test --locked -p shekyl-options -p shekyl-daemon-config -p shekyl-daemon -p shekyl-daemon-rpc -p shekyl-ffi -p shekyl-process --no-fail-fast *> daemon-crates.out
           $rc = $LASTEXITCODE
           Get-Content daemon-crates.out
           if ($rc -ne 0) { exit $rc }
-          # shekyl-daemon-rpc's console tests moved to shekyl-cli (R8). This
-          # floor is the lib that remains; Windows ran it at 184. shekyl-cli
-          # is covered by the Rust workspace job, not this MSVC link step.
-          $floors = @{ 'shekyl_options-' = 25; 'shekyl_daemon-' = 30; 'shekyl_daemon_config-' = 60; 'shekyl_daemon_rpc-' = 184; 'shekyl_ffi-' = 220 }
+          # shekyl-daemon-rpc's console tests moved to shekyl-cli (R8). shekyl-cli
+          # is covered by the Rust workspace job, not this MSVC link step. The
+          # daemon-rpc, ffi and process floors were re-set at the p2p cutover
+          # (2026-11-05), which deleted the seam-facts and p2p halves of the
+          # first two and moved the hardening tests into the third: Linux
+          # lib counts were 182, 116 and 3.
+          $floors = @{ 'shekyl_options-' = 25; 'shekyl_daemon-' = 30; 'shekyl_daemon_config-' = 60; 'shekyl_daemon_rpc-' = 170; 'shekyl_ffi-' = 100; 'shekyl_process-' = 2 }
           $lines = Get-Content daemon-crates.out
           foreach ($crate in $floors.Keys) {
             $at = ($lines | Select-String -Pattern ("Running unittests .*\\" + [regex]::Escape($crate)) | Select-Object -First 1).LineNumber
