@@ -6,30 +6,29 @@
 //! The sync owner (CS-3 §4.3): one task on its own runtime row, named
 //! `chain-sync`, holding the one [`Model`]. Nothing else holds it.
 //!
-//! The owner turns what the router, the executor, the entry's tickets, the
-//! tip watch, the latch and the timing engine report into [`Event`]s,
-//! hands each to the model with a fresh store snapshot as `main`, and runs
-//! the commands that come out, in order.
+//! The owner turns what the session layer ([`crate::port`]), the executor,
+//! the entry's tickets, the tip watch, the latch and the timing engine
+//! report into [`Event`]s, hands each to the model with a fresh store
+//! snapshot as `main`, and runs the commands that come out, in order.
 //!
-//! - **Sessions** are `Session`s. [`shekyl_seam::SocketId`] does not order itself, and
+//! - **Sessions** are `Session`s. [`SocketId`] does not order itself, and
 //!   the model's maps need an order. `Session` orders by the admission
 //!   number, and that order carries no meaning: draws are uniform over the
 //!   set. The entry's [`SessionId`] is that number, and only at the door.
+//!   The owner reaches a session through the [`Established`] the layer
+//!   handed it, which it keeps until the layer reports the close: only an
+//!   established session is ever sent to, by type (brief §2 rule 2).
 //! - **`now`** is the timing engine's clock as an [`Instant`]. Deadlines
 //!   go to the engine as ticks on that same clock, and come back as
 //!   [`Event::Deadline`]. The engine holds one deadline per owner, so the
 //!   owner arms the earliest of its own and keeps the rest.
 //! - **The wall** is the substrate's clock, read once per event.
-//! - **Serving** a request reads the store on a blocking thread, one
-//!   request at a time per session, in arrival order. A delivered chunk
-//!   that carried only chain-sync messages is finished after the requests
-//!   it carried are answered, so a peer's requests wait in the transport
-//!   and not in this task. A chunk that also carried bytes for the C++
-//!   handler is finished by that handler, so the queue is bounded here as
-//!   well: a session holds at most one waiting request of each kind, and a
-//!   later one replaces it. A requester asks again only after it gave the
-//!   first up, so the later request is the one it reads. The queue bounds
-//!   what waits. It does not schedule this task.
+//! - **Serving** a request reads the store on a blocking thread. The
+//!   request's [`Taken`] is held until the answer is sent, so a session
+//!   has at most one request being served, and its next frame waits in
+//!   the transport and not in this task (brief §7.7: one message
+//!   outstanding per session). The permit bounds what waits. It does not
+//!   schedule this task.
 //! - **Turns.** Stop comes first. Then a proof, an entry reply, or a
 //!   served response, then the tip and the latch, then one peer message.
 //!   Peer bytes do not sit ahead of work this node has already finished.
@@ -37,10 +36,12 @@
 //!   of them may be the response it would abandon (`on_headers` closes a
 //!   session whose request the deadline already cleared). When the clock
 //!   fires, those messages are taken and then the deadline runs.
-//! - **Announcements** (2008, `NOTIFY_NEW_COMPACT_BLOCK`) come from the
-//!   attached router and are the model's [`Event::Announce`].
-//!   `RequestMissingTxs` is encoded and sent as our own 2009, and a peer's
-//!   2009 is served from the store like a header or body request
+//! - **Claims** arrive decoded: the session layer reads the handshake and
+//!   the timed sync in both directions and hands the peer's sync payload
+//!   here ([`Inbound::Claim`]). There is no claim tap.
+//! - **Announcements** (2008, `NOTIFY_NEW_COMPACT_BLOCK`) are the model's
+//!   [`Event::Announce`]. `RequestMissingTxs` is sent as our own 2009, and
+//!   a peer's 2009 is served from the store like a header or body request
 //!   ([`crate::serve::serve_missing_txs`]): its faults close the session.
 //! - **Relay** is the model's decision ([`Command::Relay`]): a block that
 //!   connected as the new tip while this node, with it, is not `Behind`,
@@ -48,9 +49,9 @@
 //!   block and its witness, no transactions) and sends it as 2008 to every
 //!   established session but the one that supplied it. A block no session
 //!   supplied, such as one this node mined, goes to every established
-//!   session. That send moves behind RD's relay entry when it lands.
+//!   session.
 
-use std::collections::{BTreeMap, HashMap, HashSet, VecDeque};
+use std::collections::{BTreeMap, HashMap};
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 
@@ -64,24 +65,25 @@ use shekyl_chain_store::store::{ChainStore, SnapshotView};
 use shekyl_difficulty::CumulativeDifficulty;
 use shekyl_draw_rng::RelayRng;
 use shekyl_levin::{
-    notify, CoreSyncData, GetTxpoolComplement, HandshakeRequest, NewCompactBlock, PortableMap,
-    RequestBodies, RequestCompactMissingTx, RequestHeaders, SyncCommand, TimedSyncRequest,
-    TimedSyncResponse, HASH_SIZE, NOTIFY_GET_TXPOOL_COMPLEMENT, NOTIFY_NEW_COMPACT_BLOCK,
-    NOTIFY_REQUEST_COMPACT_MISSING_TX,
+    CoreSyncData, GetTxpoolComplement, NewCompactBlock, PortableMap, RequestBodies,
+    RequestCompactMissingTx, RequestHeaders, HASH_SIZE,
+};
+use shekyl_p2p_session::{
+    ClaimCarrier, CloseCause, CloseKind, Encoded, Established, Message, SocketId, SyncInbound,
+    Taken,
 };
 use shekyl_runtime::{Pool, RuntimeBudget, ThreadName};
-use shekyl_seam::{Hub, SocketId, SyncPayload};
 use shekyl_timing_engine::{Clock, OwnerHandle, Tick};
 use shekyl_transport_layer::{declaration, Assessment};
 use shekyl_types::{BlockHash, BlockHeight, ChainCount};
 use shekyl_wire::{BlockBody, TxBody};
-use tokio::sync::{mpsc, oneshot, watch};
+use tokio::sync::{mpsc, watch};
 use tracing::Instrument;
 
 use crate::executor::Executor;
 use crate::outcome;
+use crate::port::Inbound;
 use crate::relay;
-use crate::router::{Routed, Tapped};
 use crate::serve::{
     serve_bodies, serve_headers, serve_missing_txs, MissingTxsRefused, MissingTxsServed,
 };
@@ -107,14 +109,6 @@ pub struct OwnerParts<C: Clock + Clone, R> {
     pub tips: watch::Receiver<TipChanged>,
     /// The `following_degraded` latch.
     pub latch: watch::Receiver<Option<FollowingDegraded>>,
-    /// The seam, for sends, closes and finished deliveries. It arrives
-    /// once the seam is bound, which is after the node opens: the bind
-    /// attaches the router to this owner, mints the hub on it, and sends
-    /// the hub here (`shekyl_ffi::chain_sync_ffi`). The owner handles
-    /// nothing until it arrives. The router precedes every session, so no
-    /// session's messages are lost while it waits. A sender dropped
-    /// unsent is a node whose seam was never bound: the owner ends.
-    pub hub: oneshot::Receiver<Arc<Hub>>,
     /// The prove jobs' runner.
     pub executor: Arc<Executor>,
     /// The owner's registration on the timing engine, class `Sync`.
@@ -131,8 +125,11 @@ pub struct OwnerParts<C: Clock + Clone, R> {
     pub rng: R,
     /// The pool's transaction hashes, for the complement request.
     pub pool_hashes: Arc<dyn Fn() -> Vec<[u8; HASH_SIZE]> + Send + Sync>,
-    /// The router's output.
-    pub routed: mpsc::UnboundedReceiver<Routed>,
+    /// The session layer's calls, as [`crate::port::port`] hands them over.
+    /// The port precedes every session, so no session's messages are lost
+    /// before this task runs. The sender gone is the port dropped: the
+    /// session layer is gone, and the owner ends.
+    pub inbound: mpsc::UnboundedReceiver<Inbound>,
     /// Where the derived sync state is published (CS-Q2 step 8), which the
     /// RPC's facts, the miner's follower and the relay gate read. The owner
     /// is its only publisher: the node hands this sender over and keeps a
@@ -182,7 +179,7 @@ impl Running {
     }
 
     /// The model's view (CS-5 §7), published after every event: what
-    /// `sync_info` renders. A session is named by its seam socket.
+    /// `sync_info` renders. A session is named by its admission id.
     #[must_use]
     pub fn view(&self) -> watch::Receiver<SyncView<SocketId>> {
         self.view.clone()
@@ -190,17 +187,17 @@ impl Running {
 
     /// Ask the task to stop, without joining it.
     ///
-    /// The seam may close in the same breath. The task, and the guard
-    /// that reports its end, read this first, so that close is a stop.
+    /// The session layer may close in the same breath. The task, and the
+    /// guard that reports its end, read this first, so that close is a
+    /// stop.
     pub fn request_stop(&self) {
         self.stop_tx.send_replace(true);
     }
 
     /// Ask the task to publish `state`. The task is the only publisher.
     ///
-    /// A test sets the state the follower reads while the seam is unbound,
-    /// which is before the task accepts any other input. A send after the
-    /// task has ended is ignored.
+    /// A test sets the state the follower reads before any session
+    /// exists. A send after the task has ended is ignored.
     #[cfg(any(test, feature = "publish-for-test"))]
     pub fn publish_for_test(&self, state: SyncState) {
         let _gone = self.publish_tx.send(state);
@@ -282,7 +279,7 @@ where
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Ended {
     /// [`Running::stop`] asked it to, or [`Running::request_stop`] did
-    /// before the seam closed under it.
+    /// before the session layer closed under it.
     Stopped,
     /// It ended on its own. A daemon whose owner ends this way never
     /// syncs again, so the daemon stops with [`EndCause::text`].
@@ -297,8 +294,8 @@ pub enum Ended {
 pub enum EndCause {
     /// The task unwound before an exit set a cause.
     Panicked,
-    /// The router's sender went: the seam's hub was dropped.
-    RouterClosed,
+    /// The port's sender went: the session layer dropped the owner.
+    PortClosed,
     /// The process timing engine went.
     EngineClosed,
     /// The connector's tip watch closed.
@@ -307,8 +304,6 @@ pub enum EndCause {
     LatchWatchClosed,
     /// The seed watch closed.
     SeedWatchClosed,
-    /// The seam's hub never arrived.
-    SeamNeverBound,
 }
 
 impl EndCause {
@@ -317,12 +312,11 @@ impl EndCause {
     pub const fn text(self) -> &'static str {
         match self {
             Self::Panicked => "the sync owner's task panicked",
-            Self::RouterClosed => "the router closed",
+            Self::PortClosed => "the session layer dropped the sync owner",
             Self::EngineClosed => "the timing engine closed",
             Self::TipWatchClosed => "the connector's tip watch closed",
             Self::LatchWatchClosed => "the latch watch closed",
             Self::SeedWatchClosed => "the seed watch closed",
-            Self::SeamNeverBound => "the seam never bound, so chain sync never started",
         }
     }
 }
@@ -344,7 +338,7 @@ impl std::fmt::Display for EndCause {
 /// [`EndCause::Panicked`]. Once a stop was asked, the end is
 /// [`Ended::Stopped`] whatever `how` says: [`Running::stop`] shuts the
 /// owner's runtime down, which can cancel the task before it reads the
-/// request, and the seam can close before the task polls.
+/// request, and the session layer can close before the task polls.
 struct EndGuard {
     state: watch::Sender<SyncState>,
     ended: watch::Sender<Option<Ended>>,
@@ -419,48 +413,21 @@ enum ServeRequest {
     MissingTxs(RequestCompactMissingTx),
 }
 
+/// Frame an answer on the serving thread, so the owner's task sends it
+/// without encoding.
+fn encode(message: &Message) -> Result<Encoded, String> {
+    message.encode().map_err(|err| err.to_string())
+}
+
 /// What serving one request came to.
 enum Served {
     /// The answer, framed.
-    Send(Vec<u8>),
+    Send(Encoded),
     /// Nothing is sent: the store could not answer, or the block left the
     /// main chain after it was announced.
     Nothing,
     /// The request was the peer's fault: the session closes.
     Close(MissingTxsRefused),
-}
-
-/// One session's serving queue: the request being served, and at most
-/// one waiting request of each kind.
-#[derive(Default)]
-struct Serving {
-    queue: VecDeque<ServeRequest>,
-    busy: bool,
-    /// Chunks the router handed back, finished when the queue drains.
-    finishes: u32,
-}
-
-impl Serving {
-    /// Queue `request`. A waiting request of the same kind is replaced in
-    /// its place, however the peer packed its chunks (module docs).
-    /// `true` when one was replaced.
-    fn push(&mut self, request: ServeRequest) -> bool {
-        let kind = std::mem::discriminant(&request);
-        match self
-            .queue
-            .iter_mut()
-            .find(|waiting| std::mem::discriminant(*waiting) == kind)
-        {
-            Some(waiting) => {
-                *waiting = request;
-                true
-            }
-            None => {
-                self.queue.push_back(request);
-                false
-            }
-        }
-    }
 }
 
 /// What the owner keeps beside the model.
@@ -469,7 +436,6 @@ struct Owner<C: Clock + Clone, R> {
     store: Arc<ChainStore>,
     door: Door,
     alarm: Alarm,
-    hub: Arc<Hub>,
     executor: Arc<Executor>,
     timer: Arc<OwnerHandle<C>>,
     rng: R,
@@ -482,14 +448,17 @@ struct Owner<C: Clock + Clone, R> {
     base: (Instant, Tick),
     /// Offered arrivals, by tag.
     offered: HashMap<u64, Offered>,
-    serving: HashMap<Session, Serving>,
+    /// The request each session has being served, as the permit the
+    /// session layer handed it with. Dropped when the answer is sent,
+    /// which is when the session reads its next frame (module docs).
+    serving: HashMap<Session, Taken>,
     /// Header and body requests in flight, and seat waits. Records the
     /// profile is timed from. Nothing the owner decides reads them.
     transit: Transit,
-    /// Sessions whose Levin handshake has completed ([`Routed::Opened`]).
-    /// The owner sends to no other: a peer still waiting on the
-    /// handshake's reply refuses anything else.
-    opened: HashSet<Session>,
+    /// The established sessions, as the session layer handed them. The
+    /// owner sends to these and no other: there is no handle to a session
+    /// whose handshake has not completed.
+    sessions: BTreeMap<Session, Established>,
     seats: Option<usize>,
     /// The seed window's published pair, read when a proof found a seed
     /// absent (`Command::SeedNotHeld`). The loop waits on its own
@@ -546,7 +515,6 @@ async fn run<C, R>(
         alarm,
         mut tips,
         mut latch,
-        hub,
         executor,
         timer,
         rules,
@@ -554,7 +522,7 @@ async fn run<C, R>(
         declaration,
         rng,
         pool_hashes,
-        mut routed,
+        mut inbound,
         state: state_tx,
     } = parts;
     // Dropped with the task: every exit below sets `how` first.
@@ -563,45 +531,6 @@ async fn run<C, R>(
         ended,
         stop: stop.clone(),
         how: Ended::Failed(EndCause::Panicked),
-    };
-    // The hub arrives once. Until it does, the only other event is a
-    // stop. A test may also ask for a publish; that arm continues the
-    // wait, so the test build loops. Production has no such arm, and a
-    // loop whose every arm leaves would be a lie. A closed test sender
-    // does not match `Some`, so the arm disables instead of spinning.
-    let hub = {
-        tokio::pin!(hub);
-        #[cfg(any(test, feature = "publish-for-test"))]
-        let arrived = loop {
-            owner_select!(
-                publish_rx,
-                state,
-                {
-                    state_tx.send_replace(state);
-                },
-                _ = stop.wait_for(|asked| *asked) => {
-                    end.how = Ended::Stopped;
-                    return;
-                }
-                result = &mut hub => break result,
-            );
-        };
-        #[cfg(not(any(test, feature = "publish-for-test")))]
-        let arrived = tokio::select! {
-            biased;
-            _ = stop.wait_for(|asked| *asked) => {
-                end.how = Ended::Stopped;
-                return;
-            }
-            result = &mut hub => result,
-        };
-        match arrived {
-            Ok(hub) => hub,
-            Err(_) => {
-                end.how = Ended::Failed(EndCause::SeamNeverBound);
-                return;
-            }
-        }
     };
     let (inputs, mut input_rx) = mpsc::unbounded_channel();
     let schedule: Box<dyn Fn(BlockHeight) -> shekyl_chain_rules::RuleSet + Send> =
@@ -618,7 +547,6 @@ async fn run<C, R>(
         store,
         door,
         alarm,
-        hub,
         executor,
         timer,
         rng,
@@ -630,7 +558,7 @@ async fn run<C, R>(
         offered: HashMap::new(),
         serving: HashMap::new(),
         transit: Transit::default(),
-        opened: HashSet::new(),
+        sessions: BTreeMap::new(),
         seats: None,
         seeds: seeds.clone(),
         seen_seeds,
@@ -685,23 +613,23 @@ async fn run<C, R>(
                 let pair = *seeds.borrow_and_update();
                 owner.seeds_published(pair);
             },
-            routed_one = routed.recv() => {
-                let Some(routed_one) = routed_one else {
-                    end.how = Ended::Failed(EndCause::RouterClosed);
+            inbound_one = inbound.recv() => {
+                let Some(inbound_one) = inbound_one else {
+                    end.how = Ended::Failed(EndCause::PortClosed);
                     break;
                 };
-                owner.routed(routed_one);
+                owner.inbound(inbound_one);
                 // Messages already queued were sent before this wake was
                 // observed. Take them before the deadline, so a response
                 // in hand is applied before its request is cleared.
                 match clock_ready(&wakes) {
                     Some(false) => {}
                     Some(true) => {
-                        let pending = routed.len();
+                        let pending = inbound.len();
                         let mut closed = false;
                         for _ in 0..pending {
-                            match routed.try_recv() {
-                                Ok(routed_one) => owner.routed(routed_one),
+                            match inbound.try_recv() {
+                                Ok(inbound_one) => owner.inbound(inbound_one),
                                 Err(mpsc::error::TryRecvError::Empty) => break,
                                 Err(mpsc::error::TryRecvError::Disconnected) => {
                                     closed = true;
@@ -711,7 +639,7 @@ async fn run<C, R>(
                             pump_local(&mut owner, &mut input_rx, &mut tips, &mut latch);
                         }
                         if closed {
-                            end.how = Ended::Failed(EndCause::RouterClosed);
+                            end.how = Ended::Failed(EndCause::PortClosed);
                             break;
                         }
                         owner.deadlines_due();
@@ -830,38 +758,10 @@ where
         self.commands(out);
     }
 
-    /// A copy of a handshake request or a timed sync (the router's claim
-    /// tap): its sync payload is the session's claim. A copy that does not
-    /// decode is the C++ handler's to judge, and gives no claim.
-    fn tap(&mut self, session: Session, kind: Tapped, payload: &[u8]) {
-        let core: Result<CoreSyncData, _> = match kind {
-            Tapped::HandshakeRequest => {
-                HandshakeRequest::load(payload).map(|message| message.payload_data)
-            }
-            Tapped::TimedSyncRequest => {
-                TimedSyncRequest::load(payload).map(|message| message.payload_data)
-            }
-            Tapped::TimedSyncResponse => {
-                TimedSyncResponse::load(payload).map(|message| message.payload_data)
-            }
-        };
-        match core {
-            Ok(core) => self.claim(
-                session,
-                SyncPayload {
-                    current_height: core.current_height,
-                    cumulative_difficulty: core.cumulative_difficulty,
-                    cumulative_difficulty_top64: core.cumulative_difficulty_top64,
-                    top_id: core.top_id,
-                },
-            ),
-            Err(err) => {
-                tracing::debug!(%session, ?kind, %err, "a tapped message that does not decode")
-            }
-        }
-    }
-
-    fn claim(&mut self, session: Session, sync: SyncPayload) {
+    /// A peer's sync payload, from either direction of the handshake or
+    /// the timed sync: the session's claim.
+    fn claim(&mut self, session: Session, sync: &CoreSyncData, carrier: ClaimCarrier) {
+        tracing::trace!(%session, ?carrier, height = sync.current_height, "a claim");
         let claim = PeerClaim {
             count: ChainCount::from_raw(sync.current_height),
             work: CumulativeDifficulty::from_raw(
@@ -893,59 +793,51 @@ where
         self.commands(out);
     }
 
-    fn routed(&mut self, routed: Routed) {
-        match routed {
-            Routed::Opened { id, connector } => {
-                let session = Session::new(id);
-                let transit = match declaration(connector.column()).transit_ms() {
-                    Assessment::Assessed(ms) => Duration::from_millis(u64::from(ms.ms())),
-                    Assessment::NotAssessed => Duration::ZERO,
-                };
-                if self.opened.insert(session) {
-                    self.event(Event::SessionOpened { session, transit });
+    /// A session the layer established. The first `Inbound` of a session
+    /// is its `Established`; a message or a claim that arrives for one not
+    /// yet held is still an established session, by type, and is admitted
+    /// the same way.
+    fn opened(&mut self, established: &Established) -> Session {
+        let session = Session::new(established.id());
+        if self.sessions.contains_key(&session) {
+            return session;
+        }
+        let transit = match declaration(established.connector().column()).transit_ms() {
+            Assessment::Assessed(ms) => Duration::from_millis(u64::from(ms.ms())),
+            Assessment::NotAssessed => Duration::ZERO,
+        };
+        self.sessions.insert(session, established.clone());
+        self.event(Event::SessionOpened { session, transit });
+        session
+    }
+
+    fn inbound(&mut self, inbound: Inbound) {
+        match inbound {
+            Inbound::Established(established) => {
+                self.opened(&established);
+            }
+            Inbound::Claim {
+                session,
+                sync,
+                carrier,
+            } => {
+                let session = self.opened(&session);
+                self.claim(session, &sync, carrier);
+            }
+            Inbound::Message {
+                session,
+                message,
+                taken,
+            } => {
+                let session = self.opened(&session);
+                self.message(session, message, taken);
+            }
+            Inbound::Closed(facts) => {
+                let session = Session::new(facts.id);
+                if self.sessions.remove(&session).is_none() {
+                    // Closed before it was established: never this owner's.
+                    return;
                 }
-            }
-            Routed::Claim { id, sync } => self.claim(Session::new(id), sync),
-            Routed::Announce { id, .. }
-            | Routed::MissingTxs { id, .. }
-            | Routed::Message { id, .. }
-                if !self.opened.contains(&Session::new(id)) =>
-            {
-                // Chain-sync traffic before the handshake has completed:
-                // no peer that follows the protocol sends it.
-                let session = Session::new(id);
-                tracing::debug!(%session, "chain-sync traffic before the handshake");
-                self.close(session);
-            }
-            Routed::Announce { id, payload } => self.announce(Session::new(id), &payload),
-            Routed::MissingTxs { id, payload } => {
-                let session = Session::new(id);
-                match RequestCompactMissingTx::load(&payload) {
-                    Ok(request) => self.queue_serve(session, ServeRequest::MissingTxs(request)),
-                    Err(err) => {
-                        tracing::debug!(%session, %err, "a missing-tx request that does not decode");
-                        self.close(session);
-                    }
-                }
-            }
-            Routed::Tap { id, kind, payload } => self.tap(Session::new(id), kind, &payload),
-            Routed::Message {
-                id,
-                command,
-                payload,
-            } => self.message(Session::new(id), command, payload),
-            Routed::Finished { id } => {
-                let session = Session::new(id);
-                match self.serving.get_mut(&session) {
-                    Some(serving) if serving.busy || !serving.queue.is_empty() => {
-                        serving.finishes = serving.finishes.saturating_add(1);
-                    }
-                    _ => self.hub.delivery_finished(id, true),
-                }
-            }
-            Routed::Closed { id } => {
-                let session = Session::new(id);
-                self.opened.remove(&session);
                 self.transit.forget_session(session);
                 self.serving.remove(&session);
                 self.door.session_closed(SessionId(session.socket().get()));
@@ -954,9 +846,25 @@ where
         }
     }
 
-    fn message(&mut self, session: Session, command: SyncCommand, payload: Vec<u8>) {
-        match command {
-            SyncCommand::ResponseHeaders => {
+    /// One of the owner's six commands. A response goes to the model
+    /// now, and `taken` drops with it; a request is served, and `taken`
+    /// is held until the answer is sent.
+    fn message(&mut self, session: Session, message: SyncInbound, taken: Taken) {
+        match message {
+            SyncInbound::NewCompactBlock(payload) => {
+                self.announce(session, &payload);
+                drop(taken);
+            }
+            SyncInbound::RequestCompactMissingTx(payload) => {
+                match RequestCompactMissingTx::load(&payload) {
+                    Ok(request) => self.serve(session, ServeRequest::MissingTxs(request), taken),
+                    Err(err) => {
+                        tracing::debug!(%session, %err, "a missing-tx request that does not decode");
+                        self.close(session);
+                    }
+                }
+            }
+            SyncInbound::ResponseHeaders(payload) => {
                 if let Some(sent) = self.transit.take_headers(session) {
                     let transit = sent.elapsed();
                     self.executor
@@ -974,8 +882,9 @@ where
                     session,
                     bytes: payload,
                 });
+                drop(taken);
             }
-            SyncCommand::ResponseBodies => {
+            SyncInbound::ResponseBodies(payload) => {
                 if let Some((sent, blocks)) = self.transit.take_bodies(session) {
                     let transit = sent.elapsed();
                     self.executor
@@ -994,16 +903,17 @@ where
                     session,
                     bytes: payload,
                 });
+                drop(taken);
             }
-            SyncCommand::RequestHeaders => match RequestHeaders::decode(&payload) {
-                Ok(request) => self.queue_serve(session, ServeRequest::Headers(request)),
+            SyncInbound::RequestHeaders(payload) => match RequestHeaders::decode(&payload) {
+                Ok(request) => self.serve(session, ServeRequest::Headers(request), taken),
                 Err(err) => {
                     tracing::debug!(%session, %err, "a header request that does not decode");
                     self.close(session);
                 }
             },
-            SyncCommand::RequestBodies => match RequestBodies::decode(&payload) {
-                Ok(request) => self.queue_serve(session, ServeRequest::Bodies(request)),
+            SyncInbound::RequestBodies(payload) => match RequestBodies::decode(&payload) {
+                Ok(request) => self.serve(session, ServeRequest::Bodies(request), taken),
                 Err(err) => {
                     tracing::debug!(%session, %err, "a body request that does not decode");
                     self.close(session);
@@ -1012,51 +922,32 @@ where
         }
     }
 
-    fn queue_serve(&mut self, session: Session, request: ServeRequest) {
-        let serving = self.serving.entry(session).or_default();
-        if serving.push(request) {
-            tracing::debug!(%session, "a later request replaced a waiting one of its kind");
+    /// Serve `request` on a blocking thread. `taken` is held until the
+    /// answer is sent ([`Input::Served`]), so the session's next frame
+    /// waits in the transport (module docs). A request arriving while one
+    /// is held cannot happen under the layer's one-permit bound; were it
+    /// to, the earlier permit drops here and the later request is served.
+    fn serve(&mut self, session: Session, request: ServeRequest, taken: Taken) {
+        if self.serving.insert(session, taken).is_some() {
+            tracing::debug!(%session, "a request arrived while one was being served");
         }
-        self.serve_next(session);
-    }
-
-    fn serve_next(&mut self, session: Session) {
-        let Some(serving) = self.serving.get_mut(&session) else {
-            return;
-        };
-        if serving.busy {
-            return;
-        }
-        let Some(request) = serving.queue.pop_front() else {
-            let finishes = std::mem::take(&mut serving.finishes);
-            let id = session.socket();
-            for _ in 0..finishes {
-                self.hub.delivery_finished(id, true);
-            }
-            return;
-        };
-        serving.busy = true;
         let store = Arc::clone(&self.store);
         let inputs = self.inputs.clone();
         tokio::task::spawn_blocking(move || {
             let served = match request {
                 ServeRequest::Headers(request) => serve_headers(&store, &request)
                     .map_err(|err| err.to_string())
-                    .and_then(|response| {
-                        outcome::framed(SyncCommand::ResponseHeaders.wire_id(), &response)
-                    })
+                    .and_then(|response| encode(&Message::ResponseHeaders(response)))
                     .map(Served::Send),
                 ServeRequest::Bodies(request) => serve_bodies(&store, &request)
                     .map_err(|err| err.to_string())
-                    .and_then(|response| {
-                        outcome::framed(SyncCommand::ResponseBodies.wire_id(), &response)
-                    })
+                    .and_then(|response| encode(&Message::ResponseBodies(response)))
                     .map(Served::Send),
                 ServeRequest::MissingTxs(request) => serve_missing_txs(&store, &request)
                     .map_err(|err| err.to_string())
                     .and_then(|served| match served {
                         MissingTxsServed::Answer(block) => {
-                            outcome::framed(NOTIFY_NEW_COMPACT_BLOCK, &block).map(Served::Send)
+                            encode(&Message::NewCompactBlock(block)).map(Served::Send)
                         }
                         MissingTxsServed::LeftMain => Ok(Served::Nothing),
                         MissingTxsServed::Refused(refused) => Ok(Served::Close(refused)),
@@ -1104,23 +995,22 @@ where
             // `Idle` is the only state that accepts new evidence.
             Input::AlarmRefused => self.alarm_refused(),
             Input::Served { session, served } => {
-                if let Some(serving) = self.serving.get_mut(&session) {
-                    serving.busy = false;
-                }
                 match served {
                     // A refused send is the transport's close, not sync's.
-                    Served::Send(bytes) => {
-                        let _sent = self.hub.send(session.socket(), bytes);
+                    Served::Send(encoded) => {
+                        if let Some(handle) = self.sessions.get(&session) {
+                            let _sent = handle.send_encoded(&encoded);
+                        }
                     }
                     Served::Nothing => {}
                     Served::Close(refused) => {
                         tracing::debug!(%session, ?refused, "a missing-tx request closes its session");
-                        self.serving.remove(&session);
                         self.close(session);
-                        return;
                     }
                 }
-                self.serve_next(session);
+                // The answer is sent (or the session closed): the session
+                // may read its next frame.
+                self.serving.remove(&session);
             }
         }
     }
@@ -1160,27 +1050,26 @@ where
     /// but `from`, its supplier. A block no session supplied, such as one
     /// this node mined, goes to every established session.
     fn relay(&mut self, hash: BlockHash, from: Option<Session>) {
-        let bytes = match relay::announcement(&self.store, &hash) {
-            Ok(Some(bytes)) => bytes,
+        let compact = match relay::announcement(&self.store, &hash) {
+            Ok(Some(compact)) => compact,
             Ok(None) => {
                 tracing::debug!(?hash, "a relayed block is no longer on the main chain");
                 return;
             }
-            Err(relay::Fault::Store(err)) => {
+            Err(err) => {
                 tracing::error!(%err, "the store could not be read: the relay is dropped");
                 return;
             }
-            Err(relay::Fault::Encode(err)) => {
+        };
+        // Encoded once, sent to every session.
+        let encoded = match Message::NewCompactBlock(compact).encode() {
+            Ok(encoded) => encoded,
+            Err(err) => {
                 tracing::error!(%err, "a relayed block did not encode");
                 return;
             }
         };
-        relay::fan_out(
-            &self.hub,
-            self.opened.iter().map(|session| session.socket()),
-            from.map(Session::socket),
-            &bytes,
-        );
+        relay::fan_out(self.sessions.iter(), from, &encoded);
     }
 
     fn tip(&mut self, changed: &TipChanged) {
@@ -1226,8 +1115,13 @@ where
         });
     }
 
+    /// Close `session` for a fault of the peer's. The session layer
+    /// records the close and tells every owner; this owner forgets the
+    /// session on that call, not here.
     fn close(&mut self, session: Session) {
-        self.hub.close(session.socket());
+        if let Some(handle) = self.sessions.get(&session) {
+            handle.close(CloseCause::new(CloseKind::LocalClose));
+        }
     }
 
     fn arm(&mut self, deadline: Instant, session: Session, request: u64) {
@@ -1273,9 +1167,11 @@ where
         self.rearm();
     }
 
-    fn send(&mut self, session: Session, bytes: Vec<u8>) {
+    fn send(&mut self, session: Session, message: &Message) {
         // A refused send is the transport's close, not sync's.
-        let _sent = self.hub.send(session.socket(), bytes);
+        if let Some(handle) = self.sessions.get(&session) {
+            let _sent = handle.send(message);
+        }
     }
 
     /// Publish the model's view. The stall is logged once when it sets,
@@ -1333,23 +1229,17 @@ where
                     id,
                     request,
                     deadline,
-                } => match request.store() {
-                    Ok(payload) => {
-                        tracing::trace!(
-                            %session,
-                            id,
-                            locator = request.block_ids.len(),
-                            "a header request"
-                        );
-                        self.send(
-                            session,
-                            notify(SyncCommand::RequestHeaders.wire_id(), &payload),
-                        );
-                        self.transit.note_headers(session, Instant::now());
-                        self.arm(deadline, session, id);
-                    }
-                    Err(err) => tracing::error!(%err, "a header request did not encode"),
-                },
+                } => {
+                    tracing::trace!(
+                        %session,
+                        id,
+                        locator = request.block_ids.len(),
+                        "a header request"
+                    );
+                    self.send(session, &Message::RequestHeaders(request));
+                    self.transit.note_headers(session, Instant::now());
+                    self.arm(deadline, session, id);
+                }
                 Command::ArmOpening {
                     session,
                     id,
@@ -1365,18 +1255,12 @@ where
                     id,
                     request,
                     deadline,
-                } => match request.store() {
-                    Ok(payload) => {
-                        self.send(
-                            session,
-                            notify(SyncCommand::RequestBodies.wire_id(), &payload),
-                        );
-                        self.transit
-                            .note_bodies(session, Instant::now(), request.hashes.len());
-                        self.arm(deadline, session, id);
-                    }
-                    Err(err) => tracing::error!(%err, "a body request did not encode"),
-                },
+                } => {
+                    let hashes = request.hashes.len();
+                    self.send(session, &Message::RequestBodies(request));
+                    self.transit.note_bodies(session, Instant::now(), hashes);
+                    self.arm(deadline, session, id);
+                }
                 Command::Prove {
                     job,
                     class,
@@ -1434,12 +1318,7 @@ where
                     let request = GetTxpoolComplement {
                         hashes: (self.pool_hashes)(),
                     };
-                    match request.store() {
-                        Ok(payload) => {
-                            self.send(session, notify(NOTIFY_GET_TXPOOL_COMPLEMENT, &payload));
-                        }
-                        Err(err) => tracing::error!(%err, "a complement request did not encode"),
-                    }
+                    self.send(session, &Message::GetTxpoolComplement(request));
                 }
                 Command::Relay { hash, from } => self.relay(hash, from),
                 Command::RequestMissingTxs {
@@ -1459,12 +1338,7 @@ where
                         current_blockchain_height: current,
                         missing_tx_indices: indices,
                     };
-                    match request.store() {
-                        Ok(payload) => {
-                            self.send(session, notify(NOTIFY_REQUEST_COMPACT_MISSING_TX, &payload))
-                        }
-                        Err(err) => tracing::error!(%err, "a missing-tx request did not encode"),
-                    }
+                    self.send(session, &Message::RequestCompactMissingTx(request));
                 }
             }
         }
