@@ -19,7 +19,7 @@ on:
     types: [checks_requested]
     branches: [dev]
   pull_request:
-    types: [opened, synchronize, reopened, edited]
+    types: [opened, synchronize, reopened]
     paths:
       - 'rust/shekyl-archival-retention/**'
       - 'rust/shekyl-standoff/**'
@@ -35,7 +35,7 @@ on:
   workflow_dispatch:
 
 concurrency:
-  group: depends-aarch64-kats-${{ github.ref }}${{ github.event.action == 'edited' && !contains(toJSON(github.event.changes), '"base":') && '-edited' || '' }}
+  group: depends-aarch64-kats-${{ github.ref }}
   cancel-in-progress: true
 
 permissions:
@@ -52,7 +52,6 @@ env:
 
 jobs:
   aarch64-kats:
-    if: (github.event.action != 'edited' || contains(toJSON(github.event.changes), '"base":'))
     name: "ARM v8 qemu KATs"
     runs-on: ubuntu-latest
     container:

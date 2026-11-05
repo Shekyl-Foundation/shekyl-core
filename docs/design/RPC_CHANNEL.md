@@ -1824,17 +1824,18 @@ Census at `1b7803f69a`: the routes
 router (`:413-432`) and the path list (`:664-688`); the forwarding handlers
 ([`json.rs:293`](../../rust/shekyl-daemon-rpc/src/handlers/json.rs),
 `:389-394`, through the dispatch at `:75-91`). Callers: the Rust console's
-`print_net_stats`, which reads `/get_limit`
-(lines 1126 to 1169 of `rust/shekyl-daemon-rpc/src/console/mod.rs`)
-with its tests (`console/tests.rs:1130-1170`); the Python framework
+`print_net_stats`, which reads `/get_limit` (`console/mod.rs:1126-1169` at
+that census) with its tests (`console/tests.rs:1130-1170`); the Python
+framework
 ([`daemon.py:360-455`](../../utils/python-rpc/framework/daemon.py)); the
-C++ client test
-(lines 107 to 155 of `tests/unit_tests/daemon_rpc_client.cpp`);
-the regtest check of `print_net_stats`
+C++ client test (`daemon_rpc_client.cpp:107-155` at that census); the
+regtest check of `print_net_stats`
 ([`regtest_e2e.rs:5817-5876`](../../rust/shekyl-engine-core/src/engine/regtest_e2e.rs));
-and the C++ console
-(`src/daemon/rpc_command_executor.cpp`),
-which dies with R8 (`INPUT_GRAMMAR.md` IG-Q25). **`/get_limit` is replaced,
+and the C++ console (`rpc_command_executor.cpp` at that census). R8
+(`INPUT_GRAMMAR.md` IG-Q25; `7938c51f16`, #1259) deleted the C++ console,
+the client test and the daemon's in-process Rust console; `print_net_stats`
+lives in `shekyl-cli` (`rust/shekyl-cli/src/console/mod.rs`) and no longer
+reads `/get_limit`. **`/get_limit` is replaced,
 not ported:** it leaves RK-8 (`DAEMON_RPC_KV_CUTOVER.md` §2), and the
 comments at `regtest_e2e.rs:5866` and `console/mod.rs:1128` that say RK-8
 migrates it are corrected by the implementing PR.
@@ -1856,11 +1857,10 @@ The HTTP request's authority admits it there, on the admin listener with
 the start switch set
 ([`authority.rs`](../../rust/shekyl-daemon-rpc/src/authority.rs)); the
 router test `pop_blocks_needs_the_armed_switch` holds that gate. The
-in-process `pop_blocks` console command admits through the same function
-before the C++ handler runs
-(`rust/shekyl-daemon-rpc/src/console/pop_blocks.rs`, deleted with the console by #1259):
-the live arm reads the switch `configure` stored, and the remote arm posts
-`/pop_blocks` so that daemon's stamp admits it. The
+in-process `pop_blocks` console command admitted through the same function
+before the C++ handler ran (`console/pop_blocks.rs`, deleted with the
+daemon's console in R8 at `7938c51f16`); the remote arm, a posted
+`/pop_blocks` the daemon's stamp admits, is the one that remains. The
 daemon-configuration cutover recorded the gap as DC-F14 (PR #1066). **Reopen (rule 21):**
 a demonstrated operator recovery need returns it as a ruled capability.
 

@@ -124,7 +124,7 @@ on:
   # path filter `merge_group` would discard; its cost per group is minutes
   # the class it would catch does not pay for.
   pull_request:
-    types: [opened, synchronize, reopened, edited]
+    types: [opened, synchronize, reopened]
     paths:
       - 'rust/shekyl-randomx-differential/**'
       - 'rust/randomx-v2-sys/**'
@@ -214,7 +214,7 @@ on:
 # run never fires the alarm a failed run would; that is the
 # armed-gate-with-no-trigger failure mode reborn as a race.
 concurrency:
-  group: randomx-v2-differential-${{ (github.event_name == 'schedule' || github.event_name == 'workflow_dispatch') && github.run_id || format('{0}-{1}', github.event_name, github.ref) }}${{ github.event.action == 'edited' && !contains(toJSON(github.event.changes), '"base":') && '-edited' || '' }}
+  group: randomx-v2-differential-${{ (github.event_name == 'schedule' || github.event_name == 'workflow_dispatch') && github.run_id || format('{0}-{1}', github.event_name, github.ref) }}
   cancel-in-progress: true
 
 permissions:
@@ -250,7 +250,7 @@ jobs:
     # step is skipped on the cron, so this fits with margin — measure
     # the first crons before tightening.
     timeout-minutes: 120
-    if: (github.event.action != 'edited' || contains(toJSON(github.event.changes), '"base":')) && (github.event_name != 'schedule' || github.event.schedule == '0 5 * * *')
+    if: github.event_name != 'schedule' || github.event.schedule == '0 5 * * *'
     env:
       # Runtime-mode sizing: per-PR/push/dispatch events run the R1-D4
       # §F2 per-PR subset (16×8 = 128 pairs); the daily 05:00 cron (the
@@ -458,7 +458,7 @@ jobs:
     # ≈ 10–20 min; 90 leaves shared-runner margin — measure the first
     # crons before tightening.
     timeout-minutes: 90
-    if: (github.event.action != 'edited' || contains(toJSON(github.event.changes), '"base":')) && ((github.event_name == 'schedule' && github.event.schedule == '0 5 * * *') || (github.event_name == 'workflow_dispatch' && inputs.runtime_modes))
+    if: (github.event_name == 'schedule' && github.event.schedule == '0 5 * * *') || (github.event_name == 'workflow_dispatch' && inputs.runtime_modes)
     strategy:
       fail-fast: false
       matrix:
@@ -586,7 +586,7 @@ jobs:
     # Dominated by the C-reference build and the cargo build, not by
     # the 36 s ratchet itself.
     timeout-minutes: 30
-    if: (github.event.action != 'edited' || contains(toJSON(github.event.changes), '"base":')) && (github.event_name != 'schedule' || github.event.schedule == '0 5 * * *')
+    if: github.event_name != 'schedule' || github.event.schedule == '0 5 * * *'
     steps:
       - uses: actions/checkout@v5
         with:
@@ -744,7 +744,7 @@ jobs:
     # Mode measured at 444 s; 30 leaves room for a slow runner without
     # becoming a place a hang can hide.
     timeout-minutes: 30
-    if: (github.event.action != 'edited' || contains(toJSON(github.event.changes), '"base":')) && (github.event_name == 'pull_request')
+    if: github.event_name == 'pull_request'
     steps:
       - uses: actions/checkout@v5
         with:
@@ -897,7 +897,7 @@ jobs:
     # not transfer uniformly to this workload either, which is the same
     # lesson as the extrapolation it replaced. 40 stays.
     timeout-minutes: 40
-    if: (github.event.action != 'edited' || contains(toJSON(github.event.changes), '"base":')) && ((github.event_name == 'schedule' && github.event.schedule == '0 5 * * *') || (github.event_name == 'workflow_dispatch' && inputs.rotation_index != ''))
+    if: (github.event_name == 'schedule' && github.event.schedule == '0 5 * * *') || (github.event_name == 'workflow_dispatch' && inputs.rotation_index != '')
     strategy:
       fail-fast: false
       matrix:
@@ -1091,7 +1091,7 @@ jobs:
     name: 'cron: full-dataset parity gate + symbol isolation'
     runs-on: ubuntu-latest
     timeout-minutes: 300
-    if: (github.event.action != 'edited' || contains(toJSON(github.event.changes), '"base":')) && (github.event_name == 'schedule' || github.event_name == 'workflow_dispatch')
+    if: github.event_name == 'schedule' || github.event_name == 'workflow_dispatch'
     container:
       image: ubuntu:24.04
       env:
@@ -1233,7 +1233,7 @@ jobs:
     # T2 + pins + the SERIAL three-leg correctness mode sum to ~75+ min
     # on a 4-vCPU runner; measure the first runs before tightening.
     timeout-minutes: 120
-    if: (github.event.action != 'edited' || contains(toJSON(github.event.changes), '"base":')) && (github.event_name != 'schedule' || github.event.schedule == '0 5 * * *')
+    if: github.event_name != 'schedule' || github.event.schedule == '0 5 * * *'
     steps:
       - uses: actions/checkout@v5
         with:
