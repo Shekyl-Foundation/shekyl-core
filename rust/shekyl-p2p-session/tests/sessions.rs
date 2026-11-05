@@ -975,6 +975,17 @@ session_test!(
     }
 );
 
+// A connector hands over a channel after the stop: it is dropped, and no
+// owner hears of a session that never was.
+session_test!(nothing_is_placed_after_shutdown, async {
+    let mut rig = Rig::new(Settings::default());
+    rig.layer.shutdown();
+    let (mut wire, _gap) = rig.accept(inbound_clearnet(27));
+    assert!(rig.layer.is_empty(), "a channel was placed after the stop");
+    assert!(wire.drained().await, "its socket stayed open");
+    assert!(rig.no_event().await, "an owner heard of it");
+});
+
 session_test!(a_second_close_does_not_replace_the_first_end, async {
     let mut rig = Rig::new(Settings::default());
     let (session, wire) = rig.dial_kept(outbound_clearnet(10)).await;

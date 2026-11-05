@@ -263,6 +263,8 @@ pub(crate) struct Slot {
 struct Table {
     slots: HashMap<SocketId, Slot>,
     board: Board,
+    /// [`SessionLayer::shutdown`] ran: no channel is placed after it.
+    shut: bool,
 }
 
 impl Table {
@@ -328,6 +330,7 @@ impl<C: Clock + Clone + Send + Sync + 'static> SessionLayer<C> {
             table: Mutex::new(Table {
                 slots: HashMap::new(),
                 board: Board::empty(),
+                shut: false,
             }),
         };
         Self {
@@ -447,10 +450,14 @@ impl<C: Clock + Clone + Send + Sync + 'static> SessionLayer<C> {
         self.shared.close(id, end);
     }
 
-    /// Close every session with this node's own close after the channel.
+    /// Close every session with this node's own close after the channel,
+    /// and place none after: a channel a connector hands over once this has
+    /// run is dropped, so the stop leaves no session its owners never hear
+    /// of.
     pub fn shutdown(&self) {
         let ids: Vec<SocketId> = {
-            let table = self.shared.table.lock().expect("session table");
+            let mut table = self.shared.table.lock().expect("session table");
+            table.shut = true;
             table.slots.keys().copied().collect()
         };
         for id in ids {
@@ -553,6 +560,11 @@ impl<C: Clock + Clone + Send + Sync + 'static> Shared<C> {
             if !self.sockets.is_live(id) {
                 drop(table);
                 tracing::debug!(?id, "admission was released before adoption; no session");
+                return;
+            }
+            if table.shut {
+                drop(table);
+                tracing::debug!(?id, "the session layer has shut down; no session");
                 return;
             }
             let replaced = table.slots.insert(id, slot);
