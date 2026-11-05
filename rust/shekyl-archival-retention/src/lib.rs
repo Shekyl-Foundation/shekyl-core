@@ -74,6 +74,7 @@ pub mod debit_auth;
 pub mod distinct;
 pub mod drawable_epoch;
 pub mod drawable_pair;
+pub mod emission_auth;
 pub mod emission_kat_shape;
 pub mod emission_verify;
 pub mod emission_wire;

@@ -294,8 +294,8 @@ Guards that compare a configured network with a recorded one (the marker, the mi
 | shekyl/archival-drawable-epoch-v2 | `rust/shekyl-archival-retention/src/drawable_epoch.rs` | digest of an epoch snapshot | B | a local store check; no consensus rule reads it |
 | shekyl/p-store-aead-v1 | `rust/shekyl-p-store/src/store.rs` | P's body-store file key from file_kek | B | local file |
 | shekyl/p-store-slot-v1 | `rust/shekyl-p-store/src/store.rs` | P's per-shard table slot | B | local |
-| shekyl/archival-emission-auth-backing-v3 | `rust/shekyl-archival-retention/src/emission_wire.rs` | 64-byte emission auth message (persona, holdings, epochs, work, reward commits, `signable_tx_hash`) | A | the input starts with the network id, byte 0 (NI-R14) |
-| shekyl/archival-emission-auth-claim-v3 | `rust/shekyl-archival-retention/src/emission_wire.rs` | the same message under the claim role | A | the same input (NI-R14) |
+| shekyl/archival-emission-auth-backing-v4 | `rust/shekyl-archival-retention/src/emission_auth.rs` | 64-byte emission auth message (persona, holdings, epochs, work, reward commits, `signable_tx_hash`) | A | the input starts with the network id, byte 0 (NI-R14) |
+| shekyl/archival-emission-auth-claim-v4 | `rust/shekyl-archival-retention/src/emission_auth.rs` | the same message under the claim role | A | the same input (NI-R14) |
 | shekyl/p-socks-user-v1 | `rust/shekyl-p-transport/src/lib.rs` | Tor SOCKS isolation username from the persona id | B | local to the process |
 | shekyl/output-handle-v1 | `rust/shekyl-crypto-pq/src/handle.rs` | wallet handle for an output position | A | input is view_secret (name-salted) plus tx_hash |
 | shekyl/receive-label-hash-v1 | `rust/shekyl-crypto-pq/src/label.rs` | wallet display fingerprint of a label | B | wallet-local display only |

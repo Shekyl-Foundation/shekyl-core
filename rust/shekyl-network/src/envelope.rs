@@ -137,16 +137,26 @@ impl<const N: usize, W: Width> NameDomain<N, W> {
     }
 }
 
-/// `X = binding ‖ framed(f_1) ‖ … ‖ framed(f_n)`.
-fn input(binding: &[u8; BINDING_LEN], fields: &[&[u8]]) -> Vec<u8> {
-    let len = BINDING_LEN + fields.iter().map(|f| 8 + f.len()).sum::<usize>();
-    let mut x = Vec::with_capacity(len);
-    x.extend_from_slice(binding);
+/// `framed(f_1) ‖ … ‖ framed(f_n)`: each field behind its u64-LE length.
+/// No binding. The field half of [`input`].
+#[must_use]
+pub fn framed_fields(fields: &[&[u8]]) -> Vec<u8> {
+    let len = fields.iter().map(|f| 8 + f.len()).sum::<usize>();
+    let mut out = Vec::with_capacity(len);
     for field in fields {
         let len = u64::try_from(field.len()).expect("a field is shorter than 2^64 bytes");
-        x.extend_from_slice(&len.to_le_bytes());
-        x.extend_from_slice(field);
+        out.extend_from_slice(&len.to_le_bytes());
+        out.extend_from_slice(field);
     }
+    out
+}
+
+/// `X = binding ‖ framed(f_1) ‖ … ‖ framed(f_n)`.
+fn input(binding: &[u8; BINDING_LEN], fields: &[&[u8]]) -> Vec<u8> {
+    let framed = framed_fields(fields);
+    let mut x = Vec::with_capacity(BINDING_LEN + framed.len());
+    x.extend_from_slice(binding);
+    x.extend_from_slice(&framed);
     x
 }
 
