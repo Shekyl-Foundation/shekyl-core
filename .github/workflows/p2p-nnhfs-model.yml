@@ -32,7 +32,7 @@ name: ci/p2p-nnhfs-model
 
 on:
   pull_request:
-    branches: [dev]
+    types: [opened, synchronize, reopened]
     paths:
       - "docs/formal/proverif/**"
       - "rust/shekyl-p2p-transport/src/noise.rs"

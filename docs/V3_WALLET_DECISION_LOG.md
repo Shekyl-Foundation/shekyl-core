@@ -6847,3 +6847,32 @@ ceremony (NI-R11). The wallet RPC returns the 24 words on every network
 and no longer a raw seed. Raw 32-byte seeds remain only as harness input.
 
 ---
+
+---
+
+## 2026-11-04 — The derivation salt is the name's 16-byte binding, then the purpose
+
+**Decision** (Rick, ruling 2 on the signing envelope, `NETWORK_IDENTITY.md`;
+`claude/NI_SIGNING_ENVELOPE.md` §2.6 in the planning repository). Key
+derivation's HKDF salt is the network's `name_id`, then the purpose label,
+unframed: `salt = name_id ‖ "shekyl-master-derive-v3"`, where
+`name_id = cSHAKE256(S = "shekyl/network-name-v1", X = "shekyl/<network>")[..16]`.
+It replaces `shekyl-master-derive-v2-` ‖ the tag. HKDF stays the key
+primitive; only the salt's shape changes. The same seed derives different
+keys and addresses from this entry on.
+
+**Why.** One binding rule for everything Shekyl hashes, signs or derives:
+16 bytes at position 0, the genesis-derived id for what is signed or proved
+against the chain, the name's `name_id` for what is derived from keys or
+addresses (NI-R10, NI-R15). The salt was the one network binding of its own
+shape (a variable-length tag after a label).
+
+**Where it lands.** In network identity PR 1 (#1264), so testnet, stagenet
+and regtest are regenerated once: their genesis recipients, genesis blocks,
+network ids, the recorded ids, the captured chains and the vector suites
+(`ADDRESS_DERIVATION_V3`, `ARCHIVAL_P_DERIVE_V2`, `WALLET_FILE_FORMAT_V2`)
+move in that one PR. The rest of the envelope lands in PR 2 (#1266).
+Testnet's and stagenet's genesis wallets are generated fresh, not
+re-derived from the 2026-11-03 custody seeds: one of those seeds was
+printed into a working session transcript while this change was prepared,
+so that set is retired.

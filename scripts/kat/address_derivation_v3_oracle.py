@@ -12,11 +12,15 @@ Ed25519 base-point arithmetic, through code that shares nothing with the
 Rust: HKDF-SHA-512 per RFC 5869 written over ``hmac``, Ed25519 arithmetic
 per RFC 8032's reference formulas, and the derivation constants written out
 below from the design (``NETWORK_IDENTITY.md`` NI-R7/NI-R10, the 2026-11-03
-``V3_WALLET_DECISION_LOG.md`` entry, ``ARCHIVAL_FIREWALL_GATE6.md`` §9.3),
-never parsed out of the Rust source.
+and 2026-11-04 ``V3_WALLET_DECISION_LOG.md`` entries, the signing envelope
+§2.6, ``ARCHIVAL_FIREWALL_GATE6.md`` §9.3), never parsed out of the Rust
+source.
 
-One script covers both suites because they share the layer this decision
-moved: ``salt_for(net)`` = ``shekyl-master-derive-v2-`` || ``shekyl/<network>``.
+One script covers both suites because they share the layer these decisions
+moved: ``salt_for(net)`` = ``name_id(net)`` || ``shekyl-master-derive-v3``,
+with ``name_id`` the network tag's cSHAKE256 under ``shekyl/network-name-v1``,
+first 16 bytes, computed by ``stdlib_cshake.py`` (anchored on hashlib's
+SHAKE256 and NIST SP 800-185's cSHAKE256 samples #3 and #4).
 
 What it cannot recompute without an ML-KEM / ML-DSA / FN-DSA / SLH-DSA
 implementation (the ML-KEM keys, the hybrid signing keys, the message-signing
@@ -37,6 +41,7 @@ from __future__ import annotations
 import argparse
 import hashlib
 import hmac
+import importlib.util
 import json
 import pathlib
 import sys
@@ -46,10 +51,16 @@ DEFAULT_VECTORS_ROOT = ROOT / "docs" / "test_vectors"
 ADDRESS_DIR = "ADDRESS_DERIVATION_V3"
 ARCHIVAL_DIR = "ARCHIVAL_P_DERIVE_V2"
 
+_SPEC = importlib.util.spec_from_file_location(
+    "stdlib_cshake", pathlib.Path(__file__).resolve().parent / "stdlib_cshake.py"
+)
+cs = importlib.util.module_from_spec(_SPEC)
+_SPEC.loader.exec_module(cs)
+
 # --- derivation constants, from the design text -----------------------------
 
 NETWORKS = ("mainnet", "testnet", "stagenet", "regtest")
-SALT_PREFIX = b"shekyl-master-derive-v2-"
+MASTER_DERIVE_PURPOSE = b"shekyl-master-derive-v3"
 SEED_NORMALIZE_SALT = b"shekyl-seed-normalize-v1"
 SPEND_INFO = b"shekyl-ed25519-spend"
 VIEW_INFO = b"shekyl-ed25519-view"
@@ -109,7 +120,7 @@ def hkdf512(salt: bytes, ikm: bytes, info: bytes, length: int) -> bytes:
 def salt_for(network: str) -> bytes:
     if network not in NETWORKS:
         raise KeyError(f"unknown network {network!r}")
-    return SALT_PREFIX + b"shekyl/" + network.encode("ascii")
+    return cs.name_id(network) + MASTER_DERIVE_PURPOSE
 
 
 # --- Ed25519 (RFC 8032 section 5.1 reference arithmetic) ---------------------
@@ -442,6 +453,7 @@ def main() -> int:
     )
     args = parser.parse_args()
 
+    cs.anchor_sponge()
     self_test()
     c = Checker()
     covered = {

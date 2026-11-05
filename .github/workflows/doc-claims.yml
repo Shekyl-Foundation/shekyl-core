@@ -32,7 +32,7 @@ on:
     types: [checks_requested]
     branches: [dev]
   pull_request:
-    branches: [dev]
+    types: [opened, synchronize, reopened]
     paths:
       - "docs/**"
       # The gate resolves file:line citations against the tree, so a source

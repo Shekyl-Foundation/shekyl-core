@@ -10,8 +10,7 @@
 
 use shekyl_levin::{
     notify, BlockCompleteEntry, BucketReader, GetTxpoolComplement, NewCompactBlock,
-    NewTransactions, PayloadError, PortableMap, Received, RequestChain, RequestCompactMissingTx,
-    RequestGetObjects, ResponseChainEntry, ResponseGetObjects, TxBlobEntry,
+    NewTransactions, PayloadError, PortableMap, Received, RequestCompactMissingTx, TxBlobEntry,
     ATTESTATION_WITNESS_MAX_BYTES, HASH_SIZE, NOTIFY_NEW_TRANSACTIONS,
 };
 use shekyl_portable_storage::{store_to_binary, Array, Section, Value};
@@ -197,84 +196,22 @@ fn new_compact_block_round_trip() {
     });
 }
 
-#[test]
-fn request_get_objects_pod_hashes() {
-    let req = RequestGetObjects {
-        blocks: vec![[0xaa; HASH_SIZE], [0xbb; HASH_SIZE]],
-        prune: false,
-    };
-    let section = req.to_section().expect("section");
-    match section.get("blocks") {
-        Some(Value::Bytes(b)) => assert_eq!(b.len(), 64),
-        other => panic!("expected concatenated hashes, got {other:?}"),
-    }
-    assert!(section.get("prune").is_none());
-    round_trip(&req);
-}
-
-#[test]
-fn request_get_objects_empty_omitted() {
-    let req = RequestGetObjects {
-        blocks: Vec::new(),
-        prune: true,
-    };
-    let section = req.to_section().expect("section");
-    assert!(section.get("blocks").is_none());
-    assert_eq!(section.get("prune"), Some(&Value::Bool(true)));
-    round_trip(&req);
-}
-
+/// A POD-as-blob field whose length is not a whole number of elements is
+/// refused, not truncated: the pool complement's hash list, which carries
+/// the decoder now that the inherited block and chain requests are retired.
 #[test]
 fn pod_blob_rejects_non_multiple() {
     let mut section = Section::new();
-    section.insert("blocks", Value::Bytes(vec![0u8; 31]));
+    section.insert("hashes", Value::Bytes(vec![0u8; 31]));
     let bytes = store_to_binary(&section).expect("encode");
     assert_eq!(
-        RequestGetObjects::load(&bytes),
+        GetTxpoolComplement::load(&bytes),
         Err(PayloadError::PodBlobLength {
-            field: "blocks",
+            field: "hashes",
             element: HASH_SIZE,
             got: 31,
         })
     );
-}
-
-#[test]
-fn response_get_objects_round_trip() {
-    round_trip(&ResponseGetObjects {
-        blocks: vec![empty_block()],
-        missed_ids: vec![[0xcc; HASH_SIZE]],
-        current_blockchain_height: 4,
-    });
-}
-
-#[test]
-fn request_chain_round_trip() {
-    round_trip(&RequestChain {
-        block_ids: vec![[1u8; HASH_SIZE]],
-        prune: false,
-    });
-}
-
-#[test]
-fn response_chain_entry_top64_stored_when_zero() {
-    let msg = ResponseChainEntry {
-        start_height: 1,
-        total_height: 2,
-        cumulative_difficulty: 3,
-        cumulative_difficulty_top64: 0,
-        m_block_ids: vec![[0u8; HASH_SIZE]],
-        m_block_weights: vec![100, 200],
-        first_block: Vec::new(),
-    };
-    let section = msg.to_section().expect("section");
-    assert!(section.get("cumulative_difficulty_top64").is_some());
-    assert!(section.get("first_block").is_some());
-    match section.get("m_block_weights") {
-        Some(Value::Bytes(b)) => assert_eq!(b.len(), 16),
-        other => panic!("expected u64 pod blob, got {other:?}"),
-    }
-    round_trip(&msg);
 }
 
 #[test]

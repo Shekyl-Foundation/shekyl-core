@@ -37,6 +37,7 @@ on:
     # Order matters: the last matching pattern wins.
     branches: [main]
   pull_request:
+    types: [opened, synchronize, reopened]
 
 # Own concurrency group (distinct from build.yml's `build-<ref>`) so same-PR
 # reruns of the Rust gate supersede only each other, not the OS build run.

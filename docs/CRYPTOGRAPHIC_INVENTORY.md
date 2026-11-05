@@ -230,6 +230,12 @@ nothing needs its SLH-DSA key and the bundle no longer derives it
 (`FN_DSA_HYBRID.md` `FND-25`). The same refresh recounts every row from the
 TSV.
 
+The 2026-11-04 refresh adds one mechanism-1 row, `shekyl/network-name-v1`
+(`name_id`, the network name's 16-byte binding), and moves the mechanism-2
+salt label from `shekyl-master-derive-v2-` to `shekyl-master-derive-v3`, the
+salt being `name_id ‖ purpose` (`NETWORK_IDENTITY.md`; the signing envelope
+§2.6, Rick's ruling of 2026-11-04).
+
 | Mechanism | Entry point | Count | Frozen-inherited |
 |---|---|---|---|
 | 1 — cSHAKE256 customization | `cshake256_*`, `CShake256Core::new` | 56 | 0 |
@@ -245,7 +251,7 @@ three info labels (`shekyl-ed25519-spend/-view/-ml-kem-768`) are reused by the w
 derivation and the harness fixture wallet's test-only derivation, which differ only by
 salt — legitimately distinct, not a collision.
 
-**Frozen vs. live.** 11 of the 129 are **frozen-inherited** (mech-3: the FROST
+**Frozen vs. live.** 11 of the 130 are **frozen-inherited** (mech-3: the FROST
 ciphersuite id/context and the SAL-multisig transcript root; mech-5: the FCMP++
 generator and Bulletproof(+) DSTs). Frozen strings are byte-identical to the
 un-vendored upstream, are pinned by derived-output KATs, and are **rule-93

@@ -83,8 +83,6 @@ pub enum Code {
     BanFileLine,
     /// A runtime set names a row that is not marked runtime.
     RuntimeStartupOnly,
-    /// A client-mode command has no admin endpoint to reach.
-    ClientNoEndpoint,
     /// The service run mode is not available on this platform.
     ServicePlatform,
     /// The service run mode was asked for outside the service manager.
@@ -130,7 +128,6 @@ impl Code {
             Self::BanFileUnreadable => "config.ban-file.unreadable",
             Self::BanFileLine => "config.ban-file.line",
             Self::RuntimeStartupOnly => "config.runtime.startup-only",
-            Self::ClientNoEndpoint => "config.client.no-endpoint",
             Self::ServicePlatform => "config.service.platform",
             Self::ServiceNoManager => "config.service.no-manager",
             Self::ServiceRoot => "config.service.root",
@@ -357,9 +354,6 @@ impl Diagnostic {
             Code::RuntimeStartupOnly => format!(
                 "`{opt}` can only be set at startup; change it in the configuration file and restart"
             ),
-            Code::ClientNoEndpoint => format!(
-                "a command needs a daemon to reach, and `{opt}` is `none`; give the daemon's admin endpoint"
-            ),
             Code::ServicePlatform => format!(
                 "`{opt}` exists only on Windows; on this platform the service manager runs the daemon in the foreground"
             ),
@@ -464,7 +458,6 @@ mod tests {
             Code::BanFileUnreadable,
             Code::BanFileLine,
             Code::RuntimeStartupOnly,
-            Code::ClientNoEndpoint,
             Code::ServicePlatform,
             Code::ServiceNoManager,
             Code::ServiceRoot,

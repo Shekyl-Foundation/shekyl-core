@@ -70,7 +70,11 @@ replay-cli = [
 # TEST_ONLY feature (check_test_only_features.py): no feature here enables
 # it, `default` included, and the only enabler is that crate's
 # [dev-dependencies] edge. A shipping build never carries a second producer.
+# It forwards `shekyl-chain-rules/harness` because `ChainRules::unpinned()`
+# here reads `GenesisPin::NONE`, which exists only under that feature; an
+# enabler that turns on this crate's harness alone must still compile.
 harness = [
+    "shekyl-chain-rules/harness",
     "dep:shekyl-archival-retention",
     "dep:shekyl-crypto-pq",
     "dep:shekyl-tx-builder",

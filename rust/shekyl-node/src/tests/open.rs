@@ -249,6 +249,7 @@ fn a_newer_chain_file_is_refused_an_older_one_replaced_and_a_corrupt_one_kept() 
             protocol_version: 1,
             release_build: false,
             request_stop: Arc::new(|| {}),
+            relay_local: crate::no_relay(),
         })
     };
 
@@ -308,6 +309,7 @@ fn a_regtest_node_refuses_a_testnet_store_and_leaves_it_unwritten() {
             protocol_version: 1,
             release_build: false,
             request_stop: Arc::new(|| {}),
+            relay_local: crate::no_relay(),
         })
     };
     open_on(&testnet).expect("a testnet node opens").stop();
@@ -362,6 +364,7 @@ fn a_foreign_pool_file_is_recreated_and_a_corrupt_one_is_kept() {
         protocol_version: 1,
         release_build: false,
         request_stop: Arc::new(|| {}),
+        relay_local: crate::no_relay(),
     });
     assert!(opened.is_err(), "a corrupt pool file is refused");
     assert_eq!(std::fs::read(&pool).expect("still there"), garbage);
@@ -380,6 +383,7 @@ fn one_archival_lever_opens_and_a_cap_outside_the_epoch_does_not() {
         protocol_version: 1,
         release_build: false,
         request_stop: Arc::new(|| {}),
+        relay_local: crate::no_relay(),
     })
     .expect("one lever, the other side production");
     node.stop();
@@ -398,9 +402,45 @@ fn one_archival_lever_opens_and_a_cap_outside_the_epoch_does_not() {
         protocol_version: 1,
         release_build: false,
         request_stop: Arc::new(|| {}),
+        relay_local: crate::no_relay(),
     });
     assert!(
         opened.is_err(),
         "a reorg cap that is not inside the epoch is refused"
     );
+}
+
+/// **The state at open reads the declaration, never the network** (rule
+/// 71; CS-Q2 step 8, Rick 2026-11-01). Both connectors off is `Offline`
+/// and synced from open; clearnet on with no closed list is `Open` and
+/// has no view. The same declaration gives the same state on every
+/// network. Red edit: select the opening state by network, as
+/// `sync_at_open` did (regtest synced, every other network `NoView`).
+#[test]
+fn the_state_at_open_reads_the_declaration_not_the_network() {
+    for network in ["regtest", "testnet", "stagenet", "mainnet"] {
+        for (declared, config, want) in [
+            (
+                "offline",
+                config_on as fn(&Path, &str, &[&str]) -> DaemonConfig,
+                SyncState::Synced,
+            ),
+            ("open", config_open, SyncState::NoView),
+        ] {
+            let dir = tempfile::tempdir().expect("temp");
+            let config = config(dir.path(), network, &[]);
+            let node = Node::open(OpenArgs {
+                config: &config,
+                version: "test".to_owned(),
+                protocol_version: 1,
+                release_build: false,
+                request_stop: Arc::new(|| {}),
+                relay_local: crate::no_relay(),
+            })
+            .expect("node");
+            let state = *node.sync().borrow();
+            node.stop();
+            assert_eq!(state, want, "{declared} on {network}");
+        }
+    }
 }

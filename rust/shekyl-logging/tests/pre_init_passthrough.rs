@@ -18,10 +18,10 @@ use std::os::raw::c_char;
 use std::path::PathBuf;
 
 use shekyl_logging::ffi::{
-    shekyl_log_emit, shekyl_log_init_file, shekyl_log_install_tracing_forwarder,
-    shekyl_log_level_enabled, shekyl_log_shutdown, SHEKYL_LOG_ERR_NOT_INITIALIZED,
+    shekyl_log_emit, shekyl_log_init_file, shekyl_log_level_enabled, shekyl_log_shutdown,
     SHEKYL_LOG_LEVEL_ERROR, SHEKYL_LOG_LEVEL_INFO, SHEKYL_LOG_OK,
 };
+use shekyl_logging::{install_tracing_forwarder, ForwarderError};
 
 #[test]
 fn pre_init_emit_does_not_consume_file_init() {
@@ -86,10 +86,9 @@ fn pre_init_emit_does_not_consume_file_init() {
         reserved_err_on,
         "ERROR must stay audible while init is only reserved, not installed"
     );
-    // SAFETY: no pointer parameters.
-    let reserved_fwd = unsafe { shekyl_log_install_tracing_forwarder() };
     assert_eq!(
-        reserved_fwd, SHEKYL_LOG_ERR_NOT_INITIALIZED,
+        install_tracing_forwarder(),
+        Err(ForwarderError::NotInitialized),
         "forwarder must not consume its one-shot pin during the reservation window"
     );
     let reserved_msg = b"reservation-window probe";

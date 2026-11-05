@@ -20,8 +20,6 @@ pub struct Resolved {
     /// The value of each row that has one: given, or the row's default
     /// value. A row with no default and no value is absent.
     pub values: BTreeMap<&'static str, (Value, Source)>,
-    /// The words that are not options.
-    pub positional: Vec<String>,
 }
 
 impl Resolved {
@@ -116,10 +114,7 @@ pub fn resolve(
         values.insert(given.row.name, (given.value, given.source));
     }
     if faults.is_empty() {
-        Ok(Resolved {
-            values,
-            positional: cli.positional,
-        })
+        Ok(Resolved { values })
     } else {
         Err(faults)
     }
@@ -214,5 +209,22 @@ mod tests {
         assert_eq!(d[0].code, Code::DevNetwork);
         let cli = shekyl_options::read_cli(&TABLE, args(&["--dev-difficulty", "1"])).unwrap();
         assert!(resolve(&TABLE, Network::Regtest, cli, Vec::new()).is_ok());
+    }
+
+    /// NI-R8: `dev-rpc`, the armed RPC levers, is regtest's alone. A
+    /// testnet or stagenet daemon given it is refused at load, so it never
+    /// starts armed; the live harness spawns testnet without it.
+    #[test]
+    fn dev_rpc_is_refused_on_every_network_but_regtest() {
+        for network in Network::ALL {
+            let cli = shekyl_options::read_cli(&TABLE, args(&["--dev-rpc"])).unwrap();
+            let verdict = resolve(&TABLE, network, cli, Vec::new());
+            if network == Network::Regtest {
+                assert!(verdict.is_ok(), "regtest admits dev-rpc");
+            } else {
+                let d = verdict.unwrap_err();
+                assert_eq!(d[0].code, Code::DevNetwork, "{network}");
+            }
+        }
     }
 }

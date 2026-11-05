@@ -1079,6 +1079,7 @@ dependencies = [
  "bech32",
  "shekyl-crypto-hash",
  "shekyl-encoding",
+ "shekyl-network",
  "thiserror",
 ]
 
@@ -1229,6 +1230,13 @@ dependencies = [
  "shekyl-curve-generators",
  "std-shims",
  "zeroize",
+]
+
+[[package]]
+name = "shekyl-network"
+version = "3.1.0"
+dependencies = [
+ "shekyl-crypto-hash",
 ]
 
 [[package]]

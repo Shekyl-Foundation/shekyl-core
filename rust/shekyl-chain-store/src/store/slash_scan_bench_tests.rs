@@ -858,9 +858,14 @@ impl SlashedChain {
 /// `ec2d0b760803781c389d97d7e019933ca84e5b7e01c3f067e5c8510fd797f001`
 /// (`SO-D11`, 18 836 bytes, 60 rows, until the receipt key);
 /// `937f578b349f5815e27b2a6f8228a7338478b39b1ecd7556122a4b732dcafb2f`
-/// (the receipt key, 26 184 bytes, 60 rows, until `NI-R7` / `NI-R10`).
+/// (the receipt key, 26 184 bytes, 60 rows, until `NI-R7` / `NI-R10`);
+/// `ae8dc7a86f9a1a1597dd7805221da8ebb9dc36de3c4364b2388036de9db81a71`
+/// (`NI-R7` / `NI-R10`, 26 184 bytes, 60 rows, until the salt
+/// `name_id ‖ shekyl-master-derive-v3`, 2026-11-04: again only the persona
+/// keys and ids moved, with the same size and row counts, and every
+/// family's section still equal to its own derivation above).
 const SLASHED_SNAPSHOT_BODY_KECCAK: &str =
-    "ae8dc7a86f9a1a1597dd7805221da8ebb9dc36de3c4364b2388036de9db81a71";
+    "2a73b959226a3ad761c596d21355b090e4ad39ab7d5cdc6c00657d6da181f5c8";
 
 /// Each family's byte range inside a body, walked by the record framing
 /// alone (`n_rows u64`, then `len u32 ‖ row` each) — the test's own

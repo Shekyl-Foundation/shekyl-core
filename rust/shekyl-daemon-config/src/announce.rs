@@ -16,8 +16,10 @@ use crate::resolve::Resolved;
 use crate::sections::{Clearnet, DaemonConfig, Tor};
 
 /// Every value and its source, in table order, as one line. A secret shows
-/// as `set`, never its text. The configuration file read, or the default
-/// path at which none was found, leads.
+/// as `set`, never its text; `mine-address` shows shortened to its first
+/// and last eight characters, and `option show` gives the full value under
+/// its grant (Rick, 2026-11-02). The configuration file read, or the
+/// default path at which none was found, leads.
 #[must_use]
 pub fn effective_configuration(
     table: &Table,
@@ -44,10 +46,26 @@ pub fn effective_configuration(
                 Source::Runtime => "runtime".to_owned(),
                 Source::Machine => "machine".to_owned(),
             };
-            parts.push(format!("{}={} ({shown})", row.name, value.render()));
+            let value = match row.name {
+                "mine-address" => shortened(&value.render()),
+                _ => value.render(),
+            };
+            parts.push(format!("{}={value} ({shown})", row.name));
         }
     }
     format!("effective configuration: {}", parts.join(" "))
+}
+
+/// The first and last eight characters of an address, joined by `…`; an
+/// address of sixteen or fewer is whole.
+fn shortened(text: &str) -> String {
+    let chars: Vec<char> = text.chars().collect();
+    if chars.len() <= 16 {
+        return text.to_owned();
+    }
+    let head: String = chars[..8].iter().collect();
+    let tail: String = chars[chars.len() - 8..].iter().collect();
+    format!("{head}…{tail}")
 }
 
 /// One line per development lever set (IG-8).
@@ -247,11 +265,41 @@ mod tests {
         );
         assert!(!line.contains("tor-file="), "{line}");
         assert!(resolved.get("tor-file").is_none());
+        assert!(line.contains("mine=off (default)"), "{line}");
+        assert!(
+            !line.contains("mine-address="),
+            "unset rows do not print: {line}"
+        );
         let levers = dev_levers(&TABLE, &resolved);
         assert_eq!(
             levers,
             vec!["development lever set: dev-difficulty=7".to_owned()]
         );
+    }
+
+    /// `mine-address` prints shortened: the first and last eight characters
+    /// and nothing of the middle. Red edit: print the full address.
+    #[test]
+    fn the_mine_address_prints_shortened() {
+        let text = shekyl_address::ShekylAddress::new(
+            shekyl_address::Network::Mainnet,
+            [0xaa; 32],
+            [0xbb; 32],
+            [0xee; shekyl_address::MSG_SIGN_PK_LEN],
+            vec![0xcc; shekyl_address::PQC_PAYLOAD_LEN],
+        )
+        .encode()
+        .unwrap();
+        let (resolved, _) = setup(&["--mine-address", &text, "--tor", "off"], "");
+        let line = effective_configuration(&TABLE, &resolved, None, Path::new("/etc/x.toml"));
+        let want = format!(
+            "mine-address={}…{} (cli)",
+            &text[..8],
+            &text[text.len() - 8..]
+        );
+        assert!(line.contains(&want), "{line}");
+        assert!(!line.contains(&text[8..text.len() - 8]), "{line}");
+        assert_eq!(shortened("sixteen-chars-ok"), "sixteen-chars-ok");
     }
 
     /// The armed-lever switch announces itself in exactly this text.

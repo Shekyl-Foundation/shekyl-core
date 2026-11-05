@@ -2273,7 +2273,7 @@ mod tests {
     }
 
     #[test]
-    fn rollback_to_fork_at_tip_is_client_noop() {
+    fn rollback_to_the_fork_at_the_tip_changes_nothing() {
         let mut client = CurveTreeClient::new();
         ingest_coinbase_blocks(&mut client, 0, 10);
         let entries = client.entries.clone();

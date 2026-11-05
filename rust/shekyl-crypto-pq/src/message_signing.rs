@@ -697,12 +697,13 @@ mod tests {
     /// SM-R-4 R4-a KAT: fixed master seed → fixed public key. Pins the
     /// 72-byte single-expand slice order — a wrong split (or an n=32
     /// reflex) produces a valid-but-DIFFERENT keypair, which only this
-    /// pin catches. Re-pinned 2026-11-03 for the network-name salt
-    /// (`NETWORK_IDENTITY.md` NI-R10).
+    /// pin catches. Re-pinned 2026-11-04 for the salt `name_id ‖ purpose`
+    /// (`NETWORK_IDENTITY.md` NI-R10; the signing envelope §2.6).
     ///
     /// Oracle: the key's first 24 bytes are `PK.seed`, bytes 48..72 of the
     /// expansion, and were recomputed independently with a stdlib RFC 5869
-    /// HKDF-SHA-512 (salt `shekyl-master-derive-v2-shekyl/testnet`, IKM
+    /// HKDF-SHA-512 (salt testnet's `name_id` `866a9867…b30a` ‖
+    /// `shekyl-master-derive-v3`, IKM
     /// `0x42` × 64, info [`MSG_SIGN_SEED_DOMAIN`], L = 72). `PK.root`, the
     /// last 24, is the keygen's and self-pinned.
     #[test]
@@ -711,13 +712,13 @@ mod tests {
         let hex: String = pk.iter().map(|b| format!("{b:02x}")).collect();
         assert_eq!(
             &hex[..48],
-            "e981d2116afb7f09430ee0127209e335351dac7ebab60d7b",
+            "1004873ee5b53d9e20aa460c8e21090ca67aae89ccbbc77c",
             "PK.seed moved — the salt, the domain or the slice order changed"
         );
         assert_eq!(
             hex,
-            "e981d2116afb7f09430ee0127209e335351dac7ebab60d7b\
-             b257553881fece3b6c134c4bf9597b7c5e64dd991cb6e90f",
+            "1004873ee5b53d9e20aa460c8e21090ca67aae89ccbbc77c\
+             a52d39e60622b71d3f680e9fb024abd7a0823fd91a3cfb04",
             "SLH identity derivation moved — seed split, salt or domain changed"
         );
     }

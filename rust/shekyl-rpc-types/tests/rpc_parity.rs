@@ -18,13 +18,14 @@
 
 use serde_json::Value;
 use shekyl_rpc_types::{
-    ArchivedTx, BlockHeader, ConnectionInfo, ConnectionState, GetBlockCountResponse,
+    ArchivedTx, BlockHeader, ChainSyncState, ConnectionInfo, GetBlockCountResponse,
     GetBlockHeaderByHashResponse, GetBlockHeaderByHeightResponse, GetBlockHeadersRangeResponse,
     GetBlockResponse, GetConnectionsResponse, GetHeightResponse, GetLastBlockHeaderResponse,
     GetNetStatsResponse, GetPeerListRequest, GetPeerListResponse, GetTransactionsRequest,
     GetTransactionsResponse, GetVersionResponse, HashHex, HexU128, IsKeyImageSpentRequest,
     IsKeyImageSpentResponse, KeyImageStatus, Network, Nullable, P2pReply, Peer, RpcStatus,
-    SyncInfoPeer, SyncInfoResponse, SyncSpan, TxEntry, TxLocation, CORE_RPC_VERSION,
+    SyncBodyRequest, SyncHeaderRequest, SyncInfoPeer, SyncInfoResponse, SyncMode, TxEntry,
+    TxLocation, CORE_RPC_VERSION,
 };
 
 /// The emitter's stand-ins for the two strings C++ still produces (RK-D11).
@@ -831,7 +832,7 @@ fn request_sequences_are_omitted_when_empty_and_present_when_not() {
 fn the_get_version_chain_differs_by_exactly_the_version_at_every_link() {
     // One row per bump, oldest first. Each is (the vector before the bump,
     // the vector after it).
-    let links: [(&str, &str); 43] = [
+    let links: [(&str, &str); 44] = [
         (
             include_str!("vectors/rpc/get_version_synced_v1.json"),
             include_str!("vectors/rpc/get_version_synced_v2.json"),
@@ -1004,6 +1005,10 @@ fn the_get_version_chain_differs_by_exactly_the_version_at_every_link() {
             include_str!("vectors/rpc/get_version_synced_v43.json"),
             include_str!("vectors/rpc/get_version_synced_v44.json"),
         ),
+        (
+            include_str!("vectors/rpc/get_version_synced_v44.json"),
+            include_str!("vectors/rpc/get_version_synced_v45.json"),
+        ),
     ];
 
     let version_of = |raw: &str| -> u64 {
@@ -1022,7 +1027,7 @@ fn the_get_version_chain_differs_by_exactly_the_version_at_every_link() {
     // The trailing comment names the minor the *newer* vector carries.
     // `v1` is 3.24, so link `i`'s newer minor is `25 + i`. The comment sits
     // on its element, so it cannot attach to the neighbor.
-    const ADDED_AT_LINK: [&[&str]; 43] = [
+    const ADDED_AT_LINK: [&[&str]; 44] = [
         &[],                                                        // 3.25
         &[],                                                        // 3.26
         &[],                                                        // 3.27
@@ -1066,6 +1071,7 @@ fn the_get_version_chain_differs_by_exactly_the_version_at_every_link() {
         &[], // 3.65 (mining_status.speed is the hash count over its window; get_version gains nothing)
         &[], // 3.66 (a bounded list cap and fill_pow_hash are OverResourceBound; get_version gains nothing)
         &[], // 3.67 (calc_pow and get_coinbase_tx_sum are served within the hash budget and the coinbase-read permit; get_version gains nothing)
+        &[], // 3.68 (sync_info is chain sync's view, CS-5 §7; get_version gains nothing)
     ];
     assert_eq!(
         ADDED_AT_LINK.len(),
@@ -1077,7 +1083,7 @@ fn the_get_version_chain_differs_by_exactly_the_version_at_every_link() {
     // `ADDED_AT_LINK`, held to the same standard: a member leaves only where
     // its link names it. Indexed like `ADDED_AT_LINK`; every link but the
     // 3.44 one retires nothing.
-    const REMOVED_AT_LINK: [&[&str]; 43] = [
+    const REMOVED_AT_LINK: [&[&str]; 44] = [
         &[],             // 3.25
         &[],             // 3.26
         &[],             // 3.27
@@ -1121,6 +1127,7 @@ fn the_get_version_chain_differs_by_exactly_the_version_at_every_link() {
         &[], // 3.65 (mining_status.speed changes shape elsewhere; get_version retires nothing)
         &[], // 3.66 (the refusal class is not get_version's; it retires nothing)
         &[], // 3.67 (the hash budget is not get_version's; it retires nothing)
+        &[], // 3.68 (sync_info's spans and overview are not get_version's; it retires nothing)
     ];
     assert_eq!(
         REMOVED_AT_LINK.len(),
@@ -1954,7 +1961,7 @@ fn vector_connection() -> ConnectionInfo {
         recv_idle_time: 2,
         send_count: 338,
         send_idle_time: 3,
-        state: ConnectionState::Normal,
+        state: Some(SyncMode::Reachable),
         live_time: 4242,
         avg_download: 11,
         current_download: 12,
@@ -2121,9 +2128,9 @@ fn get_connections_matches_the_oracle() {
         status: RpcStatus::ok(),
         connections: vec![vector_connection()],
     };
-    assert_parity(include_str!("vectors/rpc/get_connections_v3.json"), &built);
+    assert_parity(include_str!("vectors/rpc/get_connections_v4.json"), &built);
 
-    let doc = parsed(include_str!("vectors/rpc/get_connections_v3.json"));
+    let doc = parsed(include_str!("vectors/rpc/get_connections_v4.json"));
     let entry = doc["connections"][0].as_object().expect("object");
     // `ip` is a string here — the counterpart of the `peer.ip` assertion.
     assert!(entry["ip"].is_string(), "connection_info.ip is a string");
@@ -2134,6 +2141,27 @@ fn get_connections_matches_the_oracle() {
     assert!(
         !entry.contains_key("ssl"),
         "`ssl` was never on the wire and is not being reintroduced"
+    );
+}
+
+/// **3.64, by derivation.** A connection row's `state` is chain sync's mode
+/// for the session, where it was the C++ handler's per-connection state;
+/// everything else in the row, `height` included (now the claim's count
+/// from the view), is unchanged.
+#[test]
+fn the_3_64_connection_row_restates_only_its_state() {
+    use serde_json::{json, Value};
+    let mut derived = parsed(include_str!("vectors/rpc/get_connections_v3.json"));
+    let row = derived["connections"][0]
+        .as_object_mut()
+        .expect("a connection row");
+    assert_eq!(
+        row.insert("state".to_owned(), json!("reachable")),
+        Some(Value::from("normal"))
+    );
+    assert_eq!(
+        derived,
+        parsed(include_str!("vectors/rpc/get_connections_v4.json"))
     );
 }
 
@@ -2149,60 +2177,69 @@ fn get_connections_empty_matches_the_oracle() {
     );
 }
 
+/// `sync_info` is chain sync's view (3.64): a node behind its best verified
+/// chain, one session serving it a header request and a body span.
 #[test]
 fn sync_info_matches_the_oracle() {
     let built = SyncInfoResponse {
         status: RpcStatus::ok(),
         height: 1_234_567,
-        target_height: Nullable::value(1_234_600),
+        target_height: 1_234_600,
+        state: ChainSyncState::Behind,
+        stalled: false,
         peers: vec![SyncInfoPeer {
-            info: vector_connection(),
-        }],
-        spans: vec![SyncSpan {
-            start_block_height: 1_234_570,
-            nblocks: 20,
             connection_id: "151c232a31383f464d545b626970777e".to_owned(),
-            rate: 4096,
-            speed: 75,
-            size: 81920,
-            remote_address: "192.0.2.7:18080".to_owned(),
+            address: "192.0.2.7:18080".to_owned(),
+            claimed_height: Some(1_234_600),
+            mode: SyncMode::Reachable,
+            header_request: Some(SyncHeaderRequest {
+                age_ms: 250,
+                due_in_ms: 257_750,
+            }),
+            body_requests: vec![SyncBodyRequest {
+                start_height: 1_234_568,
+                count: 20,
+                planned_bytes: 8_388_608,
+                age_ms: 1_500,
+                due_in_ms: 1_022_500,
+            }],
+            rate: Some(4096),
         }],
-        overview: "[<...m_o]".to_owned(),
     };
-    assert_parity(include_str!("vectors/rpc/sync_info_v3.json"), &built);
-
-    // The nesting is the wire's: a `sync_info` peer wraps the connection
-    // under `info`, where `get_connections` carries it directly.
-    let doc = parsed(include_str!("vectors/rpc/sync_info_v3.json"));
-    assert_eq!(
-        doc["peers"][0].as_object().expect("object").len(),
-        1,
-        "a sync_info peer has exactly the one `info` member"
-    );
-    assert_eq!(
-        doc["peers"][0]["info"],
-        parsed(&serde_json::to_string(&vector_connection()).expect("serialize"))
+    assert_parity(include_str!("vectors/rpc/sync_info_v4.json"), &built);
+    let doc = parsed(include_str!("vectors/rpc/sync_info_v4.json"));
+    let obj = doc.as_object().expect("object");
+    assert!(
+        !obj.contains_key("spans") && !obj.contains_key("overview"),
+        "the block queue's rendering is gone"
     );
 }
 
-/// The idle case. `overview` is a **string** holding brackets, not an empty
-/// array — the one field in this reply where the two are easy to confuse.
+/// The idle case: no session, so no view. `peers` is omitted, and the
+/// target is the node's own count.
 #[test]
 fn sync_info_empty_matches_the_oracle() {
     let built = SyncInfoResponse {
         status: RpcStatus::ok(),
         height: 1,
-        // The core reports no target: `null`, not `0`.
-        target_height: Nullable::NULL,
+        target_height: 1,
+        state: ChainSyncState::NoView,
+        stalled: false,
         peers: Vec::new(),
-        spans: Vec::new(),
-        overview: "[]".to_owned(),
     };
-    assert_parity(include_str!("vectors/rpc/sync_info_empty_v3.json"), &built);
-    let doc = parsed(include_str!("vectors/rpc/sync_info_empty_v3.json"));
-    assert!(doc["overview"].is_string(), "overview is a string");
-    let obj = doc.as_object().expect("object");
-    assert!(!obj.contains_key("peers") && !obj.contains_key("spans"));
+    assert_parity(include_str!("vectors/rpc/sync_info_empty_v4.json"), &built);
+    let doc = parsed(include_str!("vectors/rpc/sync_info_empty_v4.json"));
+    assert!(!doc.as_object().expect("object").contains_key("peers"));
+}
+
+/// A 3.63 `sync_info` reply is refused: its `spans` and `overview` are not
+/// members, and a reader that decoded it would report a queue that no
+/// longer exists.
+#[test]
+fn a_3_63_sync_info_is_refused() {
+    let old: Result<SyncInfoResponse, _> =
+        serde_json::from_str(include_str!("vectors/rpc/sync_info_v3.json"));
+    assert!(old.is_err());
 }
 
 /// **A daemon started offline answers `offline` and nothing else** on
@@ -2235,7 +2272,7 @@ fn the_p2p_methods_answer_offline_alone() {
         })
     );
     let idle: P2pReply<SyncInfoResponse> =
-        serde_json::from_str(include_str!("vectors/rpc/sync_info_empty_v3.json"))
+        serde_json::from_str(include_str!("vectors/rpc/sync_info_empty_v4.json"))
             .expect("an idle running reply decodes");
     assert!(idle.running().is_some());
 }

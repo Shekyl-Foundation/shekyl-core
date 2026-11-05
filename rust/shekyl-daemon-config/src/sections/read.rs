@@ -88,10 +88,6 @@ impl<'a> Reader<'a> {
             .unwrap_or(Source::Default)
     }
 
-    pub(super) fn positional(&self) -> &[String] {
-        &self.resolved.positional
-    }
-
     /// The operator set the row: not absent, and not the table's default.
     pub(super) fn given(&self, name: &str) -> bool {
         !matches!(self.resolved.source(name), None | Some(Source::Default))

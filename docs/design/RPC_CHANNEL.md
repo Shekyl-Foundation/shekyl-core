@@ -318,10 +318,10 @@ type and the minimal required-privilege list (RT-P8 confirms both).
   manager runs a foreground process; the SCM kills a registered process
   that never connects to its dispatcher (error 1053). Record:
   [`WINDOWS_SERVICE_RULING_2026-10-13.md`](../completed/WINDOWS_SERVICE_RULING_2026-10-13.md).
-- **The process entry moves to Rust** in the daemon-configuration
-  cutover (`DAEMON_CONFIG_CUTOVER.md`, PR #1066): the SCM dispatcher must
-  run at process entry, and `main()` is C++ until then. RT-W14 depends on
-  it.
+- **The process entry is Rust's** (`DAEMON_CONFIG_CUTOVER.md` DC-Q19,
+  PR #1254, 2026-11-01): `shekyld` is a rustc-linked binary whose `main`
+  runs through `std::rt::lang_start`, so the SCM dispatcher RT-W14 needs
+  has its process entry.
 - **Service mode is new Rust work, not a revival.** The inherited daemonizer
   was deleted in V3.1 and its five flags retired
   (lines 74 to 78 of `src/common/removed_flags.cpp` at `d26148535e`); none of
@@ -1396,11 +1396,13 @@ can contain either.
   `inject_archival_serve_credit` went with the C++ chain at the DRS-X flip
   (`DRS_X_STORE_FLIP.md` DX-Q3): the method table pins two armed levers,
   and the daemon answers the old name as a method it does not know, armed
-  or not. With the switch armed on testnet or stagenet, `generateblocks`
-  and `/pop_blocks` are served; the regtest e2e test
-  `the_armed_switch_on_testnet_serves_two_levers_and_knows_no_third` holds
-  this on testnet, and stagenet takes the same branch. Under RT-O36 the
-  network narrows what the switch enables and never enables anything.
+  or not. The switch is regtest's alone (`NETWORK_IDENTITY.md` NI-R8): a
+  testnet or stagenet daemon given `dev-rpc` is refused at load
+  (`dev_rpc_is_refused_on_every_network_but_regtest`), and on regtest
+  `generateblocks` and `/pop_blocks` are served, which the e2e test
+  `the_armed_switch_serves_two_levers_and_knows_no_third` holds. Under
+  RT-O36 the network narrows what the switch enables and never enables
+  anything.
 
 *Why each `status` field is out of view.*
 
@@ -1822,17 +1824,18 @@ Census at `1b7803f69a`: the routes
 router (`:413-432`) and the path list (`:664-688`); the forwarding handlers
 ([`json.rs:293`](../../rust/shekyl-daemon-rpc/src/handlers/json.rs),
 `:389-394`, through the dispatch at `:75-91`). Callers: the Rust console's
-`print_net_stats`, which reads `/get_limit`
-([`console/mod.rs:1126-1169`](../../rust/shekyl-daemon-rpc/src/console/mod.rs))
-with its tests (`console/tests.rs:1130-1170`); the Python framework
+`print_net_stats`, which reads `/get_limit` (`console/mod.rs:1126-1169` at
+that census) with its tests (`console/tests.rs:1130-1170`); the Python
+framework
 ([`daemon.py:360-455`](../../utils/python-rpc/framework/daemon.py)); the
-C++ client test
-([`daemon_rpc_client.cpp:107-155`](../../tests/unit_tests/daemon_rpc_client.cpp));
-the regtest check of `print_net_stats`
+C++ client test (`daemon_rpc_client.cpp:107-155` at that census); the
+regtest check of `print_net_stats`
 ([`regtest_e2e.rs:5817-5876`](../../rust/shekyl-engine-core/src/engine/regtest_e2e.rs));
-and the C++ console
-([`rpc_command_executor.cpp`](../../src/daemon/rpc_command_executor.cpp)),
-which dies with R8 (`INPUT_GRAMMAR.md` IG-Q25). **`/get_limit` is replaced,
+and the C++ console (`rpc_command_executor.cpp` at that census). R8
+(`INPUT_GRAMMAR.md` IG-Q25; `7938c51f16`, #1259) deleted the C++ console,
+the client test and the daemon's in-process Rust console; `print_net_stats`
+lives in `shekyl-cli` (`rust/shekyl-cli/src/console/mod.rs`) and no longer
+reads `/get_limit`. **`/get_limit` is replaced,
 not ported:** it leaves RK-8 (`DAEMON_RPC_KV_CUTOVER.md` §2), and the
 comments at `regtest_e2e.rs:5866` and `console/mod.rs:1128` that say RK-8
 migrates it are corrected by the implementing PR.
@@ -1854,11 +1857,10 @@ The HTTP request's authority admits it there, on the admin listener with
 the start switch set
 ([`authority.rs`](../../rust/shekyl-daemon-rpc/src/authority.rs)); the
 router test `pop_blocks_needs_the_armed_switch` holds that gate. The
-in-process `pop_blocks` console command admits through the same function
-before the C++ handler runs
-([`console/pop_blocks.rs`](../../rust/shekyl-daemon-rpc/src/console/pop_blocks.rs)):
-the live arm reads the switch `configure` stored, and the remote arm posts
-`/pop_blocks` so that daemon's stamp admits it. The
+in-process `pop_blocks` console command admitted through the same function
+before the C++ handler ran (`console/pop_blocks.rs`, deleted with the
+daemon's console in R8 at `7938c51f16`); the remote arm, a posted
+`/pop_blocks` the daemon's stamp admits, is the one that remains. The
 daemon-configuration cutover recorded the gap as DC-F14 (PR #1066). **Reopen (rule 21):**
 a demonstrated operator recovery need returns it as a ruled capability.
 
@@ -2393,7 +2395,7 @@ RK-5c commit 7, 2026-10-10). RT-W13 confirms the read is gone.
 | The `removed_flags.cpp:189-190` message; `--restricted-rpc`, `--rpc-restricted-bind-port`, `--rpc-restricted-bind-ip`, `--rpc-restricted-bind-ipv6-address` (`rpc_args.{h,cpp}`, `core_rpc_server.cpp`, `daemon.cpp`). The plaintext bind flags are re-scoped to the `view` loopback listener and their parsing moves out of C++ `rpc_args` into `shekyl-daemon-rpc` (§7) | RT-W10 |
 | The callers that **pass** those flags: `shekyl-gui-wallet` starts its daemon with `--restricted-rpc` (`src-tauri/src/daemon_manager.rs:115`), and the regtest end-to-end harness starts a second listener with `--rpc-restricted-bind-port` (`engine/regtest_e2e.rs`, `start_with_restricted_listener`). Each gets its replacement in the commit that deletes the flag, or the GUI's daemon and those tests stop starting | RT-W10 |
 | `bind.rs`'s refusal text and its two tests that assert the onion remedy | RT-W10 |
-| `ctl_client.rs`'s plaintext loopback-TCP path: `shekyld <command>` moves to the owner-only socket or pipe for a run-as-me daemon, and to the channel with the console key for a service (RT-15, §5) | RT-W10 |
+| `shekyl-daemon-ctl`'s plaintext loopback-TCP path: `shekyld <command>` moves to the owner-only socket or pipe for a run-as-me daemon, and to the channel with the console key for a service (RT-15, §5) | RT-W10 |
 | `shekyl-cli/src/commands/mine.rs:68`: the "restricted listener" refusal becomes a check for `mining-control` in the effective grant, the request clamped to the ceiling the handshake returned (§6.2) | RT-W10 |
 | The daemon client's `https://` arm (`rust/shekyl-rpc-transport/src/http_client.rs:240-266`), and with it `hyper-rustls` and native-roots loading in the wallet's graph — not before the channel client exists (RT-O8) | RT-W12 |
 | Shipped Windows guidance that points operators at Task Scheduler (`removed_flags.cpp:159-161`, `INSTALLATION_GUIDE.md:229-235`): replaced by RT-16's two run modes (the scheduled task is rejected, §12) | RT-W14 |
@@ -2522,7 +2524,7 @@ not only the daemon's owner.
 | RT-W9 | `shekyl-noise` holds `SymmetricState` and the typed `SendDirection` and `RecvDirection` (pinned handshake vectors untouched; the interim framer stays in `shekyl-p2p-transport`); the `hybridXK` handshake; `ClassedSealer` and `ClassedOpener` and the stream adapter `shekyl-rpc-stream` (RT-P5); padded records in size classes derived from RT-P5 (RT-O6). `FixedWindow` is the P2P end state and is not built here. Two exclusion rows in the domain registry, one shared reason, for the two Noise protocol-name literals — the RPC channel's and the P2P handshake's — which are mixed into a handshake hash and are standard pattern names, not Shekyl domain strings; the header-protection label `shekyl/noise-record-header-v1` is a separate mechanism-7 row, landed with the constant; the handshake's deadlines from RT-P9 (4 s for message 1, 11 s for the whole handshake, `shekyl_rpc_channel::deadline`). From RT-P6's follow-through (§4.3, ruled 2026-10-20): mac1 on message 1 (`shekyl/rpc-mac1-v1`), the handshake budget (a quarter of one core, 115 handshakes a second), the busy reply (`shekyl/rpc-busy-v1`) and the replay window. The client's retry policy (`shekyl_rpc_channel::retry`): one silent retry after a timeout, and a jittered back-off after busy (§4.3). The replay residual on a leg that can read the handshake is the operator's (§4.3, §12). **Standing check, from RT-W9 on (ruled 2026-10-11):** the RT-P4 harness is re-run under the same registered lines whenever the decapsulation closure of the ML-KEM crate or the Rust toolchain changes, and a gate attests the release build's codegen settings from every flag source (RT-O22; §10, 2026-10-22) | RT-W8 | **authorized 2026-10-11, decision-anchored to PR #1034**; pre-flight [`RPC_CHANNEL_RT_W9_PREFLIGHT.md`](../completed/RPC_CHANNEL_RT_W9_PREFLIGHT.md); `RT-O16`…`RT-O22` ruled 2026-10-11, and `RT-O16`, `RT-O18`, `RT-O20` and the sequencing of `RT-O21` re-ruled 2026-10-12; step 1 is built (`SymmetricState`, `Direction`, `into_directions`); step 2 is built in PR #1039: the `hybridXK` handshake in `shekyl-rpc-channel`, ending in `into_directions`, compared with the pinned vectors from `rust/shekyl-rpc-channel/src/pinned_handshake.rs` (RT-O18); step 5a builds `ClassedRecord` in `shekyl-noise` (2026-10-20); step 5b builds `shekyl-rpc-stream` (2026-10-20), to RT-O28 and RT-O29 as ruled in the pre-flight's §4a; mac1, the budget and busy are built in PR #1137 and the deadlines and retry policy in PR #1139 (2026-10-20); the close-out of 2026-10-22 is built in PRs #1156 (the stream), #1159 (the noise crate and handshake), #1163 (these docs) and #1173 (step 6: the two exclusion rows, the mechanism-7 call-site pin and the standing-check gate, which passes with the laptop's shipped build attested by its committed disassembly comparison, RT-P4 staying met, §4.3, §9 RT-P4); the time-bound message 1 is out of scope (ruled 2026-10-25, §12). **LANDED 2026-10-25** |
 | RT-W10 | Daemon: same-user socket/pipe and rendezvous, the daemon watching its own rendezvous and shutting down when it goes, the operator-named socket directory, the instance-name rule (§7.1), channel listener, enrolment and revocation, per-connection grants, the host-only class and the armed test-lever switch (§6.1), the resource policy and its floor-device measurement (§6.3); the `restricted` flag deleted from the Rust handlers and the FFI (the restricted listener's C++ flags went on 2026-10-15, in the daemon-configuration cutover); plaintext loopback keeps its method set (RT-O33, ruled 2026-10-25), the console alone moving to the same-user socket: its re-scope to `view` is RT-W12's, with the clients that use it. **The listener logs a connection, counts it against a client and records a last-seen time only from the authenticated client `AuthenticatedSession` yields, never from the fingerprint `DaemonReadyForMessage4` exposes for the enrolment lookup (§4.1, ruled 2026-10-12).** A copied fingerprint is still only a claim. Its pre-flight settles what message 4 carries (§6.2). **The `submit_transaction` route fails closed on the record shape (close-out F2, 2026-10-22):** it refuses any body for which the connection's `InboundShape::ends_in_submission` is false when the body has been read, so a client that did not pad, or armed another connection, is refused rather than answered. **For its pre-flight (close-out, 2026-10-22):** message 3 has no upper length bound (`handshake.rs:716` checks only the minimum); §6.2 rules the message-3 and message-4 payloads fixed-length, so once the grant encoding is fixed the handshake takes the exact lengths as constants, refuses any other length, and the listener knows how many bytes to read; the listener's read bounds; the 4 s and 11 s deadlines in the accept loop; mac1, the budget and busy, wired through | RT-W9, **RT-O9**, RT-P8, **RK-5c** (`get_info` native, §6.1; met 2026-10-13) | **authorized 2026-10-25**; pre-flight [`RPC_CHANNEL_RT_W10_PREFLIGHT.md`](RPC_CHANNEL_RT_W10_PREFLIGHT.md), RT-O30…RT-O36 ruled 2026-10-25; five steps, one pull request each; step 1 (grants as types, the armed switch) built in PR #1197 (2026-10-26); step 2 (the resource policy, `CORE_RPC_VERSION` 3.67) built from the floor run of 2026-11-03 |
 | RT-W11 | `shekyl-rpc-tunnel`, with session pooling; the pool sized with RT-P6's cost of a session as an input, about 2.16 ms of CPU each side on the floor device (§8, ruled 2026-10-20). **Client contracts for a submission (close-out F2, 2026-10-22):** the tunnel holds its own connections (hyper's `client::conn::http1`, not the pooled `Client`) and arms `SubmissionMark` on the connection it sends the submission on, and that connection carries nothing else until the response; the submission body is one complete, buffered body (`Full`), never a streaming one | RT-W9 | not authorized |
-| RT-W12 | Clients on the channel: the engine's daemon client and `shekyl-wallet-rpc` (L1); `shekyl-cli`, once it serves the console on the shared client (RT-W15); `shekyl-gui-wallet`, which dials `HttpRpc::new` directly (open since R0's RT-W7 landing review, `RPC_TRANSPORT_POSTURE.md` §7 RT-O4); `shekyl-mobile-wallet`; **deletes the daemon client's `https://` arm**, `hyper-rustls` and native-roots loading with it (RT-O8); shows the engine pages its requests within §6.3's batch caps (RT-O9). **Once these clients have moved, plaintext loopback is re-scoped to `view` and the plaintext admin listener (`rpc-admin-listen`) is retired (RT-O33, ruled 2026-10-25):** until then the admin listener is reachable by any local user, not only the daemon's owner, which is why this slice follows RT-W11 directly. **Client contracts for a submission (close-out F2, 2026-10-22):** each client holds its own connections (hyper's `client::conn::http1`, not the pooled `Client`) and arms `SubmissionMark` on the connection it sends the submission on, and that connection carries nothing else until the response; the submission body is one complete, buffered body (`Full`), never a streaming one | RT-W9 | not authorized |
+| RT-W12 | Clients on the channel: the engine's daemon client and `shekyl-wallet-rpc` (L1); `shekyl-cli`, which serves the console on `SyncDaemon` (RT-W15, landed 2026-11-03); `shekyl-gui-wallet`, which dials `HttpRpc::new` directly (open since R0's RT-W7 landing review, `RPC_TRANSPORT_POSTURE.md` §7 RT-O4); `shekyl-mobile-wallet`; **deletes the daemon client's `https://` arm**, `hyper-rustls` and native-roots loading with it (RT-O8); shows the engine pages its requests within §6.3's batch caps (RT-O9). **Once these clients have moved, plaintext loopback is re-scoped to `view` and the plaintext admin listener (`rpc-admin-listen`) is retired (RT-O33, ruled 2026-10-25):** until then the admin listener is reachable by any local user, not only the daemon's owner, which is why this slice follows RT-W11 directly. **Client contracts for a submission (close-out F2, 2026-10-22):** each client holds its own connections (hyper's `client::conn::http1`, not the pooled `Client`) and arms `SubmissionMark` on the connection it sends the submission on, and that connection carries nothing else until the response; the submission body is one complete, buffered body (`Full`), never a streaming one | RT-W9 | not authorized |
 | RT-W13 | The check that §11.2 is empty: every row gone, no reader of a deleted flag or field left | lands with RT-W10; re-run after RT-W12 and RT-W14 | not authorized |
 | RT-W14 | Service mode (RT-16): the declared-mode switch; console key and its offline reset; enrol at install; machine-wide rendezvous; Windows service under a virtual account and its installer step (service first, fresh data home never adopted, inheritance broken); Linux unit under a dedicated user; machine-wide data home and ACL; Tor as the service's child; side-by-side refusal | RT-W10, RT-P8, the Rust process entry (the daemon-configuration cutover, PR #1066) | not authorized |
-| RT-W15 | R8: `shekyl-cli` serves the daemon console (`INPUT_GRAMMAR.md` §13), on `shekyl-rpc-client` and `shekyl-rpc-types` (RK-D1, `RPC_WIRE.md`); the Rust console's renderers move into it with their tests; its private HTTP client, its reply types and its free-text status matching go; the C++ console, `shekyld <command>`'s client mode and `rpc_client.h` are deleted | — | authorized 2026-10-17 |
+| RT-W15 | R8: `shekyl-cli` serves the daemon console (`INPUT_GRAMMAR.md` §13), on `shekyl-rpc-client` and `shekyl-rpc-types` (RK-D1, `RPC_WIRE.md`); the Rust console's renderers move into it with their tests; its private HTTP client, its reply types and its free-text status matching go; the C++ console, `shekyld <command>`'s client mode and `rpc_client.h` are deleted | — | **LANDED 2026-11-03** (PR #1259). The daemon client posts through `SyncDaemon`. A refusal is the error class and the diagnostic code. The wallet session's HTTP agent is still ureq. |

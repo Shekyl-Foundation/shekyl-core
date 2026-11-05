@@ -68,8 +68,8 @@ fn only_regtest_permits_levers() {
     }
 }
 
-/// NI-R9: staging flags are accepted on the test networks only, each has
-/// an owner and an exit, and none survives mainnet genesis.
+/// NI-R9: staging flags are accepted on the test networks only, and each
+/// has an owner, an exit and a deadline release the release gate can read.
 #[test]
 fn staging_is_the_test_networks_and_never_mainnets() {
     for flag in Staging::ALL {
@@ -78,6 +78,16 @@ fn staging_is_the_test_networks_and_never_mainnets() {
             assert!(n.stages(flag), "{n}: {flag:?}");
         }
         assert!(!flag.owner().is_empty() && !flag.exit().is_empty());
+        let deadline = flag.deadline();
+        let core = deadline
+            .strip_prefix('v')
+            .and_then(|v| v.split('-').next())
+            .unwrap_or_else(|| panic!("{flag:?}: {deadline} is not vMAJOR.MINOR.PATCH[-pre]"));
+        let parts: Vec<&str> = core.split('.').collect();
+        assert!(
+            parts.len() == 3 && parts.iter().all(|p| p.parse::<u32>().is_ok()),
+            "{flag:?}: {deadline} is not vMAJOR.MINOR.PATCH[-pre]"
+        );
     }
 }
 
@@ -145,5 +155,34 @@ fn the_seed_lists_are_the_rows() {
 fn no_row_has_the_harness_id() {
     for net in Network::ALL {
         assert_ne!(net.network_id(), HARNESS_NETWORK_ID, "{net}");
+    }
+}
+
+/// `name_id` is the tag's cSHAKE256 under `shekyl/network-name-v1`, first
+/// 16 bytes, on every network (the signing envelope §2.6); the four
+/// constants are distinct. The values are the stdlib oracle's
+/// (`scripts/kat/stdlib_cshake.py`, anchored on NIST SP 800-185's samples).
+#[test]
+fn the_name_id_is_the_tags_cshake() {
+    let pinned = [
+        (Network::Mainnet, "5e6f51beafca4a33dbc98267574fc1c8"),
+        (Network::Testnet, "866a986774ba359c8950f938e8deb30a"),
+        (Network::Stagenet, "fd3a11446a2937826860949474456312"),
+        (Network::Regtest, "4b22be743ef0c275c6f9b05bb44ff33f"),
+    ];
+    for (net, hex) in pinned {
+        let derived = shekyl_crypto_hash::cshake256_32(NETWORK_NAME_DST, net.tag().as_bytes());
+        assert_eq!(
+            net.name_id(),
+            derived[..16],
+            "{net}: the constant is the derivation"
+        );
+        let shown: String = net.name_id().iter().map(|b| format!("{b:02x}")).collect();
+        assert_eq!(shown, hex, "{net}: the oracle's value");
+    }
+    for (i, a) in Network::ALL.iter().enumerate() {
+        for b in &Network::ALL[i + 1..] {
+            assert_ne!(a.name_id(), b.name_id(), "{a} and {b}");
+        }
     }
 }

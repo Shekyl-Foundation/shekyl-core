@@ -247,7 +247,8 @@ const ROWS: &[Row] = &[
     public("notify-block", Kind::Command { placeholders: &["height", "hash"] }, Default::Unset, Surface::File, "A command to run on a new block, with {height} and {hash}."),
     public("notify-reorg", Kind::Command { placeholders: &["split-height", "height", "added", "removed"] }, Default::Unset, Surface::File, "A command to run on a reorganization, with {split-height}, {height}, {added} and {removed}."),
     public("notify-block-rate", Kind::Command { placeholders: &["window", "observed", "expected"] }, Default::Unset, Surface::File, "A command to run on a block-rate warning, with {window}, {observed} and {expected}."),
-    public("mine-address", Kind::Address, Default::Unset, Surface::Both, "Mine to this address from start."),
+    public("mine", Kind::OneOf(&["on", "off"]), Default::Value("off"), Surface::Both, "Start the miner at start, to mine-address."),
+    public("mine-address", Kind::Address, Default::Unset, Surface::Both, "The address the miner pays."),
     public("mine-threads", Kind::Integer { min: 1, keywords: &["auto"] }, Default::Value("auto"), Surface::Both, "The mining thread count, or `auto`."),
     rejected("bg-mining-enable", NO_BG_MINING),
     rejected("bg-mining-ignore-battery", NO_BG_MINING),
@@ -286,8 +287,6 @@ const ROWS: &[Row] = &[
     rejected("prune-blockchain", NO_LOCAL_PRUNING),
     rejected("sync-pruned-blocks", NO_PRUNED_SYNC_FLAG),
     rejected("max-connections-per-ip", "no per-host inbound cap: a host is not an operator, and the measured inbound adversary opens one edge per victim (SHEKYL_P2P_PROTOCOL.md PWD-I7)"),
-    // Session
-    public("console", Kind::Switch, Default::Unset, Surface::Cli, "Run the interactive console."),
     // Development levers that were environment variables (IG-8)
     dev("dev-pow-seed-epoch-blocks", COUNT, Default::Unset, DevGate::Lever(Lever::PowSeedEpochBlocks), "The RandomX seed epoch length, in blocks."),
     dev("dev-pow-seed-epoch-lag", COUNT, Default::Unset, DevGate::Lever(Lever::PowSeedEpochLag), "The RandomX seed epoch lag, in blocks."),
@@ -474,14 +473,7 @@ mod tests {
                 assert_eq!(r.surface, Surface::File, "{}", r.name);
             }
         }
-        for name in [
-            "help",
-            "version",
-            "config-verify",
-            "network",
-            "config-file",
-            "console",
-        ] {
+        for name in ["help", "version", "config-verify", "network", "config-file"] {
             assert_eq!(TABLE.row(name).unwrap().surface, Surface::Cli, "{name}");
         }
     }

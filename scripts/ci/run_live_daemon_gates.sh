@@ -60,6 +60,11 @@ test -x "$SHEKYLD_BIN" || {
   echo "FATAL: no shekyld at $SHEKYLD_BIN" >&2
   exit 1
 }
+export SHEKYL_CLI_BIN="${SHEKYL_CLI_BIN:-$REPO_ROOT/build/bin/shekyl-cli}"
+test -x "$SHEKYL_CLI_BIN" || {
+  echo "FATAL: no shekyl-cli at $SHEKYL_CLI_BIN" >&2
+  exit 1
+}
 
 cd rust
 
@@ -136,8 +141,15 @@ regtest_ignored=$(grep -c '^engine::regtest_e2e::.*: test$' "$ignored" || true)
 #     2026-10-29, local debug build.
 ARMED=(
   engine::regtest_e2e::origin::restricted_listener_is_withheld_status_and_capped_by_native_handlers
-  engine::regtest_e2e::ported_console_commands_answer_on_the_in_process_arm
-  engine::regtest_e2e::ported_p2p_console_commands_answer_on_the_in_process_arm
+  # Renamed 2026-11-03 (R8): the words run through shekyl-cli, not the
+  # daemon's stdin. Observed red 2026-11-03 with the genesis assertion
+  # inverted to "NOT-A-COINBASE": panicked at "tx show must locate the
+  # genesis coinbase".
+  engine::regtest_e2e::tx_show_and_chain_spent_answer_through_shekyl_cli
+  # Renamed 2026-11-03 (R8). Observed red 2026-11-03 with the offline
+  # line inverted to "P2P: online": panicked at "sync status must render
+  # the live core's P2P state".
+  engine::regtest_e2e::peer_words_answer_through_shekyl_cli
   engine::regtest_e2e::native_handlers_apply_their_own_request_caps
   engine::regtest_e2e::e2e_fcmp_spend_accepted_by_daemon
   engine::regtest_e2e::e2e_fcmp_spend_reorg_restores_pool_and_fee
@@ -150,12 +162,31 @@ ARMED=(
   engine::regtest_e2e::get_output_histogram_stays_unrouted
   engine::regtest_e2e::origin::restricted_listener_hides_a_transaction_this_node_has_not_broadcast
   engine::regtest_e2e::origin::restricted_listener_names_a_transaction_this_node_shows
-  engine::regtest_e2e::origin::get_info_console_commands_answer_on_the_in_process_arm
-  engine::regtest_e2e::the_armed_switch_on_testnet_serves_two_levers_and_knows_no_third
+  # Renamed 2026-11-03 (R8): daemon status, chain difficulty, version and
+  # txpool stats through shekyl-cli. Observed red 2026-11-03 with the
+  # diff assertion inverted to "NOT-THE-TIP": panicked at "the in-process
+  # diff must name the live tip".
+  engine::regtest_e2e::origin::daemon_words_answer_through_shekyl_cli
+  # Renamed 2026-11-04 (NI-R8): dev-rpc is regtest's alone, so the armed
+  # switch is held on regtest; a testnet daemon given it is refused at load.
+  engine::regtest_e2e::the_armed_switch_serves_two_levers_and_knows_no_third
   engine::regtest_e2e::sync::a_dialing_node_hands_its_tip_to_the_peer_it_dials
   # Observed red 2026-10-30 on the flip at e4280bfbf5 before the sync-head
   # fix: the joiner stood at height 21 of 101 (one span) until the deadline.
   engine::regtest_e2e::sync::a_node_syncs_a_chain_longer_than_the_doors_window_from_a_peer
+  # CS-Q2 step 8, the declaration (Rick, 2026-11-01). Observed red
+  # 2026-11-01 on the #1237 head before it (a95bc9afa5): the offline
+  # testnet node posted no template at open, refused mine.not_synced
+  # (no_view); the closed node whose last peer left refused
+  # mine.not_synced. Green 106 s and 49 s, local Release daemon. The
+  # testnet gate mined one block then, real proof of work at the
+  # network's difficulty: 5 s, 123 s and past the 180 s HTTP timeout on
+  # one 2-CPU runner (2026-11-02), so it was split: the testnet half
+  # reads synced and a posted template at open, the regtest half mines
+  # under dev-difficulty.
+  engine::regtest_e2e::sync::an_offline_testnet_node_is_synced_at_open
+  engine::regtest_e2e::sync::an_offline_regtest_node_mines
+  engine::regtest_e2e::sync::a_closed_node_whose_peer_is_down_mines_and_opens_when_it_arrives
 )
 
 # Consensus gates too heavy for the per-PR lane (depth-3 spend, 13 min
@@ -244,6 +275,11 @@ ARMED_SLOW=(
 #     scripts/bench/capture_kept_chain.py. Not a pass/fail proposition for
 #     this lane: the subject is the keep, and the lane would spend a
 #     daemon start proving a bool. Sibling of generate_ct2_tier_b_fixture.
+#   sync::a_node_and_an_alpha_11_node_refuse_each_other_cleanly — CS-5 §6's
+#     mixed-version refusal: a CS-5 node and a released alpha.11 node,
+#     linked; alpha.11 never takes the chain and both stay up. Needs the
+#     released binary as SHEKYLD_ALPHA11_BIN, which CI does not have; run
+#     by hand before a release that changes the wire.
 #   bench_source::bench_tx_source — the performance budget's transaction
 #     source (DAEMON_REDB_STORE.md §1.3a, PB-S1's pool point). A load
 #     generator driven by scripts/bench/drs_crash.py against a daemon it
@@ -253,6 +289,7 @@ ARMED_SLOW=(
 DECIDED_DARK=(
   engine::regtest_e2e::bench_source::bench_tx_source
   engine::regtest_e2e::capture_chain_keeps_its_datadir
+  engine::regtest_e2e::sync::a_node_and_an_alpha_11_node_refuse_each_other_cleanly
   engine::regtest_e2e::generate_ct2_tier_b_fixture
   engine::regtest_e2e::rt_p5::rt_p5_dry_run
   engine::regtest_e2e::rt_p5::rt_p5_registered_run
@@ -330,6 +367,67 @@ for t in "${LANE_GATES[@]}"; do
   }
 done
 
+# shekyl-cli's ignored tests. The lib tests are the §13 words against a
+# live daemon (SHEKYLD_BIN). The wallet-script integration test is dark:
+# it opens a wallet and refreshes, and it is not a console-word gate.
+# Same ratchet as shekyl-levin: every ignored test the binary lists is
+# named here.
+#
+#   section_13_words_answer_a_regtest_daemon — the §13 coverage. Observed
+#     red 2026-11-03 with the height assertion inverted to "0": panicked
+#     at `assertion left == right failed: chain height is the mined height: 4`.
+#   tx_show_reads_the_wallet_or_the_daemon — the wallet-or-daemon report.
+#     Observed red 2026-11-03 with the held-record assertion inverted:
+#     panicked at "the wallet's record stays the report".
+#   a_failed_wallet_read_does_not_ask_the_daemon — a failed wallet read
+#     stops the command. Observed red 2026-11-03 with the request-log
+#     assertion inverted: panicked at "a failed wallet read asked the daemon".
+ARMED_CLI=(
+  tx_show::regtest::tx_show_reads_the_wallet_or_the_daemon
+  tx_show::regtest::a_failed_wallet_read_does_not_ask_the_daemon
+  tx_show::regtest::section_13_words_answer_a_regtest_daemon
+)
+DARK_CLI=(
+  # The wallet script against an offline testnet daemon. Not a §13 word
+  # gate; the three lib tests above are the console coverage.
+  daemon_script_drives_balance_refresh_and_a_refused_send
+)
+
+cargo test -p shekyl-cli --lib -- --list --ignored >"$ignored" 2>&1
+cli_ignored=$(grep -c ': test$' "$ignored" || true)
+[ "${cli_ignored:-0}" -gt 0 ] || {
+  echo "FATAL: shekyl-cli --lib lists no ignored test — the module moved or the enumeration broke" >&2
+  exit 1
+}
+for name in "${ARMED_CLI[@]}"; do
+  grep -qx "$name: test" "$ignored" || {
+    echo "FATAL: listed gate '$name' names no shekyl-cli ignored test — it was renamed or deleted" >&2
+    exit 1
+  }
+done
+if [ "$cli_ignored" -ne "${#ARMED_CLI[@]}" ]; then
+  echo "FATAL: shekyl-cli --lib lists $cli_ignored ignored test(s), but ${#ARMED_CLI[@]} are armed here." >&2
+  echo "A new #[ignore]d lib test must be armed (observe it red first) or decided dark." >&2
+  exit 1
+fi
+
+cargo test -p shekyl-cli --test json_script -- --list --ignored >"$ignored" 2>&1
+script_ignored=$(grep -c ': test$' "$ignored" || true)
+[ "${script_ignored:-0}" -gt 0 ] || {
+  echo "FATAL: shekyl-cli --test json_script lists no ignored test" >&2
+  exit 1
+}
+for name in "${DARK_CLI[@]}"; do
+  grep -qx "$name: test" "$ignored" || {
+    echo "FATAL: decided-dark '$name' names no shekyl-cli ignored test — it was renamed or deleted" >&2
+    exit 1
+  }
+done
+if [ "$script_ignored" -ne "${#DARK_CLI[@]}" ]; then
+  echo "FATAL: shekyl-cli --test json_script lists $script_ignored ignored test(s), but ${#DARK_CLI[@]} are decided dark." >&2
+  exit 1
+fi
+
 # The armed gates that live outside regtest_e2e, as `<test binary>:<name>`
 # in shekyl-levin's integration tests. Same ratchet, per binary: every
 # ignored test the binary lists is on this list, and every name here is
@@ -379,6 +477,22 @@ for entry in "${ARMED_LEVIN[@]}"; do
 done
 
 if [ "$GATE_LANE" = pr ]; then
+  for name in "${ARMED_CLI[@]}"; do
+    set +e
+    cargo test -p shekyl-cli --lib "$name" \
+      -- --ignored --exact --nocapture >"$gate_log" 2>&1
+    status=$?
+    set -e
+    cat "$gate_log"
+    if [ "$status" -ne 0 ]; then
+      echo "FATAL: $name failed" >&2
+      exit "$status"
+    fi
+    grep -qE '^test result: ok\. 1 passed' "$gate_log" || {
+      echo "FATAL: $name selected no test — the filter or the name moved" >&2
+      exit 1
+    }
+  done
   for entry in "${ARMED_LEVIN[@]}"; do
     binary="${entry%%:*}"
     name="${entry#*:}"

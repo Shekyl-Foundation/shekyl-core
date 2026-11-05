@@ -8,7 +8,7 @@
 #
 # Two triggers, three jobs:
 #
-#   pull_request → dev
+#   pull_request (any base)
 #     - capture-pr:       runs the Rust gungraun harness on the PR
 #                         head, uploads `shekyl_rust_v0.json` as an
 #                         artifact.
@@ -57,7 +57,7 @@ on:
   # queue): a PR-comment comparator whose jobs are gated on the PR
   # payload; there is no group to compare against or comment on.
   pull_request:
-    branches: [dev]
+    types: [opened, synchronize, reopened]
     # The whole Rust workspace, not a list of benched crates (BA-Q8, ruled
     # 2026-10-05). A bench's cost depends on its dependency closure, not on
     # its own crate: `relay_admission_verify_iai` lives in `shekyl-ffi` and

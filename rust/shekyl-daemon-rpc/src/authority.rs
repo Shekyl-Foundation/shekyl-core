@@ -196,6 +196,18 @@ pub fn grant_refusal_message(raw: &str) -> Option<String> {
     error.get("message")?.as_str().map(str::to_owned)
 }
 
+/// Record that `row` was admitted, on an armed daemon only.
+///
+/// The line is `row.name`: a REST path today, a JSON-RPC method name
+/// otherwise. The `/json_rpc` endpoint is not a method and is not
+/// recorded. Params and the body are not.
+pub(crate) fn note_admitted(authority: Authority, row: &Method) {
+    if !authority.armed_switch() || matches!(row.policy, Policy::Endpoint) {
+        return;
+    }
+    tracing::info!(target: "global", "rpc request: {}", row.name);
+}
+
 /// The layer that stamps `authority` on a request whose path is a method,
 /// and admits that row before the handler runs.
 ///
@@ -214,6 +226,12 @@ pub async fn stamp(authority: Authority, mut request: Request, next: Next) -> Re
         )
             .into_response();
     }
+    // Armed daemons (`--dev-rpc`) record the method-table row that was
+    // admitted, and not the body or the params. A REST row's name is its
+    // path today; a JSON-RPC row's name is the method. The `/json_rpc`
+    // endpoint itself is not a method, so it is not recorded here — the
+    // handler records the method it admits.
+    note_admitted(authority, row);
     request.extensions_mut().insert(authority);
     next.run(request).await
 }

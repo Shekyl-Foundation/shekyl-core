@@ -30,28 +30,24 @@
 
 #include "daemon/daemon.h"
 
-#include <atomic>
-#include <functional>
-#include <limits>
 #include <memory>
 #include <mutex>
 #include <stdexcept>
-#include <vector>
 
-#include <boost/algorithm/string/split.hpp>
-
-#include "common/password.h"
-#include "common/util.h"
 #include "cryptonote_basic/events.h"
 #include "cryptonote_core/cryptonote_core.h"
 #include "cryptonote_protocol/cryptonote_protocol_handler.h"
-#include "daemon/command_server.h"
 #include "misc_log_ex.h"
 #include "p2p/net_node.h"
 #include "rpc/core_rpc_ffi.h"
 #include "rpc/rpc_subject.h"
 #include "shekyl/shekyl_ffi.h"
-#include "version.h"
+#include "cryptonote_config.h"
+
+#include <cstdint>
+#include <exception>
+#include <iostream>
+#include <string>
 
 using namespace epee;
 
@@ -92,7 +88,7 @@ struct t_internals {
 
   explicit t_internals(const ShekylDaemonSnapshot& snapshot)
     : core(nullptr)
-    , protocol{core, nullptr, snapshot.offline}
+    , protocol{core, nullptr}
     , p2p{protocol}
     , subject{nullptr, nullptr}
   {
@@ -187,7 +183,7 @@ Daemon::~Daemon() = default;
 Daemon::Daemon(Daemon &&) = default;
 Daemon & Daemon::operator=(Daemon &&) = default;
 
-bool Daemon::run(bool interactive)
+bool Daemon::run()
 {
   if (nullptr == mp_internals)
   {
@@ -214,8 +210,8 @@ bool Daemon::run(bool interactive)
   // that escapes — stops the Rust RPC tasks before ~t_internals destroys the
   // core they hold pointers into. The normal path stops them explicitly
   // below so "Node stopped" follows the stop; this is the backstop for
-  // every other path (a later listener refusing to start, the command
-  // server or p2p.run() throwing).
+  // every other path (a later listener refusing to start, or p2p.run()
+  // throwing).
   epee::misc_utils::auto_scope_leave_caller stop_rust_rpc = epee::misc_utils::create_scope_leave_handler([](){
     shekyl_daemon_rpc_stop();
   });
@@ -232,24 +228,6 @@ bool Daemon::run(bool interactive)
       throw std::runtime_error("Failed to start the RPC; the reason is logged just above");
     }
     MGINFO("RPC started; each bound socket is logged by the Rust listener");
-
-    std::unique_ptr<daemonize::t_command_server> rpc_commands;
-    if (interactive)
-    {
-      // The first two ctor args are unused when the third is false.
-      // The interactive console renders from the live core in this process,
-      // so its identity handshake is skipped entirely (every axis would
-      // compare a value to itself). The nettype is passed for signature
-      // uniformity and read by nothing on this arm.
-      rpc_commands.reset(new daemonize::t_command_server(
-        0, 0,
-        mp_internals->core.get_nettype(),
-        false,
-        &mp_internals->subject));
-      // The console's `exit` asks the one stop owner (§2.2 step 9); the
-      // remnant never stops itself.
-      rpc_commands->start_handling([](){ shekyl_daemon_request_stop(); });
-    }
 
     // RPC listeners are open now, and each server has a connection budget
     // that is not yet open. Re-derive so both are inside the ceiling.
@@ -280,9 +258,6 @@ bool Daemon::run(bool interactive)
     MGINFO("Starting p2p net loop...");
     mp_internals->p2p.run(); // blocks until p2p goes down
     MGINFO("p2p net loop stopped");
-
-    if (rpc_commands)
-      rpc_commands->stop_handling();
 
     shekyl_daemon_rpc_stop();
     MGINFO("Node stopped.");
@@ -318,3 +293,50 @@ void Daemon::stop_p2p()
 }
 
 } // namespace daemonize
+
+// The remnant's entry pair (DAEMON_CONFIG_CUTOVER.md §2.2, DC-Q19). Rust
+// owns the process: `shekyld`'s Rust `main` hardens the process, reads the
+// configuration, takes the lock, checks the marker, creates the data
+// directory, starts logging and the forwarder that carries C++ log calls
+// to it, makes the announcements and owns every signal;
+// `shekyl_remnant_run` receives the snapshot of the values whose reader is
+// still C++, parses nothing and prepares nothing (DC-Q22).
+
+// The remnant's `run`: `noexcept`, every C++ exception caught and turned
+// into a status. Takes what C++ still reads from the snapshot, runs the
+// client command or the daemon, and returns. Imported by name by the Rust
+// binary (`rust/shekyld/src/main.rs`, DC-Q19).
+extern "C" int shekyl_remnant_run(const ShekylDaemonSnapshot* snapshot) noexcept
+{
+  try {
+    if (snapshot == nullptr)
+      return 1;
+    if (shekyl_daemon_snapshot_field_count() != SHEKYL_DAEMON_SNAPSHOT_FIELDS)
+    {
+      std::cerr << "shekyld: the C++ reads a snapshot of " << SHEKYL_DAEMON_SNAPSHOT_FIELDS
+                << " fields and Rust filled " << shekyl_daemon_snapshot_field_count()
+                << "; the two sides were built from different definitions" << std::endl;
+      return 1;
+    }
+
+    MINFO("Constructing daemon.");
+    daemonize::Daemon daemon{*snapshot};
+    return daemon.run() ? 0 : 1;
+  }
+  catch (std::exception const & ex)
+  {
+    LOG_ERROR("Exception in the daemon's run! " << ex.what());
+  }
+  catch (...)
+  {
+    LOG_ERROR("Exception in the daemon's run!");
+  }
+  return 1;
+}
+
+// The remnant's `stop`: requests the stop `run` is waiting for and returns
+// at once. `noexcept`.
+extern "C" void shekyl_remnant_stop() noexcept
+{
+  daemonize::request_stop();
+}

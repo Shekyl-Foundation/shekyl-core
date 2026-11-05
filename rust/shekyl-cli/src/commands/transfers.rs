@@ -15,7 +15,7 @@ use serde_json::{json, Value};
 use shekyl_wallet_rpc::types::{SubmitPendingTxResult, SubmitVerdictView};
 
 use super::{format_amount, format_amount_str, require_open};
-use crate::outcome::{failed, CommandResult};
+use crate::outcome::CommandResult;
 use crate::rpc_client::RpcSession;
 
 /// The handle fields of a `build_pending_tx`-shaped success (`transfer` and
@@ -265,6 +265,14 @@ pub(crate) fn show_submit(val: &Value) {
     }
 }
 
+/// The transaction id a row is listed under.
+///
+/// `tx show`, `tx note` and `tx abandon` take this id. It is the transaction
+/// hash, not the wallet's per-output transfer id.
+pub(crate) fn listed_tx_id(t: &Value) -> &str {
+    t.get("tx_hash").and_then(Value::as_str).unwrap_or("?")
+}
+
 /// One history row.
 ///
 /// A single send produces several rows sharing one TxID — the OUTGOING
@@ -281,7 +289,7 @@ fn print_transfer_row(t: &Value) {
     let amount = format_amount_str(s("amount"));
     let fee = format_amount_str(s("fee"));
     let height = format_height(t);
-    let id = s("id");
+    let id = listed_tx_id(t);
     println!("{direction:<10} {state:<12} {amount:>16} {fee:>12} {height:>8}  {id}");
     // An UNSPENDABLE row (PL-D3 §6.2) carries why; print it beside the row
     // so the user sees the failure where the money is listed (rule 82).
@@ -297,7 +305,7 @@ fn print_transfer_row(t: &Value) {
 /// Plain-language rendering of `unspendable_reason` (`PL-D3` §6.2). The
 /// user is told what it means for them — the sender's transaction cannot
 /// be spent from this wallet — not the protocol mechanism (rule 81).
-fn unspendable_reason_text(reason: &str) -> String {
+pub(crate) fn unspendable_reason_text(reason: &str) -> String {
     match reason {
         "PQC_LEAF_MISMATCH" => "the sender's transaction published a leaf entry this wallet \
                                 cannot open; this output can never be spent from here — \
@@ -316,46 +324,10 @@ fn unspendable_reason_text(reason: &str) -> String {
 /// `block_height` is absent for a send that was never mined (PENDING /
 /// FAILED / DROPPED). Printing `0` there would render a plausible block
 /// number beside a send that does not exist on chain.
-fn format_height(t: &Value) -> String {
+pub(crate) fn format_height(t: &Value) -> String {
     t.get("block_height")
         .and_then(serde_json::Value::as_i64)
         .map_or_else(|| "—".to_owned(), |h| h.to_string())
-}
-
-pub fn cmd_show_transfer(rpc: &RpcSession, id: &str) -> CommandResult {
-    require_open(rpc)?;
-    match rpc.call("get_transfer_by_id", json!({ "id": id })) {
-        Ok(val) => {
-            if val.get("transfer").is_none() {
-                return failed("Malformed get_transfer_by_id response.");
-            }
-            Ok(val)
-        }
-        Err(e) => Err(rpc.report("Failed to get transfer", &e)),
-    }
-}
-
-pub(crate) fn show_transfer(val: &Value) {
-    let Some(t) = val.get("transfer") else {
-        return;
-    };
-    let s = |name: &str| t.get(name).and_then(|v| v.as_str()).unwrap_or("?");
-    println!("Transfer:");
-    println!("  Id (tx show):              {}", s("id"));
-    println!("  Transaction (note/abandon): {}", s("tx_hash"));
-    println!("  Amount:    {} SKL", format_amount_str(s("amount")));
-    println!("  Fee:       {} SKL", format_amount_str(s("fee")));
-    println!("  Height:    {}", format_height(t));
-    if let Some(spent) = t.get("spent_height").and_then(Value::as_i64) {
-        println!("  Spent at:  {spent}");
-    }
-    if let Some(reason) = t.get("unspendable_reason").and_then(|v| v.as_str()) {
-        println!("  Unspendable: {}", unspendable_reason_text(reason));
-    }
-    if let Some(attr) = t.get("attribution") {
-        let kind = attr.get("kind").and_then(|v| v.as_str()).unwrap_or("?");
-        println!("  Attribution: {kind}");
-    }
 }
 
 /// `get_tx_note <txid>` — read the local note stored for a transaction

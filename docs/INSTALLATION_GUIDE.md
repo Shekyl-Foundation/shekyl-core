@@ -43,7 +43,7 @@ The dependency matrix is maintained in `README.md` and includes:
 
 - compiler/tooling: GCC, CMake, pkg-config
 - core libs: Boost, OpenSSL, libsodium
-- optional libs/tools: libunwind, readline, gtest, ccache, doxygen/graphviz
+- optional libs/tools: readline, gtest, ccache, doxygen/graphviz
 
 ### Rust integration behavior
 
@@ -174,13 +174,14 @@ make release-static-win64
 
 The current CMake targets produce:
 
-- daemon: `shekyld` (C++)
+- daemon: `shekyld` (a Rust binary, `rust/shekyld`, that links the C++
+  core as a static library; `DAEMON_CONFIG_CUTOVER.md` DC-Q19)
 - CLI wallet: `shekyl-cli` (Rust)
 - wallet RPC: `shekyl-wallet-rpc` (Rust)
 
-The two wallet binaries are built from the Rust workspace by
-`cmake/BuildRust.cmake` as part of the ordinary CMake build — no separate
-`cargo` step is needed, and `cargo` is already a build prerequisite.
+All three are built from the Rust workspace by `cmake/BuildRust.cmake` as
+part of the ordinary CMake build — no separate `cargo` step is needed, and
+`cargo` is already a build prerequisite.
 
 **Platform note.** The wallet binaries are produced for Unix targets
 (Linux, macOS). They are **not built for Windows** — `BuildRust.cmake`

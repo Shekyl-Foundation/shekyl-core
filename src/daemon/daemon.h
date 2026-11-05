@@ -48,7 +48,7 @@ public:
   Daemon(Daemon &&);
   Daemon & operator=(Daemon &&);
 
-  bool run(bool interactive = false);
+  bool run();
 
 private:
   friend void request_stop();
@@ -60,7 +60,23 @@ private:
 /// Signals the daemon `run` has registered, and returns at once.
 /// A request that arrives before `run` registers is kept and signalled
 /// when `run` does. A second `run` while one holds the slot is refused.
-/// Called by the Rust signal owner through the entry's `stop`.
+/// Called by the Rust signal owner through `shekyl_remnant_stop`.
 void request_stop();
 
 } // namespace daemonize
+
+// The remnant's two functions, imported by name by the Rust binary
+// (`rust/shekyld/src/main.rs`; DAEMON_CONFIG_CUTOVER.md §2.2, DC-Q19).
+// Defined in daemon.cpp. Declared here and not in `shekyl/shekyl_ffi.h`:
+// that header is the Rust exports C++ imports, and these go the other way.
+extern "C" {
+
+/// `run`: checks the snapshot and its field count, constructs and runs the
+/// daemon, and returns the exit status.
+/// `noexcept`: every C++ exception is caught inside it.
+int shekyl_remnant_run(const ShekylDaemonSnapshot* snapshot) noexcept;
+
+/// `stop`: requests the stop `run` is waiting for and returns at once.
+void shekyl_remnant_stop() noexcept;
+
+} // extern "C"

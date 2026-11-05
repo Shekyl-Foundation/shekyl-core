@@ -16,8 +16,11 @@
     "the cargo-test cycle stays fast. Production wallets always use",
     "DEFAULT_KDF_* (m_log2=0x10, t=3, p=1).",
     "",
-    "Last regenerated: 2026-11-03, 'One secret, one derivation (NI-R7, NI-R10)'",
-    "— see V3_WALLET_DECISION_LOG.md 2026-11-03. Format 0x02: region 1 stores",
+    "Last regenerated: 2026-11-04, 'The derivation salt is the name's 16-byte",
+    "binding, then the purpose' — see V3_WALLET_DECISION_LOG.md 2026-11-04: the",
+    "fixture seed derives a different address under salt name_id || purpose, so",
+    "region 2's AAD and both files move; the format is unchanged. Format 0x02",
+    "(2026-11-03, 'One secret, one derivation (NI-R7, NI-R10)'): region 1 stores",
     "the wallet's 32-byte seed and no seed format, and the region wrap keys use",
     "the -v2 labels (WALLET_FILE_FORMAT_V1.md §2.6). WALLET_FILE_FORMAT_V1/full.hex",
     "is kept as the retired format's file, the input to",
@@ -42,7 +45,7 @@
     "creation_timestamp": 1700000000,
     "restore_height_hint": 2500000,
     "expected_classical_address_provenance": "DERIVED, not chosen: the 65-byte version||spend_pk||view_pk prefix of account_from_seed(seed, Mainnet).classical_address_bytes — the production derivation the engine open path runs. pinned_fixture_address_derives_from_fixture_seed re-checks this against the frozen bytes.",
-    "expected_classical_address_hex": "010b0d05c647d39413d720628d8e94a3d5946f168ec7ed6db2c17e6294f881700435b9d2834f32fd18ee185c3c4acff1374b941fbc73089a2abea6741ca1df06b0"
+    "expected_classical_address_hex": "018731d562d5b122b9f3034d657037772302a3592e806a08729b06638d1b44fff18a34fcf57735aca4c117d782f1eb5c3c3b5fff77302a3458efe4d7317be46063"
   },
   "fixtures": {
     "full.hex": {

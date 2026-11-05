@@ -15,8 +15,8 @@
 //! ```
 //!
 //! `--offline` skips the p2p bind (`net_node.inl`); this harness uses
-//! `--p2p-bind-ip 127.0.0.1` plus `--out-peers 0`. `--regtest` (FAKECHAIN)
-//! speaks the id derived from fakechain's genesis pin.
+//! `--p2p-bind-ip 127.0.0.1` plus `--out-peers 0`. `--network regtest`
+//! speaks the id derived from regtest's own genesis pin (NI-Q8).
 
 use std::io::{Read, Write};
 use std::net::{SocketAddr, TcpStream};
@@ -30,8 +30,7 @@ use shekyl_levin::{
     COMMAND_TIMED_SYNC, DEFAULT_MAX_PACKET_SIZE,
 };
 
-/// FAKECHAIN (`--regtest`) derives its id from fakechain's genesis pin,
-/// which is mainnet's genesis today.
+/// Regtest (`--network regtest`) derives its id from its own genesis pin.
 fn regtest_network_id() -> shekyl_p2p_transport::NetworkId {
     shekyl_p2p_transport::network_id_from_genesis(&shekyl_rpc_types::genesis_hash_for(
         shekyl_rpc_types::Network::Regtest,
@@ -357,9 +356,13 @@ fn rust_client_handshakes_with_shekyld() {
         node_data: BasicNodeData {
             network_id: regtest_network_id(),
         },
+        // The daemon's own chain as a claim: under `dev-difficulty=1` every
+        // block's work is 1, so the work is the block count. Chain sync's
+        // owner closes a session whose claim has less work than blocks
+        // (`PayloadRefused::Work`).
         payload_data: CoreSyncData {
             current_height: tip.height,
-            cumulative_difficulty: 0,
+            cumulative_difficulty: tip.height,
             cumulative_difficulty_top64: 0,
             top_id: tip.top_id,
         },

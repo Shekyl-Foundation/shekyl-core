@@ -885,13 +885,13 @@ fn a_heavier_unverified_branch_takes_the_long_run_slot() {
         let fast = branch_pows(&main, &parent, &[30, 30]);
         mock_headers(&mut sync, &view, 1, slow);
         assert_eq!(
-            sync.slot_session(),
+            sync.slot_holder(),
             Some(1),
             "the first budget took the slot"
         );
         mock_headers(&mut sync, &view, 2, fast);
         assert_eq!(
-            sync.slot_session(),
+            sync.slot_holder(),
             Some(2),
             "the heavier unverified branch did not take the slot"
         );

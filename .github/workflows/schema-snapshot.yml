@@ -60,7 +60,7 @@ on:
     types: [checks_requested]
     branches: [dev]
   pull_request:
-    branches: [dev]
+    types: [opened, synchronize, reopened]
     paths:
       # The gate's subject is every crate whose code can change a byte a
       # `.snap` pins: the codecs themselves (`shekyl-store-codec`, the chain

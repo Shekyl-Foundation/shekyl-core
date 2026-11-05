@@ -194,6 +194,7 @@ fn kinds(posts: &VecDeque<Post>) -> Vec<&'static str> {
         .map(|post| match post {
             Post::Established { .. } => "established",
             Post::HandshakeResult { .. } => "handshake",
+            Post::Opened { .. } => "opened",
             Post::Deliver { .. } => "deliver",
             Post::Closed { .. } => "closed",
         })
@@ -230,12 +231,15 @@ fn a_well_formed_response_is_adopted_and_its_result_is_posted_before_any_frame()
         thread::sleep(Duration::from_millis(2));
     }
     let posts = rig.posts.lock().expect("posts");
-    assert_eq!(kinds(&posts), vec!["established", "handshake", "deliver"]);
+    assert_eq!(
+        kinds(&posts),
+        vec!["established", "opened", "handshake", "deliver"]
+    );
     let Some(Post::HandshakeResult {
         id: posted, sync, ..
-    }) = posts.get(1)
+    }) = posts.get(2)
     else {
-        panic!("the second post is the handshake result");
+        panic!("the third post is the handshake result");
     };
     assert_eq!(*posted, id);
     assert_eq!(sync.current_height, 20);

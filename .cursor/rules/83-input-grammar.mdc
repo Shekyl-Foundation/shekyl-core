@@ -162,8 +162,9 @@ default without a restart; what `option show` prints is valid input to
 `option set` and builds the same value; and no row is both runtime and a
 secret, which the gate asserts (RPC_CHANNEL §6.4, RT-O25, RT-O27). Mining
 changes while running through `mine start` and `mine stop` instead,
-which build `mine-address` and `mine-threads` through their
-constructors, so those rows are not marked runtime. The live value is
+which build `mine-threads` through its constructor, so that row is
+not marked runtime. `mine-address` is the config row, not an argument
+of `mine start`, and is not marked runtime either. The live value is
 owned by its subsystem. No binary ever writes its own config file.
 
 **IG-13 Inputs come from the table, and nowhere else.** No option value

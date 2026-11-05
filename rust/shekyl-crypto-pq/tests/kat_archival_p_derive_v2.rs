@@ -5,9 +5,9 @@
 
 //! Tier-1/Tier-2 vectors for the frozen ARCHIVAL_P_DERIVE_V2 pipeline:
 //! `ARCHIVAL_P_DERIVE_V1`'s labels, info strings and key constructions,
-//! under the salt `salt_for(net)` = `shekyl-master-derive-v2-` ‖
-//! `shekyl/<network>`, with no seed format (`NETWORK_IDENTITY.md` NI-R7,
-//! NI-R10; `V3_WALLET_DECISION_LOG.md`, 2026-11-03).
+//! under the salt `salt_for(net)` = `name_id(net)` ‖
+//! `shekyl-master-derive-v3`, with no seed format (`NETWORK_IDENTITY.md`
+//! NI-R7, NI-R10; `V3_WALLET_DECISION_LOG.md`, 2026-11-03 and 2026-11-04).
 //!
 //! Corpus: `docs/test_vectors/ARCHIVAL_P_DERIVE_V2/{manifest.json,vectors.json}`.
 //!
@@ -63,7 +63,7 @@ const P_CANONICAL_ID_CUSTOMIZATION: &[u8] = b"shekyl/archival-p-id-v1";
 
 /// The manifest's `derivation_version`: the corpus version and the salt it
 /// was derived under.
-const DERIVATION_VERSION: &str = "v2 (salt shekyl-master-derive-v2-shekyl/<network>)";
+const DERIVATION_VERSION: &str = "v2 (salt name_id(net) || shekyl-master-derive-v3)";
 
 /// Independent SP 800-185 cSHAKE256 with 32-byte output (the second of the two
 /// paths the cross-check proves equal). Intentionally a fresh implementation,
@@ -806,7 +806,7 @@ fn kat_regenerate_archival_p_derive_v2() {
         "_comment": [
             "Tier-1/Tier-2 vectors for ARCHIVAL_P_DERIVE_V2: ARCHIVAL_P_DERIVE_V1's",
             "labels and info strings (LABEL || 0x00 || p_slot_le32) under the salt",
-            "salt_for(net) = 'shekyl-master-derive-v2-' || 'shekyl/<network>', with",
+            "salt_for(net) = name_id(net) || 'shekyl-master-derive-v3', with",
             "no seed format (NETWORK_IDENTITY.md NI-R7, NI-R10). Tier-1 pins the",
             "per-label HKDF outputs, the hs_id public key on all four networks, and",
             "the label/network/slot separation properties; Tier-2 pins whole",

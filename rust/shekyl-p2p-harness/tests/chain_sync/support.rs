@@ -6,10 +6,11 @@
 //! Shared by the chain-sync loopback tests.
 //!
 //! `chain_sync_loopback.rs` drives the scripted peers and the serving
-//! queue. `chain_sync_claim_relay.rs` drives the inbound claim and the
-//! relay fan-out. Both read the owner's close lines through one
-//! subscriber, and both start a node from the spend corpus. A file under
-//! `tests/chain_sync/` is not its own test crate.
+//! queue. `chain_sync_cutover.rs` drives the cutover scenarios.
+//! `chain_sync_claim_relay.rs` drives the inbound claim and the relay
+//! fan-out. Each is its own integration binary, and each includes this
+//! file. They share the owner's close subscriber and the spend corpus.
+//! A file under `tests/chain_sync/` is not its own test crate.
 
 use std::num::NonZeroUsize;
 use std::sync::{Arc, Mutex};
@@ -40,6 +41,43 @@ pub(crate) const LIMIT: Duration = Duration::from_secs(900);
 /// Every close the owner logged: (node tag, session, cause).
 pub(crate) static CLOSES: Mutex<Vec<(String, u64, String)>> = Mutex::new(Vec::new());
 
+/// Every per-block profile the owner logged (CS-5 §8): (node tag, the
+/// profile's JSON).
+pub(crate) static PROFILES: Mutex<Vec<(String, String)>> = Mutex::new(Vec::new());
+
+/// Every sync response the owner logged at debug (CS-5 §10's per-response
+/// record): the node tag and the line's fields.
+pub(crate) static RESPONSES: Mutex<Vec<(String, Response)>> = Mutex::new(Vec::new());
+
+/// Every body span the owner logged as seated (CS-5 §10's seat wait):
+/// the node tag and the line's fields.
+pub(crate) static SEATED: Mutex<Vec<(String, Seated)>> = Mutex::new(Vec::new());
+
+/// The fields of one `a sync response` line. Read by
+/// `chain_sync_loopback.rs`; every test crate that includes this file
+/// records them.
+#[derive(Clone, Debug)]
+#[allow(dead_code)]
+pub(crate) struct Response {
+    /// `"headers"` or `"bodies"`.
+    pub(crate) kind: String,
+    pub(crate) bytes: u64,
+    /// The blocks a body response named; headers carry none.
+    pub(crate) items: Option<u64>,
+    pub(crate) transit_us: u64,
+}
+
+/// The fields of one `a body span seated` line. Read by
+/// `chain_sync_loopback.rs`, as [`Response`] is.
+#[derive(Clone, Debug)]
+#[allow(dead_code)]
+pub(crate) struct Seated {
+    pub(crate) blocks: u64,
+    pub(crate) waited_us: u64,
+    /// Whether the span waited for a seat at all.
+    pub(crate) waited: bool,
+}
+
 struct Tag(String);
 
 #[derive(Default)]
@@ -48,18 +86,40 @@ struct Fields {
     message: String,
     session: Option<u64>,
     cause: Option<String>,
+    profile: Option<String>,
+    kind: Option<String>,
+    bytes: Option<u64>,
+    items: Option<u64>,
+    transit_us: Option<u64>,
+    blocks: Option<u64>,
+    waited_us: Option<u64>,
+    waited: Option<bool>,
 }
 
 impl Visit for Fields {
     fn record_u64(&mut self, field: &Field, value: u64) {
-        if field.name() == "session" {
-            self.session = Some(value);
+        match field.name() {
+            "session" => self.session = Some(value),
+            "bytes" => self.bytes = Some(value),
+            "items" => self.items = Some(value),
+            "transit_us" => self.transit_us = Some(value),
+            "blocks" => self.blocks = Some(value),
+            "waited_us" => self.waited_us = Some(value),
+            _ => {}
+        }
+    }
+
+    fn record_bool(&mut self, field: &Field, value: bool) {
+        if field.name() == "waited" {
+            self.waited = Some(value);
         }
     }
 
     fn record_str(&mut self, field: &Field, value: &str) {
-        if field.name() == "tag" {
-            self.tag = Some(value.to_owned());
+        match field.name() {
+            "tag" => self.tag = Some(value.to_owned()),
+            "kind" => self.kind = Some(value.to_owned()),
+            _ => {}
         }
     }
 
@@ -67,6 +127,7 @@ impl Visit for Fields {
         match field.name() {
             "message" => self.message = format!("{value:?}"),
             "cause" => self.cause = Some(format!("{value:?}")),
+            "profile" => self.profile = Some(format!("{value:?}")),
             // The owner logs its `Session` by `Display`, the socket id.
             "session" => self.session = format!("{value:?}").parse().ok(),
             "tag" => self.tag = Some(format!("{value:?}").trim_matches('"').to_owned()),
@@ -92,7 +153,11 @@ where
     fn on_event(&self, event: &Event<'_>, ctx: Context<'_, S>) {
         let mut fields = Fields::default();
         event.record(&mut fields);
-        if !fields.message.contains("closes a session") {
+        let closes = fields.message.contains("closes a session");
+        let profiles = fields.message.contains("the phases so far");
+        let responses = fields.message.contains("a sync response");
+        let seated = fields.message.contains("a body span seated");
+        if !closes && !profiles && !responses && !seated {
             return;
         }
         let tag = ctx.event_scope(event).and_then(|scope| {
@@ -100,6 +165,43 @@ where
                 .from_root()
                 .find_map(|span| span.extensions().get::<Tag>().map(|tag| tag.0.clone()))
         });
+        if profiles {
+            if let (Some(tag), Some(profile)) = (tag, fields.profile) {
+                PROFILES.lock().expect("profiles").push((tag, profile));
+            }
+            return;
+        }
+        if responses {
+            if let (Some(tag), Some(kind), Some(bytes), Some(transit_us)) =
+                (tag, fields.kind, fields.bytes, fields.transit_us)
+            {
+                RESPONSES.lock().expect("responses").push((
+                    tag,
+                    Response {
+                        kind,
+                        bytes,
+                        items: fields.items,
+                        transit_us,
+                    },
+                ));
+            }
+            return;
+        }
+        if seated {
+            if let (Some(tag), Some(blocks), Some(waited_us), Some(waited)) =
+                (tag, fields.blocks, fields.waited_us, fields.waited)
+            {
+                SEATED.lock().expect("seated").push((
+                    tag,
+                    Seated {
+                        blocks,
+                        waited_us,
+                        waited,
+                    },
+                ));
+            }
+            return;
+        }
         if let (Some(tag), Some(session), Some(cause)) = (tag, fields.session, fields.cause) {
             CLOSES.lock().expect("closes").push((tag, session, cause));
         }

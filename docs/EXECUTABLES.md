@@ -84,13 +84,13 @@ file is TOML with the same names (see the example in `USER_GUIDE.md`).
 | `notify-block` | command (an array of words; placeholders `{height}`, `{hash}`) | — | file | no | A command to run on a new block, with {height} and {hash}. |
 | `notify-reorg` | command (an array of words; placeholders `{split-height}`, `{height}`, `{added}`, `{removed}`) | — | file | no | A command to run on a reorganization, with {split-height}, {height}, {added} and {removed}. |
 | `notify-block-rate` | command (an array of words; placeholders `{window}`, `{observed}`, `{expected}`) | — | file | no | A command to run on a block-rate warning, with {window}, {observed} and {expected}. |
-| `mine-address` | Shekyl address | — | both | no | Mine to this address from start. |
+| `mine` | `on` / `off` | `off` | both | no | Start the miner at start, to mine-address. |
+| `mine-address` | Shekyl address | — | both | no | The address the miner pays. |
 | `mine-threads` | integer ≥ 1, or `auto` | `auto` | both | no | The mining thread count, or `auto`. |
 | `rpc-admin-listen` | list of IP endpoint (`address:port`) (`none` for empty) | 127.0.0.1 and the network's rpc port | both | no | The plaintext full-access listeners, loopback only; `none` is no admin listener. |
 | `rpc-view-listen` | list of IP endpoint (`address:port`) (`none` for empty) | `none` | both | no | The plaintext view listeners, loopback only. |
 | `rpc-cors-origin` | list of web origin (`none` for empty) | `none` | both | no | Web origins allowed to call the RPC; `none` denies all. `*` is refused. |
 | `rpc-connections-max` | integer ≥ 1 | `25` | both | no | The RPC connection cap. |
-| `console` | switch | — | command line | no | Run the interactive console. |
 <!-- development rows, live on the named networks only and not in --help: dev-clearnet-encrypt (testnet, stagenet, regtest); dev-sync (regtest); dev-relay-cover (testnet, stagenet, regtest); dev-rpc (regtest); dev-difficulty (regtest); dev-pow-seed-epoch-blocks (regtest); dev-pow-seed-epoch-lag (regtest); dev-settlement-epoch-blocks (regtest); dev-archival-reorg-depth (regtest) -->
 <!-- shekyld-options: end -->
 
@@ -179,8 +179,7 @@ shekyl-cli [options]
 | `--testnet` / `--stagenet` | Shorthand for `--network testnet` / `--network stagenet` — the same flags `shekyld` takes (CU-1). The prompt names the selected network |
 | `--wallet-dir <path>` | Directory for wallet files. Default: the per-network `~/.shekyl/wallets/<network>/`, created on demand, so wallets on different networks never share a directory (CU-1). Ignored with `--rpc-url`. `--engine-dir` is a hidden alias (CU-2) |
 | `--wallet <name>` | Open a wallet immediately on startup. `--engine-file` is a hidden alias (CU-2) |
-| `--proxy <socks5h://host:port>` | SOCKS proxy for the daemon connections. Prefer `socks5h://`: the REPL's direct daemon queries honor the scheme, and `socks5://` resolves the hostname locally (a DNS leak, warned at startup) |
-| `--daemon-ca-cert <pem>` | PEM CA certificate for an `https://` daemon with a custom CA |
+| `--proxy <socks5h://host:port>` | SOCKS proxy for the daemon connections. Prefer `socks5h://`: the REPL's direct daemon queries honor the scheme, and `socks5://` resolves the hostname locally (a DNS leak, warned at startup). An `https://` daemon uses the system root store |
 | `--debug` | Show structured RPC error details on failures |
 
 ### Interactive commands
@@ -260,15 +259,17 @@ is [`docs/CLI_PARITY_MATRIX.md`](CLI_PARITY_MATRIX.md).
 
 | Command | Description |
 |---------|-------------|
-| `mine start [threads\|auto]` | Start mining on the local daemon, paying to this wallet (default threads: `min(cores, 4)`; the daemon owns the threads, so mining keeps running after the CLI exits) |
+| `mine start [threads\|auto]` | Start mining on the daemon, paying its `mine-address` (default threads: `min(cores, 4)`; the shell sends only the thread count; the daemon owns the threads, so mining keeps running after the CLI exits) |
 | `mine stop` | Stop mining on the daemon |
 | `mine status` | Mining state, thread count, and hash rate |
 
 The retired spellings `start_mining`, `stop_mining` and `mining_status`
-do not run; each names its `mine` replacement. Requires an open wallet,
-the unrestricted RPC listener, and a daemon on the same network as the
-CLI. The default daemon is loopback (the recommended posture); a remote
-`--daemon-address` is allowed and `mine start` reminds you of the risk.
+do not run; each names its `mine` replacement. Does not require an open
+wallet. Requires the unrestricted RPC listener and a daemon on the same
+network as the CLI. The default daemon is loopback. A remote
+`--daemon-address` is
+allowed, and `mine start` reminds you that mining will run on that
+machine's CPU.
 A still-syncing daemon refuses `mine start` until it is caught up.
 
 **Proofs and message signing**

@@ -17,6 +17,8 @@ shekyl-types = { path = "../shekyl-types" }
 # reads it for `chain_health` and the mining gates.
 shekyl-rpc-types = { path = "../shekyl-rpc-types" }
 shekyl-wallet-rpc = { path = "../shekyl-wallet-rpc" }
+# The release version string the binary prints (DC-Q20).
+shekyl-version = { path = "../shekyl-version" }
 # `shard fetch --png`: the candidate.v1 renderer over the aggregate
 # `get_shard_view` returns. Rendering is the viewer's; no picture crosses
 # the wallet RPC (SV-D).
@@ -25,6 +27,14 @@ shekyl-shard-visual = { path = "../shekyl-shard-visual" }
 # `--rpc-url` validation shares with it; already in this binary's graph
 # through shekyl-wallet-rpc.
 shekyl-rpc-transport = { path = "../shekyl-rpc-transport" }
+# `SyncDaemon`'s error. The shell reads a connection failure from it.
+shekyl-rpc-client = { path = "../shekyl-rpc-client" }
+# The console renderers read the block target from the economics
+# parameters, the peer-list caps, and the daemon's option table.
+shekyl-economics = { path = "../shekyl-economics" }
+shekyl-peerlist = { path = "../shekyl-peerlist" }
+shekyl-daemon-config = { path = "../shekyl-daemon-config" }
+shekyl-options = { path = "../shekyl-options" }
 clap = { version = "4", features = ["derive"] }
 rustyline = "15"
 tokio = { version = "1", features = ["full"] }
@@ -37,6 +47,8 @@ serde_json = "1"
 zeroize = { workspace = true }
 rpassword = "7"
 dirs = "6"
+# The wallet-RPC session's HTTP agent. The daemon client is
+# `SyncDaemon` and does not use this.
 ureq = { version = "3", default-features = false, features = ["rustls", "socks-proxy"] }
 tracing = "0.1"
 shekyl-logging = { path = "../shekyl-logging" }
@@ -45,6 +57,12 @@ shekyl-logging = { path = "../shekyl-logging" }
 # `OffsetDateTime::now_local`) instead of a hand-rolled calendar.
 time = { version = "0.3", default-features = false, features = ["std", "local-offset"] }
 shekyl-units = { path = "../shekyl-units" }
+# The console binds a transaction body and recomputes its id (`tx show`).
+shekyl-wire = { path = "../shekyl-wire" }
+hex = "0.4"
+# `--body` prints a transaction's bytes as base64 (IG-6, RW-Q4). Already
+# in the lock through shekyl-crypto-pq.
+base64 = "0.22"
 
 # WP-W2: the self-hosted transport's dial (`open_verified`, which runs the
 # peer check before handing back a handle) and the seed file's owner-only
@@ -55,8 +73,20 @@ shekyl-units = { path = "../shekyl-units" }
 shekyl-win-sec = { path = "../shekyl-win-sec" }
 
 [dev-dependencies]
+# The regtest spawns in this crate's tests take the spawn lock. The binary
+# does not launch tor; the lock is the gate's subject for a watched image,
+# and the test uses the same call the harness does.
+shekyl-tor-control-client = { path = "../shekyl-tor-control-client" }
 proptest = "1"
 tempfile = "3"
+# Console fixtures that build a reply the daemon would send
+# (`project_transactions`, a view-listener refusal).
+shekyl-daemon-rpc = { path = "../shekyl-daemon-rpc" }
+# `tx show`'s regtest: a wallet that holds a coinbase, against a real daemon.
+shekyl-engine-core = { path = "../shekyl-engine-core" }
+shekyl-address = { path = "../shekyl-address" }
+shekyl-engine-file = { path = "../shekyl-engine-file" }
+shekyl-engine-prefs = { path = "../shekyl-engine-prefs" }
 
 [lints]
 workspace = true

@@ -71,17 +71,17 @@ Source of truth: [`config/genesis_recipients.stagenet.json`](../config/genesis_r
 
 | # | Label | Amount | Address |
 |---|---|---|---|
-| 1 | Founder allocation 1 | 20,000 SHEKYL | `sshekyl1qxf6qycn…sjq7kqx05v53` |
-| 2 | Founder allocation 2 | 20,000 SHEKYL | `sshekyl1qy8pq22u…02233qh6f85r` |
-| 3 | Founder allocation 3 | 20,000 SHEKYL | `sshekyl1qyvpyewa…aws4vqeqpuhs` |
-| 4 | Founder allocation 4 | 20,000 SHEKYL | `sshekyl1qx2gcqvt…w28ycq49vu52` |
-| 5 | Founder allocation 5 | 20,000 SHEKYL | `sshekyl1qytrrznj…60rn5sy6nxvj` |
+| 1 | Founder allocation 1 | 20,000 SHEKYL | `sshekyl1qyfcskvl…k7r4lqmna0wy` |
+| 2 | Founder allocation 2 | 20,000 SHEKYL | `sshekyl1q834vknk…cnyujq9hpd72` |
+| 3 | Founder allocation 3 | 20,000 SHEKYL | `sshekyl1qywmgzk8…vjc9eq945auw` |
+| 4 | Founder allocation 4 | 20,000 SHEKYL | `sshekyl1q8rk2wxf…mda6lqqt2rn4` |
+| 5 | Founder allocation 5 | 20,000 SHEKYL | `sshekyl1qxwz8w4h…qtthdq0qv0st` |
 
 Genesis identity:
 
 ```text
-tx hash        78cc64efc390c5f58bda754234f2a4b912be43a3f5225cc11cf7010ae61f3676
-block id       cac00a967665094f24cf805457dac58f9500b4c72d5cd1474871bb8905e58dce
+tx hash        fdeccc30c952ae308c082326d9af330bc2e840e544d2f52b47b142b5d8b49177
+block id       01f60443d2905d2833b613e77acdedd27332d6b0fd592485b9082b16284ce783
 ```
 
 ### testnet
@@ -90,17 +90,17 @@ Source of truth: [`config/genesis_recipients.testnet.json`](../config/genesis_re
 
 | # | Label | Amount | Address |
 |---|---|---|---|
-| 1 | Developer 1 | 20,000 SHEKYL | `tshekyl1qxqn5fxs…kvev6sllnmq6` |
-| 2 | Developer 2 | 20,000 SHEKYL | `tshekyl1q982fkyr…k07rpsuf8weu` |
-| 3 | Developer 3 | 20,000 SHEKYL | `tshekyl1q96u7dvt…g6vy8sdgs86n` |
-| 4 | Developer 4 | 20,000 SHEKYL | `tshekyl1qxsqrckq…9cql3s3wlecu` |
-| 5 | Developer 5 | 20,000 SHEKYL | `tshekyl1qy56gmrp…xe22zs3mru89` |
+| 1 | Developer 1 | 20,000 SHEKYL | `tshekyl1qylh4dak…av8rvsxypdv0` |
+| 2 | Developer 2 | 20,000 SHEKYL | `tshekyl1qyqsj9em…qpv7ns64wtly` |
+| 3 | Developer 3 | 20,000 SHEKYL | `tshekyl1q9hqaurw…9u556su2pkz4` |
+| 4 | Developer 4 | 20,000 SHEKYL | `tshekyl1q8nx0z5w…5qv65qz3u27m` |
+| 5 | Developer 5 | 20,000 SHEKYL | `tshekyl1qxgvt06s…383jmsmk4cue` |
 
 Genesis identity:
 
 ```text
-tx hash        36f8a897bf2c1dc700a6c3026d5f3a5fb3b9514ad5fe385a5105ceeff0fc91d4
-block id       230bc902a5b375615c335f0e02ffe663c0779ae26912abb800d58a3cf3f417c3
+tx hash        87f5ef16ac6b358e43935db1877b8e18ce0c7ba31b49048cad74d2054ef5fb4e
+block id       03b9ae1330f670dc3c27b6786281b26eec00e1f59d916076a388fa7b90f7775e
 ```
 
 ### regtest
@@ -114,17 +114,17 @@ value and exist on no other network.
 
 | # | Label | Amount | Address |
 |---|---|---|---|
-| 1 | Regtest test wallet 1 | 20,000 SHEKYL | `rshekyl1qxrehuwl…za7nss9cq933` |
-| 2 | Regtest test wallet 2 | 20,000 SHEKYL | `rshekyl1qy7pgxjx…0ak2cs772z3t` |
-| 3 | Regtest test wallet 3 | 20,000 SHEKYL | `rshekyl1qyrcv3c5…x4z8dqnrfq4e` |
-| 4 | Regtest test wallet 4 | 20,000 SHEKYL | `rshekyl1qx2rxnny…vnxh2q74tkmx` |
-| 5 | Regtest test wallet 5 | 20,000 SHEKYL | `rshekyl1q8vklna0…8f968s446lkg` |
+| 1 | Regtest test wallet 1 | 20,000 SHEKYL | `rshekyl1q8kzj2s4…5k2f2svnjpx9` |
+| 2 | Regtest test wallet 2 | 20,000 SHEKYL | `rshekyl1q82e75az…h4vsksw663vd` |
+| 3 | Regtest test wallet 3 | 20,000 SHEKYL | `rshekyl1qytj4xn0…fsl4cq74lrau` |
+| 4 | Regtest test wallet 4 | 20,000 SHEKYL | `rshekyl1q97w3w35…sdtfxs03n8wc` |
+| 5 | Regtest test wallet 5 | 20,000 SHEKYL | `rshekyl1q8es9vja…8v86zsvcw5xy` |
 
 Genesis identity:
 
 ```text
-tx hash        d48f1669887960058dee197fa35ec4adf90daefbe53d73084baaf82a86ce5c45
-block id       128ed909d9a222faaa2130be4da83bfd418f83726b12358f5cc147bcee3a9423
+tx hash        187c7c7ea8095838497498e297a47da31e8fb3e739db4e9887eb6cad77a6e64d
+block id       80074ff9d70c6f5ddd43268b4df4c240dcb482d3464271f752274406e10aa965
 ```
 
 Addresses are truncated above for readability only — the full strings are
@@ -187,8 +187,9 @@ and another block.
 
 ## 4. Key custody
 
-Testnet's and stagenet's recipient wallets were generated on 2026-11-03
-with fresh operating-system entropy (`geblock gen-wallets`), one 32-byte
+Testnet's and stagenet's recipient wallets were generated on 2026-11-04,
+under the derivation salt `name_id ‖ shekyl-master-derive-v3`, with fresh
+operating-system entropy (`geblock gen-wallets`), one 32-byte
 seed per wallet, written once as its 24 BIP-39 words to custody files
 outside any repository; every address is decoded back for its network
 before it is written. Mainnet's custodians generate theirs the same way at

@@ -32,6 +32,7 @@ on:
       - 'scripts/ci/check_vendored_crypto_manifest.sh'
       - '.github/workflows/vendored-crypto-content.yml'
   pull_request:
+    types: [opened, synchronize, reopened]
     paths: *crypto_paths
 
 # Superseded-run cancellation (house pattern: economics-c2a-prime.yml).

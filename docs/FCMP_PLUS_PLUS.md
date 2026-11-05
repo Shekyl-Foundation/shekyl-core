@@ -904,8 +904,10 @@ seed                = 32 random bytes, on every network: the wallet's
 master_seed_64      = HKDF-SHA-512(salt="shekyl-seed-normalize-v1",
                                    ikm=seed, L=64)
 
-salt                = "shekyl-master-derive-v2-" || tag
+name_id             = cSHAKE256(S="shekyl/network-name-v1",
+                                X=tag)[..16]
                       (tag = the network's name, "shekyl/<network>")
+salt                = name_id || "shekyl-master-derive-v3"
 spend_wide          = HKDF-SHA-512(salt, ikm=master_seed_64,
                                    info="shekyl-ed25519-spend", L=64)
 view_wide           = HKDF-SHA-512(salt, ikm=master_seed_64,

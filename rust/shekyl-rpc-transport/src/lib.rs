@@ -25,9 +25,94 @@ use shekyl_rpc_client::{Rpc, RpcError};
 mod http_client;
 pub mod listen;
 pub mod network_posture;
-use http_client::{error_chain, HttpClient, TransportTls};
+use http_client::{error_chain, HttpClient, HttpError, TransportTls};
 
 const DEFAULT_TIMEOUT: Duration = Duration::from_secs(30);
+
+/// A failure of the connection itself, classified where it is raised.
+///
+/// The wallet's [`RpcError`](shekyl_rpc_client::RpcError) still folds this
+/// into `ConnectionError`. Callers that can act on the cause — the shell —
+/// match the variant instead of searching the sentence.
+#[derive(Clone, Debug)]
+pub enum TransportFault {
+    /// `--proxy` does not parse, or the SOCKS tunnel refused the dial.
+    Proxy(String),
+    /// The TLS connector could not be built.
+    Tls(String),
+    /// The daemon did not answer: refused, timed out, or the body could not be read.
+    Unreachable(String),
+    /// This thread cannot host the client, or the runtime would not start.
+    Runtime(String),
+}
+
+impl std::fmt::Display for TransportFault {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::Proxy(detail)
+            | Self::Tls(detail)
+            | Self::Unreachable(detail)
+            | Self::Runtime(detail) => f.write_str(detail),
+        }
+    }
+}
+
+impl std::error::Error for TransportFault {}
+
+/// Why a post did not return a body.
+///
+/// [`TransportFault`] is the connection. [`PostFault::Protocol`] is a
+/// failure of this side of the request — digest authentication, a header
+/// that would not encode — which the wallet still reports as its own
+/// [`RpcError`](shekyl_rpc_client::RpcError) variant.
+#[derive(Clone, Debug)]
+pub enum PostFault {
+    /// The connection failed.
+    Connection(TransportFault),
+    /// Not a connection fault. The wallet keeps this variant.
+    Protocol(RpcError),
+}
+
+impl PostFault {
+    fn from_rpc(error: RpcError) -> Self {
+        match error {
+            RpcError::ConnectionError(detail) => {
+                Self::Connection(TransportFault::Unreachable(detail))
+            }
+            RpcError::InternalError(detail) => Self::Connection(TransportFault::Runtime(detail)),
+            other => Self::Protocol(other),
+        }
+    }
+}
+
+impl From<HttpError> for PostFault {
+    fn from(error: HttpError) -> Self {
+        Self::Connection(error.fault())
+    }
+}
+
+impl From<PostFault> for RpcError {
+    fn from(fault: PostFault) -> Self {
+        match fault {
+            PostFault::Connection(TransportFault::Runtime(detail)) => {
+                RpcError::InternalError(detail)
+            }
+            PostFault::Connection(other) => RpcError::ConnectionError(other.to_string()),
+            PostFault::Protocol(error) => error,
+        }
+    }
+}
+
+impl std::fmt::Display for PostFault {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::Connection(fault) => write!(f, "{fault}"),
+            Self::Protocol(error) => write!(f, "{error}"),
+        }
+    }
+}
+
+impl std::error::Error for PostFault {}
 
 #[derive(Clone, Debug)]
 enum Authentication {
@@ -258,7 +343,9 @@ impl HttpRpc {
     /// A daemon requiring authentication can be used via including the username and password in the
     /// URL.
     pub async fn new(url: String) -> Result<HttpRpc, RpcError> {
-        Self::with_options(url, DEFAULT_TIMEOUT, None).await
+        Self::with_options(url, DEFAULT_TIMEOUT, None)
+            .await
+            .map_err(RpcError::from)
     }
 
     /// Create a new HTTP(S) RPC connection with a custom timeout.
@@ -269,7 +356,9 @@ impl HttpRpc {
         url: String,
         request_timeout: Duration,
     ) -> Result<HttpRpc, RpcError> {
-        Self::with_options(url, request_timeout, None).await
+        Self::with_options(url, request_timeout, None)
+            .await
+            .map_err(RpcError::from)
     }
 
     /// Create a new HTTP(S) RPC connection routed through a **SOCKS5h** proxy
@@ -280,36 +369,40 @@ impl HttpRpc {
     /// A daemon requiring authentication can be used via including the username and password in the
     /// URL.
     pub async fn with_proxy(url: String, proxy: Option<String>) -> Result<HttpRpc, RpcError> {
-        Self::with_options(url, DEFAULT_TIMEOUT, proxy).await
+        Self::with_options(url, DEFAULT_TIMEOUT, proxy)
+            .await
+            .map_err(RpcError::from)
     }
 
     async fn with_options(
         url: String,
         request_timeout: Duration,
         proxy: Option<String>,
-    ) -> Result<HttpRpc, RpcError> {
+    ) -> Result<HttpRpc, PostFault> {
         let ParsedEndpoint {
             url,
             path_prefix,
             credentials,
             tls,
-        } = parse_endpoint(url)?;
+        } = parse_endpoint(url).map_err(PostFault::from_rpc)?;
 
         let authentication = if let Some((username, password)) = credentials {
-            let client = HttpClient::new(proxy.as_deref(), tls)
-                .map_err(|e| RpcError::ConnectionError(format!("{e}")))?;
+            let client = HttpClient::new(proxy.as_deref(), tls)?;
             // Obtain the initial challenge, which also somewhat validates this connection
             let response = client
                 .request(
                     Request::post(url.clone())
                         .body(Full::new(Bytes::new()))
                         .map_err(|e| {
-                            RpcError::ConnectionError(format!("couldn't make request: {e}"))
+                            PostFault::Protocol(RpcError::ConnectionError(format!(
+                                "couldn't make request: {e}"
+                            )))
                         })?,
                 )
+                .await?;
+            let challenge = Self::digest_auth_challenge(response)
                 .await
-                .map_err(|e| RpcError::ConnectionError(format!("{e}")))?;
-            let challenge = Self::digest_auth_challenge(response).await?;
+                .map_err(PostFault::from_rpc)?;
             Authentication::Authenticated {
                 username,
                 password,
@@ -321,10 +414,7 @@ impl HttpRpc {
             // (bad --proxy, missing TLS roots), never an internal bug, and
             // its classification must not depend on whether the daemon URL
             // happened to carry credentials.
-            Authentication::Unauthenticated(
-                HttpClient::new(proxy.as_deref(), tls)
-                    .map_err(|e| RpcError::ConnectionError(format!("{e}")))?,
-            )
+            Authentication::Unauthenticated(HttpClient::new(proxy.as_deref(), tls)?)
         };
 
         Ok(HttpRpc {
@@ -337,7 +427,7 @@ impl HttpRpc {
 }
 
 impl HttpRpc {
-    async fn inner_post(&self, route: &str, body: Vec<u8>) -> Result<Vec<u8>, RpcError> {
+    async fn inner_post(&self, route: &str, body: Vec<u8>) -> Result<Vec<u8>, PostFault> {
         // Route → Content-Type is a shared protocol invariant (which routes are
         // EPEE-binary), so it lives once in `shekyl_rpc_client::content_type_for`.
         let content_type = shekyl_rpc_client::content_type_for(route);
@@ -345,19 +435,22 @@ impl HttpRpc {
             Request::post(uri)
                 .header("content-type", content_type)
                 .body(Full::new(Bytes::from(body.clone())))
-                .map_err(|e| RpcError::ConnectionError(format!("couldn't make request: {e}")))
+                .map_err(|e| {
+                    PostFault::Protocol(RpcError::ConnectionError(format!(
+                        "couldn't make request: {e}"
+                    )))
+                })
         };
 
         async fn body_from_response(
             response: hyper::Response<Incoming>,
-        ) -> Result<Vec<u8>, RpcError> {
+        ) -> Result<Vec<u8>, PostFault> {
             // No streaming size cap (matches prior behavior): daemon block
             // responses are large and the node is operator-selected.
-            let collected = response
-                .into_body()
-                .collect()
-                .await
-                .map_err(|e| RpcError::ConnectionError(error_chain(&e)))?;
+            let collected =
+                response.into_body().collect().await.map_err(|e| {
+                    PostFault::Connection(TransportFault::Unreachable(error_chain(&e)))
+                })?;
             Ok(collected.to_bytes().to_vec())
         }
 
@@ -367,8 +460,7 @@ impl HttpRpc {
                     body_from_response(
                         client
                             .request(request_fn(self.request_target(route))?)
-                            .await
-                            .map_err(|e| RpcError::ConnectionError(format!("{e}")))?,
+                            .await?,
                     )
                     .await?
                 }
@@ -386,12 +478,10 @@ impl HttpRpc {
 
                     // If we don't have an auth challenge, obtain one
                     if connection_lock.0.is_none() {
-                        let response = connection_lock
-                            .1
-                            .request(request)
+                        let response = connection_lock.1.request(request).await?;
+                        connection_lock.0 = Self::digest_auth_challenge(response)
                             .await
-                            .map_err(|e| RpcError::ConnectionError(format!("{e}")))?;
-                        connection_lock.0 = Self::digest_auth_challenge(response).await?;
+                            .map_err(PostFault::from_rpc)?;
                         request = request_fn(self.request_target(route))?;
                     }
 
@@ -415,17 +505,17 @@ impl HttpRpc {
                                 &challenge
                                     .respond(&context)
                                     .map_err(|_| {
-                                        RpcError::InvalidNode(
+                                        PostFault::Protocol(RpcError::InvalidNode(
                                             "couldn't respond to digest-auth challenge".to_string(),
-                                        )
+                                        ))
                                     })?
                                     .to_header_string(),
                             )
                             .map_err(|_| {
-                                RpcError::InternalError(
+                                PostFault::Protocol(RpcError::InternalError(
                   "digest-auth challenge response wasn't a valid string for an HTTP header"
                     .to_string(),
-                )
+                ))
                             })?,
                         );
                     }
@@ -434,7 +524,7 @@ impl HttpRpc {
                         .1
                         .request(request)
                         .await
-                        .map_err(|e| RpcError::ConnectionError(format!("{e}")));
+                        .map_err(PostFault::from);
 
                     let (error, is_stale) = match &response {
                         Err(e) => (Some(e.clone()), false),
@@ -445,10 +535,10 @@ impl HttpRpc {
                                     header
                                         .to_str()
                                         .map_err(|_| {
-                                            RpcError::InvalidNode(
+                                            PostFault::Protocol(RpcError::InvalidNode(
                                                 "www-authenticate header wasn't a string"
                                                     .to_string(),
-                                            )
+                                            ))
                                         })?
                                         .contains("stale")
                                 } else {
@@ -474,10 +564,10 @@ impl HttpRpc {
                             Err(e)?
                         } else {
                             debug_assert!(is_stale);
-                            Err(RpcError::InvalidNode(
+                            Err(PostFault::Protocol(RpcError::InvalidNode(
                                 "node claimed fresh connection had stale authentication"
                                     .to_string(),
-                            ))?
+                            )))?
                         }
                     } else {
                         body_from_response(response.expect("no response yet also no error?"))
@@ -498,16 +588,144 @@ impl Rpc for HttpRpc {
         body: Vec<u8>,
     ) -> impl Send + Future<Output = Result<Vec<u8>, RpcError>> {
         async move {
-            tokio::time::timeout(self.request_timeout, self.inner_post(route, body))
-                .await
+            match tokio::time::timeout(self.request_timeout, self.inner_post(route, body)).await {
+                Ok(result) => result.map_err(RpcError::from),
                 // `Elapsed`'s Debug is the unreadable `Elapsed(())`; say what
                 // actually happened, with the bound that was exceeded.
-                .map_err(|_| {
-                    RpcError::ConnectionError(format!(
-                        "request timed out after {:?}",
-                        self.request_timeout
-                    ))
-                })?
+                Err(_) => Err(RpcError::ConnectionError(format!(
+                    "request timed out after {:?}",
+                    self.request_timeout
+                ))),
+            }
+        }
+    }
+}
+
+/// A daemon client a synchronous caller can hold.
+///
+/// The renderers and `shekyl-cli` issue a handful of requests and then
+/// return to a prompt. One current-thread runtime owns the [`HttpRpc`]
+/// for the life of the client, so a call is not inside whatever runtime
+/// a wallet session happens to be using.
+pub struct SyncDaemon {
+    runtime: tokio::runtime::Runtime,
+    rpc: HttpRpc,
+}
+
+impl SyncDaemon {
+    /// Connect to `url` (`http://` or `https://`), optionally through a
+    /// SOCKS5h proxy. Nothing is dialed until [`Self::post`].
+    ///
+    /// # Errors
+    ///
+    /// The URL or the proxy does not parse, or this thread is already
+    /// inside a Tokio runtime (a second runtime there would panic).
+    pub fn connect(
+        url: String,
+        proxy: Option<String>,
+        timeout: Duration,
+    ) -> Result<Self, PostFault> {
+        if tokio::runtime::Handle::try_current().is_ok() {
+            return Err(PostFault::Connection(TransportFault::Runtime(
+                "the daemon client was constructed inside an async runtime".to_owned(),
+            )));
+        }
+        let runtime = tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+            .map_err(|e| PostFault::Connection(TransportFault::Runtime(format!("runtime: {e}"))))?;
+        let rpc = runtime.block_on(HttpRpc::with_options(url, timeout, proxy))?;
+        Ok(Self { runtime, rpc })
+    }
+
+    /// POST `body` to `route` (a leading `/` is ignored) and return the body.
+    ///
+    /// # Errors
+    ///
+    /// The transport failed: connect, send, receive, or the request timeout.
+    pub fn post(&self, route: &str, body: Vec<u8>) -> Result<Vec<u8>, PostFault> {
+        let route = route.trim_start_matches('/');
+        self.runtime.block_on(async {
+            match tokio::time::timeout(self.rpc.request_timeout, self.rpc.inner_post(route, body))
+                .await
+            {
+                Ok(result) => result,
+                Err(_) => Err(PostFault::Connection(TransportFault::Unreachable(format!(
+                    "request timed out after {:?}",
+                    self.rpc.request_timeout
+                )))),
+            }
+        })
+    }
+
+    /// One JSON-RPC call. The envelope is this method's: `id` is `0`, the
+    /// same value `shekyl-rpc-client` posts. A refusal is the RW-Q3 error
+    /// object, read by [`shekyl_rpc_types::errors::read_error_object`].
+    ///
+    /// # Errors
+    ///
+    /// The transport failed, the body is not a JSON-RPC reply, or the daemon
+    /// refused.
+    pub fn json_rpc<Req, Reply>(&self, method: &str, request: &Req) -> Result<Reply, JsonRpcError>
+    where
+        Req: serde::Serialize,
+        Reply: serde::de::DeserializeOwned,
+    {
+        let body = serde_json::to_vec(&serde_json::json!({
+            "jsonrpc": "2.0",
+            "id": 0,
+            "method": method,
+            "params": request,
+        }))
+        .map_err(|error| JsonRpcError::Malformed(error.to_string()))?;
+        let raw = self
+            .post("json_rpc", body)
+            .map_err(JsonRpcError::Transport)?;
+        let envelope: serde_json::Value = serde_json::from_slice(&raw)
+            .map_err(|_| JsonRpcError::Malformed(format!("malformed {method} reply")))?;
+        if let Some(error) = envelope.get("error") {
+            return Err(match shekyl_rpc_types::errors::read_error_object(error) {
+                Some(refusal) => JsonRpcError::Refusal(refusal),
+                None => JsonRpcError::Malformed(format!("{method} failed")),
+            });
+        }
+        let result = envelope.get("result").cloned().ok_or_else(|| {
+            JsonRpcError::Malformed(format!("malformed {method} reply: no result"))
+        })?;
+        serde_json::from_value(result)
+            .map_err(|error| JsonRpcError::Malformed(format!("malformed {method} reply: {error}")))
+    }
+}
+
+/// A JSON-RPC call that did not return a reply.
+#[derive(Debug)]
+pub enum JsonRpcError {
+    /// The post failed.
+    Transport(PostFault),
+    /// The daemon refused. The class and the diagnostic are the refusal.
+    Refusal(shekyl_rpc_types::errors::RpcError),
+    /// The body was not a reply of the requested type.
+    Malformed(String),
+}
+
+/// A JSON-RPC `result` envelope, for a test that answers a daemon route.
+/// `id` is `0`, the same value [`SyncDaemon::json_rpc`] posts.
+#[must_use]
+pub fn json_rpc_result_body(result: &impl serde::Serialize) -> String {
+    serde_json::json!({
+        "jsonrpc": "2.0",
+        "id": 0,
+        "result": result,
+    })
+    .to_string()
+}
+
+impl std::fmt::Display for JsonRpcError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::Transport(error) => write!(f, "{error}"),
+            Self::Refusal(refusal) => write!(f, "{}", refusal.report()),
+            Self::Malformed(detail) => write!(f, "{detail}"),
         }
     }
 }

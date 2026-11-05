@@ -161,7 +161,7 @@ fn require_daemon(
     match daemon {
         Some(dc) => Ok(dc),
         None => Err(crate::outcome::refusal(
-            "Daemon not configured. Use --daemon-address to set the daemon endpoint.",
+            crate::daemon::DaemonError::NotConfigured.to_string(),
         )),
     }
 }

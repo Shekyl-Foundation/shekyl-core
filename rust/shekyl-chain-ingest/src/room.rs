@@ -50,7 +50,7 @@ const fn reserve_for(capacity: usize) -> usize {
 }
 
 /// Unsolicited seats at `capacity` (module docs).
-const fn unsolicited_cap_for(capacity: usize) -> usize {
+pub(crate) const fn unsolicited_cap_for(capacity: usize) -> usize {
     capacity.saturating_sub(reserve_for(capacity)) / UNSOLICITED_SHARE_DENOMINATOR
 }
 

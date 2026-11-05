@@ -105,6 +105,75 @@ fn a_main_seed_not_held_drops_the_run_and_keeps_the_session() {
     });
 }
 
+/// A seed the slots do not hold is the window's state, not the peer's
+/// answer: the session is not asked again against the same slots, and it
+/// is asked again as soon as the slots change, with its claim and `H*`
+/// unchanged. Defect 8: the spend gate closed this session until its
+/// claim or `H*` moved, and an idle source moved neither.
+#[test]
+fn a_main_seed_not_held_asks_again_when_the_window_changes() {
+    with_extension(|sync, view, block, _tip, _timestamp| {
+        block.header.nonce = 0;
+        let pow = block.pow_blob();
+        let mut out = Vec::new();
+        sync.handle(
+            Event::Headers {
+                session: 1,
+                bytes: headers_of(pow),
+            },
+            view,
+            Instant::now(),
+            &mut NoDraw,
+            &mut out,
+        )
+        .expect("main answers");
+        let job = out
+            .iter()
+            .find_map(|command| match command {
+                Command::Prove { job, .. } => Some(*job),
+                _ => None,
+            })
+            .expect("a proof");
+        let mut out = Vec::new();
+        sync.handle(
+            Event::Proven {
+                job,
+                results: vec![Proved::NotHeld],
+            },
+            view,
+            Instant::now(),
+            &mut NoDraw,
+            &mut out,
+        )
+        .expect("main answers");
+        no_close(&out);
+        // An unrelated event: the same slots would answer the same way.
+        let mut out = Vec::new();
+        sync.handle(
+            Event::Room { seats: 4 },
+            view,
+            Instant::now(),
+            &mut NoDraw,
+            &mut out,
+        )
+        .expect("main answers");
+        assert!(
+            !out.iter()
+                .any(|command| matches!(command, Command::RequestHeaders { .. })),
+            "asked again against the slots that did not hold the seed: {out:?}"
+        );
+        let mut out = Vec::new();
+        sync.handle(Event::Seeds, view, Instant::now(), &mut NoDraw, &mut out)
+            .expect("main answers");
+        assert!(
+            out.iter()
+                .any(|command| matches!(command, Command::RequestHeaders { session: 1, .. })),
+            "the slots changed and the session was not asked again: {out:?}"
+        );
+        assert!(sync.transit(1).is_some(), "the session is kept");
+    });
+}
+
 /// A span is offered only once every arrival before it has connected. The
 /// entry works each offer apart, so a span whose parent is still with the
 /// entry would be unlinked and its bodies fetched again.

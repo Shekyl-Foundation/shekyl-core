@@ -35,6 +35,7 @@ on:
     types: [checks_requested]
     branches: [dev]
   pull_request:
+    types: [opened, synchronize, reopened]
     paths:
       - 'rust/**'
       - '.github/workflows/gui-drift.yml'

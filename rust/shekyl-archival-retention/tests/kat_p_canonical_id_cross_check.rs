@@ -32,31 +32,31 @@ const CASES: &[(u8, Network, u32, &str)] = &[
         0x33,
         Network::Mainnet,
         0,
-        "37aab54549688d7d1953956953b9d79b108a13175d41c1ec6308cb9890281577",
+        "8a8a612989821f7a4afaeef53c9ab220280930f964bda000826d8c4433bcde40",
     ),
     (
         0x33,
         Network::Mainnet,
         7,
-        "776bc822b44e94bd4ce2d085dbe22d7a79ad0ba63b91b98dab133fc5f4ff3a6c",
+        "5cd7e1e6f835d498096a757ae7961dad7b5c83790cbbd417afddab023ef79a70",
     ),
     (
         0x44,
         Network::Testnet,
         0,
-        "a981bf31acf778058c863c4bfb39d3cf7ae1985d4ab9aba78403d26dbda3e511",
+        "95db321af969be98e5f098850b95e3e0675280ccb18877ff35b03ba2bba74598",
     ),
     (
         0x33,
         Network::Stagenet,
         3,
-        "1b999d783111dfd97a4f9e0da7caa8a3c1fb5aa73787b6f1aea7f95e728a52ee",
+        "7528b823c28a4b6e2f50675463ad0a0c12ce655f7bb49ef9fd2ab9a3e981ff9f",
     ),
     (
         0x44,
         Network::Regtest,
         2,
-        "c446ee45b74f8b02fbcbb78cf4a370cf47f461c69006c91c0df15cc7fcc50351",
+        "869f220a4272bb35a8ff08f9fb98f87a3064d3ca1a5191289f26ecbae92c962a",
     ),
 ];
 

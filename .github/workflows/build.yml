@@ -18,6 +18,7 @@ on:
     # `.github/workflows/weekly-os.yml`.
     branches: [main]
   pull_request:
+    types: [opened, synchronize, reopened]
 
 # Superseded-run cancellation (house pattern: economics-c2a-prime.yml).
 # Without a concurrency group, every push to an open PR stacks a full new
@@ -44,7 +45,7 @@ env:
   # "stdbool.h file not found" otherwise). GitHub-hosted runners ship clang,
   # which is why the Rust workflow never needed this; these jobs run in bare
   # ubuntu containers, which do not.
-  APT_INSTALL_LINUX: 'apt -y install build-essential cmake libboost-all-dev graphviz doxygen libunwind8-dev pkg-config libssl-dev libsodium-dev ccache git curl clang libclang-dev'
+  APT_INSTALL_LINUX: 'apt -y install build-essential cmake libboost-all-dev graphviz doxygen pkg-config libssl-dev libsodium-dev ccache git curl clang libclang-dev'
   APT_SET_CONF: |
     tee -a /etc/apt/apt.conf.d/80-custom << EOF
     Acquire::Retries "3";
@@ -238,7 +239,7 @@ jobs:
         run: |
           brew uninstall cmake
           brew update
-          brew install --quiet cmake boost openssl libpgm libunwind-headers ccache
+          brew install --quiet cmake boost openssl libpgm ccache
       # Pinned to match rust/rust-toolchain.toml (avoids a parallel-cargo
       # auto-install race in the daemon build). Bump both together.
       - uses: dtolnay/rust-toolchain@1.94.0
@@ -246,6 +247,17 @@ jobs:
         run: |
           ${{env.CCACHE_SETTINGS}}
           make -j${{env.MAKE_JOB_COUNT}}
+      # The Mach-O half of the hardening gate (MH_PIE, no executable stack,
+      # no LC_RPATH) on the three staged Rust binaries; otool is Xcode's.
+      # The Makefile's build directory carries the OS and the branch name
+      # (`build/Darwin/<branch>/release`), so the staged directory is found,
+      # and the gate itself fails on a path that is not a file.
+      - name: binary hardening on the staged binaries (otool)
+        run: |
+          staged=$(find build -type f -name shekyld -path '*/release/bin/*' -print -quit)
+          if [ -z "$staged" ]; then echo "no staged shekyld under build/" >&2; exit 1; fi
+          bindir=$(dirname "$staged")
+          scripts/ci/check_binary_hardening.sh "$bindir/shekyld" "$bindir/shekyl-cli" "$bindir/shekyl-wallet-rpc"
 
   # Windows MSYS2 and Arch Linux moved to `.github/workflows/weekly-os.yml`.
   # PR Windows coverage is the MSVC daemon job below (the only runner that
@@ -351,6 +363,15 @@ jobs:
         if: matrix.pack_ctest && needs.changes.outputs.docs_only != 'true'
         shell: bash
         run: scripts/ci/check_randomx_symbol_isolation.sh build/bin/shekyld
+      # The hardening the link flags claim, read off the staged ELF binaries
+      # (PIE, non-executable stack, full RELRO, no run path). shekyld is a
+      # Rust binary linking the C++ remnant (DAEMON_CONFIG_CUTOVER.md DC-Q19,
+      # DC-Q21); the flags reach it through Corrosion, not CMAKE_EXE_LINKER_FLAGS,
+      # so the result is what is asserted. readelf is binutils.
+      - name: binary hardening on the staged binaries (readelf)
+        if: needs.changes.outputs.docs_only != 'true'
+        shell: bash
+        run: scripts/ci/check_binary_hardening.sh build/bin/shekyld build/bin/shekyl-cli build/bin/shekyl-wallet-rpc
       - name: live-daemon gates
         if: matrix.pack_ctest && needs.changes.outputs.docs_only != 'true'
         # `shell: bash` like the CTest-artifact step below, and for the same
@@ -365,7 +386,7 @@ jobs:
       # (CMakeLists.txt refuses BUILD_SHARED_LIBS), so test binaries are
       # statically linked against in-tree libraries and the tar can drop
       # *.o / *.a / CMakeFiles.
-      # They still need SYSTEM libraries (boost, ssl, sodium, unwind)
+      # They still need SYSTEM libraries (boost, ssl, sodium)
       # that the test job installs. CMake bakes absolute paths into
       # CTestTestfile.cmake; both jobs use container ubuntu:24.04 +
       # actions/checkout, so github.workspace is `/__w/shekyl-core/shekyl-core`
@@ -589,6 +610,47 @@ jobs:
             exit 1
           }
 
+      # DC-F39 / DC-F40 / DC-F42 (DAEMON_CONFIG_CUTOVER.md §11): the daemon
+      # crates' tests on MSVC, the RPC crate among them (review 3 §3). Nothing ran them here before, and the first Windows
+      # run found a lib test that did not link (link.exe resolves every
+      # symbol an object references before it discards anything, where GNU
+      # ld and lld drop the unreferenced ones) and nine tests whose fixtures
+      # assumed `/` paths and LF line ends. BLOCKING, with a floor per lib
+      # test binary so a crate whose tests were cfg'd away or filtered out
+      # fails here instead of passing as nothing run (rule 47). shekyl-ffi's
+      # `dc_q21_a_fault_ends_with_its_code` writes a scratch per-application
+      # `LocalDumps` policy under HKLM for its own binary (DC-F44) and so
+      # needs an elevated session, which this runner is; it refuses with the
+      # reason, never skips, when it is not.
+      - name: "DC-F39: the daemon crates' tests link and pass on MSVC"
+        shell: pwsh
+        working-directory: rust
+        run: |
+          $PSNativeCommandUseErrorActionPreference = $false
+          cargo test --locked -p shekyl-options -p shekyl-daemon-config -p shekyl-daemon -p shekyl-daemon-rpc -p shekyl-ffi --no-fail-fast *> daemon-crates.out
+          $rc = $LASTEXITCODE
+          Get-Content daemon-crates.out
+          if ($rc -ne 0) { exit $rc }
+          # shekyl-daemon-rpc's console tests moved to shekyl-cli (R8). This
+          # floor is the lib that remains; Windows ran it at 184. shekyl-cli
+          # is covered by the Rust workspace job, not this MSVC link step.
+          # shekyl-ffi's account and KEM exports went with the C++ wallet
+          # account code (NETWORK_IDENTITY.md NI-R7), and their 19 tests with
+          # them; the floor is the lib that remains, which Windows ran at 214.
+          $floors = @{ 'shekyl_options-' = 25; 'shekyl_daemon-' = 30; 'shekyl_daemon_config-' = 60; 'shekyl_daemon_rpc-' = 184; 'shekyl_ffi-' = 214 }
+          $lines = Get-Content daemon-crates.out
+          foreach ($crate in $floors.Keys) {
+            $at = ($lines | Select-String -Pattern ("Running unittests .*\\" + [regex]::Escape($crate)) | Select-Object -First 1).LineNumber
+            if (-not $at) { Write-Error "no lib test binary ran for $crate"; exit 1 }
+            $result = $lines[$at..($lines.Length - 1)] | Select-String -Pattern 'test result: ok\. (\d+) passed' | Select-Object -First 1
+            if (-not $result) { Write-Error "no result line after the $crate lib tests"; exit 1 }
+            $passed = [int]$result.Matches[0].Groups[1].Value
+            if ($passed -lt $floors[$crate]) {
+              Write-Error "the $crate lib tests passed $passed on Windows; the floor is $($floors[$crate])"
+              exit 1
+            }
+          }
+
       # The pre-registered probes (docs/design/WINDOWS_WALLET_PROBE_SHEET.md).
       # BLOCKING, and that is the point of writing them down first: each probe
       # carries a prediction made before any Windows machine ran it, and the
@@ -736,7 +798,6 @@ jobs:
             -DSTATIC=ON `
             -DBUILD_SHARED_LIBS=OFF `
             -DBUILD_TESTS=ON `
-            -DSTACK_TRACE=OFF `
             -DCMAKE_TOOLCHAIN_FILE="$env:VCPKG_INSTALLATION_ROOT\scripts\buildsystems\vcpkg.cmake" `
             -DVCPKG_TARGET_TRIPLET=x64-windows-static
       # Daemon only. The C++ wallet stack was deleted at Phase 5, and the
@@ -752,6 +813,14 @@ jobs:
         # with the C++ chain.
         run: |
           pwsh -NoProfile -File scripts/ci/msvc_static_crt.ps1 -Stage link
+      # The PE half of the hardening gate on the linked daemon: PE32+ and
+      # DllCharacteristics with DYNAMIC_BASE, HIGH_ENTROPY_VA and NX_COMPAT
+      # (DAEMON_CONFIG_CUTOVER.md DC-Q21). The runner image's LLVM supplies
+      # llvm-readobj; the script also reads dumpbin's shape inside a
+      # developer shell. `/GS` leaves no header mark and is not read here.
+      - name: binary hardening on the linked daemon (PE headers)
+        shell: bash
+        run: scripts/ci/check_binary_hardening.sh build/bin/Release/shekyld.exe
       - name: smoke-test daemon boot and stop
         shell: pwsh
         # The daemon's runtime gate on Windows: boot the built shekyld.exe

@@ -42,6 +42,7 @@ on:
     types: [checks_requested]
     branches: [dev]
   pull_request:
+    types: [opened, synchronize, reopened]
   push:
     branches: [dev, main]
 
@@ -158,6 +159,15 @@ jobs:
           # workflow edit.
           run_one "Workflow files parse and are well-formed" \
             python3 scripts/ci/check_workflows_parse.py
+          # A pull_request trigger filtered on branches does not run while a
+          # PR's base is another branch. That is how #1254 and #1259 merged
+          # with CodeQL and the doc gates never started. The `edited` type
+          # is refused too: it ran every workflow on each PR body edit with
+          # every job skipped, and the newest check run per name is the one
+          # the PR reports (#1264, #1267). This job has no path filter, so a
+          # workflow edit cannot hide from it.
+          run_one "pull_request triggers run on every base and only on code" \
+            python3 scripts/ci/check_pr_event_triggers.py
           # A setup step that fetches with a depth would make a developer's
           # shared clone shallow when the steps are run locally; it carries
           # the GITHUB_ACTIONS guard, and this holds every such step to it.
@@ -401,6 +411,17 @@ jobs:
           # a previous tag at a cut, so this lane holds its rule instead.
           run_one "Frozen-tuple gate self-test" \
             python3 scripts/ci/test_check_frozen_tuple.py
+          # A staging flag names a deadline release; the release-time gate
+          # refuses a cut at or past it while the flag exists (NI-R9 as
+          # amended 2026-11-04). It runs at a cut, so this lane holds its
+          # rule: precedence, refusal and an unreadable table failing.
+          run_one "Staging-deadline gate self-test" \
+            python3 scripts/release/check_staging_deadlines.py --selftest
+          # The same gate over the real table, at a tag below every
+          # deadline: a table it can no longer read fails here, per pull
+          # request, not first at a cut.
+          run_one "Staging-deadline gate reads the table" \
+            python3 scripts/release/check_staging_deadlines.py v0.0.1
           # TOR_SUPERVISOR.md §4.7: on Windows the managed tor inherits its
           # control socket inside a window the spawn lock keeps private.
           # Every Rust spawn in a crate whose image launches a managed tor

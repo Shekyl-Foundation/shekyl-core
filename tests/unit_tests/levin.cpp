@@ -190,11 +190,6 @@ namespace
             return synchronized_;
         }
 
-        virtual uint64_t get_current_blockchain_height() const final
-        {
-            return 0;
-        }
-
         virtual bool pool_has_tx(const crypto::hash &txid) const override final
         {
             if (throw_on_pool_check_)
@@ -302,7 +297,6 @@ namespace
         {
             using base_type = epee::net_utils::connection_context_base;
             static_cast<base_type&>(context_) = base_type{random_generator(), {}, is_incoming, false};
-            context_.m_state = cryptonote::cryptonote_connection_context::state_normal;
             handler_.after_init_connection();
         }
 

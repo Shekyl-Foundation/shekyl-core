@@ -1,0 +1,66 @@
+// Copyright (c) 2026, The Shekyl Foundation
+//
+// All rights reserved.
+// BSD-3-Clause
+
+//! `/get_info`, as the console reads it.
+//!
+//! Four commands read this method: `status`, `print_blockchain_info` (its
+//! negative-start form), `print_blockchain_dynamic_stats` and
+//! `alt_chain_info`; and three that render almost nothing else: `diff`,
+//! `version` and `print_pool_stats`. Until RK-5c they shared one bridged leg
+//! and a provisional struct holding exactly the fields they read. The method
+//! is native now, so they share the method itself and its one reply type
+//! ([`shekyl_rpc_types::GetInfoResponse`]).
+//!
+//! The property the provisional struct was built to hand over is kept, and
+//! is no longer this module's to keep: a renamed or removed member is a
+//! decode error naming it, never a confident zero, because the shared type
+//! defaults nothing.
+
+use shekyl_rpc_types::{GetInfoResponse, RestErrorEnvelope};
+
+use crate::daemon::DaemonClient;
+
+/// One `POST /get_info` to the daemon the operator named. The listener
+/// answers with what that listener discloses.
+pub(super) fn fetch_get_info(daemon: &DaemonClient) -> Result<GetInfoResponse, String> {
+    let raw = super::rest_post(daemon, "/get_info", b"{}".to_vec())?;
+    decode_get_info_ok(&raw)
+}
+
+/// A `/get_info` body decoded strictly, refused unless its status is OK.
+///
+/// For the one caller that fetches the body itself: `version`, which asks
+/// without the identity handshake.
+pub(super) fn decode_get_info_ok(raw: &[u8]) -> Result<GetInfoResponse, String> {
+    ok_or_status(decode_get_info(raw)?)
+}
+
+fn ok_or_status(reply: GetInfoResponse) -> Result<GetInfoResponse, String> {
+    if reply.status.is_ok() {
+        Ok(reply)
+    } else {
+        Err(reply.status.0)
+    }
+}
+
+/// The reply, else the daemon's error envelope, else a malformed-reply error
+/// that says what did not decode. The serde message is kept because it names
+/// the member: "missing field `height`" is what an operator on a version
+/// skew needs to read.
+fn decode_get_info(raw: &[u8]) -> Result<GetInfoResponse, String> {
+    match serde_json::from_slice::<GetInfoResponse>(raw) {
+        Ok(reply) => Ok(reply),
+        Err(shape) => match serde_json::from_slice::<RestErrorEnvelope>(raw) {
+            Ok(envelope) => Err(format!("get_info failed: {}", envelope.error)),
+            Err(_) => Err(format!("malformed get_info reply: {shape}")),
+        },
+    }
+}
+
+/// The network's name as the status line prints it: the row's name, on
+/// every network (`NETWORK_IDENTITY.md` NI-Q8; regtest is not mainnet).
+pub(super) const fn network_label(nettype: shekyl_rpc_types::Network) -> &'static str {
+    nettype.name()
+}

@@ -43,12 +43,16 @@ use super::*;
 /// sink. A transaction the origin's own wallet submits is a local origin, and
 /// a local origin takes the stem slot whatever the epoch draw
 /// (`Relay::plan_relay`), so the origin sends it to the sink on the stem and
-/// records it `stem`, embargoed. The sink runs `--no-sync`, never reports
-/// itself synchronized, and drops the transaction on receipt — so nothing
-/// fluffs it back. It stays `stem` on the origin until the origin's own
-/// embargo expires. The flag is load-bearing: a second daemon that
-/// synchronizes normally stems the transaction straight back, the origin
-/// upgrades the second arrival to fluff, and the hold is over in seconds.
+/// records it `stem`, embargoed. The sink runs `--dev-sync off`: it
+/// requests nothing and follows the origin by announcements alone, so once
+/// the origin has mined ahead (every walk here mines a coinbase to
+/// maturity before it spends) the sink is `Behind` and ignores the
+/// transaction on receipt, and nothing fluffs it back. It stays `stem` on
+/// the origin until the origin's own embargo expires. The flag is
+/// load-bearing: a second daemon that requests the chain catches up,
+/// stems the transaction straight back (its outbound session to the
+/// origin is a stem successor), the origin upgrades the second arrival to
+/// fluff, and the hold is over in seconds.
 ///
 /// **What the rig does not fix.** The embargo is a draw (geometric, mean
 /// 190 s on clearnet) with no lever, so a short one can end mid-assertion.
@@ -687,29 +691,12 @@ async fn restricted_listener_names_a_transaction_this_node_shows() {
     );
 }
 
-/// The console commands that read `get_info` answer on the daemon's **own**
-/// console.
-///
-/// RK-5c's half of the gate above. `get_info` is served in Rust, and seven
-/// console commands read it. Four were already rendered in Rust over a
-/// bridged leg and now call the method directly; three — `diff`, `version`
-/// and `print_pool_stats` — were rendered in C++ by calling the handler,
-/// and moved because that handler is deleted next.
-///
-/// On the in-process arm nothing crosses HTTP: the console calls the native
-/// method over the live core, with full disclosure, since the operator at
-/// the daemon's own console is the host's administrator. What this pins is
-/// that each command reaches that core and renders its own text rather than
-/// a transport failure — the failure RK-4c shipped, silently, because
-/// nothing exercised this arm.
-///
-/// `print_pool_stats` also reads `/get_transaction_pool_stats`, which is
-/// still served from the C++ dispatch table (RK-6). That bridged leg is
-/// covered here so that the slice which deletes the route turns this red.
+/// `daemon status`, `chain difficulty`, `version` and `txpool stats`
+/// answer through `shekyl-cli` on an offline regtest daemon.
 #[tokio::test]
-#[ignore = "Track-2 regtest: requires SHEKYLD_BIN; spawns a live daemon"]
-async fn get_info_console_commands_answer_on_the_in_process_arm() {
-    let mut daemon = RegtestDaemon::start_with_console().await;
+#[ignore = "requires SHEKYLD_BIN and SHEKYL_CLI_BIN; spawns a live daemon"]
+async fn daemon_words_answer_through_shekyl_cli() {
+    let daemon = RegtestDaemon::start().await;
     let info: GetInfoResponse = daemon
         .rpc()
         .json_rpc_call("get_info", None)
@@ -724,14 +711,14 @@ async fn get_info_console_commands_answer_on_the_in_process_arm() {
         .clone();
     assert!(!version.is_empty(), "the daemon reports a version");
 
-    let out = daemon.console("status");
+    let out = daemon.console("daemon status");
     assert!(
         out.contains("Height: 1/1 (100.0%)") && out.contains("uptime"),
         "the in-process status line must read the live core, start time \
          included; got:\n{out}"
     );
 
-    let out = daemon.console("diff");
+    let out = daemon.console("chain difficulty");
     assert!(
         out.contains(&format!("BH: 1, TH: {top_hash}, DIFF: ")),
         "the in-process diff must name the live tip; got:\n{out}"
@@ -744,14 +731,19 @@ async fn get_info_console_commands_answer_on_the_in_process_arm() {
          ({version}); got:\n{out}"
     );
 
-    let out = daemon.console("print_pool_stats");
+    let out = daemon.console("txpool stats");
     assert!(
         out.contains("0 tx(es), 0 bytes total") && out.contains("no backlog"),
         "the in-process print_pool_stats must render an empty pool from both \
          of its legs; got:\n{out}"
     );
 
-    for command in ["status", "diff", "version", "print_pool_stats"] {
+    for command in [
+        "daemon status",
+        "chain difficulty",
+        "version",
+        "txpool stats",
+    ] {
         let out = daemon.console(command);
         assert!(
             !out.contains("no reply") && !out.contains("console command failed"),

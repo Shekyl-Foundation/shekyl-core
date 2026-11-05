@@ -62,16 +62,4 @@ namespace cryptonote
     bool m_tx_extra_too_big;
     bool m_nonzero_unlock_time;
   };
-
-  struct block_verification_context
-  {
-    // Opaque SHEKYL_BLOCK_INGEST_* byte. Write non-reject arms through
-    // record_block_ingest; rejections through reject_block_* (Rust pairs
-    // the drop slot). P2P asks block_announce_action / block_sync_action,
-    // not these bytes. Zero is Unclassified: not added, not rejected.
-    uint8_t m_outcome = 0;
-    // PWD-B7. Opaque SHEKYL_DROP_VERDICT_* byte. Write through reject_block_*
-    // (paired) or classify_drop. Zero does not sever.
-    uint8_t m_drop_verdict = 0;
-  };
 }

@@ -142,9 +142,9 @@ impl RpcError {
 
 /// This wallet's wording of an identity refusal, one sentence per axis.
 ///
-/// The console words the same verdict its own way
-/// (`shekyl-daemon-rpc`'s `console_identity_message`); the axes themselves
-/// are compared once, in [`shekyl_rpc_types::IdentityExpectation::read`].
+/// The shell words the same verdict its own way
+/// (`shekyl-cli`'s `identity_line`); the axes themselves are compared once,
+/// in [`shekyl_rpc_types::IdentityExpectation::read`].
 fn identity_refusal(mismatch: &IdentityMismatch) -> String {
     match *mismatch {
         IdentityMismatch::Wire { ours, theirs } => {

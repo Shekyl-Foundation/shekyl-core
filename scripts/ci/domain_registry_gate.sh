@@ -384,7 +384,21 @@ count_pattern() {
 # rust/shekyl-wire/src/transaction/signing_preimage.rs (`signed_hash`)
 # under shekyl/fcmp-spend-signing-v1: the spend signature's hash binds the
 # network id.
-MECH1_EXPECTED=83
+# Network name binding (2026-11-04, NI-R16; the signing envelope §2.6):
+# 83 -> 84 (beside NI-Q4's site above). One site in rust/shekyl-network/src/tests.rs
+# (`the_name_id_is_the_tags_cshake`) recomputes each row's name_id under
+# the new domain shekyl/network-name-v1, registered with it. The rows hold
+# name_id as constants, so production adds no call.
+# NI PR 2's binding tests (2026-11-04, NI-F2, NI-F11, NI-F13): 84 -> 88.
+# Four #[cfg(test)] sites under domains already registered, no production
+# site: two in rust/shekyl-address/src/multisig_address.rs
+# (`the_fingerprint_starts_with_the_networks_name`, which hashes the
+# fingerprint input with and without the name), one in
+# rust/shekyl-archival-retention/src/emission_wire.rs
+# (`auth_msg_is_stable_role_separated_and_non_replayable`), one in
+# rust/shekyl-crypto-pq/src/message_signing.rs (`armored_tamper_battery`).
+# PR 2 had them at 87 against a pin of 83 before PR 1's site above joined.
+MECH1_EXPECTED=88
 mech1=$(count_pattern 'cshake256_(?:32|64)\(|CShake256Core::new\(')
 if [[ "$mech1" != "$MECH1_EXPECTED" ]]; then
   echo "COUNT DRIFT mech 1 (cSHAKE call sites): found $mech1, pinned $MECH1_EXPECTED." >&2

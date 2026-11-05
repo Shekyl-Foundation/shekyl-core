@@ -41,13 +41,12 @@
 #include "shekyl_ffi_generated_tx_extra_codec.h"
 #include "shekyl_ffi_generated_rpc_peerlist.h"
 #include "shekyl_ffi_generated_close_cause.h"
-#include "shekyl_ffi_generated_daemon_entry.h"
+#include "shekyl_ffi_generated_daemon_stop.h"
 #include "shekyl_ffi_generated_daemon_rpc.h"
 #include "shekyl_ffi_generated_notify.h"
 #include "shekyl_ffi_generated_data_dir.h"
 #include "shekyl_ffi_generated_daemon_snapshot.h"
-#include "shekyl_ffi_generated_sync.h"
-#include "shekyl_ffi_generated_ingest.h"
+#include "shekyl_ffi_generated_chain_sync.h"
 
 int main()
 {

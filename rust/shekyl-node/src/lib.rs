@@ -53,17 +53,25 @@
 //! keys, while chain sync's state reads `Synced`: from open on regtest,
 //! and on every other network once chain sync's cutover publishes. With no
 //! address it posts nothing, and [`Node::posting`] says why. The miner
-//! ([`MiningControl`]) hashes what is posted; it is started on request,
-//! never at open. Stop withdraws the board.
+//! ([`MiningControl`]) hashes what is posted. With `mine = on` the daemon's
+//! sequence starts it once, after [`Node::open`] returns, with the
+//! `mine-threads` count (`start(None)`); it idles until a job is posted.
+//! Off, it starts on `start_mining`. Either way `start_mining` and
+//! `stop_mining` act on the running node, and a restart returns to the
+//! configuration. Stop withdraws the board.
 
 #![deny(unsafe_code)]
 
 mod facts;
 mod genesis;
 mod mining;
+mod producer;
+mod sync_owner;
 
 pub use facts::free_bytes;
 pub use mining::{MiningControl, MiningRefused, MiningStatus, PostedJob};
+pub use producer::descriptors as producer_descriptors;
+pub use shekyl_chain_sync::Declaration;
 
 use std::num::NonZeroUsize;
 use std::sync::{Arc, Mutex, PoisonError};
@@ -79,7 +87,8 @@ use shekyl_chain_rules::{AdmissionPolicy, FakechainSchedule, GenesisPin, RuleSet
 use shekyl_chain_store::apply_policy::ApplyPolicy;
 use shekyl_chain_store::pool::PoolOpen;
 use shekyl_chain_store::store::{ChainStore, CutShort, Horizons, SnapshotView};
-use shekyl_chain_sync::SyncState;
+use shekyl_chain_sync::{Requesting, SyncState};
+use shekyl_chain_sync_runtime::executor::Executor;
 use shekyl_daemon_config::sections::{DaemonConfig, Dev};
 use shekyl_daemon_rpc::handles::Handles;
 use shekyl_daemon_rpc::store_facts::{NodeIdentity, RulesAt, StoreFacts};
@@ -104,17 +113,20 @@ fn blocking_threads(permits: NonZeroUsize, window: NonZeroUsize) -> NonZeroUsize
     permits.saturating_add(window.get()).saturating_add(1)
 }
 
-/// Chain sync's state once the node has opened, published after genesis
-/// has connected (`DRS_X_STORE_FLIP.md` DX-Q3, Q13): `Synced` on regtest,
-/// which has no network to be behind, and `NoView` on every other network
-/// until chain sync's cutover publishes. The network selects this value
-/// and nothing else (rule 71).
-const fn sync_at_open(network: shekyl_daemon_config::Network) -> SyncState {
-    match network {
-        shekyl_daemon_config::Network::Regtest => SyncState::Synced,
-        shekyl_daemon_config::Network::Mainnet
-        | shekyl_daemon_config::Network::Testnet
-        | shekyl_daemon_config::Network::Stagenet => SyncState::NoView,
+/// The operator's declaration of the node's network (CS-Q2 step 8), from
+/// the resolved configuration: `Offline` when both connectors are off,
+/// `Closed` when the peer list is closed, `Open` otherwise. Configuration,
+/// never the network type (rule 71). Public so the daemon's start can say,
+/// before the node opens, that an `Open` node's miner waits for a view
+/// (`shekyl-daemon`'s mining notice, DC-F41).
+#[must_use]
+pub fn declaration(config: &DaemonConfig) -> Declaration {
+    if config.offline() {
+        Declaration::Offline
+    } else if !config.p2p.closed_peers.is_empty() {
+        Declaration::Closed
+    } else {
+        Declaration::Open
     }
 }
 
@@ -122,6 +134,10 @@ const fn sync_at_open(network: shekyl_daemon_config::Network) -> SyncState {
 /// before the runtime detaches it. The connector has already finished; this
 /// bound is only the runtime's, and it is not a protocol constant.
 const RUNTIME_SHUTDOWN: Duration = Duration::from_secs(5);
+
+/// How long chain sync's blocking work (a proof or a store read) may run
+/// after its owner is told to stop. Not a protocol constant.
+const SYNC_OWNER_SHUTDOWN: Duration = Duration::from_secs(5);
 
 /// Why [`Node::open`] refused.
 #[derive(Debug, thiserror::Error)]
@@ -163,6 +179,9 @@ pub enum OpenError {
     /// The ingest service did not answer at open.
     #[error("the ingest service did not answer: {0}")]
     Service(String),
+    /// Chain sync's owner did not start.
+    #[error("chain sync did not start: {0}")]
+    Sync(String),
 }
 
 /// What [`Node::open`] needs from the composition root, which holds `main`.
@@ -179,6 +198,23 @@ pub struct OpenArgs<'a> {
     /// The stop latch. `shekyl-daemon` passes `signals::request_stop`,
     /// because this crate cannot depend on the binary.
     pub request_stop: Arc<dyn Fn() + Send + Sync>,
+    /// The shell's relay entry, handed in the same way (DC-F43): `true`
+    /// when the relay took the committed transaction's blob; `false` is no
+    /// route (no notifier bound, whatever the reason), and the node shows
+    /// the transaction at the origin. The binary passes the C++
+    /// `shekyl_shell_relay_local`; a test passes [`no_relay`]. RD deletes
+    /// it with `levin_notify`.
+    pub relay_local: RelayLocal,
+}
+
+/// The shell's relay entry, as [`OpenArgs::relay_local`] takes it.
+pub type RelayLocal = Arc<dyn Fn(&[u8]) -> bool + Send + Sync>;
+
+/// A [`RelayLocal`] with no route: an offline node's, and a test's. Every
+/// transaction it is handed is shown at the origin.
+#[must_use]
+pub fn no_relay() -> RelayLocal {
+    Arc::new(|_| false)
 }
 
 struct Slots {
@@ -206,6 +242,9 @@ pub struct Node {
     sockets: Sockets,
     handles: Handles,
     service: Mutex<Option<Service<ProductionSubstrate>>>,
+    /// Chain sync's owner (CS-5 §2), the node's for its lifetime. It
+    /// publishes into [`Self::sync`], and the seam's bind hands it the hub.
+    sync_owner: Mutex<Option<shekyl_chain_sync_runtime::owner::Running>>,
     runtime: Mutex<Option<shekyl_runtime::Pool>>,
     /// The hasher budget `pow_hash` acquires under. The facts-lock test
     /// holds its permits; production does not keep a second copy.
@@ -238,6 +277,8 @@ impl Node {
         ));
         let pool = open_pool(&store, &pool_path, rules)?;
         let submit_pool = Arc::clone(&pool);
+        let complement_pool = Arc::clone(&pool);
+        let sync_substrate = ProductionSubstrate::clone(&substrate);
         let departed = pool_departed();
         // Q9: fluff at this tip rebuilds the posted job. Same Notify the
         // follower waits on for parked bodies.
@@ -258,9 +299,10 @@ impl Node {
         let sockets = Sockets::new();
         let board = Arc::new(JobBoard::new());
         let network = args.config.network;
+        let declared = declaration(args.config);
         // No view until genesis has connected, so the follower never builds
-        // a genesis of its own; the network's state at open is published
-        // after (`sync_at_open`).
+        // a genesis of its own; the declaration's state at open is published
+        // after.
         let (sync, sync_rx) = tokio::sync::watch::channel(SyncState::NoView);
         let (found, found_inbox) = shekyl_miner::found_blocks();
         let (posting_tx, posting) =
@@ -278,7 +320,7 @@ impl Node {
         // Every template draws its `0x0C` commitment from this ring, and the
         // bundle producer files from it (`SO-D12` increment 4c).
         let witness = Arc::new(shekyl_bundle_producer::WitnessRing::new());
-        let producer = producer_seat(args.config, &store, &witness);
+        let producer = producer::seat(args.config, &store, &witness);
         let follow = Follow {
             job: Some(JobSeat {
                 board: Arc::clone(&board),
@@ -298,6 +340,9 @@ impl Node {
             }),
             producer,
             shown: Some(shown),
+            // The substrate's own sink, which the sync owner's executor
+            // shares: every phase of the per-block profile in one place.
+            metrics: Some(Arc::clone(substrate.metrics())),
         };
         let service_config = ServiceConfig::default();
         let runtime = shekyl_runtime::runtime(
@@ -323,16 +368,12 @@ impl Node {
                 }
                 return Err(error);
             }
-            // The handler's arrivals enter this door (DX-Q2 item 2). The
-            // pump runs on this runtime; unbind must not.
-            shekyl_ffi::ingest_ffi::install(service.door(), tokio::runtime::Handle::current());
             Ok(service)
         });
         let service = match started {
             Ok(service) => service,
             Err(error) => {
-                uninstall_process_doors();
-                runtime.shutdown(RUNTIME_SHUTDOWN);
+                abandon_open(runtime, OpenUnwind::ServiceStopped);
                 return Err(error);
             }
         };
@@ -344,31 +385,63 @@ impl Node {
         let (tips, latch) = match subscribed {
             Ok(pair) => pair,
             Err(error) => {
-                uninstall_process_doors();
-                if let Err(stop) = runtime.block_on(service.stop()) {
-                    tracing::error!(
-                        "a connector watch did not open, and the service stopped on {stop}"
-                    );
-                }
-                runtime.shutdown(RUNTIME_SHUTDOWN);
+                abandon_open(
+                    runtime,
+                    OpenUnwind::StillRunning {
+                        service,
+                        why: "a connector watch did not open",
+                    },
+                );
                 return Err(OpenError::Service(error.to_string()));
+            }
+        };
+        let sync_owner = match sync_owner::spawn(sync_owner::Parts {
+            store: Arc::clone(&store),
+            door: service.door(),
+            alarm: service.alarm(),
+            tips: tips.clone(),
+            latch: latch.clone(),
+            executor: Arc::new(Executor::new(budget.clone(), sync_substrate)),
+            rules,
+            requesting: if args.config.dev.sync {
+                Requesting::On
+            } else {
+                Requesting::Off
+            },
+            declaration: declared,
+            pool: complement_pool,
+            state: sync.clone(),
+        }) {
+            Ok(owner) => owner,
+            Err(error) => {
+                abandon_open(
+                    runtime,
+                    OpenUnwind::StillRunning {
+                        service,
+                        why: "chain sync did not start",
+                    },
+                );
+                return Err(error);
             }
         };
         // DX-Q2 item 5: the dialer's outbound handshake is a consumer of the
         // one tip source. Publish the tip the watch holds now, then every
         // change; the task ends when the connector drops its sender.
+        // The first tip is published here, before open returns: the seam
+        // binds after, so no handshake, inbound or outbound, finds none
+        // (CS-5 F4, `shekyl_p2p_handshake_tip`).
         let mut handshake_tips = tips.clone();
+        if let Some(tip) = handshake_tips.borrow_and_update().tip {
+            shekyl_ffi::dialer_ffi::publish_chain_tip(&tip);
+        }
         // The ban timer is the table's, not the zone host's. An offline
         // node never starts a zone, and a finite ban would otherwise stay
         // in force after its deadline (OE-D9: a lookup does not end one).
         shekyl_ffi::seam_ffi::bans::start(runtime.handle(), sockets.clone());
         runtime.spawn(async move {
-            loop {
+            while handshake_tips.changed().await.is_ok() {
                 if let Some(tip) = handshake_tips.borrow_and_update().tip {
                     shekyl_ffi::dialer_ffi::publish_chain_tip(&tip);
-                }
-                if handshake_tips.changed().await.is_err() {
-                    break;
                 }
             }
         });
@@ -389,15 +462,17 @@ impl Node {
                 move |fault| health.retire(fault)
             }))
             .nudging(Arc::new({
-                // The shell answers 0 only when no relay exists: an offline
-                // node never constructs one, so there is no network to hide
-                // from and the transaction is shown at once (RX-2, Rick
-                // 2026-10-29). With a relay, the answer is 1 before the zone
-                // plans on its strand, so `NoOwnEdge` and `AwaitSync` never
-                // reach this branch: the zone holds those (`hold_origin`),
-                // neither fluffed nor shown.
+                // The shell answers `false` only when no relay exists: an
+                // offline node never constructs one, so there is no network
+                // to hide from and the transaction is shown at once (RX-2,
+                // Rick 2026-10-29). With a relay, the answer is `true`
+                // before the zone plans on its strand, so `NoOwnEdge` and
+                // `AwaitSync` never reach this branch: the zone holds those
+                // (`hold_origin`), neither fluffed nor shown. An empty blob
+                // is nothing to relay.
+                let relay_local = args.relay_local;
                 move |txid, blob| {
-                    if !relay_local(blob) {
+                    if blob.is_empty() || !relay_local(blob) {
                         shekyl_ffi::pool_ffi::note_shown(*txid);
                     }
                 }
@@ -405,9 +480,9 @@ impl Node {
             .departing(Arc::clone(&departed)),
         );
         let rewinder = service.rewinder();
-        let at_open = sync_at_open(network);
+        let at_open = declared.state_at_open();
         tracing::info!(
-            "chain sync's state at open: {at_open:?}; the node posts a template only while it reads Synced"
+            "chain sync's state at open: {at_open:?} (declared {declared:?}); the node posts a template only while it reads Synced"
         );
         sync.send_replace(at_open);
         let door = service.door();
@@ -417,20 +492,30 @@ impl Node {
             offline: args.config.offline(),
             sync: sync_rx,
             latch,
+            view: sync_owner.view(),
             health: pool_health.clone(),
         });
-        let mining = Arc::new(MiningControl::new(
-            Arc::clone(&board),
-            Arc::clone(&caches),
-            budget.clone(),
-            found,
-            miner_address,
-            mining::Watched {
-                posting: posting.clone(),
-                tips: tips.clone(),
-            },
-            pool_health.clone(),
-        ));
+        let mining =
+            Arc::new(MiningControl::new(
+                Arc::clone(&board),
+                Arc::clone(&caches),
+                budget.clone(),
+                found,
+                mining::Configured {
+                    address: miner_address,
+                    // A u32 count fits a usize on every target the node builds
+                    // for; one that did not would be a row's refusal, not a
+                    // silent clamp.
+                    threads: args.config.mine.threads.map(|count| {
+                        NonZeroUsize::try_from(count).expect("a u32 count fits a usize")
+                    }),
+                },
+                mining::Watched {
+                    posting: posting.clone(),
+                    tips: tips.clone(),
+                },
+                pool_health.clone(),
+            ));
         let started_at = facts::unix_now();
         #[cfg(test)]
         let test_budget = budget.clone();
@@ -464,7 +549,7 @@ impl Node {
             pool: pool_slot,
             door: door_slot,
         });
-        Ok(Self {
+        let node = Self {
             slots,
             sync,
             posting,
@@ -473,10 +558,12 @@ impl Node {
             sockets,
             handles,
             service: Mutex::new(Some(service)),
+            sync_owner: Mutex::new(Some(sync_owner)),
             runtime: Mutex::new(Some(runtime)),
             #[cfg(test)]
             budget: test_budget,
-        })
+        };
+        Ok(node)
     }
 
     /// The handles the RPC server carries.
@@ -564,6 +651,16 @@ impl Node {
         // The process doors hold the store (`Door::admission`); leave them
         // up and `chain.db` stays exclusive after this node has stopped.
         uninstall_process_doors();
+        // Chain sync after the RPC's last read (the composition root stops
+        // the RPC first) and before the service it offers into.
+        if let Some(owner) = self
+            .sync_owner
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
+            .take()
+        {
+            owner.stop(SYNC_OWNER_SHUTDOWN);
+        }
         let Some(runtime) = self
             .runtime
             .lock()
@@ -626,97 +723,6 @@ impl RulesAt for RulesOf {
     }
 }
 
-/// The bundle producer, for a node that mines and has a Tor (`SO-D12`
-/// increment 4c).
-///
-/// Only a mining daemon is a witness. The producer reads each drawn pair's
-/// shard through the daemon's fetch scheduler over the store's facts, and
-/// the scheduler dials through this node's Tor: an operator's at its
-/// `tor-socks` endpoint, or the managed one at the route its supervisor
-/// publishes, read at each fetch (`TOR_SUPERVISOR.md` §4.5, `TSR-F10`). The
-/// managed route appears after the node opens and moves when Tor respawns;
-/// a read while there is none is a stall that retries, and nothing is sent.
-/// A node with Tor off runs no producer: the templates still draw from the
-/// ring, which keeps its bound, and the node says once why it files nothing.
-///
-/// Only the endpoint of the operator's SOCKS row is used. The fetch client
-/// presents credentials derived from each read's nonce (`SF-D3`: a fresh
-/// circuit per read through `IsolateSOCKSAuth`), so a configured
-/// `tor-socks-username`/`password` pair is not sent, and a proxy that
-/// authenticates refuses every read.
-fn producer_seat(
-    config: &DaemonConfig,
-    store: &Arc<ChainStore>,
-    witness: &Arc<shekyl_bundle_producer::WitnessRing>,
-) -> Option<shekyl_chain_ingest::bundle_producer::ProducerSeat> {
-    use shekyl_archival_fetch_sched::{FetchScheduler, PFetchClient};
-    use shekyl_chain_ingest::shard_facts::{StoreHolderSource, StoreShardFacts};
-    let Some(tor) = producer_tor(config) else {
-        if config.mine.address.is_some() {
-            tracing::info!(
-                "the bundle producer is off: it reads through this node's Tor, and Tor is off"
-            );
-        }
-        return None;
-    };
-    let timeouts = shekyl_bundle_producer::read::CHALLENGE_TIMEOUTS;
-    let client = match tor {
-        ProducerTor::Operator(endpoint) => PFetchClient::with_timeouts(endpoint, timeouts),
-        ProducerTor::Managed => {
-            PFetchClient::with_route(Arc::new(shekyl_ffi::zone_ffi::managed_socks), timeouts)
-        }
-    };
-    let scheduler = Arc::new(FetchScheduler::new(
-        Arc::new(StoreShardFacts::new(Arc::clone(store))),
-        Arc::new(StoreHolderSource::new(Arc::clone(store))),
-        client,
-    ));
-    Some(shekyl_chain_ingest::bundle_producer::ProducerSeat {
-        witness: Arc::clone(witness),
-        read: shekyl_chain_ingest::bundle_producer::read_through(scheduler),
-        start_spread: shekyl_bundle_producer::READ_START_SPREAD,
-    })
-}
-
-/// The Tor the bundle producer reads through.
-enum ProducerTor {
-    /// The operator's, at its `tor-socks` endpoint.
-    Operator(std::net::SocketAddr),
-    /// The managed one, at the route its supervisor publishes.
-    Managed,
-}
-
-/// The Tor the bundle producer reads through, when this configuration runs
-/// it: the node mines and has a Tor. `None` runs no producer. The one
-/// decision [`producer_seat`] and [`producer_descriptors`] both read.
-fn producer_tor(config: &DaemonConfig) -> Option<ProducerTor> {
-    use shekyl_daemon_config::sections::Tor;
-    config.mine.address.as_ref()?;
-    match &config.tor {
-        Tor::Operator { socks, .. } => Some(ProducerTor::Operator(socks.endpoint)),
-        Tor::Managed { .. } => Some(ProducerTor::Managed),
-        Tor::Off => None,
-    }
-}
-
-/// The descriptors the bundle producer can hold, for the daemon's inbound
-/// ceiling: each started read holds one SOCKS stream for as long as it
-/// holds a slot of the fetch client, and the producer starts at most
-/// [`READS_AT_ONCE`](shekyl_bundle_producer::read::READS_AT_ONCE), the
-/// client's slots. Zero when this configuration runs no producer, under
-/// either Tor.
-#[must_use]
-pub fn producer_descriptors(config: &DaemonConfig) -> u64 {
-    if producer_tor(config).is_none() {
-        return 0;
-    }
-    // One stream per fetch slot. `READS_AT_ONCE` is the client's slot count,
-    // and that count fits a descriptor count on every platform this node
-    // builds for.
-    u64::try_from(shekyl_bundle_producer::read::READS_AT_ONCE.get())
-        .expect("READS_AT_ONCE fits a descriptor count")
-}
-
 fn wall_now() -> UnixSeconds {
     UnixSeconds::from_raw(facts::unix_now())
 }
@@ -727,37 +733,6 @@ fn wall_now() -> UnixSeconds {
 /// can empty it between the release and any later count.
 fn pool_departed() -> shekyl_chain_ingest::service::Departed {
     Arc::new(shekyl_ffi::relay_zone_ffi::note_departed)
-}
-
-/// The shell's relay entry. RD deletes it with `levin_notify`. `true`
-/// when the relay took the blob; `false` is no route (no notifier bound,
-/// whatever the reason), and the caller applies the fluff at the origin.
-fn relay_local(blob: &[u8]) -> bool {
-    if blob.is_empty() {
-        return false;
-    }
-    relay_local_ffi(blob) != 0
-}
-
-#[cfg(not(test))]
-#[allow(unsafe_code)]
-fn relay_local_ffi(blob: &[u8]) -> i32 {
-    // SAFETY: `blob` is a live slice. The shell answers 0 to a call before
-    // `core::init` returns.
-    unsafe { shekyl_shell_relay_local(blob.as_ptr(), blob.len()) }
-}
-
-#[cfg(test)]
-fn relay_local_ffi(blob: &[u8]) -> i32 {
-    shekyl_shell_relay_local(blob.as_ptr(), blob.len())
-}
-
-// The C++ shell's one relay entry. The node is the caller; the shell is
-// the definition. Unit tests supply the symbol themselves.
-#[cfg(not(test))]
-#[allow(unsafe_code)]
-unsafe extern "C" {
-    fn shekyl_shell_relay_local(blob: *const u8, len: usize) -> i32;
 }
 
 fn rules_of(config: &DaemonConfig) -> Result<ChainRules, OpenError> {
@@ -791,9 +766,36 @@ fn schedule_of(dev: &Dev) -> Result<FakechainSchedule, OpenError> {
 /// with this; a stop or a failed open that already installed must call it,
 /// or the next open in this process meets `DatabaseAlreadyOpen`.
 fn uninstall_process_doors() {
-    shekyl_ffi::ingest_ffi::uninstall();
     shekyl_ffi::pool_ffi::uninstall();
+    // A slot no bind took: its hub sender drops, and an owner still
+    // waiting for the hub ends.
+    shekyl_ffi::chain_sync_ffi::uninstall();
     shekyl_daemon_rpc::submit::clear_production();
+}
+
+/// How far [`Node::open`] got when it fails, so the service is stopped
+/// once. Genesis connect stops the service itself before it returns.
+enum OpenUnwind {
+    /// The service already stopped.
+    ServiceStopped,
+    /// The service is still running.
+    StillRunning {
+        service: Service<ProductionSubstrate>,
+        /// Named when that stop itself fails.
+        why: &'static str,
+    },
+}
+
+/// Uninstall the process doors, stop a service that is still running, and
+/// shut the runtime down. The log line keeps the step that failed.
+fn abandon_open(runtime: shekyl_runtime::Pool, unwind: OpenUnwind) {
+    uninstall_process_doors();
+    if let OpenUnwind::StillRunning { service, why } = unwind {
+        if let Err(stop) = runtime.block_on(service.stop()) {
+            tracing::error!("{why}, and the service stopped on {stop}");
+        }
+    }
+    runtime.shutdown(RUNTIME_SHUTDOWN);
 }
 
 fn open_chain(
@@ -933,12 +935,3 @@ async fn connect_genesis(
 
 #[cfg(test)]
 mod tests;
-
-/// The daemon binary supplies this from C++. Unit tests link no C++, so
-/// a test node has no route: its own transactions fluff at the origin.
-#[cfg(test)]
-#[allow(unsafe_code)]
-#[no_mangle]
-extern "C" fn shekyl_shell_relay_local(_blob: *const u8, _len: usize) -> i32 {
-    0
-}

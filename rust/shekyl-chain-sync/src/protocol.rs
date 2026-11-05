@@ -78,6 +78,10 @@ pub enum Event<K> {
         /// Seats free.
         seats: u32,
     },
+    /// The ingest window's cache slots changed: a seed they did not hold
+    /// may be held now. A session whose headers could not be proven for
+    /// that reason ([`Proved::NotHeld`]) is drawn again.
+    Seeds,
     /// The header request's deadline passed.
     Deadline {
         /// The session the request was drawn for.
@@ -131,10 +135,11 @@ pub enum Proved {
     /// A [`CachePlan::Main`] seed is not in either cache slot. The executor
     /// looks a main seed up and never derives it (B2), so the header cannot
     /// be proven against this window. Not the peer's fault: the run is
-    /// dropped and the session kept. A later header request fetches it
-    /// again, against the window the tip has moved to by then. Dropping the
-    /// run, not only the proof, is what stops the same plan being issued
-    /// again on the same event.
+    /// dropped and the session kept, closed to header draws until the
+    /// slots change ([`Event::Seeds`]), when the next header request
+    /// fetches the headers again against the window as it stands then.
+    /// Dropping the run, not only the proof, is what stops the same plan
+    /// being issued again on the same event.
     NotHeld,
 }
 
@@ -155,6 +160,33 @@ pub enum Command<K> {
         /// The sparse locator.
         request: RequestHeaders,
         /// When the response is late.
+        deadline: Instant,
+    },
+    /// Wake the model at `deadline` with `Event::Deadline { session, request:
+    /// id }`: the opening's bound, the first session's header deadline
+    /// (CS-Q2 step 8). It fires whether or not `session` is still open.
+    ArmOpening {
+        /// The session the opening started with.
+        session: K,
+        /// The id `Deadline` carries back.
+        id: u64,
+        /// The first session's header deadline.
+        deadline: Instant,
+    },
+    /// Wake the model at `deadline` with `Event::Deadline { session, request:
+    /// id }` for the evidence draw. A header response records a candidate
+    /// and does not draw, so responses arriving together are drawn over as
+    /// a set; the wake is the draw's bound when nothing else arrives (the
+    /// §10 partition regtest: a node whose one peer served its heavier chain
+    /// and then went quiet never began the check). One is armed at a time.
+    ArmDraw {
+        /// The session whose response recorded the candidate.
+        session: K,
+        /// The id `Deadline` carries back.
+        id: u64,
+        /// That session's declared transit from the response: a response
+        /// another session is sending to a request of the same round is
+        /// about that far away.
         deadline: Instant,
     },
     /// Bodies along `H*`.
@@ -211,8 +243,10 @@ pub enum Command<K> {
     Relay {
         /// The block.
         hash: BlockHash,
-        /// The session that supplied it.
-        from: K,
+        /// The session that supplied it. `None` is a tip no session
+        /// supplied, such as a block this node mined: it goes to every
+        /// established session.
+        from: Option<K>,
     },
     /// An announce is missing transactions.
     RequestMissingTxs {
@@ -223,6 +257,47 @@ pub enum Command<K> {
         /// The missing indices.
         indices: Vec<u64>,
     },
+    /// This session's headers from `H*` yielded nothing, and it is not
+    /// drawn to extend `H*` again until its claim or `H*` changes. A
+    /// record: the owner logs it, and nothing is sent.
+    HeadersSpent {
+        /// The session.
+        session: K,
+        /// What the response, or its proof, came to.
+        cause: Spent,
+    },
+    /// This session's headers could not be proven: the cache for `seed`
+    /// was in neither of the ingest window's slots ([`Proved::NotHeld`]).
+    /// The run is dropped and the session is not drawn for headers until
+    /// the slots change ([`Event::Seeds`]). A record: the owner logs it,
+    /// and nothing is sent. The owner also reads the window it holds: a
+    /// pair that holds `seed` by the time this command is handled was
+    /// published between the lookup and now, and its change event may
+    /// already have passed, so the owner raises [`Event::Seeds`] at the
+    /// end of the batch.
+    SeedNotHeld {
+        /// The session.
+        session: K,
+        /// The seed the slots did not hold.
+        seed: BlockHash,
+    },
+}
+
+/// Why a session's headers from `H*` yielded nothing
+/// ([`Command::HeadersSpent`]). Each is an answer that asking again, from
+/// the same `H*`, would repeat.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Spent {
+    /// The response named no header `T` lacked, and the peer said its
+    /// chain ends there.
+    Exhausted,
+    /// The run ended, at the peer's word, without beating `H*`.
+    BelowStar,
+    /// The headers could not be judged where they were placed: the view
+    /// moved under them, or the run's own record did not line up.
+    Stale,
+    /// The run's headers were gone when the proof answered.
+    Gone,
 }
 
 /// Which hasher class a [`Command::Prove`] runs under. The executor maps
@@ -356,7 +431,11 @@ pub enum Outcome {
     },
     /// Want the block again. The service cancelled or stopped.
     Again,
-    /// The door had no room.
+    /// The door had no room. The model holds the body and spends nothing
+    /// until the next [`Event::Room`], which the owner owes after every
+    /// `NoRoom` whether or not the door's count moved (2026-11-02: a count
+    /// the owner thought unchanged was never re-reported, and a node sat
+    /// `behind` for good with its seats frozen).
     NoRoom,
     /// The entry could not read the store that bounds an arrival. The
     /// body is not held and not asked for again. The peer did not fail.
@@ -369,6 +448,30 @@ pub enum Outcome {
     Noted,
 }
 
+/// Which form rule a decoded header page failed. A page is a chain of
+/// headers hanging off one hash the request located; each variant is a
+/// way it can fail to be that. The close names the rule so a page that
+/// comes back the same way on every retry says why (2026-11-03: the
+/// three-miner rehearsal closed 47 sessions at `HeadersForm` and the
+/// log could not say which rule).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum HeadersFormFault {
+    /// No headers, and the peer says more follow.
+    EmptyWithMore,
+    /// A header blob did not read as a proof-of-work blob.
+    BlobUnreadable,
+    /// The first header's parent is not a hash this session's open
+    /// request located.
+    ParentUnrequested,
+    /// A header's parent is not the header before it.
+    Linkage,
+    /// The first header's parent is located and `T` does not place it.
+    ParentUnplaced,
+    /// A header this node holds follows one it does not: a chain
+    /// rejoining what it left.
+    HeldAfterNew,
+}
+
 /// Why a session is closed. Each variant is a universal rule the input
 /// failed. A missed deadline is not one of them.
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -376,7 +479,7 @@ pub enum CloseCause {
     /// The header payload did not decode.
     HeadersUndecodable,
     /// The header payload decoded and failed its form.
-    HeadersForm,
+    HeadersForm(HeadersFormFault),
     /// A cheap check or a proof refused the header.
     HeaderRefused(shekyl_chain_rules::CenRow),
     /// The header descends from one already marked invalid.

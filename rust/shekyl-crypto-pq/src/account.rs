@@ -164,20 +164,23 @@ pub use shekyl_address::Network;
 
 // --- salt construction -------------------------------------------------------
 
-/// The HKDF salt's prefix. Registered in `CRYPTO_DOMAIN_REGISTRY.tsv`.
-pub const MASTER_DERIVE_SALT_PREFIX: &[u8] = b"shekyl-master-derive-v2-";
+/// The HKDF salt's purpose label, after the network's `name_id`.
+/// Registered in `CRYPTO_DOMAIN_REGISTRY.tsv`; the label is the salt
+/// layout's only version (the signing envelope §2.6: a layout change is a
+/// new label, here `-v3` for `name_id ‖ purpose`).
+pub const MASTER_DERIVE_PURPOSE: &[u8] = b"shekyl-master-derive-v3";
 
-/// Build the HKDF salt bound to a network's name (NI-R10): the value is
-/// [`MASTER_DERIVE_SALT_PREFIX`] followed by the network's tag, all ASCII,
-/// bounded, with no internal NUL.
-///
-/// Example: `b"shekyl-master-derive-v2-shekyl/mainnet"`.
+/// Build the HKDF salt bound to a network's name (NI-R10, Rick's ruling of
+/// 2026-11-04 on the signing envelope): the network's 16-byte `name_id` at
+/// position 0, then [`MASTER_DERIVE_PURPOSE`], unframed. Keys and addresses
+/// exist before any genesis, so derivation binds the name, never the
+/// genesis-derived id.
 #[must_use]
 pub fn salt_for(net: Network) -> Vec<u8> {
-    let tag = net.tag().as_bytes();
-    let mut out = Vec::with_capacity(MASTER_DERIVE_SALT_PREFIX.len() + tag.len());
-    out.extend_from_slice(MASTER_DERIVE_SALT_PREFIX);
-    out.extend_from_slice(tag);
+    let name_id = net.name_id();
+    let mut out = Vec::with_capacity(name_id.len() + MASTER_DERIVE_PURPOSE.len());
+    out.extend_from_slice(&name_id);
+    out.extend_from_slice(MASTER_DERIVE_PURPOSE);
     out
 }
 
@@ -368,9 +371,7 @@ pub struct AllKeysBlob {
     ///
     /// Wrapped in [`SpendPublicKey`] for
     /// type-system protection at sites that distinguish "spend half"
-    /// from "view half" of the account identity. `#[repr(transparent)]`
-    /// preserves the bit-for-bit FFI layout invariant with
-    /// `shekyl_ffi::ShekylAllKeysBlob.spend_pk: [u8; 32]`. Read the
+    /// from "view half" of the account identity. Read the
     /// canonical bytes via `spend_pk.as_canonical_bytes()`.
     pub spend_pk: SpendPublicKey,
     /// Ed25519 view public key.
@@ -397,17 +398,13 @@ pub struct AllKeysBlob {
     ///
     /// Wrapped in [`SpendSecret`] for
     /// type-system protection and structural wipe-on-drop.
-    /// `#[repr(transparent)]` preserves the bit-for-bit FFI layout
-    /// invariant with `shekyl_ffi::ShekylAllKeysBlob.spend_sk: [u8; 32]`.
     /// Read the canonical bytes via `spend_sk.as_canonical_bytes()`.
     pub spend_sk: SpendSecret,
     /// Ed25519 view secret scalar, in canonical 32-byte little-endian form.
     /// Also used (unclamped) as the Montgomery scalar at ECDH sites.
     ///
     /// Wrapped in [`ViewSecret`] for type-system
-    /// protection and structural wipe-on-drop. `#[repr(transparent)]`
-    /// on `ViewSecret` preserves the bit-for-bit FFI layout invariant
-    /// with `shekyl_ffi::ShekylAllKeysBlob.view_sk: [u8; 32]`. Read
+    /// protection and structural wipe-on-drop. Read
     /// the canonical bytes via `view_sk.as_canonical_bytes()`.
     pub view_sk: ViewSecret,
     /// ML-KEM-768 decap (secret) key, 2400 bytes. Rederived on every wallet
@@ -416,10 +413,7 @@ pub struct AllKeysBlob {
     /// Wrapped in [`MlKem768DecapKey`] for
     /// type-system protection and structural wipe-on-drop, per the
     /// `35-secure-memory.mdc:21-22` "wrap secret scalars and key bytes"
-    /// mandate. `#[repr(transparent)]` preserves the bit-for-bit FFI
-    /// layout invariant with
-    /// `shekyl_ffi::ShekylAllKeysBlob.ml_kem_dk: [u8; ML_KEM_768_DK_LEN]`.
-    /// Read the canonical 2400-byte FIPS 203 representation via
+    /// mandate. Read the canonical 2400-byte FIPS 203 representation via
     /// `ml_kem_dk.as_canonical_bytes()`.
     pub ml_kem_dk: MlKem768DecapKey,
 }
@@ -604,23 +598,22 @@ mod tests {
     use super::*;
 
     #[test]
-    fn salt_for_is_the_prefix_and_the_networks_tag() {
-        assert_eq!(
-            salt_for(Network::Mainnet),
-            b"shekyl-master-derive-v2-shekyl/mainnet"
-        );
-        assert_eq!(
-            salt_for(Network::Testnet),
-            b"shekyl-master-derive-v2-shekyl/testnet"
-        );
-        assert_eq!(
-            salt_for(Network::Stagenet),
-            b"shekyl-master-derive-v2-shekyl/stagenet"
-        );
-        assert_eq!(
-            salt_for(Network::Regtest),
-            b"shekyl-master-derive-v2-shekyl/regtest"
-        );
+    fn salt_for_is_the_name_id_then_the_purpose() {
+        for net in [
+            Network::Mainnet,
+            Network::Testnet,
+            Network::Stagenet,
+            Network::Regtest,
+        ] {
+            let salt = salt_for(net);
+            assert_eq!(salt[..16], net.name_id(), "{net}: name_id at position 0");
+            assert_eq!(
+                &salt[16..],
+                b"shekyl-master-derive-v3",
+                "{net}: the purpose"
+            );
+        }
+        assert_ne!(salt_for(Network::Mainnet), salt_for(Network::Regtest));
     }
 
     #[test]

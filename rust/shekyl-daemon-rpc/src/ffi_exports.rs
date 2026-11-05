@@ -38,7 +38,7 @@ use crate::bind::{bind_listener, BoundListener};
 use crate::conn_limit::ConnLimits;
 use crate::core::CoreRpc;
 use crate::handles::Handles;
-use crate::options::{OptionsAbsent, OptionsHandle};
+use crate::options::OptionsHandle;
 use crate::server::{serve_listeners, ServerConfig};
 
 /// Structural floor, the same pair the transport runtime is built with.
@@ -75,21 +75,6 @@ static RUNNING: Mutex<Option<Running>> = Mutex::new(None);
 /// methods read it before any dialer call. Default false, so a process
 /// that never configured still asks the dialer.
 static OFFLINE: AtomicBool = AtomicBool::new(false);
-/// The armed-lever switch the last [`configure`] recorded. [`Pending`] is
-/// taken at start, so the in-process console cannot read it from there.
-/// Default false: a console that runs before configure fails closed.
-static ARMED: AtomicBool = AtomicBool::new(false);
-/// The options handle the last `configure` recorded, for the in-process
-/// console arm, which has the core and not the server's state.
-static OPTIONS: Mutex<Option<OptionsHandle>> = Mutex::new(None);
-
-/// The options handle the daemon configured, or the absent handle before
-/// any was.
-pub(crate) fn options() -> OptionsHandle {
-    slot(&OPTIONS)
-        .clone()
-        .unwrap_or_else(|| Arc::new(OptionsAbsent))
-}
 
 fn slot<T>(of: &'static Mutex<Option<T>>) -> MutexGuard<'static, Option<T>> {
     of.lock().unwrap_or_else(PoisonError::into_inner)
@@ -105,17 +90,6 @@ pub fn offline() -> bool {
 
 fn store_offline(offline: bool) {
     OFFLINE.store(offline, Ordering::Release);
-}
-
-/// Whether this daemon was started with `dev-rpc`. The in-process console
-/// admits an armed lever under this bit. Default false.
-#[must_use]
-pub(crate) fn armed() -> bool {
-    ARMED.load(Ordering::Acquire)
-}
-
-fn store_armed(armed: bool) {
-    ARMED.store(armed, Ordering::Release);
 }
 
 /// Records the RPC section, whether the daemon is offline, and the options
@@ -135,8 +109,6 @@ pub fn configure(
 ) -> oneshot::Receiver<Result<(), String>> {
     let (constructed, rx) = oneshot::channel();
     store_offline(offline);
-    store_armed(armed);
-    *slot(&OPTIONS) = Some(Arc::clone(&options));
     *slot(&PENDING) = Some(Pending {
         section,
         options,
@@ -300,6 +272,7 @@ mod tests {
 
     use super::*;
     use crate::core::{CoreRpc, P2pRead};
+    use crate::options::OptionsAbsent;
 
     /// The offline bit and the section `configure` stores are process-wide.
     /// This puts both back, including when the test panics.
@@ -309,7 +282,6 @@ mod tests {
         fn drop(&mut self) {
             store_offline(false);
             slot(&PENDING).take();
-            slot(&OPTIONS).take();
         }
     }
 
@@ -334,5 +306,16 @@ mod tests {
         assert_eq!(CoreRpc::peerlist_sizes(), Ok(P2pRead::Offline));
         store_offline(false);
         assert_eq!(CoreRpc::p2p_state(), Ok(P2pRead::Running(())));
+        // Online, and this process installed no lists: a fault, not an
+        // empty list and not the null core handle.
+        assert_eq!(
+            CoreRpc::peerlist_sizes(),
+            Err(crate::chain_facts::FactsFault::ListsAbsent)
+        );
+        let core = CoreRpc::null_for_router_tests();
+        assert_eq!(
+            core.peer_list(false),
+            Err(crate::chain_facts::FactsFault::ListsAbsent)
+        );
     }
 }

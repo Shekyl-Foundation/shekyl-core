@@ -118,7 +118,7 @@ fn service(rig: &Rig, accepted: bool) {
             rig.hub.handler_gone(id);
             rig.hub.reap(id);
         }
-        Post::HandshakeResult { .. } => {}
+        Post::HandshakeResult { .. } | Post::Opened { .. } => {}
     }
 }
 
@@ -147,6 +147,7 @@ fn a_delivery_posted_before_closed_is_parsed() {
             Post::Deliver { .. } | Post::HandshakeResult { .. } => Phase::Delivering,
             Post::Closed { .. } => Phase::Closed,
             Post::Established { .. } => Phase::Arming,
+            Post::Opened { .. } => Phase::Open,
         })
         .collect();
     assert_eq!(kinds, vec![Phase::Delivering, Phase::Closed]);
@@ -189,6 +190,7 @@ fn a_tor_row_posts_deliver_and_closed_with_the_tor_connector() {
         .map(|post| match post {
             Post::Deliver { connector, .. }
             | Post::Closed { connector, .. }
+            | Post::Opened { connector, .. }
             | Post::HandshakeResult { connector, .. } => *connector,
             Post::Established { .. } => unreachable!("serviced above"),
         })
@@ -980,3 +982,6 @@ fn moving_bytes_does_not_republish_the_board() {
     drop(opened);
     pump.join().expect("pump");
 }
+
+#[path = "hub_open_tests.rs"]
+mod open;
