@@ -402,8 +402,8 @@ mod tests {
             view_tags: vec![Some(3)],
             tx_extra: vec![1, 2, 3],
             fee: 1_000,
-            enc_amounts: vec![crate::tests::enc_field_fixture([0u8; 9])],
-            enc_labels: vec![crate::tests::enc_field_fixture([0u8; 9])],
+            enc_amounts: vec![crate::tests::enc_fields().0],
+            enc_labels: vec![crate::tests::enc_fields().1],
             out_commitments: vec![[4u8; 32]],
             pseudo_outs: vec![[5u8; 32]],
             bulletproof: Bulletproof::prove_plus(
@@ -697,9 +697,7 @@ mod tests {
         // A per-output base array out of step with the output count must fail at the
         // boundary, not serialize a tx the daemon later rejects.
         let mut input = minimal_input();
-        input
-            .enc_amounts
-            .push(crate::tests::enc_field_fixture([0u8; 9])); // 2 enc_amounts vs 1 output
+        input.enc_amounts.push(crate::tests::enc_fields().0); // 2 enc_amounts vs 1 output
         assert!(matches!(
             encode_final_tx(&input),
             Err(TxBuilderError::WireError(_))
