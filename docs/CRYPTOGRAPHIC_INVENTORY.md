@@ -225,8 +225,13 @@ rows are `shekyl/network-name-v1`, `shekyl/tx-signable-v1`,
 over, 64 bytes), `shekyl/msg-sign-v2` (`shekyl/msg-hash-v1` retired), the
 four proof frames `shekyl/tx-proof-{outbound,inbound}-v1`,
 `shekyl/reserve-proof-message-v1` and `shekyl/reserve-proof-dleq-context-v1`,
-`shekyl/multisig-address-v3` and
-`shekyl/archival-emission-auth-{backing,claim}-v4`.
+`shekyl/multisig-address-v3`,
+`shekyl/archival-emission-auth-{backing,claim}-v4` and
+`shekyl/archival-serve-credit-bundle-v2` (the bundle commitment, now
+64 bytes under the network's id; `-v1` goes). No row is kept retired
+before genesis (Rick, 2026-11-05): `shekyl/archival-serve-credit-batch-v1`,
+`shekyl/archival-witness-carrier-scheme-v1` and the test-only
+`shekyl/archival-serve-challenge-leaf-v1` are deleted with their code.
 
 The 2026-10-18 refresh removes one mechanism-2 info label,
 `shekyl-archival-p-msg-sign-slh-dsa-192s-v1`: a persona has no address, so

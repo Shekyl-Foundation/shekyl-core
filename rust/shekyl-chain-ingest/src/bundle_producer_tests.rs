@@ -70,9 +70,13 @@ impl Witness {
             passes: PassBitmap::none(),
             support: PassBitmap::none(),
         };
-        assemble_bundle(&kept, &[], &self.public, |commitment| {
-            sign_bundle_commitment(&self.secret, commitment)
-        })
+        assemble_bundle(
+            &shekyl_network::HARNESS_NETWORK_ID,
+            &kept,
+            &[],
+            &self.public,
+            |commitment| sign_bundle_commitment(&self.secret, commitment),
+        )
         .expect("the key signs")
     }
 }
@@ -274,7 +278,7 @@ async fn the_connector_learns_a_blocks_draws_only_for_that_block() {
 async fn the_producer_claims_what_its_ring_drew() {
     let mut scenario = Scenario::open("bundle-claim");
     scenario.mine(2).await;
-    let ring = Arc::new(WitnessRing::new());
+    let ring = Arc::new(WitnessRing::new(shekyl_network::HARNESS_NETWORK_ID));
     scenario.draw_from(Arc::clone(&ring));
     let ours = scenario.mine(1).await.remove(0);
     let mut producer = Producer::new(
@@ -315,7 +319,7 @@ fn the_serving_scheme_line_is_once_per_block() {
 /// A producer with one block of ours claimed, its one draw learned, and
 /// that draw's first read started: one slot taken.
 fn one_started_read() -> (Producer, DueRead) {
-    let ring = Arc::new(WitnessRing::new());
+    let ring = Arc::new(WitnessRing::new(shekyl_network::HARNESS_NETWORK_ID));
     let ours = BlockHeight::from_raw(100);
     let commitment = ring.draw(ours).expect("the ring draws");
     let mut producer = Producer::new(

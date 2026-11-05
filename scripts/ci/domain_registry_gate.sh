@@ -430,7 +430,14 @@ count_pattern() {
 # and challenge.rs loses the retired -v1 leaf label's negative control (two
 # #[cfg(test)] sites). shekyl/archival-witness-carrier-scheme-v1 goes too; a
 # scheme domain, it had no call site of its own.
-MECH1_EXPECTED=79
+# Bundle commitment on the envelope (2026-11-05, Rick; the signing envelope
+# §2.4, §2.7): 79 -> 77. `bundle_commitment` in
+# rust/shekyl-archival-retention/src/bundle.rs called cshake256_32 under
+# shekyl/archival-serve-credit-bundle-v1; it frames the kept part and the
+# records under shekyl/archival-serve-credit-bundle-v2 and the network id
+# at 64 bytes. The #[cfg(test)] site in bundle_tests.rs that rebuilt the
+# -v1 preimage by hand goes with it.
+MECH1_EXPECTED=77
 mech1=$(count_pattern 'cshake256_(?:32|64)\(|CShake256Core::new\(')
 if [[ "$mech1" != "$MECH1_EXPECTED" ]]; then
   echo "COUNT DRIFT mech 1 (cSHAKE call sites): found $mech1, pinned $MECH1_EXPECTED." >&2

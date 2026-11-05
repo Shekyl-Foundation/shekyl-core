@@ -3931,6 +3931,7 @@ dependencies = [
  "shekyl-chain-rules",
  "shekyl-crypto-pq",
  "shekyl-difficulty",
+ "shekyl-network",
  "shekyl-p-loopback",
  "shekyl-p-serve",
  "shekyl-types",

@@ -212,6 +212,7 @@ use shekyl_crypto_pq::fn_dsa_hybrid::{
     FnDsaHybridPublicKey, FnDsaHybridSignature, HybridEd25519FnDsa,
 };
 use shekyl_crypto_pq::signature::{SignatureScheme as _, SCHEME_DOMAIN_WITNESS_BUNDLE};
+use shekyl_network::NetworkId;
 use shekyl_types::archival::DrawCommitment;
 use shekyl_types::{BlockHash, BlockHeight, PCanonicalId, SettlementEpoch};
 
@@ -647,6 +648,7 @@ pub fn verify_bundle<V: BundleView>(
     h_incl: BlockHeight,
     view: &V,
     rule_set: &RuleSet,
+    network_id: &NetworkId,
 ) -> Result<Admitted, BundleRefused<V::Fault>> {
     let invalid = |why: BundleInvalid| Err(BundleRefused::Invalid(why));
     let h = reference.h();
@@ -708,7 +710,7 @@ pub fn verify_bundle<V: BundleView>(
     ) else {
         return invalid(BundleInvalid::WitnessSignature);
     };
-    let commitment = kept.commitment(body.records_bytes());
+    let commitment = kept.commitment(network_id, body.records_bytes());
     if scheme
         .verify(
             &witness_key,

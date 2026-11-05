@@ -3,18 +3,16 @@
 // All rights reserved.
 // BSD-3-Clause
 
-//! The secret draw: selection, the `0x0C` commitment, the challenge nonce,
-//! and the superseded serve-credit batch commitment.
+//! The secret draw: selection, the `0x0C` commitment and the challenge
+//! nonce.
 //!
 //! Design: [`ARCHIVAL_SERVE_CREDIT_SPEC.md`](../../../docs/design/ARCHIVAL_SERVE_CREDIT_SPEC.md)
 //! §4 (the draw), §5.2 (the nonce), §7.3 (the bundle commitment). The
-//! first three hashes are consensus: every node must pick the same pair
-//! and recompute the same nonce. **The batch commitment is SUPERSEDED** by
-//! the bundle commitment (`SCS-P16`, `SCS-P35`;
-//! [`crate::bundle_commitment`]): no consensus path computes it, and it
-//! stays until the cutover decides it (spec §11.1). The witness key and the
-//! receipt scheme are Slice C's FN-DSA increment; this module is the
-//! hash side, which that increment does not move.
+//! hashes are consensus: every node must pick the same pair and recompute
+//! the same nonce. The bundle commitment is [`crate::bundle_commitment`]
+//! (`SCS-P35`). The witness key and the receipt scheme are Slice C's
+//! FN-DSA increment; this module is the hash side, which that increment
+//! does not move.
 
 use crate::hash::cshake256_32;
 use crate::ArchivalParams;

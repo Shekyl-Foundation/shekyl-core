@@ -199,7 +199,7 @@ impl Node {
                         sync: state.subscribe(),
                     },
                     posting: posting_tx,
-                    witness: Arc::new(WitnessRing::new()),
+                    witness: Arc::new(WitnessRing::new(rules.trust().network_id())),
                 };
                 let follow = Follow {
                     job: Some(seat),

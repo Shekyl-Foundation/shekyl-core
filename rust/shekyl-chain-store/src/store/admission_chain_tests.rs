@@ -245,8 +245,16 @@ fn admit(prepared: &mut Prepared) -> (Vec<shekyl_chain_rules::Admitted>, BlockDr
             prepared.support,
             "the bundle states the support width the store issued"
         );
-        let verdict = judge_bundles(&refs, &bodies, &root, height, &bundle_view, &RULES)
-            .expect("the store view admits the fixture bundle");
+        let verdict = judge_bundles(
+            &refs,
+            &bodies,
+            &root,
+            height,
+            &bundle_view,
+            &RULES,
+            &shekyl_network::HARNESS_NETWORK_ID,
+        )
+        .expect("the store view admits the fixture bundle");
         let txs = prepared.chain.grown.realise(&[]);
         let judged = prepared
             .chain
@@ -530,6 +538,7 @@ fn a_bundle_for_genesis_is_refused_at_j33() {
             BlockHeight::from_raw(2),
             &bundle_view,
             &RULES,
+            &shekyl_network::HARNESS_NETWORK_ID,
         )
         .expect_err("genesis does not open");
         assert!(

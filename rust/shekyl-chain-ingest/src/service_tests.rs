@@ -2204,7 +2204,9 @@ fn miner_follow(
                 keys: None,
                 miner: crate::follower::MinerFeed { found, sync },
                 posting,
-                witness: Arc::new(shekyl_bundle_producer::WitnessRing::new()),
+                witness: Arc::new(shekyl_bundle_producer::WitnessRing::new(
+                    shekyl_network::HARNESS_NETWORK_ID,
+                )),
             }),
             pool: None,
             ..Default::default()
