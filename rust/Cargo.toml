@@ -340,6 +340,11 @@ members = [
     # nonces, timed sync, the dispatch table over `Command`, the board
     # (P2P_3_REMNANT_CUTOVER_BRIEF.md §7). Replaces shekyl-seam.
     "shekyl-p2p-session",
+    # The network composition: connectors per configuration, the session
+    # layer and its owners, the process engine and transport runtime, the
+    # stop order, the RPC's facts from the board (brief §2). The node builds
+    # one `Network`; nothing above it reaches shekyl-ffi.
+    "shekyl-p2p",
     # P2P conformance harness (P2P_DIFFERENTIAL_HARNESS.md). The scripted
     # peer, the seam host, the transcript comparator, and check-goldens.
     # Nothing in the production graph depends on it. The epee recording

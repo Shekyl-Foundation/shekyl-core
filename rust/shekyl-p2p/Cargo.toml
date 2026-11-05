@@ -1,0 +1,38 @@
+[package]
+name = "shekyl-p2p"
+description = "The network composition: the connectors a configuration names (clearnet, an operator's Tor, the managed Tor), the session layer and its three owners, the process timing engine and transport runtime, the stop order, and the facts the RPC reads from the board (P2P_3_REMNANT_CUTOVER_BRIEF.md section 2). The node builds one Network and reaches no FFI."
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+publish = false
+
+[dependencies]
+shekyl-capped-stream = { path = "../shekyl-capped-stream" }
+shekyl-clearnet = { path = "../shekyl-clearnet" }
+shekyl-dialer = { path = "../shekyl-dialer" }
+shekyl-onion-v3 = { path = "../shekyl-onion-v3" }
+shekyl-p2p-session = { path = "../shekyl-p2p-session" }
+shekyl-peer-policy = { path = "../shekyl-peer-policy" }
+shekyl-peerlist = { path = "../shekyl-peerlist" }
+shekyl-relay = { path = "../shekyl-relay" }
+shekyl-runtime = { path = "../shekyl-runtime" }
+shekyl-socks = { path = "../shekyl-socks" }
+shekyl-thread-ledger = { path = "../shekyl-thread-ledger" }
+shekyl-timing-engine = { path = "../shekyl-timing-engine" }
+shekyl-tor = { path = "../shekyl-tor" }
+shekyl-tor-control-client = { path = "../shekyl-tor-control-client" }
+shekyl-transport-layer = { path = "../shekyl-transport-layer" }
+tokio = { version = "1", default-features = false, features = ["macros", "net", "rt", "sync", "time"] }
+tracing = "0.1"
+
+[target.'cfg(unix)'.dependencies]
+libc = "0.2"
+
+[dev-dependencies]
+tempfile = "3"
+tokio = { version = "1", default-features = false, features = ["macros", "net", "rt-multi-thread", "sync", "time", "io-util"] }
+
+[lints]
+workspace = true
