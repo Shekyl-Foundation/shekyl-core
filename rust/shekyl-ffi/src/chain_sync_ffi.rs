@@ -3,10 +3,11 @@
 // All rights reserved.
 // BSD-3-Clause
 
-//! Chain sync's two process-wide entries (CS-5): the owners the node leaves
-//! for the seam's bind (§2), and the state the shell's `core::is_synchronized`
-//! reads (§3). The bind takes the latest owner still waiting. Each node
-//! keeps the lease for its own hub sender.
+//! Chain sync's process-wide owners (CS-5). The bind takes the latest owner
+//! still waiting (§2). The shell's `core::is_synchronized` reads that latest
+//! install's receiver (§3), and the receiver lives with the owner, so a
+//! release cannot clear a later install's read. Each node keeps the lease
+//! for its own hub sender.
 //!
 //! The handler's sync reads that lived here went with the handler's sync
 //! half: chain sync is the Rust owner's, and nothing in C++ reads the chain
@@ -32,6 +33,15 @@ struct Live {
 #[derive(Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
 struct OwnerId(u64);
 
+/// The owner whose state [`shekyl_node_is_synchronized`] reads, and that
+/// state. One value: the id and the receiver are installed, replaced, and
+/// cleared together. A second cell, written after this lock, let a release
+/// clear a receiver a later install had already published.
+struct Published {
+    id: OwnerId,
+    state: watch::Receiver<SyncState>,
+}
+
 /// The owners this process has installed, and which of them the bind takes.
 ///
 /// A node's tests open more than one node in this process. Each owner
@@ -43,8 +53,8 @@ struct Owners {
     waiting: Option<OwnerId>,
     /// The owner the seam's bind took. A later bind is [`Refused::SecondBind`].
     taken: Option<OwnerId>,
-    /// Whose state [`shekyl_node_is_synchronized`] reads. The latest install.
-    published: Option<OwnerId>,
+    /// The latest install, when one is still held. The shell reads its receiver.
+    published: Option<Published>,
 }
 
 impl Owners {
@@ -109,9 +119,6 @@ impl Refused {
     }
 }
 
-/// Chain sync's published state, as the node holds it.
-static STATE: Mutex<Option<watch::Receiver<SyncState>>> = Mutex::new(None);
-
 /// Leave the node's chain-sync owner for the seam's bind
 /// ([`crate::seam_ffi::shekyl_seam_bind`]), which attaches the Levin router
 /// to `router` and sends the hub it mints down `hub`, and install the
@@ -141,15 +148,14 @@ pub fn install(
     if owners.taken.is_none() {
         owners.waiting = Some(id);
     }
-    owners.published = Some(id);
-    drop(owners);
-    *STATE.lock().unwrap_or_else(PoisonError::into_inner) = Some(state);
+    owners.published = Some(Published { id, state });
     OwnerLease { id }
 }
 
 /// Release one owner. The seam's bind, if it already took this owner, is
 /// not given another: the slot goes empty, and the next bind is
-/// [`Refused::NoOwner`] until a node installs again.
+/// [`Refused::NoOwner`] until a node installs again. The shell's read
+/// clears only when this owner is the one it reads.
 fn release(id: OwnerId) {
     let mut owners = OWNERS.lock().unwrap_or_else(PoisonError::into_inner);
     owners.live.remove(&id);
@@ -159,10 +165,12 @@ fn release(id: OwnerId) {
     if owners.taken == Some(id) {
         owners.taken = None;
     }
-    if owners.published == Some(id) {
+    if owners
+        .published
+        .as_ref()
+        .is_some_and(|published| published.id == id)
+    {
         owners.published = None;
-        drop(owners);
-        STATE.lock().unwrap_or_else(PoisonError::into_inner).take();
     }
 }
 
@@ -175,8 +183,6 @@ pub fn uninstall() {
     let next = owners.next;
     *owners = Owners::EMPTY;
     owners.next = next;
-    drop(owners);
-    STATE.lock().unwrap_or_else(PoisonError::into_inner).take();
 }
 
 /// 1 when chain sync reads `Synced`, 0 otherwise (CS-5 §3): what the
@@ -191,10 +197,10 @@ pub fn uninstall() {
 /// RD, with `levin_notify` and the shell's `i_core_events`.
 #[no_mangle]
 pub extern "C" fn shekyl_node_is_synchronized() -> u8 {
-    let state = STATE.lock().unwrap_or_else(PoisonError::into_inner);
-    let synced = state
-        .as_ref()
-        .is_some_and(|state| state.has_changed().is_ok() && *state.borrow() == SyncState::Synced);
+    let owners = OWNERS.lock().unwrap_or_else(PoisonError::into_inner);
+    let synced = owners.published.as_ref().is_some_and(|published| {
+        published.state.has_changed().is_ok() && *published.state.borrow() == SyncState::Synced
+    });
     u8::from(synced)
 }
 
@@ -333,5 +339,47 @@ mod state_tests {
 
         drop(second);
         assert_eq!(take().err(), Some(Refused::NoOwner));
+    }
+
+    /// The shell reads the latest install. Releasing an earlier owner used
+    /// to clear that read after the later install had published, when the
+    /// receiver lived in a second mutex. The later owner stays synced.
+    #[test]
+    fn releasing_an_earlier_owner_keeps_the_later_owners_synced_read() {
+        let _seam = crate::seam_ffi::seam_bind_lock().lock();
+        uninstall();
+        let (router_a, _routed_a) = mpsc::unbounded_channel();
+        let (hub_a, _hub_a) = oneshot::channel();
+        let (tx_a, state_a) = watch::channel(SyncState::NoView);
+        let earlier = install(router_a, hub_a, state_a);
+        tx_a.send_replace(SyncState::Synced);
+        assert_eq!(shekyl_node_is_synchronized(), 1, "the first install");
+
+        let (router_b, _routed_b) = mpsc::unbounded_channel();
+        let (hub_b, _hub_b) = oneshot::channel();
+        let (tx_b, state_b) = watch::channel(SyncState::NoView);
+        let later = install(router_b, hub_b, state_b);
+        tx_b.send_replace(SyncState::Synced);
+        assert_eq!(shekyl_node_is_synchronized(), 1, "the later install");
+
+        drop(earlier);
+        assert_eq!(
+            shekyl_node_is_synchronized(),
+            1,
+            "the earlier lease does not clear the later owner's read"
+        );
+        tx_a.send_replace(SyncState::NoView);
+        assert_eq!(
+            shekyl_node_is_synchronized(),
+            1,
+            "the earlier owner's watch is not the shell's read"
+        );
+
+        drop(later);
+        assert_eq!(
+            shekyl_node_is_synchronized(),
+            0,
+            "the published owner is gone"
+        );
     }
 }
