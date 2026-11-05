@@ -5,76 +5,105 @@
 
 //! The **PQC signing preimage** — what every hybrid (Ed25519 + ML-DSA)
 //! signature on a transaction is over (`FCMP_SPEND_SIGNING_PREIMAGE.md`
-//! §1.1). The derivation of record: the wallet signs over it
-//! (`shekyl-tx-builder`), the daemon verifies against it through
-//! `shekyl_tx_pqc_signing_payload_hashes`, and the validator records it as
-//! CEN-I17. One body; the KAT in `tests/pqc_signing_preimage_kat.rs` holds
-//! it to the specification's output over eight daemon-accepted shapes.
-//!
-//! A signature must bind everything about the transaction that is not
-//! discardable, the discardable regions by digest, the signer's own public
-//! key, and every other input's key — so that no proof, output, reference
-//! or key can be substituted under a standing signature. The preimage is
-//! that set of bindings, composed from the transaction's own typed parts:
+//! §1.1), and the transaction's one network-bound message, `tx_signable`,
+//! that every authorization of it proves over (the signing envelope §2.2;
+//! `NETWORK_IDENTITY.md` NI-F12 (b)). The derivation of record: the wallet
+//! signs over it (`shekyl-tx-builder`), the daemon verifies against it
+//! through `shekyl_tx_pqc_signing_payload_hashes`, and the validator
+//! records it as CEN-I17. One body; the KAT in
+//! `tests/pqc_signing_preimage_kat.rs` holds it to the specification's
+//! output over eight daemon-accepted shapes.
 //!
 //! ```text
-//! payload(i)     = pruned ‖ prunable_hash ‖ header(i) ‖ key_hashes
-//! signed_hash(i) = cSHAKE256-32(S = SPEND_SIGNING_CUSTOMIZATION,
-//!                               X = network_id ‖ payload(i))
+//! tx_signable    = frame("shekyl/tx-signable-v1", id, [prefix_hash, ct_base_hash])
+//! signed_hash(i) = frame("shekyl/fcmp-spend-signing-v2", id,
+//!                        [tx_signable, header(i), key_hashes, prunable_hash])
 //! ```
 //!
-//! The network id is the 16-byte genesis-derived id
-//! (`NETWORK_IDENTITY.md` NI-Q4, NI-R10): a signature is valid on exactly
-//! one network by construction. It is a fixed-width prefix of the input;
-//! the customization is one domain string.
+//! `frame` is the envelope ([`shekyl_network::envelope`]); `id` is the
+//! network's 16-byte genesis-derived id (NI-R10), so a proof or signature
+//! is valid on exactly one network by construction. `prefix_hash` and
+//! `ct_base_hash` are the txid's first two components, read from the
+//! functions the txid uses (Rick's ruling 4): together they bind version,
+//! prefix, CT type, fee, reference block and the committed base —
+//! everything a node keeps after pruning. The SAL proof (full and
+//! membership-only) and FROST prove over `tx_signable`, so each commits to
+//! the network itself, not through the signature around it.
 //!
-//! Three of the four components are the transaction's, shared by every
-//! input; only `header(i)` is the signing input's. [`PqcSigningPreimage`]
-//! is therefore a value derived once per transaction, from which each
-//! input's payload is composed.
+//! A signature must also bind the discardable regions by digest, the
+//! signer's own public key, and every other input's key — so no proof,
+//! output, reference or key can be substituted under a standing signature:
+//! `header(i)` is the signing input's scheme and key, `key_hashes` the
+//! concatenated `keccak256` of every input's key in input order (one field,
+//! its length gives the count), and `prunable_hash` the txid's
+//! [`PrunableHash`] component.
 
-use shekyl_crypto_hash::{cshake256_32, keccak256};
+use shekyl_crypto_hash::keccak256;
+use shekyl_network::envelope::IdDomain;
 use shekyl_network::NetworkId;
-use shekyl_types::{PrunableHash, SigningPayloadHash};
+use shekyl_types::{CtBaseHash, PrefixHash, PrunableHash, SigningPayloadHash, TxSignableHash};
 
 use super::{Ct, PqcAuth, Transaction};
 
-/// The cSHAKE customization of the spend signature's hash
-/// (`NETWORK_IDENTITY.md` §2.4.1).
-pub const SPEND_SIGNING_CUSTOMIZATION: &[u8] = b"shekyl/fcmp-spend-signing-v1";
+/// A transaction's one network-bound message (the signing envelope §2.2):
+/// fields `[prefix_hash, ct_base_hash]`.
+pub const TX_SIGNABLE: IdDomain<2> = IdDomain::new(b"shekyl/tx-signable-v1");
 
-/// A transaction's PQC signing preimage — the components shared by every
-/// input's payload, derived once. `payload(i)` and `signed_hash(i)` are
-/// composed from it per input.
+/// The spend signature's hash (`NETWORK_IDENTITY.md` §2.4.1, the signing
+/// envelope §2.2): fields `[tx_signable, header(i), key_hashes,
+/// prunable_hash]`.
+pub const FCMP_SPEND_SIGNING: IdDomain<4> = IdDomain::new(b"shekyl/fcmp-spend-signing-v2");
+
+/// `tx_signable` on the network whose id is `network_id`, from the txid's
+/// first two components. [`Transaction::tx_signable`] reads them from a
+/// finished body; a signer that has not assembled the body yet reads
+/// `prefix_hash` from [`super::TxPrefix::hash`] and `ct_base_hash` from
+/// [`super::fcmp_base_hash`], the same functions.
+#[must_use]
+pub fn tx_signable(
+    network_id: &NetworkId,
+    prefix_hash: PrefixHash,
+    ct_base_hash: CtBaseHash,
+) -> TxSignableHash {
+    TxSignableHash::from_bytes(TX_SIGNABLE.frame(
+        network_id,
+        [prefix_hash.as_bytes(), ct_base_hash.as_bytes()],
+    ))
+}
+
+/// A transaction's PQC signing preimage on one network — the fields shared
+/// by every input's `signed_hash(i)`, derived once.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct PqcSigningPreimage {
-    /// The pruned segment ([`super::TxSegments::pruned`]): version, prefix,
-    /// CT type, fee, reference block and the committed base — everything a
-    /// node retains after pruning, bound in full.
-    pruned: Vec<u8>,
+    /// The network the signatures are valid on.
+    network_id: NetworkId,
+    /// The transaction's network-bound message: prefix and base.
+    tx_signable: TxSignableHash,
     /// The prunable region, bound by its digest — the txid's
     /// [`PrunableHash`] component: the proof and the pseudo-outs cannot be
     /// swapped without changing every signature's preimage.
     prunable_hash: PrunableHash,
-    /// `keccak256` of every input's hybrid public key, in input order: each
-    /// input's signature binds every input's key, so no one key can be
-    /// substituted without invalidating the others.
-    key_hashes: Vec<[u8; 32]>,
+    /// `keccak256` of every input's hybrid public key, in input order,
+    /// concatenated: each input's signature binds every input's key, so no
+    /// one key can be substituted without invalidating the others.
+    key_hashes: Vec<u8>,
 }
 
 impl PqcSigningPreimage {
-    /// The preimage of `tx`, or `None` for a body that has none: a coinbase
-    /// (`Null` CT); the storage-pruned spend form (no prunable region to
-    /// bind); and the serve-credit form, which consensus forbids to carry
-    /// `pqc_auths` at all (`blockchain.cpp`'s serve-credit arm, CEN-H20). That
-    /// form is not unauthenticated — it is hybrid-signed, but over a different
-    /// object with a different key: the pass record (registry sub-root,
-    /// challenged leaf, path), under `SCHEME_DOMAIN_SERVE_CREDIT`, by the
-    /// bond's registered key, with the Ed25519 leg on the vin and the ML-DSA
-    /// leg in the pruned record (the serve-credit verifier, pending in `shekyl-chain-rules` as
-    /// CEN-J10). This preimage is the wrong object for it, not a missing one.
+    /// The preimage of `tx` on the network whose id is `network_id`, or
+    /// `None` for a body that has none: a coinbase (`Null` CT); the
+    /// storage-pruned spend form (no prunable region to bind); and the
+    /// serve-credit form, which consensus forbids to carry `pqc_auths` at
+    /// all (`blockchain.cpp`'s serve-credit arm, CEN-H20). That form is not
+    /// unauthenticated — it is hybrid-signed, but over a different object
+    /// with a different key: the pass record (registry sub-root, challenged
+    /// leaf, path), under `SCHEME_DOMAIN_SERVE_CREDIT`, by the bond's
+    /// registered key, with the Ed25519 leg on the vin and the ML-DSA leg in
+    /// the pruned record (the serve-credit verifier, pending in
+    /// `shekyl-chain-rules` as CEN-J10). This preimage is the wrong object
+    /// for it, not a missing one.
     #[must_use]
-    pub fn of(tx: &Transaction) -> Option<Self> {
+    pub fn of(tx: &Transaction, network_id: &NetworkId) -> Option<Self> {
         let Ct::Fcmp {
             pqc_auths,
             prunable: Some(_),
@@ -86,53 +115,50 @@ impl PqcSigningPreimage {
         if pqc_auths.is_empty() {
             return None;
         }
-        let mut pruned = Vec::new();
-        tx.write_pruned(&mut pruned)
-            .expect("writing to a Vec is infallible");
         Some(Self {
-            pruned,
+            network_id: *network_id,
+            tx_signable: tx.tx_signable(network_id),
             prunable_hash: tx.prunable_hash(),
             key_hashes: pqc_auths
                 .iter()
-                .map(|auth| keccak256(&auth.hybrid_public_key))
+                .flat_map(|auth| keccak256(&auth.hybrid_public_key))
                 .collect(),
         })
     }
 
-    /// `payload(i)`: the preimage for the input whose authentication is
-    /// `auth` — the shared bindings with that input's own header (its
-    /// scheme and public key, never its signature: a signature is not over
-    /// itself) between the region digest and the key hashes.
+    /// `signed_hash(i)` for the input whose authentication is `auth`: the
+    /// message its hybrid signature is made over and verified against,
+    /// typed so it can never be passed where a txid component is expected
+    /// (RTN-7). `header(i)` is the auth's scheme and public key, never its
+    /// signature: a signature is not over itself.
     #[must_use]
-    pub fn payload(&self, auth: &PqcAuth) -> Vec<u8> {
-        let mut payload = Vec::with_capacity(
-            self.pruned.len() + 32 + auth.hybrid_public_key.len() + 32 * self.key_hashes.len(),
-        );
-        payload.extend_from_slice(&self.pruned);
-        payload.extend_from_slice(self.prunable_hash.as_bytes());
-        auth.write_header(&mut payload)
+    pub fn signed_hash(&self, auth: &PqcAuth) -> SigningPayloadHash {
+        let mut header = Vec::with_capacity(4 + auth.hybrid_public_key.len());
+        auth.write_header(&mut header)
             .expect("writing to a Vec is infallible");
-        for key_hash in &self.key_hashes {
-            payload.extend_from_slice(key_hash);
-        }
-        payload
-    }
-
-    /// `signed_hash(i)` on the network whose id is `network_id`: the
-    /// message the input's hybrid signature is made over and verified
-    /// against, typed so it can never be passed where a txid component is
-    /// expected (RTN-7).
-    #[must_use]
-    pub fn signed_hash(&self, network_id: &NetworkId, auth: &PqcAuth) -> SigningPayloadHash {
-        let payload = self.payload(auth);
-        let mut input = Vec::with_capacity(network_id.len() + payload.len());
-        input.extend_from_slice(network_id);
-        input.extend_from_slice(&payload);
-        SigningPayloadHash::from_bytes(cshake256_32(SPEND_SIGNING_CUSTOMIZATION, &input))
+        SigningPayloadHash::from_bytes(FCMP_SPEND_SIGNING.frame(
+            &self.network_id,
+            [
+                self.tx_signable.as_bytes(),
+                &header,
+                &self.key_hashes,
+                self.prunable_hash.as_bytes(),
+            ],
+        ))
     }
 }
 
 impl Transaction {
+    /// This transaction's `tx_signable` on the network whose id is
+    /// `network_id` ([`tx_signable`]): its prefix hash and base hash,
+    /// framed. Defined for every body; the SAL proofs of a spend and the
+    /// signatures over [`Self::pqc_signing_payload_hashes`] are what read
+    /// it.
+    #[must_use]
+    pub fn tx_signable(&self, network_id: &NetworkId) -> TxSignableHash {
+        tx_signable(network_id, self.prefix_hash(), self.ct.base_hash())
+    }
+
     /// Every input's `signed_hash(i)` on the network whose id is
     /// `network_id`, in input order — one per `pqc_auths`
     /// entry (`== nvin` for a body [`Transaction::validate`] admits; a
@@ -141,7 +167,7 @@ impl Transaction {
     /// preimage ([`PqcSigningPreimage::of`]).
     #[must_use]
     pub fn pqc_signing_payload_hashes(&self, network_id: &NetworkId) -> Vec<SigningPayloadHash> {
-        let Some(preimage) = PqcSigningPreimage::of(self) else {
+        let Some(preimage) = PqcSigningPreimage::of(self, network_id) else {
             return Vec::new();
         };
         let Ct::Fcmp { pqc_auths, .. } = &self.ct else {
@@ -149,7 +175,7 @@ impl Transaction {
         };
         pqc_auths
             .iter()
-            .map(|auth| preimage.signed_hash(network_id, auth))
+            .map(|auth| preimage.signed_hash(auth))
             .collect()
     }
 }

@@ -405,7 +405,11 @@ count_pattern() {
 # #[cfg(test)] site in envelope/tests.rs that rebuilds the input by hand.
 # Until the gate counts frame sites (the envelope §2.5), this count rises
 # and falls as domains move onto frame.
-MECH1_EXPECTED=91
+# tx_signable and spend signing v2 (2026-11-04, the signing envelope §2.2):
+# 91 -> 90. `signed_hash` in rust/shekyl-wire/src/transaction/signing_preimage.rs
+# called cshake256_32 under shekyl/fcmp-spend-signing-v1; it and the new
+# shekyl/tx-signable-v1 now reach cSHAKE only through frame.
+MECH1_EXPECTED=90
 mech1=$(count_pattern 'cshake256_(?:32|64)\(|CShake256Core::new\(')
 if [[ "$mech1" != "$MECH1_EXPECTED" ]]; then
   echo "COUNT DRIFT mech 1 (cSHAKE call sites): found $mech1, pinned $MECH1_EXPECTED." >&2

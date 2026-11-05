@@ -328,7 +328,7 @@ pub fn judge_slot_stateless(
     let mut scratch = RuleCoverage::EMPTY;
     let cx = rules::TxContext::derive(tx, slot, &mut scratch)?;
     judge_signatures(&cx, network, coverage)?;
-    let verified = judge_proofs(&cx, references, coverage)?;
+    let verified = judge_proofs(&cx, network, references, coverage)?;
     if slot == TxSlot::Lone {
         H19::verify_lone(tx)?;
         coverage.insert(<H19 as rules::Rule>::ROW);

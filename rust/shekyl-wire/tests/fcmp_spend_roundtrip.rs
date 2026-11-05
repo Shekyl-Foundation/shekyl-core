@@ -423,17 +423,17 @@ fn synthetic_spend_prefix_hash_is_pinned() {
 
 #[test]
 fn synthetic_spend_pqc_signing_payload_hashes_are_pinned() {
-    // Per-input PQC signing preimage (§1.1): payload(i) = pruned ‖ prunable_hash ‖
-    // header(i) ‖ key_hashes, hashed with the network id under
-    // shekyl/fcmp-spend-signing-v1 (here the harness id). The captured KAT
-    // (`pqc_signing_preimage_kat.rs`) holds the derivation to the specification's
-    // output over real transactions; this pins one synthetic body against drift.
+    // Per-input PQC signing hash (§1.1; the signing envelope §2.2):
+    // frame("shekyl/fcmp-spend-signing-v2", id, [tx_signable, header(i),
+    // key_hashes, prunable_hash]) on the harness id. The captured KAT
+    // (`pqc_signing_preimage_kat.rs`) holds the derivation to an independent
+    // oracle over real transactions; this pins one synthetic body against drift.
     let tx = synthetic_spend();
     let hashes = tx.pqc_signing_payload_hashes(&shekyl_network::HARNESS_NETWORK_ID);
     assert_eq!(hashes.len(), 1, "one PQC signing hash per input");
     assert_eq!(
         hashes[0].to_string(),
-        "37c316716448a8e080953215c1921bc9c2d256a8084a439acc8e901cdbd3bb23",
+        "faf54a6b311ad25cab1ab1efdfabc3b6656700b5507b82561b5c68dcd5b95224",
         "FCMP++ PQC signing preimage drifted (§1.1)"
     );
     // Structural: the fee is bound into the preimage (it lives in ct_base_blob), so

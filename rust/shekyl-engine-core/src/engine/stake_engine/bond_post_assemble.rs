@@ -155,8 +155,10 @@ pub(crate) async fn assemble_signed_bond_post(
     let fee = args.fee;
     let extra_input_terms = args.extra_input_terms;
     let extra_output_terms = args.extra_output_terms;
+    let network_id = args.network;
     let (signed, spend_inputs) = tokio::task::spawn_blocking(move || {
         sign_transaction_with_terms(
+            &network_id,
             prefix_hash,
             &spend_inputs,
             &outputs_for_prove,

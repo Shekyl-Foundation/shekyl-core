@@ -88,30 +88,6 @@ pub unsafe extern "C" fn shekyl_derive_pqc_leaf_entry(
     }
 }
 
-/// Derive the canonical hybrid public key bytes from combined shared secret and
-/// output index. No secret material crosses this boundary.
-///
-/// # Safety
-/// - `combined_ss_ptr` must point to 64 bytes.
-/// - Returns a heap-allocated ShekylBuffer that must be freed with `shekyl_buffer_free`.
-#[no_mangle]
-pub unsafe extern "C" fn shekyl_derive_pqc_public_key(
-    combined_ss_ptr: *const u8,
-    output_index: u64,
-) -> ShekylBuffer {
-    if combined_ss_ptr.is_null() {
-        return ShekylBuffer::null();
-    }
-    // Rule 35's FFI clause: the shared-secret copy wipes on every exit.
-    let mut ss = Zeroizing::new([0u8; 64]);
-    std::ptr::copy_nonoverlapping(combined_ss_ptr, ss.as_mut_ptr(), 64);
-
-    match shekyl_crypto_pq::derivation::derive_pqc_public_key(&ss, output_index) {
-        Ok(pk) => ShekylBuffer::from_vec(pk),
-        Err(_) => ShekylBuffer::null(),
-    }
-}
-
 /// Derive all per-output secrets from the combined KEM shared secret.
 ///
 /// Writes to 7 output pointers: ho(32), y(32), z(32), k_amount(32),

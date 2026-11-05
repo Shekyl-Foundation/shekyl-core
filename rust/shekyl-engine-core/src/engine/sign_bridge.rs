@@ -514,6 +514,7 @@ pub(crate) fn sign_tx(local: &LocalKeys, tx: &TxToSign) -> Result<TxSignatures, 
     let prefix_hash = tx_prefix_hash_from_parts(&key_images, &output_keys, &view_tags, &tx_extra);
 
     let signed = tx_sign_proofs(
+        &tx.network.network_id(),
         prefix_hash,
         &spend_inputs,
         &output_infos,

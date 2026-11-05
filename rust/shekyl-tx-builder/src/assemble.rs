@@ -30,7 +30,7 @@ use shekyl_wire::Input;
 use crate::error::TxBuilderError;
 use crate::sign::sign_pqc_auths;
 use crate::types::{PqcAuth, SignedProofs, SpendInput, PQC_AUTH_VERSION};
-use crate::wire::{encode_final_tx, phase1_payload_hashes, WireEncodeInput};
+use crate::wire::{build_wire_tx, encode_final_tx, phase1_payload_hashes, WireEncodeInput};
 
 /// Hybrid public keys that occupy `pqc_auths`, split by who signs them.
 ///
@@ -176,6 +176,16 @@ pub fn open_spend(
             .collect(),
         fcmp_layers: signed.tree_depth,
     };
+
+    let proved_over = signed.tx_signable;
+    let assembled = build_wire_tx(&wire)?.tx_signable(network);
+    if assembled != proved_over {
+        return Err(TxBuilderError::WireError(
+            "the assembled transaction's tx_signable is not the one its proofs were made over \
+             (the layout's prefix, fee or outputs differ from what was signed)"
+                .into(),
+        ));
+    }
 
     let payload_hashes = phase1_payload_hashes(&wire, network)?;
     if payload_hashes.len() != slot_count {
@@ -327,6 +337,7 @@ mod tests {
             pqc_auths: Vec::new(),
             reference_block: BlockHash::from_bytes([0; 32]),
             tree_depth: 2,
+            tx_signable: shekyl_types::TxSignableHash::from_bytes([0; 32]),
         }
     }
 

@@ -98,6 +98,7 @@ fn dummy_tree() -> TreeContext {
 #[test]
 fn test_no_inputs() {
     let result = sign_transaction(
+        &shekyl_network::HARNESS_NETWORK_ID,
         PrefixHash::from_bytes([0u8; 32]),
         &[],
         &[dummy_output(100)],
@@ -111,6 +112,7 @@ fn test_no_inputs() {
 fn test_too_many_inputs() {
     let inputs: Vec<SpendInput> = (0..=MAX_INPUTS).map(|_| dummy_spend_input(100)).collect();
     let result = sign_transaction(
+        &shekyl_network::HARNESS_NETWORK_ID,
         PrefixHash::from_bytes([0u8; 32]),
         &inputs,
         &[dummy_output(100)],
@@ -123,6 +125,7 @@ fn test_too_many_inputs() {
 #[test]
 fn test_no_outputs() {
     let result = sign_transaction(
+        &shekyl_network::HARNESS_NETWORK_ID,
         PrefixHash::from_bytes([0u8; 32]),
         &[dummy_spend_input(100)],
         &[],
@@ -136,6 +139,7 @@ fn test_no_outputs() {
 fn test_too_many_outputs() {
     let outputs: Vec<OutputInfo> = (0..=MAX_OUTPUTS).map(|_| dummy_output(100)).collect();
     let result = sign_transaction(
+        &shekyl_network::HARNESS_NETWORK_ID,
         PrefixHash::from_bytes([0u8; 32]),
         &[dummy_spend_input(100 * (MAX_OUTPUTS as u64 + 1))],
         &outputs,
@@ -148,6 +152,7 @@ fn test_too_many_outputs() {
 #[test]
 fn test_zero_input_amount() {
     let result = sign_transaction(
+        &shekyl_network::HARNESS_NETWORK_ID,
         PrefixHash::from_bytes([0u8; 32]),
         &[dummy_spend_input(0)],
         &[dummy_output(100)],
@@ -163,6 +168,7 @@ fn test_zero_input_amount() {
 #[test]
 fn test_zero_output_amount() {
     let result = sign_transaction(
+        &shekyl_network::HARNESS_NETWORK_ID,
         PrefixHash::from_bytes([0u8; 32]),
         &[dummy_spend_input(100)],
         &[dummy_output(0)],
@@ -179,6 +185,7 @@ fn test_zero_output_amount() {
 fn test_input_amount_overflow() {
     let inputs = vec![dummy_spend_input(u64::MAX), dummy_spend_input(1)];
     let result = sign_transaction(
+        &shekyl_network::HARNESS_NETWORK_ID,
         PrefixHash::from_bytes([0u8; 32]),
         &inputs,
         &[dummy_output(100)],
@@ -192,6 +199,7 @@ fn test_input_amount_overflow() {
 fn test_output_amount_overflow() {
     let outputs = vec![dummy_output(u64::MAX), dummy_output(1)];
     let result = sign_transaction(
+        &shekyl_network::HARNESS_NETWORK_ID,
         PrefixHash::from_bytes([0u8; 32]),
         &[dummy_spend_input(u64::MAX)],
         &outputs,
@@ -204,6 +212,7 @@ fn test_output_amount_overflow() {
 #[test]
 fn test_output_plus_fee_overflow() {
     let result = sign_transaction(
+        &shekyl_network::HARNESS_NETWORK_ID,
         PrefixHash::from_bytes([0u8; 32]),
         &[dummy_spend_input(u64::MAX)],
         &[dummy_output(u64::MAX)],
@@ -216,6 +225,7 @@ fn test_output_plus_fee_overflow() {
 #[test]
 fn test_insufficient_funds() {
     let result = sign_transaction(
+        &shekyl_network::HARNESS_NETWORK_ID,
         PrefixHash::from_bytes([0u8; 32]),
         &[dummy_spend_input(50)],
         &[dummy_output(100)],
@@ -231,6 +241,7 @@ fn test_insufficient_funds() {
 #[test]
 fn test_insufficient_funds_with_fee() {
     let result = sign_transaction(
+        &shekyl_network::HARNESS_NETWORK_ID,
         PrefixHash::from_bytes([0u8; 32]),
         &[dummy_spend_input(100)],
         &[dummy_output(100)],
@@ -248,6 +259,7 @@ fn test_empty_leaf_chunk() {
     let mut input = dummy_spend_input(100);
     input.leaf_chunk.clear();
     let result = sign_transaction(
+        &shekyl_network::HARNESS_NETWORK_ID,
         PrefixHash::from_bytes([0u8; 32]),
         &[input],
         &[dummy_output(100)],
@@ -266,6 +278,7 @@ fn test_leaf_chunk_too_large() {
     let width = shekyl_fcmp::SELENE_CHUNK_WIDTH;
     input.leaf_chunk = vec![dummy_leaf_entry(); width + 1];
     let result = sign_transaction(
+        &shekyl_network::HARNESS_NETWORK_ID,
         PrefixHash::from_bytes([0u8; 32]),
         &[input],
         &[dummy_output(100)],
@@ -283,6 +296,7 @@ fn test_zero_tree_depth() {
     let mut tree = dummy_tree();
     tree.tree_depth = 0;
     let result = sign_transaction(
+        &shekyl_network::HARNESS_NETWORK_ID,
         PrefixHash::from_bytes([0u8; 32]),
         &[dummy_spend_input(100)],
         &[dummy_output(100)],
@@ -299,6 +313,7 @@ fn test_branch_layer_mismatch() {
     input.c1_layers = vec![vec![[10u8; 32]], vec![[11u8; 32]]];
     input.c2_layers = vec![];
     let result = sign_transaction(
+        &shekyl_network::HARNESS_NETWORK_ID,
         PrefixHash::from_bytes([0u8; 32]),
         &[input],
         &[dummy_output(100)],
@@ -316,6 +331,7 @@ fn test_invalid_combined_ss_length() {
     let mut input = dummy_spend_input(100);
     input.combined_ss = vec![0u8; 10]; // wrong length
     let result = sign_transaction(
+        &shekyl_network::HARNESS_NETWORK_ID,
         PrefixHash::from_bytes([0u8; 32]),
         &[input],
         &[dummy_output(100)],

@@ -382,6 +382,7 @@ fn assemble(
     // Step 15: the fee-side proving, the mint as the input-side cleartext
     // term — `Σ pseudoOuts + total_reward·H = Σ masks + fee·H` (CEN-H22).
     let mut signed = sign_transaction_with_terms(
+        &shekyl_network::HARNESS_NETWORK_ID,
         prefix_hash,
         &spend_inputs,
         &output_infos,

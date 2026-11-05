@@ -171,10 +171,26 @@ def name_id(name: str) -> bytes:
     return cshake256(f"shekyl/{name}".encode("ascii"), 32, s=NETWORK_NAME_DST)[:16]
 
 
+def keccak256(data: bytes) -> bytes:
+    """Keccak-256 with the original 0x01 padding (not SHA3-256): the txid's
+    and the prefix hash's function."""
+    return _sponge(data, _RATE, 0x01, 32)
+
+
+# Keccak-256 of the empty string and of "abc", the published values.
+KECCAK256_SAMPLES = (
+    (b"", "c5d2460186f7233c927e7db2dcc703c0e500b653ca82273b7bfad8045d85a470"),
+    (b"abc", "4e03657aea45a94fc7d47ba826c8d667c0d1e6e33a64a036ec44f58fa12d6c45"),
+)
+
+
 def anchor_sponge() -> None:
     for msg in (b"", b"abc", bytes(range(200))):
         if cshake256(msg, 32) != hashlib.shake_256(msg).digest(32):
             sys.exit("the Keccak sponge disagrees with hashlib's SHAKE256")
+    for msg, want in KECCAK256_SAMPLES:
+        if keccak256(msg).hex() != want:
+            sys.exit("Keccak-256 disagrees with its published value")
     for data, want in NIST_CSHAKE256_SAMPLES:
         if cshake256(data, 64, s=b"Email Signature").hex() != want:
             sys.exit("cSHAKE256 disagrees with NIST SP 800-185's published sample")

@@ -10,7 +10,7 @@
 
 use serde::{Deserialize, Serialize};
 use shekyl_crypto_pq::output::EncryptedOutputField;
-use shekyl_types::{BlockHash, CurveTreeRoot};
+use shekyl_types::{BlockHash, CurveTreeRoot, TxSignableHash};
 use shekyl_units::AtomicUnits;
 use zeroize::{Zeroize, ZeroizeOnDrop};
 
@@ -372,4 +372,10 @@ pub struct SignedProofs {
     pub reference_block: BlockHash,
     /// Tree depth (echo back for CtSig).
     pub tree_depth: u8,
+    /// The `tx_signable` the FCMP++ proof was made over (the signing
+    /// envelope §2.2). [`crate::open_spend`] holds the assembled
+    /// transaction to it: a layout whose prefix or base differs from what
+    /// was proved is refused there, not by the daemon.
+    #[serde(with = "hex_typed_hash")]
+    pub tx_signable: TxSignableHash,
 }

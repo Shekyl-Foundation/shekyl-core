@@ -45,7 +45,9 @@ use std::io::{self, BufRead, Read, Write};
 
 use shekyl_crypto_hash::keccak256;
 use shekyl_types::archival::{ReceiptSignPk, RECEIPT_SIGN_PK_LEN};
-use shekyl_types::{ArchivalLength, BlockHash, PCanonicalId, PrefixHash, MAX_HOLDINGS_SHARDS};
+use shekyl_types::{
+    ArchivalLength, BlockHash, CtBaseHash, PCanonicalId, PrefixHash, MAX_HOLDINGS_SHARDS,
+};
 
 use crate::bytes::{read_array, read_byte};
 use crate::tx_extra::{check_tx_extra_shape, parse as parse_tx_extra, ExtraSubject};
@@ -960,6 +962,34 @@ pub struct CtBase {
     pub commitments: Vec<[u8; CT_COMMITMENT_LEN]>,
 }
 
+/// The FCMP++ base segment: `CT_TYPE_FCMP ‖ varint(fee) ‖ reference_block
+/// ‖ base` — the one serializer [`Ct::write_base`] and [`fcmp_base_hash`]
+/// share, so a builder that has not assembled the transaction yet hashes
+/// the same bytes the txid will.
+fn write_fcmp_base<W: Write>(
+    fee: u64,
+    reference_block: &BlockHash,
+    base: &CtBase,
+    w: &mut W,
+) -> io::Result<()> {
+    w.write_all(&[CT_TYPE_FCMP])?;
+    write_varint(fee, w)?;
+    w.write_all(reference_block.as_bytes())?;
+    base.write(w)
+}
+
+/// `H(base)` of an FCMP++ body from its parts: what [`Ct::base_hash`]
+/// returns for `Ct::Fcmp { fee, reference_block, base, .. }`, by the same
+/// serializer. The signer reads it before the proofs exist (they are not in
+/// the base), so the message it proves over is the one the verifier derives
+/// from the finished transaction.
+#[must_use]
+pub fn fcmp_base_hash(fee: u64, reference_block: &BlockHash, base: &CtBase) -> CtBaseHash {
+    let mut buf = Vec::new();
+    write_fcmp_base(fee, reference_block, base, &mut buf).expect("writing to a Vec is infallible");
+    CtBaseHash::from_bytes(keccak256(&buf))
+}
+
 impl CtBase {
     fn write<W: Write>(&self, w: &mut W) -> io::Result<()> {
         for amount in &self.enc_amounts {
@@ -1314,13 +1344,20 @@ impl Ct {
                 reference_block,
                 base,
                 ..
-            } => {
-                w.write_all(&[CT_TYPE_FCMP])?;
-                write_varint(*fee, w)?;
-                w.write_all(reference_block.as_bytes())?;
-                base.write(w)
-            }
+            } => write_fcmp_base(*fee, reference_block, base, w),
         }
+    }
+
+    /// `H(base)`: `keccak256` of the base segment ([`Self::write_base`]),
+    /// the txid's second component (GENESIS_TX_WIRE_FORMAT.md §11). The
+    /// txid and [`TxSignableHash`](shekyl_types::TxSignableHash) both read
+    /// it here.
+    #[must_use]
+    pub fn base_hash(&self) -> CtBaseHash {
+        let mut buf = Vec::new();
+        self.write_base(&mut buf)
+            .expect("writing to a Vec is infallible");
+        CtBaseHash::from_bytes(keccak256(&buf))
     }
 
     /// The tx-level `pqc_auths`: count == nvin, no length prefix (empty in
@@ -1595,7 +1632,7 @@ pub use txid::{
 };
 
 mod signing_preimage;
-pub use signing_preimage::{PqcSigningPreimage, SPEND_SIGNING_CUSTOMIZATION};
+pub use signing_preimage::{tx_signable, PqcSigningPreimage, FCMP_SPEND_SIGNING, TX_SIGNABLE};
 
 /// A transaction's bytes as the chain store's three segments.
 ///

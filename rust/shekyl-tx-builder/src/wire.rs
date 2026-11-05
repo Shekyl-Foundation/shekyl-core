@@ -138,7 +138,7 @@ fn wire_outputs(
 /// C++ daemon: the version is part of the prefix hash, `reference_block` is a 32-byte
 /// hash in the *base*, the prunable is `nbp ‖ bp+ ‖ tree_depth ‖ proof ‖ pseudoOuts`, and
 /// the pqc_header uses a varint public-key length.
-fn build_wire_tx(input: &WireEncodeInput) -> Result<Transaction, TxBuilderError> {
+pub(crate) fn build_wire_tx(input: &WireEncodeInput) -> Result<Transaction, TxBuilderError> {
     // Enforce the wire arity couplings up front: the committed-base arrays are per-output
     // and pqc_auths / pseudo_outs are per-input (the invariants `Transaction::validate`
     // assumes). A mismatch would otherwise serialize a tx only the daemon (or

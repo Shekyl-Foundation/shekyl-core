@@ -223,7 +223,7 @@ fn verify_spend(
     // of a spend is `ToKey`, so the leaf set is all auths.
     let (tree_root, layers) = fcmp_reference_layers(facts, prunable)?;
     let leaf_auths: Vec<&PqcAuth> = pqc_auths.iter().collect();
-    verify_fcmp(parsed, prunable, &leaf_auths, &tree_root, layers)?;
+    verify_fcmp(parsed, prunable, &leaf_auths, &tree_root, layers, network)?;
 
     // ── K13: PQC hybrid auth (per-input scheme validity; MSW-6 dropped the
     // former tx-wide scheme-id agreement — see verify_pqc_auths) ─────────
@@ -377,7 +377,14 @@ fn verify_bond_post(
         .zip(pqc_auths.iter())
         .filter_map(|(input, auth)| matches!(input, Input::ToKey { .. }).then_some(auth))
         .collect();
-    verify_fcmp(parsed, prunable, &funding_auths, &tree_root, layers)?;
+    verify_fcmp(
+        parsed,
+        prunable,
+        &funding_auths,
+        &tree_root,
+        layers,
+        network,
+    )?;
 
     // ── K13: PQC hybrid auth over EVERY input, the bond-post slot
     // included — exactly the C++ `verify_transaction_pqc_auth` battery ───
@@ -664,7 +671,14 @@ fn verify_emission(
             .zip(pqc_auths.iter())
             .filter_map(|(input, auth)| matches!(input, Input::ToKey { .. }).then_some(auth))
             .collect();
-        verify_fcmp(parsed, prunable, &fee_auths, &reference.root, layers)?;
+        verify_fcmp(
+            parsed,
+            prunable,
+            &fee_auths,
+            &reference.root,
+            layers,
+            network,
+        )?;
     }
 
     // ── E12 / K13: PQC hybrid auth over EVERY slot, emission included ───
@@ -996,6 +1010,7 @@ fn verify_fcmp(
     leaf_auths: &[&PqcAuth],
     tree_root: &[u8; 32],
     layers: u8,
+    network: &NetworkId,
 ) -> Result<(), VerifyReject> {
     // One PQC key scalar `k = H_ℓ(hybrid_public_key)` per spending input,
     // submission order — the same value the C++ caller computes per input via
@@ -1032,9 +1047,9 @@ fn verify_fcmp(
         tree_depth: layers,
     };
 
-    // The signable hash is the canonical prefix hash — the C++ caller's
-    // `get_transaction_prefix_hash(tx)` (blockchain.cpp:3372, threaded to
-    // the verify at :3849).
+    // The proof is over the transaction's network-bound message,
+    // `tx_signable` (the signing envelope §2.2): the prefix hash and the
+    // base hash framed under this network's id.
     match proof::verify(
         &fcmp_proof,
         &key_images,
@@ -1043,7 +1058,7 @@ fn verify_fcmp(
         tree_root,
         layers,
         // Proof-crate boundary: the verifier takes the signable hash as bytes.
-        parsed.tx.prefix_hash().to_bytes(),
+        parsed.tx.tx_signable(network).to_bytes(),
     ) {
         Ok(true) => Ok(()),
         // `verify` never returns `Ok(false)` today (failures are `Err`);

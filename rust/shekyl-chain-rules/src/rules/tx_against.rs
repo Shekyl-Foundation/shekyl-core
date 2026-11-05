@@ -32,6 +32,7 @@
 //! This module reads the chain and compares that claim; it does not verify
 //! again. I17 and I18 are re-exported so the census path stays.
 
+use shekyl_network::NetworkId;
 use std::collections::BTreeSet;
 
 use crate::block::VerifiedReference;
@@ -494,6 +495,7 @@ impl I15 {
         tx: &Transaction,
         spend_slots: &[usize],
         reference: &ReferenceContext,
+        network: &NetworkId,
     ) -> Result<(), ()> {
         let Ct::Fcmp {
             pqc_auths,
@@ -540,7 +542,9 @@ impl I15 {
             &pqc_keys,
             reference.anchor.as_bytes(),
             layers,
-            tx.prefix_hash().to_bytes(),
+            // The transaction's network-bound message (the signing
+            // envelope §2.2): a proof made for another network fails here.
+            tx.tx_signable(network).to_bytes(),
         ) {
             Ok(true) => Ok(()),
             Ok(false) | Err(_) => Err(()),

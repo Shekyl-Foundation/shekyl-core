@@ -427,8 +427,10 @@ pub(super) async fn assemble_drain_tx(
     }
     let outputs_for_prove = output_infos.clone();
     let tree = tree_ctx;
+    let network_id = *network;
     let (signed, spend_inputs) = tokio::task::spawn_blocking(move || {
         sign_transaction(
+            &network_id,
             prefix_hash,
             &spend_inputs,
             &outputs_for_prove,

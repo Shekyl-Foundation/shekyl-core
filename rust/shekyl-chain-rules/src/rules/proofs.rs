@@ -107,6 +107,7 @@ const PROOF_ROWS: [CenRow; 3] = [I15::ROW, J26::ROW, J27::ROW];
 /// ([`crate::judge_lone_stateless`]).
 pub(crate) fn judge_proofs(
     cx: &TxContext<'_>,
+    network: &NetworkId,
     claims: &ReferenceClaims,
     coverage: &mut RuleCoverage,
 ) -> Verdict<Option<VerifiedReference>> {
@@ -151,7 +152,7 @@ pub(crate) fn judge_proofs(
         anchor: claim.root,
         tree_depth,
     };
-    if I15::verify(cx.tx, &to_key_slots(cx.tx), &context).is_err() {
+    if I15::verify(cx.tx, &to_key_slots(cx.tx), &context, network).is_err() {
         return Err(InvalidBlock::new(row, cx.locus()));
     }
     coverage.insert(row);

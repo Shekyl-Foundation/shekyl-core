@@ -747,6 +747,7 @@ impl Spender {
         )
         .expect("the prefix hashes");
         let mut signed = sign_transaction_with_terms(
+            &Self::NETWORK_ID,
             tx_prefix_hash,
             &spend_inputs,
             &outputs,

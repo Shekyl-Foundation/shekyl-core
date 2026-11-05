@@ -233,7 +233,6 @@ mod legacy_core;
 mod legacy_curve_tree;
 mod legacy_fcmp;
 mod legacy_frost;
-mod legacy_kem;
 mod legacy_proofs;
 mod legacy_tx;
 mod legacy_types;
@@ -249,8 +248,6 @@ pub use legacy_curve_tree::*;
 pub use legacy_fcmp::*;
 #[allow(unused_imports)]
 pub use legacy_frost::*;
-#[allow(unused_imports)]
-pub use legacy_kem::*;
 #[allow(unused_imports)]
 pub use legacy_proofs::*;
 #[allow(unused_imports)]

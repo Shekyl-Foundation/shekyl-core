@@ -2767,6 +2767,7 @@ async fn real_tree_bond_post_proofs() -> RealTreeBondProofs {
     // ── Prove over the REAL tree: bond_credit is the sole cleartext term ─
     let credit_term = built.credit_term();
     let signed = sign_transaction_with_terms(
+        &shekyl_network::HARNESS_NETWORK_ID,
         signable_tx_hash,
         &inputs,
         &outputs,

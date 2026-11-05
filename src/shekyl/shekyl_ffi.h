@@ -457,14 +457,6 @@ bool shekyl_derive_pqc_leaf_entry(
     uint64_t output_index,
     uint8_t* leaf_entry_out); // 64 bytes: the output's 0x07 entry CM || record (PL-D3)
 
-/// Derive canonical hybrid public key bytes from combined KEM shared secret
-/// and output index. Secret key derived internally and zeroized; never returned.
-/// combined_ss_ptr: 64 bytes. Returns heap-allocated buffer; free with
-/// shekyl_buffer_free.
-ShekylBuffer shekyl_derive_pqc_public_key(
-    const uint8_t* combined_ss_ptr,
-    uint64_t output_index);
-
 /// Derive all per-output secrets from the combined KEM shared secret.
 /// Writes: ho(32), y(32), z(32), k_amount(32), view_tag_combined(1),
 /// amount_tag(1), ml_dsa_seed(32). Returns true on success.
@@ -548,89 +540,6 @@ uint8_t shekyl_fcmp_membership_only_verify(
 ShekylBuffer shekyl_fcmp_outputs_to_leaves(
     const uint8_t* outputs_ptr,
     size_t count);
-
-// ─── FCMP++: KEM operations ─────────────────────────────────────────────────
-
-/// Generate hybrid X25519 + ML-KEM-768 keypair.
-ShekylPqcKeypair shekyl_kem_keypair_generate();
-
-// ─── Output Construction / Scanning / PQC Signing ────────────────────────────
-
-/// Result of construct_output.
-struct ShekylOutputData {
-    uint8_t output_key[32];
-    uint8_t commitment[32];
-    uint8_t enc_amount[8];
-    uint8_t amount_tag;
-    uint8_t enc_label[8];
-    uint8_t label_tag;
-    uint8_t view_tag_prefilter;
-    uint8_t kem_ciphertext_x25519[32];
-    ShekylBuffer kem_ciphertext_ml_kem;
-    ShekylBuffer pqc_public_key;
-    /// The output's 64-byte tx_extra 0x07 entry CM || record (PL-D3).
-    uint8_t pqc_leaf[64];
-    uint8_t y[32];
-    uint8_t z[32];
-    uint8_t k_amount[32];
-    bool success;
-};
-
-/// Construct a two-component output via unified HKDF path.
-/// tx_key_secret: 32-byte ephemeral transaction secret key (drives KEM encapsulation).
-ShekylOutputData shekyl_construct_output(
-    const uint8_t* tx_key_secret,
-    const uint8_t* x25519_pk,
-    const uint8_t* ml_kem_ek,
-    size_t ml_kem_ek_len,
-    const uint8_t* spend_key,
-    uint64_t amount,
-    uint64_t output_index);
-
-/// Free heap-allocated fields in ShekylOutputData.
-void shekyl_output_data_free(ShekylOutputData* data);
-
-// ─── Merged scan + key image (PR-wallet Phase 1b) ────────────────────────────
-
-/// Scan an output, recover all secrets, and compute the key image — all in one
-/// call. Secret outputs are written into caller-provided buffers. Production
-/// scan does not use this export (`shekyl-scanner` calls the Rust functions);
-/// the remaining callers are tests. `transfer_details` left with the C++ wallet.
-///
-/// persist_combined_ss: if false, Rust wipes combined_ss internally and
-///   combined_ss_out is ignored (pass nullptr). If true, Rust writes directly
-///   to combined_ss_out (64 bytes).
-///
-/// Returns true on success (output belongs to this wallet).
-bool shekyl_scan_and_recover(
-    const uint8_t* x25519_sk,
-    const uint8_t* ml_kem_dk,
-    size_t ml_kem_dk_len,
-    const uint8_t* kem_ct_x25519,
-    const uint8_t* kem_ct_ml_kem,
-    size_t kem_ct_ml_kem_len,
-    const uint8_t* output_key,
-    const uint8_t* commitment,
-    const uint8_t* enc_amount,
-    uint8_t amount_tag_on_chain,
-    const uint8_t* enc_label,
-    uint8_t label_tag_on_chain,
-    uint8_t view_tag_on_chain,
-    uint64_t output_index,
-    const uint8_t* spend_secret_key,
-    const uint8_t* hp_of_O,
-    bool persist_combined_ss,
-    uint8_t* ho_out,
-    uint8_t* y_out,
-    uint8_t* z_out,
-    uint8_t* k_amount_out,
-    uint64_t* amount_out,
-    uint8_t* recovered_spend_key_out,
-    uint8_t* key_image_out,
-    uint8_t* combined_ss_out,
-    ShekylBuffer* pqc_pk_out,
-    ShekylBuffer* pqc_sk_out,
-    uint8_t* leaf_entry_out); // 64 bytes: the output's 0x07 entry CM || record (PL-D3)
 
 // ─── Wallet proofs (6 exports) ───────────────────────────────────────────────
 ///
@@ -751,24 +660,6 @@ bool shekyl_verify_reserve_proof(
     const uint8_t* enc_amounts,            // output_count * 8 bytes
     uint32_t output_count,
     uint64_t* total_amount_out);
-
-/// PQC auth result (hybrid pk + signature).
-struct ShekylPqcAuthResult {
-    ShekylBuffer hybrid_public_key;
-    ShekylBuffer signature;
-    bool success;
-};
-
-/// Sign using HKDF-derived hybrid PQC keypair. ML-DSA secret key never
-/// crosses this boundary — derived, used, and wiped entirely in Rust.
-ShekylPqcAuthResult shekyl_sign_pqc_auth(
-    const uint8_t* combined_ss,
-    uint64_t output_index,
-    const uint8_t* message,
-    size_t message_len);
-
-/// Free a ShekylPqcAuthResult. Wipes signature and key material before deallocation.
-void shekyl_pqc_auth_result_free(ShekylPqcAuthResult* result);
 
 // ─── FCMP++: Curve tree hash operations ─────────────────────────────────────
 
@@ -1114,8 +1005,8 @@ bool shekyl_tx_prunable_hash(
 /// different bytes and the caller holds no secret (rule 36). If the OS
 /// random source or key generation fails the call returns 104 with a
 /// message and builds nothing; there is no fallback value. kem is
-/// 1120·n_outputs bytes and leaf 64·n_outputs, as shekyl_construct_output
-/// produced them; anything else is refused with the shape code naming the
+/// 1120·n_outputs bytes and leaf 64·n_outputs, as the wallet's output
+/// construction produces them; anything else is refused with the shape code naming the
 /// field, so a template that could not pass admission is refused at
 /// construction, not at the miner.
 int32_t shekyl_coinbase_extra(
@@ -1201,56 +1092,6 @@ bool shekyl_construct_curve_tree_leaf(
     const uint8_t* commitment_ptr,
     const uint8_t* cm_point_ptr,
     uint8_t* leaf_out_ptr);
-
-// ─── Transaction Builder ─────────────────────────────────────────────────────
-/// Single-call FCMP++ proof generation: BP+, membership proof, pseudo-outs.
-/// Rust owns all witness assembly. C++ never touches ephemeral spend secrets.
-
-/// Result of shekyl_sign_fcmp_transaction.
-/// On success: proofs_json contains JSON-encoded SignedProofs; error_code == 0.
-/// On failure: proofs_json is null; error_code < 0; error_message describes the failure.
-/// The caller must free proofs_json and error_message via shekyl_buffer_free.
-struct ShekylSignResult {
-    ShekylBuffer proofs_json;
-    bool success;
-    int32_t error_code;
-    ShekylBuffer error_message;
-};
-
-/// Collapsed FCMP++ signing: Rust owns all witness assembly.
-///
-/// C++ passes the wallet master spend key `b` (one value, not per-input) plus
-/// per-input data that includes combined_ss + output_index. Rust derives
-/// x = ho + b and y internally. C++ never touches x.
-///
-/// Input JSON format (FcmpSignInput):
-///   {ki, combined_ss (hex, 128 chars), output_index, amount,
-///    commitment_mask, commitment, output_key,
-///    leaf_chunk, c1_layers, c2_layers}
-/// The input's own PQC leaf commitment and blind (PL-D3) are re-derived by
-/// Rust from combined_ss + output_index and checked against leaf_chunk before
-/// proving (a mismatch is the received-but-unspendable refusal, code -32).
-///
-/// @param spend_secret_ptr     32-byte wallet master private spend key (b).
-/// @param tx_prefix_hash_ptr   32-byte Keccak-256 hash of serialized tx prefix.
-/// @param inputs_json_ptr      JSON array of FcmpSignInput objects.
-/// @param outputs_json_ptr     JSON array of OutputInfo objects.
-/// @param fee                  Transaction fee in atomic units.
-/// @param reference_block_ptr  32-byte reference block hash.
-/// @param tree_root_ptr        32-byte Selene curve tree root.
-/// @param tree_depth           Number of curve tree layers (>= 1).
-///
-/// Error codes: -1 null pointer, -2 JSON parse, -5 key derivation error,
-///              -10..-29 TxBuilderError variants.
-ShekylSignResult shekyl_sign_fcmp_transaction(
-    const uint8_t* spend_secret_ptr,
-    const uint8_t* tx_prefix_hash_ptr,
-    const uint8_t* inputs_json_ptr, size_t inputs_json_len,
-    const uint8_t* outputs_json_ptr, size_t outputs_json_len,
-    uint64_t fee,
-    const uint8_t* reference_block_ptr,
-    const uint8_t* tree_root_ptr,
-    uint8_t tree_depth);
 
 /// The remnant's one RPC start (DAEMON_CONFIG_CUTOVER.md §2.3): serves the
 /// RPC section the Rust main() recorded on this core; every listener is

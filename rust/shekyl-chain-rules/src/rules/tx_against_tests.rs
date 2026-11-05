@@ -775,7 +775,7 @@ fn j27_refuses_a_proof_the_yielded_context_does_not_verify() {
         );
         let claims: ReferenceClaims = [(reference, claim)].into_iter().collect();
         assert_refused(
-            judge_proofs(&cx, &claims, &mut coverage),
+            judge_proofs(&cx, &crate::HARNESS_NETWORK_ID, &claims, &mut coverage),
             CenRow::J27,
             Locus::Tx { slot: TxSlot::Lone },
         );
@@ -1319,7 +1319,7 @@ fn the_doors_no_anchor_exits_each_end_in_a_refusal() {
             let claims = ReferenceClaims::for_transaction(&view, connecting, &tx).expect("claims");
             let mut coverage = RuleCoverage::EMPTY;
             let cx = TxContext::derive(&tx, TxSlot::Lone, &mut coverage).expect("a spend");
-            let proven = judge_proofs(&cx, &claims, &mut coverage)
+            let proven = judge_proofs(&cx, &crate::HARNESS_NETWORK_ID, &claims, &mut coverage)
                 .unwrap_or_else(|r| panic!("{name}: the proof exit, not a refusal: {r:?}"));
             assert_eq!(proven, None, "{name}: no anchor");
             match tx_against(
@@ -1358,7 +1358,10 @@ fn the_doors_no_anchor_exits_each_end_in_a_refusal() {
         let mut coverage = RuleCoverage::EMPTY;
         let cx = TxContext::derive(&in_window, TxSlot::Lone, &mut coverage).expect("a spend");
         assert!(
-            !matches!(judge_proofs(&cx, &claims, &mut coverage), Ok(None)),
+            !matches!(
+                judge_proofs(&cx, &crate::HARNESS_NETWORK_ID, &claims, &mut coverage),
+                Ok(None)
+            ),
             "a claimed reference is verified, not skipped"
         );
     });

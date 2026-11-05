@@ -97,13 +97,16 @@ fn off_the_emission_class_the_rows_are_recorded_vacuous() {
 #[test]
 fn i15_over_the_fee_subset_refuses_filler_and_requires_absence_over_nothing() {
     let tx = emission();
-    assert!(I15::verify(&tx, &[0], &REFERENCE).is_err(), "filler proof");
     assert!(
-        I15::verify(&tx, &[], &REFERENCE).is_err(),
+        I15::verify(&tx, &[0], &REFERENCE, &crate::HARNESS_NETWORK_ID).is_err(),
+        "filler proof"
+    );
+    assert!(
+        I15::verify(&tx, &[], &REFERENCE, &crate::HARNESS_NETWORK_ID).is_err(),
         "a proof over no spends"
     );
     assert!(
-        I15::verify(&tx, &[1], &REFERENCE).is_err(),
+        I15::verify(&tx, &[1], &REFERENCE, &crate::HARNESS_NETWORK_ID).is_err(),
         "the emission slot is not a spend"
     );
     let mut absent = tx;
@@ -114,11 +117,11 @@ fn i15_over_the_fee_subset_refuses_filler_and_requires_absence_over_nothing() {
         p.fcmp_proof.clear();
     }
     assert!(
-        I15::verify(&absent, &[], &REFERENCE).is_ok(),
+        I15::verify(&absent, &[], &REFERENCE, &crate::HARNESS_NETWORK_ID).is_ok(),
         "nothing to prove"
     );
     assert!(
-        I15::verify(&absent, &[0], &REFERENCE).is_err(),
+        I15::verify(&absent, &[0], &REFERENCE, &crate::HARNESS_NETWORK_ID).is_err(),
         "a spend with no proof"
     );
 }

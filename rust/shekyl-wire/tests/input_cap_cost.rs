@@ -446,6 +446,7 @@ fn measure(
 
     let started = Instant::now();
     let signed = sign_transaction(
+        &shekyl_network::HARNESS_NETWORK_ID,
         tx_prefix_hash,
         &spend_inputs,
         &outputs,

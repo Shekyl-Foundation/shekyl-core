@@ -585,8 +585,8 @@ hash32! {
     /// `TxHash([u8; 32])` previously defined in `shekyl-engine-core`.
     ///
     /// The **output** of the txid construction. Its inputs are the
-    /// component hashes — [`PrefixHash`] (first), the base hash (second,
-    /// never surfaced), [`PqcAuthHash`] (third), [`PrunableHash`] (fourth)
+    /// component hashes — [`PrefixHash`] (first), [`CtBaseHash`] (second),
+    /// [`PqcAuthHash`] (third), [`PrunableHash`] (fourth)
     /// — and each is a distinct type so no component can be passed where
     /// the txid is expected, or the txid where a component is
     /// (`RTN-7`, `RTN_7_WIRE_HASH_TYPES.md` Q3).
@@ -595,19 +595,43 @@ hash32! {
 
 hash32! {
     /// `keccak256(varint(TX_VERSION) ‖ transaction_prefix)` — the **first
-    /// component** of a transaction's [`TxHash`], and the FCMP++
-    /// `signable_tx_hash` the membership/SAL proof signs
-    /// (`FCMP_SPEND_SIGNING_PREIMAGE.md` §1.2; the C++ `cn_fast_hash` over
-    /// `transaction_prefix`, version varint first).
+    /// component** of a transaction's [`TxHash`] (the C++ `cn_fast_hash`
+    /// over `transaction_prefix`, version varint first), and the first
+    /// field of [`TxSignableHash`], which the membership/SAL proof proves
+    /// over (`FCMP_SPEND_SIGNING_PREIMAGE.md` §1.2).
     ///
-    /// A member of the component-hash family beside [`PqcAuthHash`] and
-    /// [`PrunableHash`], not a signing-specific category: the value the
-    /// builder signs *is* the txid's first component, and one type for one
+    /// A member of the component-hash family beside [`CtBaseHash`],
+    /// [`PqcAuthHash`] and [`PrunableHash`], not a signing-specific
+    /// category, and one type for one
     /// value is what lets the type system refuse the confusion a bare
     /// `[u8; 32]` permits — a prefix hash passed to `TxHash::from_bytes`, or
-    /// a txid handed to the signer (`RTN-7`, Q3). Distinct from [`TxHash`]
+    /// a txid handed where a component is (`RTN-7`, Q3). Distinct from [`TxHash`]
     /// in both directions.
     PrefixHash
+}
+
+hash32! {
+    /// `keccak256(ct_type ‖ fee ‖ reference_block ‖ base)` — the **second
+    /// component** of a transaction's [`TxHash`], `H(base)`
+    /// (GENESIS_TX_WIRE_FORMAT.md §11): the CT type, the fee and reference
+    /// block of an FCMP++ body, and the per-output encrypted amounts, labels
+    /// and commitments. Derived by the one function the txid uses
+    /// (`shekyl_wire`); [`TxSignableHash`] reads it there, never from a
+    /// second serializer (Rick's ruling 4 on the signing envelope).
+    CtBaseHash
+}
+
+hash32! {
+    /// `frame("shekyl/tx-signable-v1", network_id, [prefix_hash,
+    /// ct_base_hash])` — a transaction's **one network-bound message**
+    /// (the signing envelope §2.2; `NETWORK_IDENTITY.md` NI-F12 (b)). The
+    /// FCMP++ SAL (full and membership-only) and FROST prove over it, and
+    /// each input's hybrid signature hash ([`SigningPayloadHash`]) frames
+    /// it.
+    ///
+    /// Not a txid component: [`PrefixHash`] and [`CtBaseHash`] are its
+    /// fields, and the network id makes it valid on one network only.
+    TxSignableHash
 }
 
 hash32! {
@@ -653,10 +677,10 @@ hash32! {
 }
 
 hash32! {
-    /// `cSHAKE256-32(S = "shekyl/fcmp-spend-signing-v1", X = network_id ‖
-    /// payload(i))` — the **message one input's hybrid PQC signature is
-    /// over**: `payload(i) = pruned ‖ prunable_hash ‖ header(i) ‖ key_hashes`
-    /// (`FCMP_SPEND_SIGNING_PREIMAGE.md` §1.1; derived by
+    /// `frame("shekyl/fcmp-spend-signing-v2", network_id, [tx_signable,
+    /// header(i), key_hashes, prunable_hash])` — the **message one input's
+    /// hybrid PQC signature is over** (`FCMP_SPEND_SIGNING_PREIMAGE.md`
+    /// §1.1; the signing envelope §2.2; derived by
     /// `shekyl_wire::PqcSigningPreimage`), bound to one network
     /// (`NETWORK_IDENTITY.md` NI-Q4). The wallet signs it
     /// (`shekyl-tx-builder`), the daemon's submit verifier checks against it
@@ -667,8 +691,8 @@ hash32! {
     /// family: **not** [`PqcAuthHash`] (the txid's third component, over the
     /// `pqc_auths` themselves — this value is what those auths *sign*, and
     /// the two are one letter apart by name and 32 bytes apart by nature) and
-    /// **not** [`PrefixHash`] (the FCMP++ SAL's signable hash, the txid's
-    /// first component). One per `pqc_auths` entry; none for a body without
+    /// **not** [`TxSignableHash`] (what the FCMP++ SAL proves over, and
+    /// this hash's first field). One per `pqc_auths` entry; none for a body without
     /// them. Minted 2026-09-25 when the value gained its second consumer —
     /// the reopening criterion `RTN_7_WIRE_HASH_TYPES.md` §4 set when it
     /// stayed raw for one.

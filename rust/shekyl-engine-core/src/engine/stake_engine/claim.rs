@@ -416,8 +416,10 @@ impl Message<AssembleEmissionClaim> for StakeEngine {
         let outputs_for_prove = output_infos;
         let tree = msg.tree_ctx.clone();
         let reward_term = InputTerm::new(AtomicUnits::from_raw(total_reward));
+        let network_id = self.network;
         let (signed, spend_inputs, vin) = tokio::task::spawn_blocking(move || {
             let signed = sign_transaction_with_terms(
+                &network_id,
                 prefix_hash,
                 &spend_inputs,
                 &outputs_for_prove,

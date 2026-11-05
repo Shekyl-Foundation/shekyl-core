@@ -485,6 +485,7 @@ fn build_fixture() -> SpendFixture {
         &submit_fixtures::conforming_pqc_extra(2),
     );
     let signed = sign_transaction(
+        &NETWORK,
         tx_prefix_hash,
         std::slice::from_ref(&spend_input),
         &outputs,
@@ -707,6 +708,7 @@ fn build_bond_fixture(receipt: Option<&shekyl_types::archival::ReceiptSignPk>) -
 
     // ── Prove: the bond credit rides as the sole output-side term ────────
     let signed = sign_transaction_with_terms(
+        &NETWORK,
         tx_prefix_hash,
         std::slice::from_ref(&spend_input),
         &outputs,
@@ -1630,6 +1632,7 @@ fn build_release_fixture(auth_key: ReleaseAuthKey) -> ReleaseFixture {
     .expect("prefix hash with the release input");
 
     let signed = sign_transaction_with_terms(
+        &NETWORK,
         tx_prefix_hash,
         std::slice::from_ref(&spend_input),
         &outputs,
