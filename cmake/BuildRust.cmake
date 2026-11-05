@@ -213,6 +213,21 @@ if(RUST_TARGET_TRIPLE AND CMAKE_C_COMPILER AND NOT MSVC)
             string(APPEND _rust_link_args " -C link-arg=-mmacosx-version-min=10.16")
         endif()
 
+        # The stack protector's runtime on mingw. The forwarded flags compile
+        # the C inside crates (ring) with `-fstack-protector-strong` and
+        # `_FORTIFY_SOURCE`, whose `__stack_chk_fail`, `__stack_chk_guard` and
+        # `__*_chk` live in libssp there, not in the C runtime. gcc adds
+        # libssp itself when it sees those flags at link, but only from the
+        # default-libraries part of its spec, and rustc always links with
+        # `-nodefaultlibs`. A CMake link of the same objects had no such
+        # switch, which is why this surfaced only once `shekyld` became an
+        # all-cargo link. Static, so the binary needs no libssp DLL beside
+        # it; msvcrt again after it, because GNU ld does not go back to the
+        # earlier copy for what libssp itself calls.
+        if(RUST_TARGET_TRIPLE MATCHES "-windows-gnu$" AND _target_cflags MATCHES "-fstack-protector")
+            string(APPEND _rust_link_args " -C link-arg=-l:libssp.a -C link-arg=-lmsvcrt")
+        endif()
+
         string(STRIP "${_rust_link_args}" _rust_link_args)
         if(_rust_link_args)
             list(APPEND _rust_env_clear
