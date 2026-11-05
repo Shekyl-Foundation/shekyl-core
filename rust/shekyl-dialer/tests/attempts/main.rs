@@ -342,14 +342,18 @@ fn the_nonce_stays_in_flight_until_the_handshake_resolves() {
     dialer.apply_completions(CLEARNET, &mut rng);
 
     // A second attempt, answered: once the layer resolved it, its nonce
-    // is gone.
-    rig.peer.answer_next(Answer::Answered(reply(NETWORK)));
+    // is gone. The request is read before the peer answers, as a peer
+    // answers only what it has read: an answer injected at connect can
+    // resolve the dial and discard the unsent request first.
+    rig.peer.answer_next(Answer::Connect);
     let Launch::Running(id) = dialer.launch(CLEARNET, &mut rng) else {
         panic!("a second draw");
     };
-    dialer.wait_posted(id);
-    let socket = *rig.opened().last().expect("the second channel");
+    wait_until("the second channel opened", || rig.opened().len() == 2);
+    let socket = rig.opened()[1];
     let nonce = rig.request(socket).nonce;
+    rig.answer(socket, reply(NETWORK));
+    dialer.wait_posted(id);
     dialer.apply_completions(CLEARNET, &mut rng);
     assert_eq!(
         rig.layer.nonces().take(CLEARNET, &nonce),
