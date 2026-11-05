@@ -75,9 +75,7 @@ const PRODUCTION_PINS: [(&str, usize, usize); 7] = [
 // channel's hybridXK and the P2P handshake's NNhfs).
 const EXCLUDED_EXPECTED: usize = 10;
 // One derivation (NI-R7): +4 (the harness fixture wallet's fixed salt and its three infos).
-const TEST_ONLY_EXPECTED: usize = 11; // -1: archival-serve-challenge-leaf-v1 (the retired label's negative control) deleted, 2026-11-05
-// PC-D3: +1 — the retired `-v1` leaf label, kept only so the negative control
-// can assert the `-v2` derivation does not reproduce it.
+const TEST_ONLY_EXPECTED: usize = 11;
 
 /// Well-formed mechanism ids: `1`..=`7` (live mechanisms) or `x` (excluded).
 fn is_valid_mech(mech: &str) -> bool {

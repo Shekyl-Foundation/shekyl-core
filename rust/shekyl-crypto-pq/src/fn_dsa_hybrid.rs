@@ -577,9 +577,7 @@ mod tests {
         );
     }
     use crate::error::PqcVerifyError;
-    use crate::signature::{
-        verify_pqc_auth, SCHEME_DOMAIN_RECEIPT, SCHEME_DOMAIN_WITNESS_BUNDLE,
-    };
+    use crate::signature::{verify_pqc_auth, SCHEME_DOMAIN_RECEIPT, SCHEME_DOMAIN_WITNESS_BUNDLE};
 
     const D: &[u8] = SCHEME_DOMAIN_RECEIPT;
 

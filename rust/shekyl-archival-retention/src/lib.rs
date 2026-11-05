@@ -233,9 +233,8 @@ pub use reward_arithmetic::{
 };
 pub use secret_draw::{
     challenge_nonce, commit_and_discard, draw_commit, draw_count, draw_horizon, draw_target,
-    select_draw, DrawTarget, SelectedDraw,
-    CHALLENGE_NONCE_CUSTOMIZATION, CHALLENGE_READS, DRAW_ATTEMPTS, DRAW_COMMIT_CUSTOMIZATION,
-    DRAW_CUSTOMIZATION,
+    select_draw, DrawTarget, SelectedDraw, CHALLENGE_NONCE_CUSTOMIZATION, CHALLENGE_READS,
+    DRAW_ATTEMPTS, DRAW_COMMIT_CUSTOMIZATION, DRAW_CUSTOMIZATION,
 };
 pub use segment_freeze::{
     challenge_leaf_chunk_bounds, challenged_leaf_offset_in_chunk, LeafChunkBounds,

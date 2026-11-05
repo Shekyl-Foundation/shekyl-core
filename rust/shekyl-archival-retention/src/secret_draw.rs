@@ -16,7 +16,6 @@
 //! receipt scheme are Slice C's FN-DSA increment; this module is the
 //! hash side, which that increment does not move.
 
-
 use crate::hash::cshake256_32;
 use crate::ArchivalParams;
 
