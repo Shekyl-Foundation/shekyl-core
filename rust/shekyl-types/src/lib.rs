@@ -179,11 +179,12 @@ macro_rules! scalar_u64 {
     };
 }
 
-/// Defines a `[u8; 32]`-backed, transparent identity-hash newtype with
-/// `from_bytes` / `to_bytes` / `as_bytes`.
+/// Defines a transparent identity-hash newtype with `from_bytes` /
+/// `to_bytes` / `as_bytes`.
 ///
-/// Three arms, one per **exposure policy** — how much of the value may reach a
-/// string:
+/// Three 32-byte arms, one per **exposure policy** — how much of the value
+/// may reach a string. Their derives and accessors are shared (`@core`:
+/// `[u8; 32]`, serde, `Ord`, [`Hash32Bytes`]):
 ///
 /// | arm | `Debug` | `Display` | `AsRef<[u8]>` | for |
 /// | --- | --- | --- | --- | --- |
@@ -191,9 +192,16 @@ macro_rules! scalar_u64 {
 /// | `Name, redact` | first two bytes | full hex | yes | ids whose *log* leak correlates an origin edge, but whose hex encoding is a wire form (`PCanonicalId`) |
 /// | `Name, redact, no_display` | first two bytes | **none** | **no** | ids whose stringly-typed leak correlates a wallet to its on-chain spends (`KeyImage`) — `to_string()` and `hex::encode(value)` must not compile |
 ///
-/// The derives and accessors are shared (`@core`); `Display` is opt-in
-/// (`@display`); `AsRef<[u8]>` is opt-in (`@as_ref`) so a `no_display` identity
-/// is not a generic byte sink; each arm picks its `Debug`.
+/// `Display` is opt-in (`@display`); `AsRef<[u8]>` is opt-in (`@as_ref`) so a
+/// `no_display` identity is not a generic byte sink; each arm picks its
+/// `Debug`. Both helpers walk `&self.0`, so they are not tied to 32 bytes.
+///
+/// `Name, bytes = N` is the width arm. The `bytes =` tokens are what keep it
+/// off the `redact` matcher. It emits `[u8; N]` (`@wide`) with full-hex
+/// `Debug` and `Display` and `AsRef<[u8]>`, deriving only `Clone`, `Copy`,
+/// `PartialEq`, `Eq`, `Hash`, and `Zeroize`: no serde, no `Ord`, and not a
+/// [`Hash32Bytes`] member. [`SigningPayloadHash`] uses it at 64 bytes — hybrid
+/// signed content, not a 32-byte identity.
 macro_rules! hash32 {
     // Default `Debug` renders the full hex — public, non-correlating hashes
     // (`TxHash`, `BlockHash`, …) where the whole value aids debugging and the
@@ -242,6 +250,27 @@ macro_rules! hash32 {
         hash32!(@debug_redacted $name);
     };
 
+    // Width arm. `bytes = N` is the disambiguator: a bare trailing ident is
+    // the `redact` matcher. Not `@core` — a non-32 width is not a persisted
+    // `Hash32Bytes` identity (no serde, no `Ord`). Full-hex `Debug`, same
+    // shape as the default arm.
+    ($(#[$doc:meta])* $name:ident, bytes = $n:literal) => {
+        hash32!(@wide $(#[$doc])* $name, $n);
+        hash32!(@as_ref $name);
+        hash32!(@display $name);
+
+        impl fmt::Debug for $name {
+            fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+                // Delegate to the hex `Display` rather than dumping the raw byte
+                // array; `debug_tuple().field(...)` keeps the single field
+                // represented so `missing_fields_in_debug` is satisfied.
+                f.debug_tuple(stringify!($name))
+                    .field(&format_args!("{self}"))
+                    .finish()
+            }
+        }
+    };
+
     // Truncated `Debug`, shared by both `redact` arms.
     (@debug_redacted $name:ident) => {
         impl fmt::Debug for $name {
@@ -261,9 +290,9 @@ macro_rules! hash32 {
     (@display $name:ident) => {
         impl fmt::Display for $name {
             fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-                // Iterate by reference: avoids copying the `[u8; 32]` out of
-                // `&self`, and `&self.0` is the form the workspace's denied
-                // `explicit_iter_loop` clippy lint requires over `.iter()`.
+                // Iterate by reference: avoids copying the array out of `&self`
+                // (32 or wider), and `&self.0` is the form the workspace's
+                // denied `explicit_iter_loop` clippy lint requires over `.iter()`.
                 for &byte in &self.0 {
                     write!(f, "{byte:02x}")?;
                 }
@@ -326,6 +355,36 @@ macro_rules! hash32 {
                 $name(bytes)
             }
             fn as_bytes(&self) -> &[u8; 32] {
+                &self.0
+            }
+        }
+    };
+
+    // Wide core. Deliberately not `@core`: no serde, no `#[serde(transparent)]`,
+    // no `Ord`/`PartialOrd`, no postcard `Schema`, no `Hash32Bytes` (that
+    // trait is `[u8; 32]`). `as_bytes` returns `&[u8; N]`, not a hardcoded 32.
+    (@wide $(#[$doc:meta])* $name:ident, $n:literal) => {
+        $(#[$doc])*
+        #[derive(Clone, Copy, PartialEq, Eq, Hash, ::zeroize::Zeroize)]
+        #[repr(transparent)]
+        pub struct $name([u8; $n]);
+
+        impl $name {
+            /// Wrap raw bytes. An *edge* constructor.
+            #[must_use]
+            pub const fn from_bytes(bytes: [u8; $n]) -> Self {
+                $name(bytes)
+            }
+
+            /// Unwrap to the raw bytes. An *edge* accessor.
+            #[must_use]
+            pub const fn to_bytes(self) -> [u8; $n] {
+                self.0
+            }
+
+            /// Borrow the raw bytes (e.g. for a hash input or a map key).
+            #[must_use]
+            pub const fn as_bytes(&self) -> &[u8; $n] {
                 &self.0
             }
         }
@@ -676,76 +735,34 @@ hash32! {
     PqcAuthHash
 }
 
-/// `frame("shekyl/fcmp-spend-signing-v2", network_id, [tx_signable,
-/// header(i), key_hashes, prunable_hash])` — the **message one input's
-/// hybrid PQC signature is over** (`FCMP_SPEND_SIGNING_PREIMAGE.md`
-/// §1.1; the signing envelope §2.2; derived by
-/// `shekyl_wire::PqcSigningPreimage`), bound to one network
-/// (`NETWORK_IDENTITY.md` NI-Q4). The wallet signs it
-/// (`shekyl-tx-builder`), the daemon's submit verifier checks against it
-/// (daemon-rpc K13), and the validator records its derivation as
-/// CEN-I17 and verifies over it as CEN-I18.
-///
-/// A component of **no** txid, so not a member of the component-hash
-/// family: **not** [`PqcAuthHash`] (the txid's third component, over the
-/// `pqc_auths` themselves — this value is what those auths *sign*, and
-/// the two are one letter apart by name and 32 bytes apart by nature) and
-/// **not** [`TxSignableHash`] (what the FCMP++ SAL proves over, and
-/// this hash's first field). One per `pqc_auths` entry; none for a body without
-/// them. Minted 2026-09-25 when the value gained its second consumer —
-/// the reopening criterion `RTN_7_WIRE_HASH_TYPES.md` §4 set when it
-/// stayed raw for one.
-///
-/// **64 bytes** (the signing envelope §2.7): it is the signed content of a
-/// hybrid ML-DSA-65 signature, and a 32-byte digest caps collision
-/// resistance at 2^128, below ML-DSA-65's Category 3 target
-/// (`shekyl_crypto_hash::cshake256_64`'s rule). Not a `hash32!` family
-/// member for that reason; its accessors mirror theirs.
-#[derive(Clone, Copy, PartialEq, Eq, Hash, ::zeroize::Zeroize)]
-#[repr(transparent)]
-pub struct SigningPayloadHash([u8; 64]);
-
-impl SigningPayloadHash {
-    /// Wrap raw bytes. An *edge* constructor.
-    #[must_use]
-    pub const fn from_bytes(bytes: [u8; 64]) -> Self {
-        SigningPayloadHash(bytes)
-    }
-
-    /// Unwrap to the raw bytes. An *edge* accessor.
-    #[must_use]
-    pub const fn to_bytes(self) -> [u8; 64] {
-        self.0
-    }
-
-    /// Borrow the raw bytes (the message the signature is made over).
-    #[must_use]
-    pub const fn as_bytes(&self) -> &[u8; 64] {
-        &self.0
-    }
-}
-
-impl AsRef<[u8]> for SigningPayloadHash {
-    fn as_ref(&self) -> &[u8] {
-        &self.0
-    }
-}
-
-impl fmt::Display for SigningPayloadHash {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        for &byte in &self.0 {
-            write!(f, "{byte:02x}")?;
-        }
-        Ok(())
-    }
-}
-
-impl fmt::Debug for SigningPayloadHash {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        f.debug_tuple("SigningPayloadHash")
-            .field(&format_args!("{self}"))
-            .finish()
-    }
+hash32! {
+    /// `frame("shekyl/fcmp-spend-signing-v2", network_id, [tx_signable,
+    /// header(i), key_hashes, prunable_hash])` — the **message one input's
+    /// hybrid PQC signature is over** (`FCMP_SPEND_SIGNING_PREIMAGE.md`
+    /// §1.1; the signing envelope §2.2; derived by
+    /// `shekyl_wire::PqcSigningPreimage`), bound to one network
+    /// (`NETWORK_IDENTITY.md` NI-Q4). The wallet signs it
+    /// (`shekyl-tx-builder`), the daemon's submit verifier checks against it
+    /// (daemon-rpc K13), and the validator records its derivation as
+    /// CEN-I17 and verifies over it as CEN-I18.
+    ///
+    /// A component of **no** txid, so not a member of the component-hash
+    /// family: **not** [`PqcAuthHash`] (the txid's third component, over the
+    /// `pqc_auths` themselves — this value is what those auths *sign*, and
+    /// the two are one letter apart by name and 32 bytes apart by nature) and
+    /// **not** [`TxSignableHash`] (what the FCMP++ SAL proves over, and
+    /// this hash's first field). One per `pqc_auths` entry; none for a body without
+    /// them. Minted 2026-09-25 when the value gained its second consumer —
+    /// the reopening criterion `RTN_7_WIRE_HASH_TYPES.md` §4 set when it
+    /// stayed raw for one.
+    ///
+    /// **64 bytes** (the signing envelope §2.7): it is the signed content of a
+    /// hybrid ML-DSA-65 signature, and a 32-byte digest caps collision
+    /// resistance at 2^128, below ML-DSA-65's Category 3 target
+    /// (`shekyl_crypto_hash::cshake256_64`'s rule). Emitted by `hash32!`'s
+    /// width arm for that reason: still not a [`Hash32Bytes`] member, with
+    /// no serde, and 64 bytes because it is hybrid signed content.
+    SigningPayloadHash, bytes = 64
 }
 
 hash32! {
