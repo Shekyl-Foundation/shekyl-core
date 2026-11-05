@@ -1124,7 +1124,8 @@ fn engine_derived_bundle_signs_through_tx_builder_end_to_end() {
             &pqc_pk_hashes,
             tree.tree_root.as_bytes(),
             tree.tree_depth,
-            signable_tx_hash.to_bytes(),
+            // The message the proof was made over (the signing envelope §2.2).
+            signed_engine.tx_signable.to_bytes(),
         );
         assert!(
             matches!(result, Ok(true)),
@@ -1407,7 +1408,7 @@ fn join_market_bond_post_signs_and_verifies_through_prover() {
                 &pqc_pk_hashes,
                 tree.tree_root.as_bytes(),
                 tree.tree_depth,
-                signable_tx_hash.to_bytes(),
+                signed.tx_signable.to_bytes(),
             ),
             Ok(true)
         ),

@@ -2590,7 +2590,6 @@ struct RealTreeBondProofs {
     spend_key_x: [u8; 32],
     fee: u64,
     floor: u64,
-    signable_tx_hash: shekyl_types::PrefixHash,
 }
 
 async fn real_tree_bond_post_proofs() -> RealTreeBondProofs {
@@ -2619,7 +2618,7 @@ async fn real_tree_bond_post_proofs() -> RealTreeBondProofs {
     let fee: u64 = 1_000;
     // Funding covers the change output, the fee, and the bond credit.
     let input_amount: u64 = floor + fee + 1_000_000;
-    let signable_tx_hash = shekyl_types::PrefixHash::from_bytes([0xC3u8; 32]);
+    let prefix_hash = shekyl_types::PrefixHash::from_bytes([0xC3u8; 32]);
 
     // ── A real, consistent ledger+tree (depth 2: two drained leaves) ─
     // The bond spends gindex 0 (the first leaf); the second leaf makes the
@@ -2768,7 +2767,7 @@ async fn real_tree_bond_post_proofs() -> RealTreeBondProofs {
     let credit_term = built.credit_term();
     let signed = sign_transaction_with_terms(
         &shekyl_network::HARNESS_NETWORK_ID,
-        signable_tx_hash,
+        prefix_hash,
         &inputs,
         &outputs,
         AtomicUnits::from_raw(fee),
@@ -2794,7 +2793,6 @@ async fn real_tree_bond_post_proofs() -> RealTreeBondProofs {
         spend_key_x: *bundle.spend_key_x,
         fee,
         floor,
-        signable_tx_hash,
     }
 }
 
@@ -2822,7 +2820,6 @@ async fn join_market_bond_post_fcmp_verify_over_real_tree() {
         output_key,
         pqc_public_key,
         spend_key_x,
-        signable_tx_hash,
         ..
     } = real_tree_bond_post_proofs().await;
 
@@ -2846,7 +2843,8 @@ async fn join_market_bond_post_fcmp_verify_over_real_tree() {
         &pqc_pk_hashes,
         tree_ctx.tree_root.as_bytes(),
         tree_ctx.tree_depth,
-        signable_tx_hash.to_bytes(),
+        // The message the proof was made over (the signing envelope §2.2).
+        signed.tx_signable.to_bytes(),
     );
     assert!(
         matches!(fcmp_result, Ok(true)),

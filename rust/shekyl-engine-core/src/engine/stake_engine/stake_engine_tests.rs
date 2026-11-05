@@ -883,6 +883,7 @@ async fn plan_bond_post_emits_gf7_draw_and_schedule_events() {
             bundles,
             bonded: BTreeSet::new(),
             active: None,
+            network: shekyl_network::HARNESS_NETWORK_ID,
             #[cfg(feature = "conformance")]
             self_cert: TestSelfCert::Skip,
             observer: Box::new(Recorder(Arc::clone(&recorded))),
@@ -1265,6 +1266,7 @@ mod s6_self_cert {
             bundles,
             bonded: BTreeSet::new(),
             active: None,
+            network: shekyl_network::HARNESS_NETWORK_ID,
             self_cert: mode,
             #[cfg(feature = "gf7-hooks")]
             observer: Box::new(shekyl_standoff::gf7::NoOpObserver),
