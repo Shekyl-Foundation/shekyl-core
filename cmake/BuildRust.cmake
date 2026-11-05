@@ -222,10 +222,15 @@ if(RUST_TARGET_TRIPLE AND CMAKE_C_COMPILER AND NOT MSVC)
         # `-nodefaultlibs`. A CMake link of the same objects had no such
         # switch, which is why this surfaced only once `shekyld` became an
         # all-cargo link. Static, so the binary needs no libssp DLL beside
-        # it; msvcrt again after it, because GNU ld does not go back to the
-        # earlier copy for what libssp itself calls.
+        # it. What libssp itself calls follows it, because GNU ld does not go
+        # back to libraries it already passed: msvcrt (write, open, the
+        # string functions), advapi32 (the CryptoAPI calls that seed the
+        # guard) and libgcc (___chkstk_ms). gcc's own mingw LIB_SPEC orders
+        # them the same way. Checked against Ubuntu 22.04's mingw-w64 8.0.0
+        # archives, whose C runtime defines none of these symbols.
         if(RUST_TARGET_TRIPLE MATCHES "-windows-gnu$" AND _target_cflags MATCHES "-fstack-protector")
-            string(APPEND _rust_link_args " -C link-arg=-l:libssp.a -C link-arg=-lmsvcrt")
+            string(APPEND _rust_link_args
+                " -C link-arg=-l:libssp.a -C link-arg=-lmsvcrt -C link-arg=-ladvapi32 -C link-arg=-lgcc")
         endif()
 
         string(STRIP "${_rust_link_args}" _rust_link_args)
