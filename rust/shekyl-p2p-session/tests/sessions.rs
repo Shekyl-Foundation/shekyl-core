@@ -18,8 +18,8 @@ use common::{
     within, Answer, Event, Rig, Settings, NETWORK, OTHER_NETWORK, OUR_HEIGHT, PEER_HEIGHT, SETTLE,
 };
 use shekyl_levin::{
-    invoke, notify, HandshakeResponse, PortableMap, Received, RequestHeaders, TimedSyncRequest,
-    TimedSyncResponse,
+    invoke, notify, HandshakeResponse, NewTransactions, PortableMap, Received, RequestHeaders,
+    TimedSyncRequest, TimedSyncResponse, INITIAL_MAX_PACKET_SIZE,
 };
 use shekyl_p2p_session::{
     ClaimCarrier, CloseCause, CloseKind, Command, ConnectorId, DialAim, DialEnd, DialOutcome,
@@ -519,6 +519,77 @@ session_test!(
             .expect_err("garbage is not a response");
         assert_eq!(kind(end), CloseKind::LevinHandshakeRejected);
         assert!(matches!(end.failure().evidence(), Evidence::Destination(_)));
+    }
+);
+
+/// A 2002 carrying one blob, framed so the whole bucket is larger than
+/// the pre-handshake packet limit.
+fn new_transactions_above_the_initial_limit() -> Vec<u8> {
+    let blob = usize::try_from(INITIAL_MAX_PACKET_SIZE).expect("fits usize") + 1024;
+    let payload = NewTransactions {
+        txs: vec![vec![7; blob]],
+        padding: Vec::new(),
+        dandelionpp_fluff: true,
+    }
+    .store()
+    .expect("batch stores");
+    let frame = notify(Command::NewTransactions.wire_id(), &payload);
+    assert!(
+        u64::try_from(frame.len()).expect("fits u64") > INITIAL_MAX_PACKET_SIZE,
+        "the frame is above the pre-handshake limit"
+    );
+    frame
+}
+
+// **A session this node dialed reads frames above the pre-handshake
+// limit once it is established.** The alpha.11 fleet binary stalled a
+// dial-only node at one height for ever: its C++ connection raised the
+// 256 KiB ceiling at three handshake sites, none on the path an outbound
+// handshake took, so every object response above that size was refused
+// (shekyl-dev `4fab39a`). Here the ceiling moves in `establish()`, the
+// one place either direction becomes `Established`; the dialed side is
+// the side to pin.
+session_test!(
+    a_dialed_session_reads_a_frame_above_the_pre_handshake_limit,
+    async {
+        let mut rig = Rig::new(Settings::default());
+        let (session, wire) = rig.dial_kept(outbound_clearnet(40)).await;
+        assert_eq!(session.direction(), Direction::Outbound);
+        wire.inject(new_transactions_above_the_initial_limit())
+            .await;
+        let Event::Relay(id, count, _taken) = rig.event().await else {
+            panic!("the batch reaches the relay owner");
+        };
+        assert_eq!((id, count), (wire.id, 1));
+        assert!(rig.no_event().await, "the session stays open");
+    }
+);
+
+// The same frame in place of the handshake response is refused at the
+// pre-handshake limit: the ceiling is lifted by the handshake, not by
+// the direction.
+session_test!(
+    a_frame_above_the_pre_handshake_limit_before_the_response_ends_the_dial,
+    async {
+        let mut rig = Rig::new(Settings::default());
+        let layer = rig.layer.clone();
+        let dial =
+            tokio::spawn(async move { layer.dial(outbound_clearnet(41), DialAim::Keep).await });
+        let mut wire = within("the dialed wire", rig.dialed.recv())
+            .await
+            .expect("loopback");
+        let _ = wire.read().await;
+        wire.inject(new_transactions_above_the_initial_limit())
+            .await;
+        let end = within("the outcome", dial)
+            .await
+            .expect("task")
+            .expect_err("a bucket above the limit is not a response");
+        assert_eq!(kind(end), CloseKind::LevinHandshakeRejected);
+        let (facts, recorded) = rig.closed(wire.id).await;
+        assert!(!facts.established);
+        assert_eq!(kind(recorded), CloseKind::LevinHandshakeRejected);
+        assert!(rig.no_event().await, "no owner saw the batch");
     }
 );
 
