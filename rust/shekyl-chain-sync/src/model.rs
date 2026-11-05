@@ -55,6 +55,36 @@ pub use crate::protocol::{
     OfferedBody, Outcome, ProveItem, Proved, Spent,
 };
 
+/// How long a refused latch write waits before it is asked again.
+///
+/// Assumption: a refused write is a store or connector fault, which a
+/// retry a second later either clears or meets again; each refusal is
+/// logged by the owner, so a fault that persists is seen once a second.
+pub const ALARM_RETRY: Duration = Duration::from_secs(1);
+
+/// The evidence a latch write carries ([`Command::RaiseAlarm`]).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) struct Evidence {
+    pub(crate) fork_at: BlockHeight,
+    pub(crate) tip: BlockHash,
+    pub(crate) work: CumulativeDifficulty,
+}
+
+/// The latch write. Raised once, and written only when the latch watch
+/// says so: a refused write keeps its evidence and is asked again after
+/// [`ALARM_RETRY`], until the latch is set.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum AlarmWrite {
+    /// Not raised.
+    Idle,
+    /// Asked for; neither refused nor written yet.
+    InFlight(Evidence),
+    /// Refused, waiting for its retry.
+    Refused(Evidence),
+    /// The latch watch reports it set.
+    Written,
+}
+
 /// The chain the model has observed.
 #[derive(Clone, Copy, Debug)]
 pub(crate) struct Local {
@@ -128,8 +158,8 @@ pub struct Sync<K, R> {
     pub(crate) fill_frontier: BlockHeight,
     /// The store's latch. Read, never published as the state.
     pub(crate) alarm: bool,
-    /// Raised from `T` already, so it is not raised again.
-    pub(crate) alarm_sent: bool,
+    /// The latch write, from its raise until the latch is set.
+    pub(crate) alarm_write: AlarmWrite,
     /// The evidence draw's wake ([`Command::ArmDraw`]), while one is armed.
     pub(crate) draw_wake: Option<u64>,
     /// The posture `judge_header` is given. The fill's checkpoint does
@@ -191,7 +221,7 @@ where
             rules,
             fill_frontier: BlockHeight::ZERO,
             alarm: false,
-            alarm_sent: false,
+            alarm_write: AlarmWrite::Idle,
             draw_wake: None,
             trust,
             requesting: Requesting::On,
@@ -521,7 +551,9 @@ where
                     });
                 }
             }
-            Event::Latch { set } => self.alarm = set,
+            Event::Latch { set } => self.latch_reported(set),
+            Event::AlarmRefused => self.alarm_refused(now, out),
+            Event::AlarmRetry => self.alarm_retry(out),
             Event::Fill { frontier } => self.fill_frontier = frontier,
             Event::Deadline { session, request } => self.on_deadline(session, request),
             Event::Headers { session, bytes } => {

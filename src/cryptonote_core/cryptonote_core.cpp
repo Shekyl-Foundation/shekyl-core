@@ -88,10 +88,6 @@ namespace cryptonote
       m_pprotocol = &m_protocol_stub;
   }
   //-----------------------------------------------------------------------------------------------
-  void core::stop()
-  {
-  }
-  //-----------------------------------------------------------------------------------------------
   bool core::init(const ShekylDaemonSnapshot& snapshot)
   {
     start_time = std::time(nullptr);

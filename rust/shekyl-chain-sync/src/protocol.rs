@@ -46,6 +46,11 @@ pub enum Event<K> {
         /// Whether the latch is set.
         set: bool,
     },
+    /// The latch write a [`Command::RaiseAlarm`] asked for was refused.
+    /// The model retries it after [`ALARM_RETRY`](crate::ALARM_RETRY).
+    AlarmRefused,
+    /// The retry deadline [`Command::ArmAlarmRetry`] armed has passed.
+    AlarmRetry,
     /// PDM-Q5's backward-fill frontier.
     Fill {
         /// The descending frontier.
@@ -223,7 +228,15 @@ pub enum Command<K> {
         /// The rule.
         cause: CloseCause,
     },
+    /// Wake the model at `deadline` with [`Event::AlarmRetry`]: the retry of
+    /// a refused latch write.
+    ArmAlarmRetry {
+        /// When to retry.
+        deadline: Instant,
+    },
     /// A heavier chain forks past the cap. The connector writes the latch.
+    /// A refused write comes back as [`Event::AlarmRefused`]; the written
+    /// latch comes back as [`Event::Latch`].
     RaiseAlarm {
         /// The fork point.
         fork_at: BlockHeight,

@@ -21,6 +21,7 @@ use super::{Hub, Phase, Post};
 use crate::connection::{AdvertisedEndpoint, ChainLength, HeightMessage, RedialRefusal};
 use crate::drive_inbound;
 use crate::endpoint::{admit, Endpoint};
+use crate::post::{AfterPost, PostSink};
 
 /// The connectors' own stream-end tables, as zone bind dispatches them.
 fn tables(connector: ConnectorId, end: StreamEnd) -> DialFailure {
@@ -120,6 +121,52 @@ fn service(rig: &Rig, accepted: bool) {
         }
         Post::HandshakeResult { .. } | Post::Opened { .. } => {}
     }
+}
+
+/// A sink that finishes a delivery itself returns the row to open. The
+/// pump does not wait for `delivery_finished`, and the next frame is
+/// posted. Red edit: ignore the sink's answer and wait.
+#[test]
+fn a_sink_that_finishes_a_delivery_returns_the_row_to_open() {
+    let posts = Arc::new(Mutex::new(VecDeque::new()));
+    let recorded = Arc::clone(&posts);
+    let sink: PostSink = Arc::new(move |post| {
+        let finished = matches!(post, Post::Deliver { .. });
+        recorded.lock().expect("posts").push_back(post);
+        if finished {
+            AfterPost::Finished
+        } else {
+            AfterPost::AwaitFinish
+        }
+    });
+    let clock = ManualClock::new(Tick::new(1));
+    let sockets = Sockets::new();
+    let hub = Hub::new(
+        sockets.clone(),
+        InboundCeiling::Bounded(8),
+        sink,
+        Arc::new(clock.clone()),
+    );
+    let rig = Rig {
+        hub: hub.clone(),
+        sockets,
+        posts,
+        clock,
+    };
+    let opened = adopt(&rig, Direction::Outbound, 32);
+    rig.hub.handler_armed(opened.id, true);
+    let id = opened.id;
+    let (done_tx, done_rx) = std::sync::mpsc::channel();
+    thread::spawn(move || {
+        let first = hub.deliver(id, b"one".to_vec());
+        let second = hub.deliver(id, b"two".to_vec());
+        let _sent = done_tx.send((first, second));
+    });
+    let (first, second) = done_rx
+        .recv_timeout(Duration::from_secs(2))
+        .expect("the row waited on a sink that already finished");
+    assert!(first, "the first delivery did not finish");
+    assert!(second, "the row stayed delivering");
 }
 
 #[test]

@@ -7,8 +7,8 @@
 //!
 //! C++ calls `open`, `send`, and `close`. Rust calls the bound post, which
 //! only enqueues onto the connection's strand. The hub's post sink is the
-//! chain-sync router (`shekyl_chain_sync_runtime::router`), pass-through here: no
-//! sync owner is attached, so each post is the bound post's, unchanged. The strand calls back when
+//! chain-sync router (`shekyl_chain_sync_runtime::router`), attached to the
+//! node's sync owner; a bind with no owner is refused. The strand calls back when
 //! the handler is armed, when a delivery returns, when `closed` starts,
 //! and when the executor drops the link.
 //!
@@ -18,14 +18,13 @@
 //! caller already resolved. This module does not resolve another.
 
 use std::ffi::c_void;
-use std::net::{IpAddr, Ipv4Addr, Ipv6Addr};
+use std::net::IpAddr;
 use std::sync::{Arc, Mutex, MutexGuard, OnceLock, PoisonError};
 
 use shekyl_chain_sync_runtime::router::Router;
 use shekyl_peer_policy::{InboundCeiling, UnboundedReason};
 use shekyl_seam::{
-    connector_from_index, direction_from_index, CloseCause, CloseKind, ConnectorId, Direction,
-    Endpoint, Hub, Post, SocketId, TOR_HOST_MAX,
+    CloseCause, CloseKind, ConnectorId, Direction, Endpoint, Hub, Post, SocketId, TOR_HOST_MAX,
 };
 use shekyl_timing_engine::{Clock, EngineService, Handle, MonotonicClock, Tick};
 
@@ -35,9 +34,6 @@ use crate::inbound_ceiling_ffi::{
     SHEKYL_INBOUND_CEILING_NO_PER_PROCESS_LIMIT, SHEKYL_INBOUND_CEILING_UNLIMITED,
 };
 use crate::legacy_util::slice_from_ptr;
-
-/// Outbound cap for the loopback harness. Not the measured session limit.
-const HARNESS_SEND_CAP: usize = 64 * 1024;
 
 /// `established`. Matches the C header.
 pub(crate) const POST_ESTABLISHED: u32 = 1;
@@ -87,6 +83,19 @@ pub struct ShekylSeamAddress {
     pub bytes: [u8; TOR_HOST_MAX],
 }
 
+/// What `established` carries upward.
+#[repr(C)]
+#[derive(Clone, Copy)]
+pub struct ShekylSeamObserved {
+    pub connector: u8,
+    pub direction: u8,
+    pub address_type: u8,
+    pub zone_only: u8,
+    pub port: u16,
+    pub len: u16,
+    pub bytes: [u8; TOR_HOST_MAX],
+}
+
 /// What a kept dial's handshake notification carries. The strand reads
 /// these fields and does not answer. Only a kept dial is posted.
 #[repr(C)]
@@ -117,30 +126,6 @@ const _: () = {
     assert!(std::mem::offset_of!(ShekylSeamHandshakeResult, current_height) == 0);
     assert!(std::mem::offset_of!(ShekylSeamHandshakeResult, top_id) == 24);
 };
-
-/// What `established` carries upward.
-#[repr(C)]
-#[derive(Clone, Copy)]
-pub struct ShekylSeamObserved {
-    pub connector: u8,
-    pub direction: u8,
-    pub address_type: u8,
-    pub zone_only: u8,
-    pub port: u16,
-    pub len: u16,
-    pub bytes: [u8; TOR_HOST_MAX],
-}
-
-/// `id` is zero when the open was refused. `cause_kind` is then the D12
-/// discriminant, and zero when `id` is a socket.
-#[repr(C)]
-#[derive(Clone, Copy)]
-pub struct ShekylSeamOpenResult {
-    pub id: u64,
-    pub cause_kind: u8,
-    pub _pad: u8,
-    pub reply_code: u16,
-}
 
 type PostFn = unsafe extern "C" fn(
     ctx: *mut c_void,
@@ -188,6 +173,23 @@ pub(crate) fn hub() -> Option<Hub> {
 pub(crate) fn seam_bind_lock() -> &'static TestSeam {
     static GATE: TestSeam = TestSeam(Mutex::new(()));
     &GATE
+}
+
+/// Bind the seam as the daemon does, for a test: a stand-in owner is
+/// installed first ([`crate::chain_sync_ffi::install_test_owner`]) and its
+/// ends kept until the next such bind, so the router is the production
+/// one, attached. A test that reads the owner's side installs its own
+/// owner and calls [`shekyl_seam_bind`] directly.
+///
+/// # Safety
+/// As [`shekyl_seam_bind`].
+#[cfg(test)]
+pub(crate) unsafe fn bind_attached(ctx: *mut c_void, post: Option<PostFn>) -> i32 {
+    static KEPT: Mutex<Option<crate::chain_sync_ffi::TestOwner>> = Mutex::new(None);
+    let owner = crate::chain_sync_ffi::install_test_owner();
+    *KEPT.lock().unwrap_or_else(PoisonError::into_inner) = Some(owner);
+    // SAFETY: the caller's contract is shekyl_seam_bind's.
+    unsafe { shekyl_seam_bind(ctx, post) }
 }
 
 /// The test serializer. [`TestSeam::lock`] is the only way in, so every
@@ -364,7 +366,11 @@ pub(crate) fn ceiling_from_abi(ceiling: ShekylInboundCeiling) -> Option<InboundC
 
 /// Install the post callback and the caller's ceiling.
 ///
-/// A null `post` or a null `ctx` clears the seam. Returns 0.
+/// A null `post` or a null `ctx` clears the seam. Returns 0, or -1 when no
+/// chain-sync owner is there to attach the router to: none was installed,
+/// or the daemon's bind already took it. The seam would run without chain
+/// sync, so the bind is refused, the binding in place is kept, and the
+/// zone's start fails (CS-5).
 ///
 /// The hub's inbound ceiling is this process's, resolved here from its
 /// descriptor limit and the reservation in the remnant's preparation;
@@ -391,6 +397,16 @@ pub unsafe extern "C" fn shekyl_seam_bind(ctx: *mut c_void, post: Option<PostFn>
         store(None);
         return 0;
     }
+    // The node's chain-sync owner, which it left for this bind. Without it
+    // the seam would run without chain sync: refused, and the zone's
+    // start fails with the cause.
+    let (router_tx, hub_tx) = match crate::chain_sync_ffi::take() {
+        Ok(attach) => attach,
+        Err(refused) => {
+            tracing::error!(target: "p2p", "the seam bind was refused: {}", refused.cause());
+            return -1;
+        }
+    };
     let ceiling = crate::inbound_ceiling_ffi::configured();
     tracing::info!(target: "p2p", ceiling = ?ceiling, "the inbound ceiling the seam binds with");
     let bound = Bound {
@@ -400,33 +416,24 @@ pub unsafe extern "C" fn shekyl_seam_bind(ctx: *mut c_void, post: Option<PostFn>
     let clock: Arc<dyn Clock + Send + Sync> = process_clock();
     // The table this hub is built on and the store of the hub are one
     // critical section with [`install_process_sockets`].
-    // The node's chain-sync owner, when it left itself for this bind.
-    let attach = crate::chain_sync_ffi::take();
     let hub = {
         let _table = hold_table();
-        // The Rust Levin router is the post sink. With the node's owner it
-        // is attached: chain sync's messages go to the owner and the rest
-        // reach the C++ handler. Without one (a test's bind) every post
-        // reaches the C++ handler unchanged.
+        // The Rust Levin router is the post sink, attached to the node's
+        // owner: chain sync's messages go to the owner and the rest reach
+        // the C++ handler.
         let forward: shekyl_chain_sync_runtime::router::Forward =
             Arc::new(move |item: Post| post_one(&bound, item));
-        let (sink, hub_tx) = match attach {
-            Some((router_tx, hub_tx)) => (Router::attached(forward, router_tx), Some(hub_tx)),
-            None => (Router::pass_through(forward), None),
-        };
+        let sink = Router::attached(forward, router_tx);
         let hub = Hub::new(process_sockets(), ceiling, sink.into_sink(), clock);
         // `store` stops the previous hub's dialer; this hub's is built after.
         store(Some(hub.clone()));
-        (hub, hub_tx)
+        hub
     };
-    let (hub, hub_tx) = hub;
-    if let Some(hub_tx) = hub_tx {
-        // The owner gone already is a node that stopped before its seam
-        // bound; the router then finds its sender closed and hands every
-        // session to the C++ handler.
-        if hub_tx.send(Arc::new(hub.clone())).is_err() {
-            tracing::info!(target: "p2p", "the chain-sync owner stopped before the seam bound");
-        }
+    // The owner gone already is a node whose owner ended before its seam
+    // bound. The node reports that end to the stop owner; here it is only
+    // logged.
+    if hub_tx.send(Arc::new(hub.clone())).is_err() {
+        tracing::info!(target: "p2p", "the chain-sync owner stopped before the seam bound");
     }
     crate::dialer_ffi::ensure_dialer(&hub);
     0
@@ -452,66 +459,6 @@ pub unsafe extern "C" fn shekyl_seam_set_ceiling(ceiling: *const ShekylInboundCe
     0
 }
 
-/// Install the in-memory harness dialer. Returns 0, or -1 when unbound.
-///
-/// The harness admits on the hub's table and discards outbound bytes.
-/// Zone bind does not call this.
-#[no_mangle]
-pub extern "C" fn shekyl_seam_install_loopback() -> i32 {
-    let Some(hub) = hub() else {
-        return -1;
-    };
-    hub.install_loopback(HARNESS_SEND_CAP, crate::zone_ffi::connector_tables);
-    0
-}
-
-/// Dial through the installed dialer and adopt the channel. The harness
-/// and the unit tests open sessions here; the daemon's dialer is
-/// `shekyl-dialer`, which runs the handshake between the two steps.
-///
-/// Returns as soon as the row exists, without waiting for the strand to
-/// arm its handler (the C++ dial path that needed the wait is deleted,
-/// 2026-10-13). `id` is zero and `cause_kind` is the D12 cause when the
-/// dial fails. The inbound pump runs where the installed dialer runs
-/// pumps; the harness's thread is joined by [`shekyl_seam_reap`].
-///
-/// # Safety
-/// `addr` is readable.
-#[no_mangle]
-pub unsafe extern "C" fn shekyl_seam_open(
-    addr: *const ShekylSeamAddress,
-    inbound: u8,
-) -> ShekylSeamOpenResult {
-    let refused = |cause: CloseCause| ShekylSeamOpenResult {
-        id: 0,
-        cause_kind: cause.kind() as u8,
-        _pad: 0,
-        reply_code: cause.reply_code(),
-    };
-    if addr.is_null() {
-        return refused(CloseCause::new(CloseKind::LocalClose));
-    }
-    let Some(hub) = hub() else {
-        return refused(CloseCause::new(CloseKind::LocalClose));
-    };
-    let addr = unsafe { &*addr };
-    let Some(endpoint) = endpoint_from_c(addr, inbound != 0) else {
-        return refused(CloseCause::new(CloseKind::LocalClose));
-    };
-    let attached = match hub.connect(&endpoint) {
-        Ok(attached) => attached,
-        Err(end) => return refused(end.cause()),
-    };
-    let id = attached.id;
-    hub.drive(id, attached.session);
-    ShekylSeamOpenResult {
-        id: id.get(),
-        cause_kind: 0,
-        _pad: 0,
-        reply_code: 0,
-    }
-}
-
 /// The strand finished `established`. `armed` is nonzero when the handler
 /// was created. Zero records [`CloseKind::LocalClose`] and wakes the opener.
 #[no_mangle]
@@ -529,33 +476,6 @@ pub extern "C" fn shekyl_seam_handler_armed(id: u64, armed: i32) {
 #[no_mangle]
 pub extern "C" fn shekyl_seam_is_bound() -> i32 {
     i32::from(hub().is_some())
-}
-
-/// Inject one frame into the harness channel and return when `deliver`
-/// has been posted. `0` means it was posted.
-///
-/// # Safety
-/// `bytes` is readable for `len` when `len` is nonzero.
-#[no_mangle]
-pub unsafe extern "C" fn shekyl_seam_deliver(id: u64, bytes: *const u8, len: usize) -> i32 {
-    let Some(frame) = (unsafe { slice_from_ptr(bytes, len) }) else {
-        return -1;
-    };
-    let Some(hub) = hub() else {
-        return -1;
-    };
-    let Some(id) = SocketId::from_ffi(id) else {
-        return -1;
-    };
-    let before = hub.posted_deliveries(id).unwrap_or(0);
-    if !hub.inject(id, frame.to_vec()) {
-        return -1;
-    }
-    if hub.wait_delivery_posted(id, before) {
-        0
-    } else {
-        -1
-    }
 }
 
 /// The strand finished `handle_recv`. `accepted` is nonzero when the
@@ -596,29 +516,7 @@ pub extern "C" fn shekyl_seam_reap(id: u64) {
     hub.reap(id);
 }
 
-/// Copy one whole message into the byte cap. `1` is accepted. `0` is not.
-///
-/// # Safety
-/// `bytes` is readable for `len` when `len` is nonzero.
-#[no_mangle]
-pub unsafe extern "C" fn shekyl_seam_send(id: u64, bytes: *const u8, len: usize) -> i32 {
-    let Some(frame) = (unsafe { slice_from_ptr(bytes, len) }) else {
-        return 0;
-    };
-    let Some(hub) = hub() else {
-        return 0;
-    };
-    let Some(id) = SocketId::from_ffi(id) else {
-        return 0;
-    };
-    if hub.send(id, frame.to_vec()) {
-        1
-    } else {
-        0
-    }
-}
-
-/// The same send, with the registry and the cause.
+/// Copy one whole message into the byte cap. `1` is accepted, `0` is not.
 ///
 /// `found` is 1 when the registry held `id`. `cause_kind` is the close
 /// code when one was recorded, and 0 when there is none.
@@ -670,90 +568,11 @@ pub extern "C" fn shekyl_seam_close(id: u64) {
     hub.close(id);
 }
 
-/// Live sockets for one connector and direction.
-#[no_mangle]
-pub extern "C" fn shekyl_seam_socket_count(connector: u32, direction: u32) -> u64 {
-    let Some(hub) = hub() else {
-        return 0;
-    };
-    let Some(connector) = connector_from_index(connector) else {
-        return 0;
-    };
-    let Some(direction) = direction_from_index(direction) else {
-        return 0;
-    };
-    hub.socket_count(connector, direction)
-}
-
-/// Inbound sockets on every connector.
-#[no_mangle]
-pub extern "C" fn shekyl_seam_inbound_held() -> u64 {
-    hub().map(|hub| hub.inbound_held()).unwrap_or(0)
-}
-
 /// The ban table's entries, as the C++ and the daemon's owners reach them.
 #[path = "seam_ban_ffi.rs"]
 pub mod bans;
 
 pub use bans::ShekylBanView;
-
-fn endpoint_from_c(addr: &ShekylSeamAddress, inbound: bool) -> Option<Endpoint> {
-    let _ = connector_from_index(u32::from(addr.connector))?;
-    let len = usize::from(addr.len);
-    if len > TOR_HOST_MAX {
-        return None;
-    }
-    let direction = if inbound {
-        Direction::Inbound
-    } else {
-        Direction::Outbound
-    };
-    match (addr.connector, addr.address_type, addr.zone_only, direction) {
-        (connector, ADDR_IPV4, 0, direction)
-            if u32::from(connector) == SHEKYL_CONNECTOR_CLEARNET && len == 4 =>
-        {
-            let ip = Ipv4Addr::new(addr.bytes[0], addr.bytes[1], addr.bytes[2], addr.bytes[3]);
-            Some(Endpoint::Clearnet {
-                ip: IpAddr::V4(ip),
-                port: addr.port,
-                direction,
-            })
-        }
-        (connector, ADDR_IPV6, 0, direction)
-            if u32::from(connector) == SHEKYL_CONNECTOR_CLEARNET && len == 16 =>
-        {
-            let mut octets = [0u8; 16];
-            octets.copy_from_slice(&addr.bytes[..16]);
-            Some(Endpoint::Clearnet {
-                ip: IpAddr::V6(Ipv6Addr::from(octets)),
-                port: addr.port,
-                direction,
-            })
-        }
-        (connector, ADDR_TOR, 1, Direction::Inbound)
-            if u32::from(connector) == SHEKYL_CONNECTOR_TOR && len == 0 =>
-        {
-            Some(Endpoint::TorInbound)
-        }
-        (connector, ADDR_TOR, 0, Direction::Outbound)
-            if u32::from(connector) == SHEKYL_CONNECTOR_TOR && len > 0 =>
-        {
-            let Ok(host) = std::str::from_utf8(&addr.bytes[..len]) else {
-                tracing::error!("tor dial refused: host is not a v3 onion");
-                return None;
-            };
-            let Some(key) = shekyl_onion_v3::v3_pubkey(host) else {
-                tracing::error!("tor dial refused: host is not a v3 onion");
-                return None;
-            };
-            Some(Endpoint::Tor {
-                key,
-                port: addr.port,
-            })
-        }
-        _ => None,
-    }
-}
 
 pub(crate) fn observed_c(endpoint: &Endpoint) -> ShekylSeamObserved {
     let mut out = ShekylSeamObserved {

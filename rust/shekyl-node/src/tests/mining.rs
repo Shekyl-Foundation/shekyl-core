@@ -410,11 +410,12 @@ fn a_job_withdrawn_mid_wait_ends_generateblocks() {
     let node = open_posted(dir.path(), &[]);
     let row = shekyl_rpc_types::methods::json_rpc("generateblocks").expect("a row");
     let handles = node.handles();
-    let sync = node.sync().clone();
     let answered = a_runtime().block_on(async {
         let withdraw = async {
             tokio::time::sleep(Duration::from_millis(300)).await;
-            sync.send_replace(SyncState::NoView);
+            // The owner is the only publisher, and it is still waiting
+            // for a hub. Ask it; the follower reads the watch it writes.
+            node.publish_sync_for_test(SyncState::NoView);
             std::future::pending::<()>().await;
         };
         tokio::time::timeout(Duration::from_secs(30), async {
@@ -613,10 +614,10 @@ fn a_regtest_node_with_an_address_posts_its_template_with_no_sessions() {
     node.stop();
 }
 /// On an open network the node opens `NoView` (its declaration's state at
-/// open), and no owner publishes here: no seam is bound, so the sync
-/// owner never receives its hub. The node posts nothing and says why, and
-/// publishing `Synced` on the node's watch posts (DX-Q3, Q13). Red edit:
-/// post without reading the watch.
+/// open). The owner publishes that before it returns and is the only
+/// publisher; no seam is bound, so it is still waiting for its hub. The
+/// node posts nothing and says why. Asking the owner to publish `Synced`
+/// posts (DX-Q3, Q13). Red edit: post without reading the watch.
 #[test]
 fn a_node_on_an_open_network_posts_nothing_until_chain_sync_says_synced() {
     let dir = tempfile::tempdir().expect("temp");
@@ -637,7 +638,7 @@ fn a_node_on_an_open_network_posts_nothing_until_chain_sync_says_synced() {
         .chain
         .chain_tip()
         .is_ok_and(|tip| !tip.synchronized));
-    node.sync().send_replace(SyncState::Synced);
+    node.publish_sync_for_test(SyncState::Synced);
     let started = std::time::Instant::now();
     while !matches!(*posting.borrow_and_update(), Posting::Posted(_)) {
         assert!(

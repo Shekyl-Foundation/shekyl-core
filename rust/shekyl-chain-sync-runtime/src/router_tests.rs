@@ -11,7 +11,7 @@ use shekyl_levin::{
     invoke, notify, response, BucketHead, DefinedCommand, Flags, SyncCommand, COMMAND_HANDSHAKE,
     COMMAND_TIMED_SYNC, HEADER_SIZE, NOTIFY_NEW_COMPACT_BLOCK, NOTIFY_REQUEST_COMPACT_MISSING_TX,
 };
-use shekyl_seam::{Endpoint, Post, SocketId, SyncPayload};
+use shekyl_seam::{AfterPost, Endpoint, Post, SocketId, SyncPayload};
 use tokio::sync::mpsc;
 
 use super::{Admitted, Fed, Forward, Routed, Router, Split, Taken, Tapped};
@@ -32,6 +32,12 @@ fn sync_bucket(command: SyncCommand, payload: &[u8]) -> Vec<u8> {
 fn other_bucket(payload: &[u8]) -> Vec<u8> {
     // 2002, new transactions: a C++ command.
     notify(2002, payload)
+}
+
+/// The test watches the owner channel and the forward sink. The delivering
+/// row lives in the hub, which is not in this process.
+fn posted(router: &Router, post: Post) {
+    router.post(post).without_a_delivering_row();
 }
 
 #[test]
@@ -150,39 +156,22 @@ fn socket(raw: u64) -> SocketId {
 }
 
 #[test]
-fn pass_through_forwards_every_post_unchanged() {
-    let (forward, seen) = recorder();
-    let router = Router::pass_through(forward);
-    let id = socket(7);
-    let bytes = sync_bucket(SyncCommand::RequestHeaders, b"p");
-    router.post(Post::Established {
-        id,
-        endpoint: endpoint(),
-    });
-    router.post(Post::Deliver {
-        id,
-        connector: endpoint().connector(),
-        bytes: bytes.clone(),
-    });
-    let seen = seen.lock().expect("unpoisoned");
-    assert_eq!(seen.len(), 2);
-    assert!(matches!(&seen[1], Post::Deliver { bytes: b, .. } if *b == bytes));
-}
-
-#[test]
 fn attached_routes_sync_and_forwards_one_post_per_chunk() {
     let (forward, seen) = recorder();
     let (tx, mut rx) = mpsc::unbounded_channel();
     let router = Router::attached(forward, tx);
     let id = socket(9);
     let connector = endpoint().connector();
-    router.post(Post::Established {
-        id,
-        endpoint: endpoint(),
-    });
+    posted(
+        &router,
+        Post::Established {
+            id,
+            endpoint: endpoint(),
+        },
+    );
     // Attached before the handshake: the handler's, not the owner's.
     assert!(rx.try_recv().is_err(), "the owner heard of an attach");
-    router.post(Post::Opened { id, connector });
+    posted(&router, Post::Opened { id, connector });
     assert_eq!(
         rx.try_recv().expect("opened"),
         Routed::Opened { id, connector }
@@ -193,21 +182,27 @@ fn attached_routes_sync_and_forwards_one_post_per_chunk() {
         cumulative_difficulty_top64: 0,
         top_id: [4; 32],
     };
-    router.post(Post::HandshakeResult {
-        id,
-        connector,
-        sync,
-    });
+    posted(
+        &router,
+        Post::HandshakeResult {
+            id,
+            connector,
+            sync,
+        },
+    );
     assert_eq!(rx.try_recv().expect("claim"), Routed::Claim { id, sync });
 
     // A chunk with a C++ bucket and a sync bucket: one forward, one message.
     let mut chunk = other_bucket(b"tx");
     chunk.extend_from_slice(&sync_bucket(SyncCommand::RequestBodies, b"rb"));
-    router.post(Post::Deliver {
-        id,
-        connector,
-        bytes: chunk,
-    });
+    posted(
+        &router,
+        Post::Deliver {
+            id,
+            connector,
+            bytes: chunk,
+        },
+    );
     assert_eq!(
         rx.try_recv().expect("message"),
         Routed::Message {
@@ -222,11 +217,14 @@ fn attached_routes_sync_and_forwards_one_post_per_chunk() {
     );
 
     // A chunk that is all sync: the owner finishes it.
-    router.post(Post::Deliver {
-        id,
-        connector,
-        bytes: sync_bucket(SyncCommand::RequestHeaders, b""),
-    });
+    posted(
+        &router,
+        Post::Deliver {
+            id,
+            connector,
+            bytes: sync_bucket(SyncCommand::RequestHeaders, b""),
+        },
+    );
     assert!(matches!(rx.try_recv(), Ok(Routed::Message { .. })));
     assert_eq!(rx.try_recv().expect("finished"), Routed::Finished { id });
 
@@ -248,25 +246,43 @@ fn attached_routes_sync_and_forwards_one_post_per_chunk() {
     );
 }
 
+/// With the owner gone the router still splits: chain sync's messages are
+/// dropped, never handed to the C++ handler (which no longer reads them),
+/// and the handler's own buckets still reach it until the stop closes the
+/// session.
 #[test]
-fn a_gone_owner_turns_the_router_back_to_pass_through() {
+fn a_gone_owner_s_messages_are_dropped_and_the_handler_s_bytes_still_flow() {
     let (forward, seen) = recorder();
     let (tx, rx) = mpsc::unbounded_channel();
     let router = Router::attached(forward, tx);
     let id = socket(3);
-    router.post(Post::Established {
-        id,
-        endpoint: endpoint(),
-    });
+    posted(
+        &router,
+        Post::Established {
+            id,
+            endpoint: endpoint(),
+        },
+    );
     drop(rx);
-    let bytes = sync_bucket(SyncCommand::RequestHeaders, b"q");
-    router.post(Post::Deliver {
-        id,
-        connector: endpoint().connector(),
-        bytes: bytes.clone(),
-    });
+    let mut chunk = sync_bucket(SyncCommand::RequestHeaders, b"q");
+    chunk.extend_from_slice(&other_bucket(b"tx"));
+    posted(
+        &router,
+        Post::Deliver {
+            id,
+            connector: endpoint().connector(),
+            bytes: chunk,
+        },
+    );
     let seen = seen.lock().expect("unpoisoned");
-    assert!(matches!(&seen[1], Post::Deliver { bytes: b, .. } if *b == bytes));
+    let delivers: Vec<_> = seen
+        .iter()
+        .filter_map(|post| match post {
+            Post::Deliver { bytes, .. } => Some(bytes.clone()),
+            _ => None,
+        })
+        .collect();
+    assert_eq!(delivers, vec![other_bucket(b"tx")]);
 }
 
 #[test]
@@ -276,23 +292,32 @@ fn a_partial_header_reaches_cpp_when_the_owner_leaves() {
     let router = Router::attached(forward, tx);
     let id = socket(4);
     let connector = endpoint().connector();
-    router.post(Post::Established {
-        id,
-        endpoint: endpoint(),
-    });
+    posted(
+        &router,
+        Post::Established {
+            id,
+            endpoint: endpoint(),
+        },
+    );
     let bucket = other_bucket(b"cpp-bytes");
     let cut = 10;
-    router.post(Post::Deliver {
-        id,
-        connector,
-        bytes: bucket[..cut].to_vec(),
-    });
+    posted(
+        &router,
+        Post::Deliver {
+            id,
+            connector,
+            bytes: bucket[..cut].to_vec(),
+        },
+    );
     drop(rx);
-    router.post(Post::Deliver {
-        id,
-        connector,
-        bytes: bucket[cut..].to_vec(),
-    });
+    posted(
+        &router,
+        Post::Deliver {
+            id,
+            connector,
+            bytes: bucket[cut..].to_vec(),
+        },
+    );
     let seen = seen.lock().expect("unpoisoned");
     let delivers: Vec<_> = seen
         .iter()
@@ -311,24 +336,33 @@ fn a_cpp_payload_already_handed_on_is_not_sent_twice() {
     let router = Router::attached(forward, tx);
     let id = socket(5);
     let connector = endpoint().connector();
-    router.post(Post::Established {
-        id,
-        endpoint: endpoint(),
-    });
+    posted(
+        &router,
+        Post::Established {
+            id,
+            endpoint: endpoint(),
+        },
+    );
     let bucket = other_bucket(b"cpp-bytes");
     let cut = HEADER_SIZE + 2;
     assert!(cut < bucket.len());
-    router.post(Post::Deliver {
-        id,
-        connector,
-        bytes: bucket[..cut].to_vec(),
-    });
+    posted(
+        &router,
+        Post::Deliver {
+            id,
+            connector,
+            bytes: bucket[..cut].to_vec(),
+        },
+    );
     drop(rx);
-    router.post(Post::Deliver {
-        id,
-        connector,
-        bytes: bucket[cut..].to_vec(),
-    });
+    posted(
+        &router,
+        Post::Deliver {
+            id,
+            connector,
+            bytes: bucket[cut..].to_vec(),
+        },
+    );
     let seen = seen.lock().expect("unpoisoned");
     let delivers: Vec<_> = seen
         .iter()
@@ -341,89 +375,43 @@ fn a_cpp_payload_already_handed_on_is_not_sent_twice() {
 }
 
 #[test]
-fn a_partial_sync_bucket_is_handed_to_cpp_whole_when_the_owner_leaves() {
+fn a_partial_sync_bucket_is_not_handed_to_cpp_when_the_owner_leaves() {
     let (forward, seen) = recorder();
     let (tx, rx) = mpsc::unbounded_channel();
     let router = Router::attached(forward, tx);
     let id = socket(6);
     let connector = endpoint().connector();
-    router.post(Post::Established {
-        id,
-        endpoint: endpoint(),
-    });
-    let bucket = sync_bucket(SyncCommand::RequestHeaders, b"sync-payload");
-    let cut = HEADER_SIZE + 3;
-    router.post(Post::Deliver {
-        id,
-        connector,
-        bytes: bucket[..cut].to_vec(),
-    });
-    drop(rx);
-    router.post(Post::Deliver {
-        id,
-        connector,
-        bytes: bucket[cut..].to_vec(),
-    });
-    let seen = seen.lock().expect("unpoisoned");
-    let delivers: Vec<_> = seen
-        .iter()
-        .filter_map(|post| match post {
-            Post::Deliver { bytes, .. } => Some(bytes.clone()),
-            _ => None,
-        })
-        .collect();
-    assert_eq!(delivers, vec![bucket]);
-}
-
-/// A router with no owner is pass-through: every post reaches the C++
-/// handler unchanged, including chain sync's own commands and the messages
-/// the claim tap copies. That is a bind the node left no owner for, such
-/// as a test's rebind; the daemon's router is attached
-/// (`shekyl-ffi`'s `a_bind_attaches_the_router_to_the_nodes_owner_and_sends_it_the_hub`).
-#[test]
-fn a_router_with_no_owner_changes_nothing() {
-    let (forward, seen) = recorder();
-    let sink = Router::pass_through(forward).into_sink();
-    let id = socket(11);
-    let connector = endpoint().connector();
-    let sync = SyncPayload {
-        current_height: 3,
-        cumulative_difficulty: 3,
-        cumulative_difficulty_top64: 0,
-        top_id: [1; 32],
-    };
-    let mut posts = vec![
+    posted(
+        &router,
         Post::Established {
             id,
             endpoint: endpoint(),
         },
-        Post::HandshakeResult {
+    );
+    let bucket = sync_bucket(SyncCommand::RequestHeaders, b"sync-payload");
+    let cut = HEADER_SIZE + 3;
+    posted(
+        &router,
+        Post::Deliver {
             id,
             connector,
-            sync,
+            bytes: bucket[..cut].to_vec(),
         },
-    ];
-    for command in SyncCommand::ALL {
-        posts.push(Post::Deliver {
+    );
+    drop(rx);
+    posted(
+        &router,
+        Post::Deliver {
             id,
             connector,
-            bytes: sync_bucket(command, b"payload"),
-        });
-    }
-    posts.push(Post::Deliver {
-        id,
-        connector,
-        bytes: invoke(COMMAND_HANDSHAKE, b"a handshake"),
-    });
-    posts.push(Post::Deliver {
-        id,
-        connector,
-        bytes: other_bucket(b"relay"),
-    });
-    for post in posts.clone() {
-        sink(post);
-    }
-    assert_eq!(*seen.lock().expect("unpoisoned"), posts);
+            bytes: bucket[cut..].to_vec(),
+        },
+    );
+    let seen = seen.lock().expect("unpoisoned");
+    assert!(
+        !seen.iter().any(|post| matches!(post, Post::Deliver { .. })),
+        "a chain-sync bucket reached the handler: {seen:?}"
+    );
 }
 
 /// An attached router's claim tap (CS-Q10): a handshake request and both
@@ -438,10 +426,13 @@ fn an_attached_router_taps_the_messages_that_carry_a_claim() {
     let router = Router::attached(forward, tx);
     let id = socket(12);
     let connector = endpoint().connector();
-    router.post(Post::Established {
-        id,
-        endpoint: endpoint(),
-    });
+    posted(
+        &router,
+        Post::Established {
+            id,
+            endpoint: endpoint(),
+        },
+    );
     assert!(rx.try_recv().is_err(), "the owner heard of an attach");
     let handshake = invoke(COMMAND_HANDSHAKE, b"handshake-payload");
     let request = invoke(COMMAND_TIMED_SYNC, b"request-payload");
@@ -452,11 +443,14 @@ fn an_attached_router_taps_the_messages_that_carry_a_claim() {
     // Split mid-payload, so a copy spans two chunks.
     let cut = handshake.len() - 4;
     for chunk in [&stream[..cut], &stream[cut..]] {
-        router.post(Post::Deliver {
-            id,
-            connector,
-            bytes: chunk.to_vec(),
-        });
+        posted(
+            &router,
+            Post::Deliver {
+                id,
+                connector,
+                bytes: chunk.to_vec(),
+            },
+        );
     }
     let taps: Vec<Routed> = std::iter::from_fn(|| rx.try_recv().ok()).collect();
     assert_eq!(
@@ -503,11 +497,14 @@ fn an_attached_router_taps_the_messages_that_carry_a_claim() {
         &vec![0; usize::try_from(cap + 1).expect("a cap")],
     );
     for bytes in [fragment, oversize] {
-        router.post(Post::Deliver {
-            id,
-            connector,
-            bytes,
-        });
+        posted(
+            &router,
+            Post::Deliver {
+                id,
+                connector,
+                bytes,
+            },
+        );
     }
     assert!(
         std::iter::from_fn(|| rx.try_recv().ok()).all(|item| !matches!(item, Routed::Tap { .. })),
@@ -523,18 +520,24 @@ fn an_attached_router_hands_an_announcement_to_the_owner() {
     let (tx, mut rx) = mpsc::unbounded_channel();
     let router = Router::attached(forward, tx);
     let id = socket(21);
-    router.post(Post::Established {
-        id,
-        endpoint: endpoint(),
-    });
+    posted(
+        &router,
+        Post::Established {
+            id,
+            endpoint: endpoint(),
+        },
+    );
     assert!(rx.try_recv().is_err(), "the owner heard of an attach");
     let mut chunk = notify(NOTIFY_NEW_COMPACT_BLOCK, b"a block");
     chunk.extend_from_slice(&other_bucket(b"tx"));
-    router.post(Post::Deliver {
-        id,
-        connector: endpoint().connector(),
-        bytes: chunk,
-    });
+    posted(
+        &router,
+        Post::Deliver {
+            id,
+            connector: endpoint().connector(),
+            bytes: chunk,
+        },
+    );
     assert_eq!(
         rx.try_recv().expect("the announcement"),
         Routed::Announce {
@@ -557,17 +560,23 @@ fn an_attached_router_hands_a_missing_tx_request_to_the_owner() {
     let (tx, mut rx) = mpsc::unbounded_channel();
     let router = Router::attached(forward, tx);
     let id = socket(22);
-    router.post(Post::Established {
-        id,
-        endpoint: endpoint(),
-    });
+    posted(
+        &router,
+        Post::Established {
+            id,
+            endpoint: endpoint(),
+        },
+    );
     assert!(rx.try_recv().is_err(), "the owner heard of an attach");
     let before = seen.lock().expect("unpoisoned").len();
-    router.post(Post::Deliver {
-        id,
-        connector: endpoint().connector(),
-        bytes: notify(NOTIFY_REQUEST_COMPACT_MISSING_TX, b"indices"),
-    });
+    posted(
+        &router,
+        Post::Deliver {
+            id,
+            connector: endpoint().connector(),
+            bytes: notify(NOTIFY_REQUEST_COMPACT_MISSING_TX, b"indices"),
+        },
+    );
     assert_eq!(
         rx.try_recv().expect("the request"),
         Routed::MissingTxs {
@@ -594,20 +603,26 @@ fn a_claim_that_precedes_a_kept_message_reaches_the_owner_first() {
     let router = Router::attached(forward, tx);
     let id = socket(30);
     let connector = endpoint().connector();
-    router.post(Post::Established {
-        id,
-        endpoint: endpoint(),
-    });
+    posted(
+        &router,
+        Post::Established {
+            id,
+            endpoint: endpoint(),
+        },
+    );
     assert!(rx.try_recv().is_err(), "the owner heard of an attach");
     let handshake = invoke(COMMAND_HANDSHAKE, b"claim");
     let headers = sync_bucket(SyncCommand::ResponseHeaders, b"headers");
     let mut chunk = handshake.clone();
     chunk.extend_from_slice(&headers);
-    router.post(Post::Deliver {
-        id,
-        connector,
-        bytes: chunk,
-    });
+    posted(
+        &router,
+        Post::Deliver {
+            id,
+            connector,
+            bytes: chunk,
+        },
+    );
     let got: Vec<Routed> = std::iter::from_fn(|| rx.try_recv().ok()).collect();
     assert_eq!(
         got,
@@ -648,16 +663,22 @@ fn an_empty_claim_payload_is_still_handed_to_the_owner() {
     let (tx, mut rx) = mpsc::unbounded_channel();
     let router = Router::attached(forward, tx);
     let id = socket(31);
-    router.post(Post::Established {
-        id,
-        endpoint: endpoint(),
-    });
+    posted(
+        &router,
+        Post::Established {
+            id,
+            endpoint: endpoint(),
+        },
+    );
     assert!(rx.try_recv().is_err(), "the owner heard of an attach");
-    router.post(Post::Deliver {
-        id,
-        connector: endpoint().connector(),
-        bytes: invoke(COMMAND_HANDSHAKE, b""),
-    });
+    posted(
+        &router,
+        Post::Deliver {
+            id,
+            connector: endpoint().connector(),
+            bytes: invoke(COMMAND_HANDSHAKE, b""),
+        },
+    );
     assert_eq!(
         rx.try_recv().expect("the empty claim"),
         Routed::Tap {
@@ -670,4 +691,56 @@ fn an_empty_claim_payload_is_still_handed_to_the_owner() {
         rx.try_recv().is_err(),
         "the empty claim was paired with another"
     );
+}
+
+/// The owner is gone. A chunk only it would finish is finished by the
+/// sink, and nothing of it is forwarded. A chunk that also carries the
+/// handler's bytes is still the handler's to finish.
+#[test]
+fn an_owner_that_is_gone_finishes_a_delivery_only_it_would() {
+    let (forward, seen) = recorder();
+    let (tx, rx) = mpsc::unbounded_channel();
+    drop(rx);
+    let router = Router::attached(forward, tx);
+    let connector = endpoint().connector();
+    let owner_only = socket(41);
+    posted(
+        &router,
+        Post::Established {
+            id: owner_only,
+            endpoint: endpoint(),
+        },
+    );
+    let finished = router.post(Post::Deliver {
+        id: owner_only,
+        connector,
+        bytes: sync_bucket(SyncCommand::RequestHeaders, b"h"),
+    });
+    assert_eq!(finished, AfterPost::Finished);
+
+    let mixed = socket(42);
+    posted(
+        &router,
+        Post::Established {
+            id: mixed,
+            endpoint: endpoint(),
+        },
+    );
+    let mut chunk = other_bucket(b"tx");
+    chunk.extend_from_slice(&sync_bucket(SyncCommand::RequestBodies, b"rb"));
+    let awaited = router.post(Post::Deliver {
+        id: mixed,
+        connector,
+        bytes: chunk,
+    });
+    assert_eq!(awaited, AfterPost::AwaitFinish);
+    let forwarded = seen.lock().expect("unpoisoned");
+    let delivers: Vec<_> = forwarded
+        .iter()
+        .filter_map(|post| match post {
+            Post::Deliver { id, bytes, .. } => Some((*id, bytes.clone())),
+            _ => None,
+        })
+        .collect();
+    assert_eq!(delivers, vec![(mixed, other_bucket(b"tx"))]);
 }

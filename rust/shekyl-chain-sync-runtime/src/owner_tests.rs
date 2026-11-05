@@ -251,20 +251,78 @@ fn a_session_holds_one_waiting_request_of_each_kind() {
     );
 }
 
-/// The node keeps its sender, so the owner's exit cannot close the watch.
-/// The task publishes `NoView` instead, which is what facts and the
-/// follower would have read from a closed watch.
+/// Every exit publishes `NoView` and drops the sender, so the watch
+/// closes on that state. Facts and the follower read a closed watch as
+/// `NoView`; a reader that only borrows sees the publish. The same guard
+/// reports how the task ended: the cause an exit set, a panic when none
+/// did, and a stop when one was asked, including an exit before the hub.
 #[test]
-fn an_owner_exit_publishes_no_view_while_the_node_keeps_its_sender() {
-    let (node, seen) = tokio::sync::watch::channel(SyncState::Synced);
-    let owner = node.clone();
-    let live = super::EndsAsNoView { state: owner };
-    assert_eq!(*node.borrow(), SyncState::Synced);
+fn an_owner_exit_publishes_no_view_and_reports_how_it_ended() {
+    let (sender, mut seen) = tokio::sync::watch::channel(SyncState::Synced);
+    let (ended_tx, ended) = tokio::sync::watch::channel(None);
+    let (stop_tx, stop) = tokio::sync::watch::channel(false);
+    let mut live = super::EndGuard {
+        state: sender,
+        ended: ended_tx.clone(),
+        stop: stop.clone(),
+        how: super::Ended::Failed(super::EndCause::Panicked),
+    };
+    assert_eq!(*seen.borrow(), SyncState::Synced);
+    assert_eq!(*ended.borrow(), None, "a running owner has not ended");
+    live.how = super::Ended::Failed(super::EndCause::RouterClosed);
     drop(live);
-    assert_eq!(*node.borrow(), SyncState::NoView);
-    assert_eq!(*seen.borrow(), SyncState::NoView);
+    assert_eq!(*seen.borrow_and_update(), SyncState::NoView);
     assert!(
-        seen.has_changed().is_ok(),
-        "the node's sender was dropped with the owner"
+        seen.has_changed().is_err(),
+        "the watch stayed open after the owner"
+    );
+    assert_eq!(
+        *ended.borrow(),
+        Some(super::Ended::Failed(super::EndCause::RouterClosed))
+    );
+    // An unwind runs the guard with no exit's cause set: a panic.
+    let (sender, _seen) = tokio::sync::watch::channel(SyncState::Synced);
+    let unwound = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+        let _guard = super::EndGuard {
+            state: sender,
+            ended: ended_tx.clone(),
+            stop: stop.clone(),
+            how: super::Ended::Failed(super::EndCause::Panicked),
+        };
+        panic!("the owner's task");
+    }));
+    assert!(unwound.is_err());
+    assert_eq!(
+        *ended.borrow(),
+        Some(super::Ended::Failed(super::EndCause::Panicked))
+    );
+    // A task cancelled after a stop was asked (the owner's runtime shut
+    // down under it) ended by the stop, not by a failure.
+    stop_tx.send_replace(true);
+    let (sender, mut stopped) = tokio::sync::watch::channel(SyncState::Synced);
+    drop(super::EndGuard {
+        state: sender,
+        ended: ended_tx,
+        stop,
+        how: super::Ended::Failed(super::EndCause::Panicked),
+    });
+    assert_eq!(*ended.borrow(), Some(super::Ended::Stopped));
+    assert_eq!(*stopped.borrow_and_update(), SyncState::NoView);
+    assert!(stopped.has_changed().is_err());
+    // An exit before the hub publishes `NoView` too. The task is gone,
+    // and a reader must not keep the state at open.
+    let (sender, mut unbound_state) = tokio::sync::watch::channel(SyncState::Synced);
+    let (unbound_tx, unbound) = tokio::sync::watch::channel(None);
+    drop(super::EndGuard {
+        state: sender,
+        ended: unbound_tx,
+        stop: tokio::sync::watch::channel(false).1,
+        how: super::Ended::Failed(super::EndCause::SeamNeverBound),
+    });
+    assert_eq!(*unbound_state.borrow_and_update(), SyncState::NoView);
+    assert!(unbound_state.has_changed().is_err());
+    assert_eq!(
+        *unbound.borrow(),
+        Some(super::Ended::Failed(super::EndCause::SeamNeverBound))
     );
 }

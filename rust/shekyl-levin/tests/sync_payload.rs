@@ -80,8 +80,8 @@ fn carried(block: Vec<u8>) -> BlockBody {
     }
 }
 
-/// The new ids are named and are not dispatched. Ingress admits a command
-/// for a handler, and none exists until the cutover.
+/// The chain-sync ids are named and the C++ ingress does not dispatch them:
+/// the router hands them to chain sync's owner.
 #[test]
 fn sync_commands_are_not_admitted_at_ingress() {
     assert_eq!(NOTIFY_REQUEST_HEADERS, 2011);

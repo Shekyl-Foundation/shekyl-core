@@ -253,12 +253,6 @@ void toJsonValue(rapidjson::Writer<epee::byte_stream>& dest, const cryptonote::t
 void fromJsonValue(const rapidjson::Value& val, cryptonote::tx_out& txout);
 
 
-void toJsonValue(rapidjson::Writer<epee::byte_stream>& dest, const cryptonote::tx_blob_entry& tx);
-void fromJsonValue(const rapidjson::Value& val, cryptonote::tx_blob_entry& tx);
-
-void toJsonValue(rapidjson::Writer<epee::byte_stream>& dest, const cryptonote::block_complete_entry& blk);
-void fromJsonValue(const rapidjson::Value& val, cryptonote::block_complete_entry& blk);
-
 void toJsonValue(rapidjson::Writer<epee::byte_stream>& dest, const cryptonote::rpc::block_with_transactions& blk);
 void fromJsonValue(const rapidjson::Value& val, cryptonote::rpc::block_with_transactions& blk);
 

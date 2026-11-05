@@ -5,7 +5,7 @@
 
 //! The cutover's loopback scenarios (CS-5): phase timing, a node that
 //! posts no template while it is behind, stall recovery, a retired chain
-//! request, and a missing-transaction serve.
+//! request, a missing-transaction serve, and how the owner's task ends.
 //!
 //! Its own integration binary. It includes `chain_sync/support.rs`, as
 //! `chain_sync_loopback` and `chain_sync_claim_relay` do. The older
@@ -16,6 +16,7 @@ use std::sync::{Arc, Mutex};
 use shekyl_chain_ingest::follower::{NoJob, Posting};
 use shekyl_chain_rules::AtHeight;
 use shekyl_chain_sync::SyncState;
+use shekyl_chain_sync_runtime::owner::{EndCause, Ended};
 use shekyl_levin::{
     notify, NewCompactBlock, PortableMap, RequestCompactMissingTx, NOTIFY_NEW_COMPACT_BLOCK,
     NOTIFY_REQUEST_COMPACT_MISSING_TX,
@@ -529,4 +530,37 @@ async fn the_owner_serves_a_missing_tx_request_and_closes_on_its_faults() {
 /// `message` as one Levin notify of `command`.
 fn frame_notify(command: u32, message: &impl PortableMap) -> Vec<u8> {
     notify(command, &message.store().expect("the message encodes"))
+}
+
+/// **An owner whose timing engine closes reports why** (the CS-5
+/// tune-up). The engine going under a running owner ends its task on its
+/// own: the end is a failure naming the engine, which the daemon stops on,
+/// not silence and not a stop.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn an_owner_whose_engine_closes_reports_the_cause() {
+    logs();
+    let (corpus, steps) = spend();
+    let node = Node::start("owner-end-engine", corpus.rules(), &steps[..1], 2, rng()).await;
+    let mut ended = node.ended();
+    assert_eq!(*ended.borrow(), None, "a running owner has ended");
+    node.close_engine();
+    let how = *tokio::time::timeout(LIMIT, ended.wait_for(Option::is_some))
+        .await
+        .expect("the owner ended in time")
+        .expect("the end watch is held by the node");
+    assert_eq!(how, Some(Ended::Failed(EndCause::EngineClosed)));
+    node.stop().await;
+}
+
+/// **An owner asked to stop reports a stop.** Its end is not a failure,
+/// so a daemon stopping on purpose is not told chain sync died.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn an_owner_asked_to_stop_reports_a_stop() {
+    logs();
+    let (corpus, steps) = spend();
+    let node = Node::start("owner-end-stop", corpus.rules(), &steps[..1], 2, rng()).await;
+    let ended = node.ended();
+    assert_eq!(*ended.borrow(), None, "a running owner has ended");
+    node.stop().await;
+    assert_eq!(*ended.borrow(), Some(Ended::Stopped));
 }

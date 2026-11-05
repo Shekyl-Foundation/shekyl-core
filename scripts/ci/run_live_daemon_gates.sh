@@ -185,6 +185,11 @@ ARMED=(
   engine::regtest_e2e::sync::an_offline_testnet_node_is_synced_at_open
   engine::regtest_e2e::sync::an_offline_regtest_node_mines
   engine::regtest_e2e::sync::a_closed_node_whose_peer_is_down_mines_and_opens_when_it_arrives
+  # The CS-5 tune-up §2: a block mined by generateblocks and one taken by
+  # submit_block reach the peer by relay. Observed red 2026-11-04 with the
+  # model's relay of a local tip removed: "the peer did not take the block
+  # generateblocks made within 20s". Green 4.4 s, local Release daemon.
+  engine::regtest_e2e::sync::a_block_a_node_mines_reaches_its_peer_by_relay
 )
 
 # Consensus gates too heavy for the per-PR lane (depth-3 spend, 13 min

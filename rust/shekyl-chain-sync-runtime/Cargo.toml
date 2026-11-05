@@ -12,6 +12,12 @@ license.workspace = true
 repository.workspace = true
 description = "Chain sync's runtime half: the Levin router, the sync owner task, the executor and serving (CS-3)."
 
+[features]
+# A test of another crate asks the owner to publish a sync state. The
+# owner remains the only publisher. Off in every shipped build; shekyl-node
+# enables it from its dev-dependency edge for the follower tests.
+publish-for-test = []
+
 [dependencies]
 shekyl-chain-ingest = { path = "../shekyl-chain-ingest", default-features = false, features = ["pipeline"] }
 shekyl-chain-rules = { path = "../shekyl-chain-rules" }

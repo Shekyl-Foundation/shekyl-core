@@ -33,7 +33,7 @@ use crate::connection::{
 use crate::dial::{AttemptTask, Channel, ConnectFuture, Dial, StampStreamEnd};
 use crate::endpoint::Endpoint;
 use crate::loopback::Loopback;
-use crate::post::{Post, SyncPayload};
+use crate::post::{AfterPost, IntoPostSink, Post, PostSink, SyncPayload};
 use crate::registry::{Board, Row};
 
 /// A channel the hub has posted `established` for.
@@ -117,7 +117,7 @@ pub struct Hub {
     /// Wakes the thread waiters: the harness pump and the open path. Task
     /// waiters have one [`tokio::sync::Notify`] per row.
     ready: Arc<Condvar>,
-    post: Arc<dyn Fn(Post) + Send + Sync>,
+    post: PostSink,
     clock: Arc<dyn Clock + Send + Sync>,
     dial: Arc<RwLock<Option<Arc<dyn Dial>>>>,
     /// Each connector's link: published by whoever owns its route, read by
@@ -138,15 +138,19 @@ impl Hub {
     /// the same table from the caller; this hub does not mint one.
     /// `post` enqueues onto that connection's strand and returns. It must
     /// not call back into the hub: posts run while the table lock is held,
-    /// so `established` cannot land after `closed`.
+    /// so `established` cannot land after `closed`. A sink that returns
+    /// [`AfterPost::Finished`] has finished that delivery; the hub opens
+    /// the row before it drops the lock, and does not call
+    /// `delivery_finished` for it.
     /// `ceiling` is the descriptor-derived inbound bound the caller resolved.
     #[must_use]
     pub fn new(
         sockets: Sockets,
         ceiling: InboundCeiling,
-        post: Arc<dyn Fn(Post) + Send + Sync>,
+        post: impl IntoPostSink,
         clock: Arc<dyn Clock + Send + Sync>,
     ) -> Self {
+        let post = post.into_post_sink();
         Self {
             inner: Arc::new(Mutex::new(Inner {
                 sockets,
@@ -181,11 +185,7 @@ impl Hub {
 
     /// [`Self::new`] with the monotonic clock.
     #[must_use]
-    pub fn with_clock(
-        sockets: Sockets,
-        ceiling: InboundCeiling,
-        post: Arc<dyn Fn(Post) + Send + Sync>,
-    ) -> Self {
+    pub fn with_clock(sockets: Sockets, ceiling: InboundCeiling, post: impl IntoPostSink) -> Self {
         Self::new(sockets, ceiling, post, Arc::new(MonotonicClock::new()))
     }
 
@@ -305,7 +305,8 @@ impl Hub {
             id,
             connector,
             sync,
-        });
+        })
+        .without_a_delivering_row();
     }
 
     /// Register a channel the connector already admitted.
@@ -440,7 +441,7 @@ impl Hub {
 
     fn write_row(
         inner: &mut Inner,
-        post: &Arc<dyn Fn(Post) + Send + Sync>,
+        post: &PostSink,
         connection: Connection,
         open: OpenSocket,
         session: Session,
@@ -468,7 +469,7 @@ impl Hub {
             },
         );
         Self::republish(inner);
-        post(Post::Established { id, endpoint });
+        post(Post::Established { id, endpoint }).without_a_delivering_row();
         Attached { id, session }
     }
 
@@ -687,13 +688,38 @@ impl Hub {
                 conn.posted_deliveries = conn.posted_deliveries.saturating_add(1);
                 let connector = conn.connection.endpoint().connector();
                 let frame = bytes.take().expect("checked above");
-                (self.post)(Post::Deliver {
+                let after = (self.post)(Post::Deliver {
                     id,
                     connector,
                     bytes: frame,
                 });
-                self.wake();
-                DeliverStep::Wait
+                match after {
+                    AfterPost::AwaitFinish => {
+                        self.wake();
+                        DeliverStep::Wait
+                    }
+                    // The sink finished this delivery. The same transition
+                    // `delivery_finished` makes, under the lock this step
+                    // already holds. The sink must not take that lock; the
+                    // chain-sync router's `Opened` only sends on a channel.
+                    AfterPost::Finished => {
+                        if conn.end.is_none() && matches!(conn.phase, Phase::Delivering) {
+                            conn.phase = Phase::Open;
+                        }
+                        let inbound = conn.connection.endpoint().direction() == Direction::Inbound;
+                        let opened = if inbound && conn.established && conn.end.is_none() {
+                            Self::open_once(conn, id)
+                        } else {
+                            None
+                        };
+                        if let Some(post) = opened {
+                            (self.post)(post).without_a_delivering_row();
+                        }
+                        conn.notify.notify_one();
+                        self.wake();
+                        DeliverStep::Done(true)
+                    }
+                }
             }
             (Phase::Arming | Phase::Delivering, _) => DeliverStep::Wait,
         }
@@ -748,7 +774,7 @@ impl Hub {
             }
         };
         if let Some(post) = opened {
-            (self.post)(post);
+            (self.post)(post).without_a_delivering_row();
         }
         if let Some(notify) = notify {
             notify.notify_one();
@@ -894,7 +920,7 @@ impl Hub {
             (sender, opened)
         };
         if let Some(post) = opened {
-            (self.post)(post);
+            (self.post)(post).without_a_delivering_row();
         }
         if let Some(sender) = sender {
             match sender.send(()) {
@@ -1102,7 +1128,7 @@ impl Hub {
         if let Some(dial) = dial {
             dial.reader_stopped(id);
         }
-        poster(Post::Closed { id, connector, end });
+        poster(Post::Closed { id, connector, end }).without_a_delivering_row();
         CloseResult::Recorded(cause)
     }
 
