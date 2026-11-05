@@ -173,11 +173,16 @@ fn the_name_id_is_the_tags_cshake() {
     for (net, hex) in pinned {
         let derived = shekyl_crypto_hash::cshake256_32(NETWORK_NAME_DST, net.tag().as_bytes());
         assert_eq!(
-            net.name_id(),
+            net.name_id().as_bytes()[..],
             derived[..16],
             "{net}: the constant is the derivation"
         );
-        let shown: String = net.name_id().iter().map(|b| format!("{b:02x}")).collect();
+        let shown: String = net
+            .name_id()
+            .as_bytes()
+            .iter()
+            .map(|b| format!("{b:02x}"))
+            .collect();
         assert_eq!(shown, hex, "{net}: the oracle's value");
     }
     for (i, a) in Network::ALL.iter().enumerate() {

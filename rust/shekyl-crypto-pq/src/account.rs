@@ -178,8 +178,8 @@ pub const MASTER_DERIVE_PURPOSE: &[u8] = b"shekyl-master-derive-v3";
 #[must_use]
 pub fn salt_for(net: Network) -> Vec<u8> {
     let name_id = net.name_id();
-    let mut out = Vec::with_capacity(name_id.len() + MASTER_DERIVE_PURPOSE.len());
-    out.extend_from_slice(&name_id);
+    let mut out = Vec::with_capacity(name_id.as_bytes().len() + MASTER_DERIVE_PURPOSE.len());
+    out.extend_from_slice(name_id.as_bytes());
     out.extend_from_slice(MASTER_DERIVE_PURPOSE);
     out
 }
@@ -606,7 +606,11 @@ mod tests {
             Network::Regtest,
         ] {
             let salt = salt_for(net);
-            assert_eq!(salt[..16], net.name_id(), "{net}: name_id at position 0");
+            assert_eq!(
+                salt[..16],
+                net.name_id().as_bytes()[..],
+                "{net}: name_id at position 0"
+            );
             assert_eq!(
                 &salt[16..],
                 b"shekyl-master-derive-v3",

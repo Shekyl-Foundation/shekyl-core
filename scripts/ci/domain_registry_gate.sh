@@ -398,7 +398,14 @@ count_pattern() {
 # (`auth_msg_is_stable_role_separated_and_non_replayable`), one in
 # rust/shekyl-crypto-pq/src/message_signing.rs (`armored_tamper_battery`).
 # PR 2 had them at 87 against a pin of 83 before PR 1's site above joined.
-MECH1_EXPECTED=88
+# The signing envelope's frame (2026-11-04, NI_SIGNING_ENVELOPE §2.1, §2.6):
+# 88 -> 91. Two production sites in rust/shekyl-network/src/envelope.rs, the
+# 32- and 64-byte widths every framed domain hashes through (the domain is
+# the caller's registered constant, not a literal here), and one
+# #[cfg(test)] site in envelope/tests.rs that rebuilds the input by hand.
+# Until the gate counts frame sites (the envelope §2.5), this count rises
+# and falls as domains move onto frame.
+MECH1_EXPECTED=91
 mech1=$(count_pattern 'cshake256_(?:32|64)\(|CShake256Core::new\(')
 if [[ "$mech1" != "$MECH1_EXPECTED" ]]; then
   echo "COUNT DRIFT mech 1 (cSHAKE call sites): found $mech1, pinned $MECH1_EXPECTED." >&2

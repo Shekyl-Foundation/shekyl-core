@@ -21,6 +21,7 @@ encode_string prefix and the 0x04 suffix that SHAKE256 does not (Rick's
 ruling 3 on the signing envelope, 2026-11-04). `anchor()` adds the four
 derived network ids against the values PR 1 recorded (`network_id_ffi.rs`),
 and `name_id` is pinned for all four networks (the envelope §2.6).
+`framed()` and `frame()` are the envelope's §2.6, written from the design.
 
 An oracle loads this file by its path (`importlib`), as `python3 -I` puts
 neither the script's directory nor the working directory on `sys.path`.
@@ -181,6 +182,20 @@ def anchor_sponge() -> None:
         if name_id(name).hex() != want:
             sys.exit(f"{name}: name_id is not the pinned value")
 
+
+
+def framed(field: bytes) -> bytes:
+    """The envelope's field framing (§2.6): u64_le(len) ‖ field."""
+    return len(field).to_bytes(8, "little") + field
+
+
+def frame(domain: bytes, binding: bytes, fields: list[bytes], out_len: int = 32) -> bytes:
+    """The signing envelope (§2.6): cSHAKE256(S = domain,
+    X = binding ‖ framed(f_1) ‖ … ‖ framed(f_n)), out_len bytes. The binding is
+    16 bytes, raw: a network id or a name_id."""
+    if len(binding) != 16:
+        sys.exit(f"a binding is 16 bytes, not {len(binding)}")
+    return cshake256(binding + b"".join(framed(f) for f in fields), out_len, s=domain)
 
 
 def network_id(name: str) -> bytes:
