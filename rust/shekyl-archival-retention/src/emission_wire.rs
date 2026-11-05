@@ -87,18 +87,19 @@ pub const MAX_BACKING_PROOF_BYTES: usize = 65_536;
 /// network's 16-byte id, so the message binds one network on its own.
 ///
 /// **`-v4` (the signing envelope §2.2, §2.7):** the message is the envelope
-/// frame of the eight fields under the network's id, 64 bytes wide (a hybrid
-/// signature signs it), and field 8 is the transaction's `tx_signable`
-/// where `-v3` took the bare signable prefix hash. The bytes `-v3` hashed
-/// were already `id ‖ framed fields`, so the frame's input layout is theirs.
-pub const EMISSION_AUTH_BACKING: IdDomain<8, W64> =
+/// frame of nine fields under the network's id, 64 bytes wide (a hybrid
+/// signature signs it). Field 8 is the transaction's `tx_signable`, and
+/// field 9 the backing's wire bytes, which CEN-J22's signable prefix no
+/// longer covers. `-v4` has never been released, so the ninth field joins it
+/// without a new label.
+pub const EMISSION_AUTH_BACKING: IdDomain<9, W64> =
     IdDomain::new(b"shekyl/archival-emission-auth-backing-v4");
 
 /// The envelope domain of the **claim-side** auth (`auth_claim`) binding
 /// message. See [`ArchivalRewardEmissionVin::auth_msg`]. Bumped alongside
 /// the backing domain: `-v2` for the D1 micro change, `-v3` for the network
 /// id, `-v4` for the envelope and `tx_signable` (see there).
-pub const EMISSION_AUTH_CLAIM: IdDomain<8, W64> =
+pub const EMISSION_AUTH_CLAIM: IdDomain<9, W64> =
     IdDomain::new(b"shekyl/archival-emission-auth-claim-v4");
 
 /// Public per-shard work entry (`REWARD_EMISSION_LEG.md` §5.4) — the verifier
@@ -528,6 +529,26 @@ impl ArchivalRewardEmissionVin {
         Ok(())
     }
 
+    fn write_backing<W: Write>(&self, w: &mut W) -> io::Result<()> {
+        write_varint(&self.backing.proof.len(), w)?;
+        w.write_all(&self.backing.proof)?;
+        w.write_all(&self.backing.pseudo_out)?;
+        write_varint(&self.backing.backing_pubkey.len(), w)?;
+        w.write_all(&self.backing.backing_pubkey)?;
+        w.write_all(&[self.backing.tree_depth])
+    }
+
+    /// Canonical backing section bytes (proof, `pseudo_out`, backing key,
+    /// tree depth, as the wire carries them) — digest field 9 of
+    /// [`Self::auth_msg`]. Wraps [`Self::write_backing`], so wire and digest
+    /// cannot drift.
+    #[must_use]
+    pub fn encode_backing(&self) -> Vec<u8> {
+        let mut out = Vec::with_capacity(self.backing.proof.len() + 2_100);
+        self.write_backing(&mut out).expect("vec write");
+        out
+    }
+
     /// Canonical work-claim section bytes — digest field 6 of [`Self::auth_msg`].
     /// Wraps [`Self::write_work_claim`] (the same bytes the wire streams), so
     /// wire and digest cannot drift.
@@ -555,12 +576,7 @@ impl ArchivalRewardEmissionVin {
             write_varint(epoch, w)?;
         }
         self.write_work_claim(w)?;
-        write_varint(&self.backing.proof.len(), w)?;
-        w.write_all(&self.backing.proof)?;
-        w.write_all(&self.backing.pseudo_out)?;
-        write_varint(&self.backing.backing_pubkey.len(), w)?;
-        w.write_all(&self.backing.backing_pubkey)?;
-        w.write_all(&[self.backing.tree_depth])?;
+        self.write_backing(w)?;
         for amount in &self.reward_amount_plain {
             write_varint(amount, w)?;
         }
@@ -697,7 +713,7 @@ impl ArchivalRewardEmissionVin {
     ///
     /// The message is the envelope frame of the field inventory under the
     /// network's id, read to 64 bytes (the signing envelope §2.2, §2.7):
-    /// `frame(role domain, network_id, [field 1, …, field 8])`. The id is the
+    /// `frame(role domain, network_id, [field 1, …, field 9])`. The id is the
     /// network's 16-byte genesis-derived id (`NETWORK_IDENTITY.md` NI-F11)
     /// at position 0, so the message is valid on one network whatever the
     /// transaction around it carries.
@@ -716,6 +732,11 @@ impl ArchivalRewardEmissionVin {
     /// 8. `tx_signable`, the transaction's one network-bound message (cross-tx
     ///    replay; [`shekyl_wire::Transaction::tx_signable`], over CEN-J22's
     ///    signable prefix hash)
+    /// 9. backing canonical wire bytes ([`Self::encode_backing`]: the proof,
+    ///    `pseudo_out`, the backing key and the tree depth). CEN-J22 takes the
+    ///    emission input out of the signable prefix whole, so nothing else
+    ///    signs these bytes; with this field, every byte of the input is
+    ///    either a field both auths sign or one of the two auth signatures.
     ///
     /// `reward_commits` and `tx_signable` are tx-level context supplied by
     /// the caller (wallet builder / PR-E3), not vin fields.
@@ -754,14 +775,14 @@ impl ArchivalRewardEmissionVin {
         })
     }
 
-    /// The eight fields of [`Self::auth_msg`], in order, each its raw bytes:
+    /// The nine fields of [`Self::auth_msg`], in order, each its raw bytes:
     /// the envelope frames each behind its length. A list field (4, 5, 7) is
     /// one field, the concatenation of its fixed-width entries.
     fn auth_msg_fields(
         &self,
         reward_commits: &[RewardCommit],
         tx_signable: &TxSignableHash,
-    ) -> Result<[Vec<u8>; 8], WireError> {
+    ) -> Result<[Vec<u8>; 9], WireError> {
         self.validate()?;
         let u64_le =
             |values: &[u64]| -> Vec<u8> { values.iter().flat_map(|v| v.to_le_bytes()).collect() };
@@ -782,10 +803,11 @@ impl ArchivalRewardEmissionVin {
             self.encode_work_claim(),
             commits,
             tx_signable.as_bytes().to_vec(),
+            self.encode_backing(),
         ])
     }
 
-    /// The framed field inventory: each of [`Self::auth_msg`]'s eight fields
+    /// The framed field inventory: each of [`Self::auth_msg`]'s nine fields
     /// behind its u64-LE length, the part of the envelope's input after the
     /// network id. Public so the `EMISSION_AUTH_MSG_V1` vectors can pin it and
     /// an independent oracle can recompute each digest from it.
@@ -809,7 +831,7 @@ impl ArchivalRewardEmissionVin {
 impl EmissionAuthRole {
     /// The role's envelope domain (the Q1 domain separation).
     #[must_use]
-    pub const fn domain(self) -> IdDomain<8, W64> {
+    pub const fn domain(self) -> IdDomain<9, W64> {
         match self {
             Self::Backing => EMISSION_AUTH_BACKING,
             Self::Claim => EMISSION_AUTH_CLAIM,

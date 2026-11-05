@@ -5,23 +5,27 @@
 """Independent oracle for the emission auth digests (NETWORK_IDENTITY.md NI-F11).
 
 `docs/test_vectors/EMISSION_AUTH_MSG_V1/vectors.json` pins the emission vin
-fixture's framed field inventory (`expected.auth_msg_framed_hex`, fields 1-8 of
+fixture's framed field inventory (`expected.auth_msg_framed_hex`, fields 1-9 of
 `ArchivalRewardEmissionVin::auth_msg`) and, per network and role, the 64-byte
 digest the two hybrid auths sign:
 
     auth_msg(role) = frame("shekyl/archival-emission-auth-<role>-v4", network_id,
-                           [field 1, ..., field 8])[..64]
+                           [field 1, ..., field 9])[..64]
 
 the signing envelope's frame (§2.2, §2.6, §2.7) with `network_id` the network's
-16-byte genesis-derived id at position 0 and field 8 the transaction's
-`tx_signable`. The frame's input is `network_id || framed`, so the digest is
-recomputed from the pinned framed bytes.
+16-byte genesis-derived id at position 0, field 8 the transaction's
+`tx_signable` and field 9 the backing's wire bytes. The frame's input is
+`network_id || framed`, so the digest is recomputed from the pinned framed
+bytes.
 This script recomputes every digest from the framed bytes through
 `stdlib_cshake.py`, which shares nothing with the Rust and is anchored before
-use. It anchors the framed bytes too: hashed alone under the `-v2`
-customizations, which carried no id, they must give the two digests the file
-pinned before NI-F11 (written out below), so the inventory is the one that was
-pinned independently of this change.
+use. It anchors the framed bytes too:
+- fields 1-8, hashed alone under the `-v2` customizations, which carried no id,
+  must give the two digests the file pinned before NI-F11 (written out below),
+  so that part of the inventory is the one pinned independently of this change;
+- field 9 must be the backing section this script builds from the fixture's
+  description by the wire layout (`varint(len) || proof || pseudo_out ||
+  varint(len) || backing_pubkey || tree_depth`).
 
 Modes: with no flag it checks the pinned digests and ids (exit 0, 1 on a
 mismatch, 2 when the file has no framed bytes to check, rule 47). With
@@ -37,6 +41,7 @@ import argparse
 import importlib.util
 import json
 import pathlib
+import re
 import sys
 
 _HERE = pathlib.Path(__file__).resolve().parent
@@ -65,20 +70,53 @@ PRIOR_V2 = {
 }
 
 
-def unframe(framed: bytes) -> list[bytes]:
-    """The fields of a framed inventory: each behind its u64-LE length."""
+def unframe(framed: bytes) -> list[tuple[int, bytes]]:
+    """The fields of a framed inventory, each behind its u64-LE length, with
+    the offset where each field's frame starts."""
     fields, at = [], 0
     while at < len(framed):
         n = int.from_bytes(framed[at:at + 8], "little")
-        fields.append(framed[at + 8:at + 8 + n])
+        fields.append((at, framed[at + 8:at + 8 + n]))
         at += 8 + n
-    if at != len(framed) or len(fields) != 8:
-        sys.exit("the framed bytes are not eight length-framed fields")
+    if at != len(framed) or len(fields) != 9:
+        sys.exit("the framed bytes are not nine length-framed fields")
     return fields
 
 
+def varint(n: int) -> bytes:
+    """The wire's LEB128 varint."""
+    out = bytearray()
+    while True:
+        b = n & 0x7F
+        n >>= 7
+        if n:
+            out.append(b | 0x80)
+        else:
+            out.append(b)
+            return bytes(out)
+
+
+def repeated(desc: str) -> bytes:
+    """A fixture blob described as `0xNN repeated K times` (K may be written
+    `NAME (K)`)."""
+    m = re.fullmatch(r"0x([0-9A-Fa-f]{2}) repeated (?:[A-Z_]+ \((\d+)\)|(\d+)) times", desc)
+    if not m:
+        sys.exit(f"unreadable fixture blob: {desc!r}")
+    return bytes([int(m.group(1), 16)]) * int(m.group(2) or m.group(3))
+
+
+def backing_section(backing: dict) -> bytes:
+    proof = repeated(backing["proof"])
+    pseudo_out = repeated(backing["pseudo_out"])
+    pubkey = repeated(backing["backing_pubkey"])
+    return (
+        varint(len(proof)) + proof + pseudo_out + varint(len(pubkey)) + pubkey
+        + bytes([backing["tree_depth"]])
+    )
+
+
 def digests(framed: bytes) -> dict:
-    fields = unframe(framed)
+    fields = [field for _, field in unframe(framed)]
     out = {}
     for name in cs.NETWORKS:
         nid = cs.network_id(name)
@@ -100,8 +138,12 @@ def main() -> int:
         print("the vector file has no framed bytes", file=sys.stderr)
         return 2
     framed = bytes.fromhex(framed_hex)
+    field9_at, field9 = unframe(framed)[8]
+    if field9 != backing_section(doc["fixture"]["backing"]):
+        print("field 9 is not the fixture's backing section", file=sys.stderr)
+        return 1
     for custom, pinned in PRIOR_V2.items():
-        if cs.cshake256(framed, 64, s=custom).hex() != pinned:
+        if cs.cshake256(framed[:field9_at], 64, s=custom).hex() != pinned:
             print(
                 f"the framed bytes do not give the prior {custom.decode()} digest",
                 file=sys.stderr,

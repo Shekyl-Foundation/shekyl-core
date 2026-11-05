@@ -163,10 +163,13 @@ impl TxRule for J20 {
 /// It is the prefix field of the transaction's one network-bound message,
 /// `tx_signable` (the signing envelope §2.2), which every SAL, both auths
 /// and the per-input hybrid auths (CEN-I17/I18, through the spend hash)
-/// prove over. So the hybrid auths cover the emission vin only through the
-/// auths' fields 1–6, not byte for byte: the vin's backing proof and the
-/// two auth signatures are under no signature of their own. Raised to Rick
-/// with #1266 (2026-11-05).
+/// prove over. The emission vin is therefore covered by its own two auths
+/// alone, byte for byte: every byte of it is either a field both auths sign
+/// (the vin's fields, and the backing's wire bytes as field 9 — the proof,
+/// `pseudo_out`, the backing key and the tree depth) or one of the two auth
+/// signatures, and those are verified strictly (canonical encodings only,
+/// both halves of the hybrid; CEN-J25). Changing any byte of the vin is
+/// refused (`emission_verify_kat::auth_refuses_any_changed_byte_of_the_input`).
 ///
 /// Nothing fails a definition. The row runs in `tx_form` so the derivation
 /// is exercised at both sites on every emission, and is recorded there;

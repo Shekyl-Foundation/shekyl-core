@@ -155,7 +155,7 @@ fn emission_auth_msg_matches_pinned_vectors() {
         "the file's claim customization is the code's"
     );
 
-    // The framed inventory (fields 1-8), the part after the network id.
+    // The framed inventory (fields 1-9), the part after the network id.
     let framed = vin
         .auth_msg_framed(&commits, &FIXTURE_TX_SIGNABLE)
         .expect("fixture is valid");

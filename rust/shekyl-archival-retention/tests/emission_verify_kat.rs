@@ -838,6 +838,54 @@ fn auth_rejects_tampered_tx_context() {
     ));
 }
 
+/// Every byte of the emission input is covered (the signing envelope
+/// §2.2; CEN-J22). CEN-J22 takes the input out of the signable prefix
+/// whole, so nothing but its own two auths signs it: each byte is either a
+/// field both auths sign (fields 1-7 and the backing's wire bytes, field 9)
+/// or one of the two auth signatures, which are verified strictly. Each byte
+/// of an honest input, changed alone, gives bytes that either fail to parse
+/// as one emission input or parse and are refused by the auth check.
+#[test]
+fn auth_refuses_any_changed_byte_of_the_input() {
+    let fx = Fixture::new(E);
+    let (commits, tx_hash) = auth_tx_context();
+    let (vin, _, _) = authed_vin(&fx, &commits, &tx_hash);
+    let wire = vin.serialize().expect("the honest vin encodes");
+
+    let parse_whole = |bytes: &[u8]| {
+        let mut rest = bytes;
+        let parsed = ArchivalRewardEmissionVin::read(&mut rest).ok()?;
+        rest.is_empty().then_some(parsed)
+    };
+    let honest = parse_whole(&wire).expect("the honest bytes parse whole");
+    emission_vin_verify_auth(&honest, &commits, &tx_hash, &testnet())
+        .expect("the honest bytes verify");
+
+    let (mut unparsed, mut refused) = (0usize, 0usize);
+    for at in 0..wire.len() {
+        let mut changed = wire.clone();
+        changed[at] ^= 0x01;
+        match parse_whole(&changed) {
+            None => unparsed += 1,
+            Some(parsed) => {
+                assert!(
+                    emission_vin_verify_auth(&parsed, &commits, &tx_hash, &testnet()).is_err(),
+                    "byte {at} of {} changed and the input still verifies",
+                    wire.len()
+                );
+                refused += 1;
+            }
+        }
+    }
+    assert_eq!(unparsed + refused, wire.len());
+    // Most bytes are payload, so most changes parse and reach the auth check.
+    assert!(
+        refused > wire.len() / 2,
+        "{refused} of {} reached the auth check",
+        wire.len()
+    );
+}
+
 /// Canonical-length-but-malformed bytes (the pre-C-1 placeholder fill) fail
 /// hybrid deserialization, not signature verification — the distinct
 /// `AuthMalformed` diagnostic, per role.

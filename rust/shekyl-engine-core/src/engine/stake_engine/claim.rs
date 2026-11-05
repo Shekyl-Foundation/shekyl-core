@@ -328,8 +328,9 @@ impl Message<AssembleEmissionClaim> for StakeEngine {
         .map_err(|e| BondAssemblyError::build("membership proving", e))?;
 
         // ── Step 12: the vin, with placeholder auths at canonical length
-        // (the auth digest spans fields 1–6 + tx context, never the auth
-        // legs themselves, so the placeholders don't poison it).
+        // (the auth digest spans every vin byte but the auth legs, the
+        // backing proof included, so the proof is in place first and the
+        // placeholders don't poison it).
         let hybrid_pk_bytes = keys
             .hybrid_sign_pk
             .to_canonical_bytes()

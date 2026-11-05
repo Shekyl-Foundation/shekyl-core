@@ -89,7 +89,7 @@ signed_hash(i) = frame64("shekyl/fcmp-spend-signing-v2", id,
 ```
 
 - `prefix_hash` is CEN-J22's signable prefix hash (the prefix hash with the emission input removed whole; the plain prefix hash when there is none), and `ct_base_hash` is the txid's base component, `H(base)`; both come from the functions `shekyl-wire` uses for the txid.
-- The FCMP++ SAL (full and membership-only) and FROST prove over `tx_signable`, so every proof over a transaction commits to the network itself. An emission's backing proof proves over the same message, and both emission auths are `frame64` under `shekyl/archival-emission-auth-{backing,claim}-v4`, field 8 `tx_signable` (NI-R14).
+- The FCMP++ SAL (full and membership-only) and FROST prove over `tx_signable`, so every proof over a transaction commits to the network itself. An emission's backing proof proves over the same message, and both emission auths are `frame64` under `shekyl/archival-emission-auth-{backing,claim}-v4`, field 8 `tx_signable` and field 9 the backing's wire bytes (NI-R14). Every byte of the emission input is then a field both auths sign or one of their signatures, which are verified strictly: canonical encodings only, and Ed25519's strict verify (a small-order key or R refused) beside ML-DSA's.
 - Each input's hybrid signature signs `signed_hash(i)` (`SigningPayloadHash`, 64 bytes); the validator takes the id from the genesis its `Trust` pins, and a harness chain under `Trust::UNPINNED` signs and verifies under `HARNESS_NETWORK_ID` (test and harness builds only).
 - The KAT keeps the eight C++-captured payloads; its oracle takes them apart itself and pins `tx_signable` and each `signed_hash` per network ([`FCMP_SPEND_SIGNING_PREIMAGE.md`](FCMP_SPEND_SIGNING_PREIMAGE.md)).
 

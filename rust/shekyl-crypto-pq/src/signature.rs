@@ -561,6 +561,54 @@ mod tests {
         out
     }
 
+    /// The classical half is verified strictly. Under the identity key
+    /// (small order) the Ed25519 equation holds for `(R = [s]B, S = s)` over
+    /// any message, so a plain verify accepts this forgery; the strict
+    /// verify refuses it. The post-quantum half is a real signature, so the
+    /// classical check is the only thing that can refuse.
+    #[test]
+    fn hybrid_refuses_a_small_order_classical_key() {
+        use curve25519_dalek::{constants::ED25519_BASEPOINT_POINT, Scalar};
+        let (pk, sk) = kp();
+        let msg = b"strict classical half";
+        let honest = scheme().sign(&sk, D, msg).unwrap();
+
+        let s = Scalar::from(7u64);
+        let mut forged_ed = (ED25519_BASEPOINT_POINT * s).compress().to_bytes().to_vec();
+        forged_ed.extend_from_slice(s.as_bytes());
+        let mut identity = [0u8; 32];
+        identity[0] = 1;
+
+        let weak_pk = HybridPublicKey {
+            ed25519: identity,
+            ml_dsa: pk.ml_dsa.clone(),
+        };
+        let forged = HybridSignature {
+            ed25519: forged_ed,
+            ml_dsa: honest.ml_dsa.clone(),
+        };
+        assert!(scheme().verify(&weak_pk, D, msg, &forged).is_err());
+    }
+
+    /// A classical key spelled non-canonically (y at or above p) is refused
+    /// by its encoding, before any signature check: `y = p + 1` decodes to
+    /// the same point as `y = 1`, and a key's bytes are signed content.
+    #[test]
+    fn hybrid_refuses_a_non_canonical_classical_key() {
+        let (mut pk, sk) = kp();
+        let msg = b"canonical key";
+        let sig = scheme().sign(&sk, D, msg).unwrap();
+        // p + 1 = 2^255 - 18, little-endian.
+        let mut p_plus_one = [0xffu8; 32];
+        p_plus_one[0] = 0xee;
+        p_plus_one[31] = 0x7f;
+        pk.ed25519 = p_plus_one;
+        assert!(matches!(
+            scheme().verify(&pk, D, msg, &sig),
+            Err(CryptoError::InvalidKeyMaterial)
+        ));
+    }
+
     #[test]
     fn keygen_sign_verify_roundtrip() {
         let scheme = scheme();
