@@ -336,6 +336,10 @@ members = [
     # The seam: SocketId, one cause, posts onto the connection strand.
     # epee's TCP server is deleted (D13).
     "shekyl-seam",
+    # The session layer: the Levin handshake both ways, the self-connection
+    # nonces, timed sync, the dispatch table over `Command`, the board
+    # (P2P_3_REMNANT_CUTOVER_BRIEF.md §7). Replaces shekyl-seam.
+    "shekyl-p2p-session",
     # P2P conformance harness (P2P_DIFFERENTIAL_HARNESS.md). The scripted
     # peer, the seam host, the transcript comparator, and check-goldens.
     # Nothing in the production graph depends on it. The epee recording

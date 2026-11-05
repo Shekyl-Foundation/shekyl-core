@@ -114,6 +114,11 @@ close_kinds! {
     (15, InboundNotAccepted, BeforeChannel, "SHEKYL_CLOSE_INBOUND_NOT_ACCEPTED"),
     (16, ProxyUnavailable, BeforeChannel, "SHEKYL_CLOSE_PROXY_UNAVAILABLE"),
     (17, AcceptRateExceeded, BeforeChannel, "SHEKYL_CLOSE_ACCEPT_RATE_EXCEEDED"),
+    // The session layer's two (P2P_3_REMNANT_CUTOVER_BRIEF.md §7.4, §7.6):
+    // a handshake whose network id is not ours is dropped, never banned;
+    // an invoke whose response did not arrive within INVOKE_TIMEOUT.
+    (18, NetworkMismatch, Gap, "SHEKYL_CLOSE_NETWORK_MISMATCH"),
+    (19, InvokeTimeout, ChannelExists, "SHEKYL_CLOSE_INVOKE_TIMEOUT"),
 }
 
 /// One close cause. `reply_code` is the overlay reply for
@@ -272,6 +277,8 @@ mod tests {
             CloseKind::IoError,
             CloseKind::SendQueueFull,
             CloseKind::LocalClose,
+            CloseKind::NetworkMismatch,
+            CloseKind::InvokeTimeout,
         ];
         let after = [
             CloseKind::PeerClosed,
@@ -280,6 +287,7 @@ mod tests {
             CloseKind::IoError,
             CloseKind::SendQueueFull,
             CloseKind::LocalClose,
+            CloseKind::InvokeTimeout,
         ];
         assert_eq!(kinds_in(Phase::BeforeChannel), before);
         assert_eq!(kinds_in(Phase::Gap), gap);

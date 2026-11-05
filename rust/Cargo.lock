@@ -5082,6 +5082,22 @@ dependencies = [
 ]
 
 [[package]]
+name = "shekyl-p2p-session"
+version = "3.1.0"
+dependencies = [
+ "shekyl-capped-stream",
+ "shekyl-draw-rng",
+ "shekyl-levin",
+ "shekyl-net-address",
+ "shekyl-onion-v3",
+ "shekyl-peer-policy",
+ "shekyl-timing-engine",
+ "shekyl-transport-layer",
+ "tokio",
+ "tracing",
+]
+
+[[package]]
 name = "shekyl-p2p-transport"
 version = "3.1.0"
 dependencies = [

@@ -310,10 +310,13 @@ session (`SessionRefused`, PWD-B1). On a 1001 request:
    it through its outcome); `Probe` resolves the dialer's reachability
    probe and the session is closed as a probe; `MisroutedProbe` is a form
    failure; `NotOurs` continues;
-6. the peer's advertised endpoint (`my_port`) is recorded on the row as a
+6. ~~the peer's advertised endpoint (`my_port`) is recorded on the row as a
    claim (`Claimed<AdvertisedEndpoint>`), observed only under the redial
-   rule the seam carried (`observes`): clearnet, same ip and the claimed
-   port on an outbound session; Tor, same key and port;
+   rule the seam carried (`observes`)~~ — **SUPERSEDED 2026-11-05 (F4):**
+   the handshake carries no address (ruled 2026-10-09; `basic_node_data`
+   is the network id alone), so there is no claim to record and the
+   seam's claim machinery is deleted, not moved. The step is a no-op;
+   numbering kept so the later steps' citations hold;
 7. the response is built: our `basic_node_data` (network id only), our
    `CORE_SYNC_DATA` from the **tip source** (§7.6), and the **disclosure**
    the peers owner supplies (`PeerOwner::disclosure(connector)`), and
@@ -329,8 +332,9 @@ deadline is the connector's, as today), writes the 1001 request with a
 nonce inserted in the set **before** the bytes are written, arms the
 invoke timeout (§7.6), reads until the response, runs the shared checks,
 and returns the outcome with the peer's node data, received list and sync
-payload. `Confirm` closes the channel on the response (`Reached::Response`).
-`Keep` enters `Established` and does step 8. A response with no pending
+payload. `Confirm` closes the channel on the response — as built
+(2026-11-05, F5): `DialEnd::local_close_after_channel()`; ~~`Reached::Response`~~
+does not exist and is not minted. `Keep` enters `Established` and does step 8. A response with no pending
 invoke, or anything but a 1001 response before the response, is a form
 failure.
 
@@ -348,6 +352,13 @@ unchanged in shape: one map per connector, `nonce → Kind`
 an in-flight guard that erases the nonce when the attempt ends. The
 dialer keeps `mint_probe` as policy (when to probe) and asks the session
 layer to insert the minted nonce; the session layer alone reads the set.
+As built (2026-11-05): the set is reached through `SessionLayer::nonces()`;
+`mint` is the layer's own (each `dial` inserts before it writes), and
+`mint_probe` is the managed Tor supervisor's call. A probe that arrives
+is reported to a fourth member of `Owners`, `probes: Arc<dyn ProbeSink>`
+(`ProbeArrival { minted_at, arrived_at }`), not to a command owner: a
+probe is a handshake this node sent itself, and the session closes as
+soon as the nonce is read.
 
 ### 7.6 Timing: every wake an owner
 
@@ -357,7 +368,7 @@ earliest of the session's live deadlines:
 
 | Deadline | Armed | Fires |
 | --- | --- | --- |
-| handshake | inbound, at adoption; `handshake_within` | close, `SessionRefused` |
+| handshake | inbound, at adoption; `handshake_within` | close, `LevinHandshakeTimeout` (as built 2026-11-05, F5; ~~`SessionRefused`~~ is the bucket-shape refusal, not the deadline) |
 | invoke | at each request sent (1001 outbound, 1002); `INVOKE_TIMEOUT` = 120 s, the Levin handler's `LEVIN_DEFAULT_TIMEOUT_PRECONDITION` kept | close, `InvokeTimeout` |
 | timed sync | at establishment and after each of this session's own 1002 responses; the draw below | send a 1002 request with our `CORE_SYNC_DATA`, arm the invoke deadline |
 
@@ -407,8 +418,12 @@ dropped with the event; it holds nothing.
 `Board` is the session layer's published view: `Arc<[Row]>` sorted by id,
 republished on adopt, establish and close, as the seam's. A row carries
 `id`, `connector`, `direction`, `endpoint`, `established`, `started_unix`,
-`started_mono`, and the claims the row holds (`claimed_height`,
-`accepted_chain_length`, `last_known_hash`, `advertised`). The board is
+`started_mono`~~, and the claims the row holds (`claimed_height`,
+`accepted_chain_length`, `last_known_hash`, `advertised`)~~ —
+**SUPERSEDED 2026-11-05 (F4):** a row carries no claims. Height claims
+reach the sync owner as `SyncOwner::claim(session, sync, carrier)` and
+live in its view, which is the one place they are judged; the advertised
+endpoint does not exist on the wire. The board is
 what `shekyl-p2p` reads for `connections` and `net_stats` and what the
 relay reads for its established-outbound candidate set. It has one
 writer.
@@ -420,7 +435,13 @@ where the seam's `bans` module put them; the session layer reads
 `is_banned` at adoption and closes a banned peer's session as the hub did.
 `ban_*`/`lift_*`/`subscribe_bans`/`listed_bans` keep their shape and move
 with the module into the admission crate's surface the composition
-exposes to RPC.
+exposes to RPC. As built (2026-11-05, F6): the list verbs are
+`Sockets`' (`shekyl-transport-layer`, `admission::bans`); the session
+layer adds the four `ban_*` verbs on `SessionLayer`, each of which
+records the ban in admission and then closes every live session the
+ban covers (`local_close_after_channel`), because only the session layer
+closes (§2, rule 3). `lift_*`, `is_banned`, `subscribe_bans` and
+`listed_bans` are reached through `SessionLayer::sockets()`.
 
 ### 7.10 What the session layer does not do
 
@@ -449,3 +470,23 @@ Recorded as they are found; each names the anchor it corrects.
   Each is pure Rust with no C++ caller on the daemon path; they re-home
   to the crate that owns their subject (§3's "moves to its owner crate")
   so the dependency edge can go.
+- **F4 (2026-11-05):** §7.4 step 6 and §7.8's claim columns were written
+  from the seam as it stood, which still carried `Claimed<AdvertisedEndpoint>`
+  and the `observes` redial rule. The handshake has carried no address
+  since 2026-10-09 (`basic_node_data` is the network id alone, PWD-B1), so
+  the claim is unrecordable: the seam's `endpoint.rs`/`registry.rs` claim
+  machinery is deleted in step 5, not moved, and the board row has no
+  claim fields. The sync owner remains the one holder of height claims.
+- **F5 (2026-11-05):** the brief named two `DialEnd`s that do not exist:
+  `Reached::Response` (§7.4) and `SessionRefused` for the handshake
+  deadline (§7.6). As built, `Confirm` closes with
+  `local_close_after_channel()` and the deadline closes with
+  `DialEnd::levin_handshake_timeout()` (`CloseKind::LevinHandshakeTimeout`,
+  kind 7); two kinds are minted, `NetworkMismatch` (18, a `Gap`) and
+  `InvokeTimeout` (19, `ChannelExists`), with the header parity test
+  (`the_header_is_the_enum`) and `close_cause.h` updated. `SessionRefused`
+  stays the bucket-shape refusal.
+- **F6 (2026-11-05):** a ban that admission records does not close the
+  sessions it covers; the hub did that. Since only the session layer
+  closes, the `ban_*` verbs are on `SessionLayer` (§7.9) and return the
+  ids they dropped.
