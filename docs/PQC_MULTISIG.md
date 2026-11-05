@@ -259,8 +259,8 @@ prover Option D and is withdrawn for the E′ product path.)*
 ### 5.3 Group identity — **the address fingerprint** (`group_id` retired)
 
 The group's identity is the **address fingerprint** (§6.3):
-`cSHAKE256(len(tag) ‖ tag ‖ canonical(MultisigAddressPayload), "shekyl/multisig-address-v2")`,
-where `tag` is the network's name, `shekyl/<network>`: a group is derived from
+`frame("shekyl/multisig-address-v3", name_id, [canonical(MultisigAddressPayload)])`,
+where `name_id` is the network's name binding: a group is derived from
 keys and addresses, which exist before any genesis, so it binds the name, not
 the genesis-derived id (`NETWORK_IDENTITY.md` NI-R15). It is per-group, computable by every participant from the address alone, and
 covers the group's whole public state (`B_group`, `Y_group`, the N KEM pubkeys,

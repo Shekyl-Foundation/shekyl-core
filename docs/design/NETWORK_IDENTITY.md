@@ -61,29 +61,49 @@ One crate holds one table: `network → { name, genesis block bytes, genesis has
 
 ### 2.4 Bind the identity wherever cross-network confusion could matter
 
-- **Transaction signing (NI-Q4).** `payload(i)` gains the network id through a cSHAKE customization. A signature is then valid on exactly one network by construction, not because tree roots happen to differ. It changes the KAT and [`FCMP_SPEND_SIGNING_PREIMAGE.md`](FCMP_SPEND_SIGNING_PREIMAGE.md) §1.1, and every signer (`shekyl-tx-builder`) and verifier (CEN-I17) in one change.
+- **Transaction signing (NI-Q4, NI-F12).** Every proof and signature over a transaction commits to the network through one network-bound message, `tx_signable` (§2.4.1). A signature or proof is then valid on exactly one network by construction, not because tree roots happen to differ.
 - **Noise prologue (NI-Q5).** The prologue is `network id ‖ wire-protocol version`. The network id is already there (NI-F1); the wire version joins it.
 - **Pool file (NI-Q6).** Its seal records the network id. The chain store needs no field: it has block 0.
 - **Marker file (NI-Q7).** A derived label for humans and tooling; nothing trusts it for identity, because every holder of chain data checks the genesis-derived id itself.
 - **Every other domain (NI-Q9).** Audit [`CRYPTO_DOMAIN_REGISTRY.tsv`](CRYPTO_DOMAIN_REGISTRY.tsv): every signature or commitment that could be replayed across networks binds the network id, or is shown unable to replay.
 
-### 2.4.1 PR 2's shape (NI-Q4, NI-Q9, NI-F2; built on `feat/ni-signing-domain`, #1266)
+### 2.4.1 PR 2's shape: one signing envelope (NI-Q4, NI-Q9, NI-F2, NI-F11…F13; #1266)
 
-**The spend signature (NI-Q4).** The payload bytes do not change; the hash over them does:
+Ruled in full by Rick on 2026-11-04 (the signing envelope, `claude/NI_SIGNING_ENVELOPE.md` in `shekyl-dev`; NI-R13…R15 and the rulings of 23:42). Every Shekyl-owned hash, signature and proof that binds the network derives its message through one function, `shekyl_network::envelope`:
 
 ```text
-signed_hash(i) = cSHAKE256-32(S = "shekyl/fcmp-spend-signing-v1", X = network_id ‖ payload(i))
+framed(b)                      = u64_le(len(b)) ‖ b
+frame(domain, binding, fields) = cSHAKE256(S = domain, X = binding ‖ framed(f_1) ‖ … ‖ framed(f_n))
 ```
 
-`network_id` is the 16-byte genesis-derived id (NI-R10), a fixed-width prefix of the input. The customization is one domain string, as every cSHAKE domain in the registry is (SA-R-2: one string separates one context), so the registry gate pins one row; the id is data, and its width is fixed, so the input stays unambiguous. This replaces `keccak256(payload(i))`, which is not a registry row, so nothing retires. *Not taken:* the id inside the customization (`S = domain ‖ id`), which makes four customization strings per domain that the registry cannot pin and departs from how `shekyl/p2p-network-id-v1` and `shekyl/genesis-txkey-v2` use cSHAKE. NI-Q4's row read "a cSHAKE customization carrying the network id"; the id is in the input instead, RULED by Rick 2026-11-04 (NI-R13): the registry stays a list of constant strings, and a fixed 16 bytes at a fixed position is unambiguous without framing. Every network-bound hash here puts the id at a fixed position, ahead of any variable-length field.
+- **The domain** is a registered constant (`CRYPTO_DOMAIN_REGISTRY.tsv`), versioned in its own name; a layout change is a new domain, and no version byte is hashed beside it.
+- **The binding** is 16 bytes at position 0: the genesis-derived network id for anything signed or proved against the chain (an `IdDomain`), or `name_id = cSHAKE256(S = "shekyl/network-name-v1", X = "shekyl/<network>")[..16]` for anything derived from keys or addresses, which exist before genesis (a `NameDomain`; NI-R10, NI-R15). The domain constant's type carries its binding, its field count and its width, so a call site that passes the other binding, another number of fields or reads another width does not compile.
+- **The width** is 64 bytes for content a post-quantum or hybrid signature signs, because a 32-byte digest caps collision resistance at 2^128, below ML-DSA-65's and SLH-DSA-192s's Category 3; 32 otherwise (16 for the two bindings).
 
-- **The validator** learns the id from `Trust`, which already carries the genesis pin: `trust.network_id()` derives it. CEN-I17 and I18 run in `form`, which is stateless and takes no `Trust`, so `form` takes the id as one more input beside the seed, target and references it already takes from its caller, and the caller reads it from its trust. The rules crate still holds no network (rule 71), and a validator under regtest's pin binds regtest's id with nothing else to set. A harness chain that mines its own block 0 runs under `Trust::UNPINNED`, which carries one named harness id (`HARNESS_NETWORK_ID`, test and harness builds only), and every harness signer signs under that same constant.
-- **The signers**: `shekyl-tx-builder` takes the network it already builds for and passes its id; the daemon's verifier takes the node's; multisig and the engine follow the builder. The FFI export `shekyl_tx_pqc_signing_payload_hashes` has no C++ caller and is deleted, not given an id nobody passes.
-- **The KAT** keeps the eight captured payloads as its subject (they still pin the preimage's composition) and pins each `signed_hash` per network against an independent Python oracle for the hash.
+**One transaction message (NI-F12, ruled (b)).**
 
-**Message signing (NI-F2, NI-Q9).** The preimage's network field is the 16-byte id, where it was the network's one-byte code. Message signing is post-genesis, so there is no circularity (the reason key derivation stays on the name, NI-R10). The field's width changes what a signature attests, so the payload layout version is 2 and a layout-1 signature is refused by name; the envelope prefix and the canonical length do not change, as the id is hashed and never carried (`WALLET_MESSAGE_SIGNING.md` SM-R-3, amended 2026-11-04). There was no pinned preimage vector before; `docs/test_vectors/MSG_SIGN_PREIMAGE_V2.json` pins four cases on every network, rebuilt by `scripts/kat/msg_sign_preimage_oracle.py` on the same stdlib sponge as the spend oracle (`scripts/kat/stdlib_cshake.py`).
+```text
+tx_signable    = frame("shekyl/tx-signable-v1", id, [prefix_hash, ct_base_hash])
+signed_hash(i) = frame64("shekyl/fcmp-spend-signing-v2", id,
+                         [tx_signable, header(i), key_hashes, prunable_hash])
+```
 
-**The audit (NI-Q9).** Every production row of [`CRYPTO_DOMAIN_REGISTRY.tsv`](CRYPTO_DOMAIN_REGISTRY.tsv) is classed: it binds the network (its input carries the id, the name, or something only one chain produces: a genesis-chained header, a block hash, a txid, a tree root, a key derived under the name); it cannot cross networks (local, or bound to a chain object checked elsewhere); or it is replayable. The table is [Appendix A](#appendix-a-the-domain-registry-audit-ni-q9): of 131 rows, 52 bind the network, 79 cannot cross, and none is replayable. Three groups hold their class only through a one-byte code or through their neighbours' proofs; they are raised for a ruling as NI-F11…F13 (§7, §A.8) and are not changed here.
+- `prefix_hash` is CEN-J22's signable prefix hash (the prefix hash with the emission input removed whole; the plain prefix hash when there is none), and `ct_base_hash` is the txid's base component, `H(base)`; both come from the functions `shekyl-wire` uses for the txid.
+- The FCMP++ SAL (full and membership-only) and FROST prove over `tx_signable`, so every proof over a transaction commits to the network itself. An emission's backing proof proves over the same message, and both emission auths are `frame64` under `shekyl/archival-emission-auth-{backing,claim}-v4`, field 8 `tx_signable` (NI-R14).
+- Each input's hybrid signature signs `signed_hash(i)` (`SigningPayloadHash`, 64 bytes); the validator takes the id from the genesis its `Trust` pins, and a harness chain under `Trust::UNPINNED` signs and verifies under `HARNESS_NETWORK_ID` (test and harness builds only).
+- The KAT keeps the eight C++-captured payloads; its oracle takes them apart itself and pins `tx_signable` and each `signed_hash` per network ([`FCMP_SPEND_SIGNING_PREIMAGE.md`](FCMP_SPEND_SIGNING_PREIMAGE.md)).
+
+**Message signing (NI-F2).** `preimage = frame64("shekyl/msg-sign-v2", id, [u64_le(mode), classical_segment, message])`: the id at position 0, the message framed whole (its pre-hash domain is retired), and the decoded wire format's layout version, 2, read and not hashed ([`WALLET_MESSAGE_SIGNING.md`](WALLET_MESSAGE_SIGNING.md) SM-R-3; `docs/test_vectors/MSG_SIGN_PREIMAGE_V2.json`).
+
+**Proofs (NI-F13, NI-R15).** A tx proof's Schnorr signs `frame("shekyl/tx-proof-{outbound,inbound}-v1", id, [txid, address_bytes, user_message, per_output_data])`, a reserve proof's `frame("shekyl/reserve-proof-message-v1", id, [address_bytes, user_message, per_output_data])`, and each DLEQ binds `frame("shekyl/reserve-proof-dleq-context-v1", id, [address_bytes, user_message, output_key])`. The canonical address bytes are the address alone (spend ‖ view ‖ ML-KEM key), and both proof versions are 3.
+
+**Multisig fingerprint (NI-R15).** `frame("shekyl/multisig-address-v3", name_id, [canonical payload])` (`docs/test_vectors/MULTISIG_FINGERPRINT_V3.json`).
+
+**Key derivation (NI-R16).** The HKDF salt is `name_id ‖ purpose` (`salt_for`), from PR 1.
+
+**Wire size.** Unchanged everywhere: every binding is hashed, never carried.
+
+**The registry's bindings and the gate (NI-Q9).** Appendix A's classes become a `binding` column on every registry row (`id`, `name`, `input:<type>`, `local:<why>`, `enclosed-by:<row>`, closed lists for `<type>` and `<why>`) and a `width`, kept true by a CI gate that type-checks the cSHAKE rows' domain constants. Appendix A is the audit at its ground, which the column replaces when the gate lands.
 
 ### 2.5 Regtest is a network, not an exception (NI-Q8)
 
@@ -120,6 +140,7 @@ Regtest is a row in the table: its own genesis, address prefixes, ports, difficu
 - **NI-R14 — RULED 2026-11-04 (NI-F11): the emission auth message starts with the network id.** The audit's standard is "bound, or shown unable to replay"; an emission may have no fee input to lean on, so it binds explicitly: 16 bytes at byte 0, with a known-answer test that fails if they are removed.
 - **NI-R15 — RULED 2026-11-04 (NI-F13), following NI-R10's name/id split: derived from keys or addresses ⇒ the name; signed or proved against the chain ⇒ the id.** Reserve proofs and their DLEQ are made against a chain after genesis and take the id (so do the tx proofs, which share their address bytes). The multisig fingerprint is derived from keys and addresses, which exist before any genesis, and takes the name.
 - **NI-R16 — RULED 2026-11-04 (amends NI-R10's key derivation; Rick's ruling 2 on the signing envelope): the derivation salt is the name's 16-byte binding, then the purpose.** `salt = name_id ‖ "shekyl-master-derive-v3"`, with `name_id = cSHAKE256(S = "shekyl/network-name-v1", X = "shekyl/<network>")[..16]`, held on each table row and pinned for all four networks; it replaces `shekyl-master-derive-v2-` ‖ tag. It lands in PR 1, so testnet, stagenet and regtest are regenerated once: their recipients, genesis blocks, network ids, the captured chains and the vector suites move here and not again in PR 2. The rest of the signing envelope is PR 2's.
+- **NI-R17 — RULED 2026-11-04 (NI-F12 (b) in the universal form; the signing envelope, with the rulings of 23:42): one framing function, one transaction message.** Every Shekyl-owned hash, signature and proof that binds the network derives its message through `frame` (§2.4.1), its binding the id or `name_id` at position 0 and its width 64 where a post-quantum or hybrid signature signs it; every authorization of a transaction proves over `tx_signable`, which is framed over CEN-J22's prefix hash (so emissions have no separate message); proofs bind by frame, with plain address bytes; the registry carries one of five bindings per row (`id`, `name`, `input:<type>`, `local:<why>`, `enclosed-by:<row>`, closed lists) and a width, and a CI gate keeps them true. Supersedes NI-R13's per-site positions: the id is at position 0 of every frame.
 
 ### 4.1 NI-R2: why Zcash binds the rule set, and why Shekyl doesn't
 
@@ -143,12 +164,12 @@ Regtest is a row in the table: its own genesis, address prefixes, ports, difficu
 | NI-Q1 | The genesis header nonce. | BUILDING (PR 1): `0` on every network; identity from content (§1). |
 | NI-Q2 | What the genesis content carries. | BUILDING (PR 1): recipients and a transaction key derived from the row's name (NI-R12), the same shape on every network; no coinbase field; regtest's recipient and key committed and marked test-only (§2.2). |
 | NI-Q3 | The one Rust table: fields, readers, the network type; the C++ genesis constants. | BUILDING (PR 1): §2.3; the C++ genesis constants deleted outright (NI-F4); one network type with one code (NI-F5); tests (a)–(c) over all four networks. |
-| NI-Q4 | The signing domain. | BUILT (PR 2, #1266, §2.4.1): `cSHAKE256-32(shekyl/fcmp-spend-signing-v1, network_id ‖ payload(i))`; signer, verifier (CEN-I17, the id from `Trust`) and KAT in one PR; `FCMP_SPEND_SIGNING_PREIMAGE.md` §1.1. |
+| NI-Q4 | The signing domain. | BUILT (PR 2, #1266, §2.4.1): every SAL and FROST proof and each input's hybrid signature are over the transaction's one network-bound message, `tx_signable`; the spend hash is `frame64(shekyl/fcmp-spend-signing-v2, id, [tx_signable, header(i), key_hashes, prunable_hash])`; signer, verifier (CEN-I15, I17, I18, the id from `Trust`) and KAT in one PR; `FCMP_SPEND_SIGNING_PREIMAGE.md`. |
 | NI-Q5 | The Noise prologue. | OPEN (PR 3): `network id ‖ wire-protocol version`; the network id is already the prologue (NI-F1), so the change is the wire version and a handshake KAT re-record; lands at a testnet alpha cut. |
 | NI-Q6 | The pool seal. | OPEN (PR 4): records the network id; the chain store needs no field. |
 | NI-Q7 | The marker file. | OPEN (PR 4): daemon-config's call (DC-Q15, IG-Q17); recommendation: a label, trusted for nothing. |
 | NI-Q8 | Regtest as an ordinary network. | BUILDING (PR 1): §2.5; corpus re-captured through #1244's path. The address byte is persisted in wallet files and multisig addresses (NI-F5), so the wallet-file codec takes rule 42's version bump; an older file is refused with a reason, never reinterpreted. |
-| NI-Q9 | The domain-registry audit. | BUILT (PR 2, #1266, Appendix A): 131 rows, 56 bound to the network, 75 unable to cross, none replayable. NI-F11 and NI-F13 RULED (NI-R14, NI-R15) and built; NI-F12 brought back (§A.8). NI-F2: message signing binds the genesis-derived id at layout version 2, with a new preimage vector and its oracle; key derivation's label is the network's name, ruled by NI-R10 (genesis pays keys derived before the id exists). |
+| NI-Q9 | The domain-registry audit. | BUILT (PR 2, #1266): Appendix A classed 131 rows at its ground; NI-F11…F13 RULED and built (NI-R14, NI-R15, NI-R17). The classes become the registry's `binding` column and a CI gate (§2.4.1, NI-R17). NI-F2: message signing binds the id at position 0 of its frame. |
 | NI-Q10 | Compatibility at the handshake, replacing genesis rotation. | SHAPE RULED 2026-11-03 (§3); OPEN (PR 3): what the rules digest covers per step, and the frozen-tuple gate shrinks or goes. |
 | NI-Q11 | Regtest's levers. | RULED 2026-11-03 (NI-R6, NI-R8); BUILDING (PR 1). |
 | NI-Q12 | Seed format. | RULED 2026-11-03 (NI-R7, NI-R10); BUILDING (PR 1): BIP39, 24 words, on every network; one derivation from the 32 entropy bytes (NI-F8), salted by the network's name. |
@@ -195,7 +216,7 @@ Guards that compare a configured network with a recorded one (the marker, the mi
 - **NI-F9 — at `8f2b68dbbf`: key derivation can't bind the genesis-derived network id.** RULED: NI-R10. The genesis pays its recipients' addresses, the addresses come out of key derivation, and the network id is a hash of the genesis. Derivation bound to that id would need the genesis before the genesis exists. Derivation binds the network's name, the row's tag `shekyl/<network>` (NI-R10).
 - **NI-F10 — at `8f2b68dbbf`: the public networks' genesis recipients are derived addresses, and NI-R7 moves them.** RULED: NI-R11. `config/genesis_recipients.{mainnet,testnet,stagenet}.json` hold addresses the custodians derived from their seeds (`geblock wallets`, `shekyl-genesis-tool/src/wallets.rs`) under today's derivation. NI-R7 changes the derivation (the format leaves the salt; the words give the 32 entropy bytes, not PBKDF2's output), so the same seeds give different addresses, and a genesis rebuilt from today's files would pay addresses no wallet can spend. Every change to key derivation, including NI-R10's name, therefore lands in PR 1, before the one regeneration, or PR 2 forces a second regenesis.
 - **NI-F11 — at `5cb6cdba7a`: the emission auth message binds no network on its own.** RULED: NI-R14 (built). It signed `signable_tx_hash`, a prefix hash with no `reference_block`; its binding is the transaction's proofs, and an emission may have no fee input. Its input now starts with the network id. Appendix A §A.8 item 1.
-- **NI-F12 — at `5cb6cdba7a`: the SAL and FROST transcripts bind no network on their own.** RAISED again 2026-11-04: they do not commit to the network id; they are bound by enclosure in the network-bound spend signature. Two ways forward are with Rick. They hash the same prefix hash; their binding is the membership proof and, since NI-Q4, the network-bound spend signature on the same input. Appendix A §A.8 item 2.
+- **NI-F12 — at `5cb6cdba7a`: the SAL and FROST transcripts bind no network on their own.** RULED (b) and built (NI-R17): they prove over `tx_signable`, which carries the id, so no proof over a transaction is bound only by the signature around it (§2.4.1).
 - **NI-F13 — at `5cb6cdba7a`: three rows separate networks by `Network::code()`, not by the id or the name.** RULED: NI-R15 (built): the proofs take the id, the multisig fingerprint the name. The multisig address fingerprint, the reserve proof and its DLEQ; a reserve proof carries no txid or height. Appendix A §A.8 item 3.
 
 ## 8. Shape and order

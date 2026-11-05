@@ -48,24 +48,36 @@ shekyl-oxide output. Its full end-to-end proof is the live-oracle spend KAT
 > was read at the pin, not live sites.
 
 ### 1.1 Per-input PQC signing preimage
-`get_transaction_signed_payload(tx, i)` (`tx_pqc_verify.cpp:58-152` at the pin; the function was deleted 2026-09-25 and the file deleted with the C++ chain in DRS-X):
+`get_transaction_signed_payload(tx, i)` (`tx_pqc_verify.cpp:58-152` at the pin; the function was deleted 2026-09-25 and the file deleted with the C++ chain in DRS-X) assembled the payload whose fields the signatures bind:
 
 ```
 payload(i) = prefix_blob ‖ ct_base_blob ‖ prunable_hash ‖ pqc_header(i) ‖ all_key_hashes
-signed_hash(i) = cSHAKE256-32(S = "shekyl/fcmp-spend-signing-v1",
-                              X = network_id ‖ payload(i))   # PQC sig (ML-DSA+ed25519) signs this
+```
+
+The signatures are over the signing envelope's frame of those fields
+(`NETWORK_IDENTITY.md` §2.4.1, NI-R17), never over the payload bytes:
+
+```
+tx_signable    = frame("shekyl/tx-signable-v1", network_id,
+                       [keccak256(prefix_blob), keccak256(ct_base_blob)])
+signed_hash(i) = frame64("shekyl/fcmp-spend-signing-v2", network_id,
+                         [tx_signable, pqc_header(i), all_key_hashes, prunable_hash])
+                 # PQC sig (ML-DSA + Ed25519) signs this, 64 bytes
+frame(S, b, [f…]) = cSHAKE256(S, X = b ‖ u64_le(len(f)) ‖ f ‖ …)
 ```
 
 `network_id` is the 16-byte genesis-derived id of the network the spend is
-for (`NETWORK_IDENTITY.md` NI-Q4, NI-R10): a signature is valid on one
-network by construction. It sits in the hash **input**, at a **fixed
-position** (byte 0 of `X`) with a **fixed width** (16 bytes), ahead of every
-variable-length field, so `X` is unambiguous without framing; it is never
-moved after a variable-length field or into the customization string, which
-stays one constant registry row (Rick, 2026-11-04). The KAT (`pqc_signing_preimage_kat.rs`)
-pins the captured payload bytes, and each hash per network against
-`scripts/kat/spend_signing_hash_oracle.py`, which computes the hashes on a stdlib
-sponge (`scripts/kat/stdlib_cshake.py`) that shares no code with the Rust.
+for (NI-Q4, NI-R10), at position 0 of each frame: a signature is valid on one
+network by construction. `keccak256(prefix_blob)` and `keccak256(ct_base_blob)`
+are the txid's first two components (GENESIS_TX_WIRE_FORMAT.md §11), read from
+`shekyl-wire`'s txid functions; for a transaction with an emission input the
+prefix component is CEN-J22's, the prefix hash with that input removed. The
+spend hash is 64 bytes because a hybrid signature signs it (§2.7 of the
+envelope). The KAT (`pqc_signing_preimage_kat.rs`) pins the captured payload
+bytes, and `tx_signable` and each `signed_hash` per network against
+`scripts/kat/spend_signing_hash_oracle.py`, which takes the captured payloads
+apart itself and frames them on a stdlib sponge (`scripts/kat/stdlib_cshake.py`)
+that shares no code with the Rust.
 
 - **prefix_blob** = `serialize(transaction_prefix)` — see §1.2. *Includes the tx version.*
 - **ct_base_blob** = `CtSigBase::serialize_ctsig_base(inputs, outputs)` — see §1.3.
@@ -81,8 +93,9 @@ FIELD(vin)             # varint(count) + inputs
 FIELD(vout)            # varint(count) + outputs
 FIELD(extra)           # varint(len) + bytes
 ```
-The FCMP++ **`signable_tx_hash`** (what the membership/SAL proof signs) is the prefix
-hash = `keccak256(serialize(transaction_prefix))` — **also includes `version=3`**.
+The prefix hash = `keccak256(serialize(transaction_prefix))` — **also includes
+`version=3`** — is the first field of `tx_signable` (§1.1), which is what the
+membership/SAL proof signs.
 
 ### 1.3 CtSigBase (`src/fcmp/ct_types.h:198-…`)
 ```

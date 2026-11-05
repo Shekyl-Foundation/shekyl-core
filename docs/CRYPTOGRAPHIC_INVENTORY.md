@@ -217,12 +217,16 @@ consensus rule. The 2026-11-01 refresh replaces it with
 `shekyl/archival-drawable-epoch-v2`, one function and one site: the
 digest now also covers the archive width and the support stream's
 members with their receipt keys (`SO-D12q`), so the encoding changed and
-the version moved with it (rule 30). The 2026-11-04 refresh adds one
-mechanism-1 customization, `shekyl/fcmp-spend-signing-v1`: the hash every
-hybrid spend signature is over, `cSHAKE256-32` of the network id and the
-payload, so a signature is valid on one network (`NETWORK_IDENTITY.md`
-NI-Q4). It replaces `keccak256` of the payload, which was not a registry
-row.
+the version moved with it (rule 30). The 2026-11-04/05 refresh is the
+signing envelope (`NETWORK_IDENTITY.md` §2.4.1, NI-R17): every
+network-bound mechanism-1 domain is framed through one function, and the
+rows are `shekyl/network-name-v1`, `shekyl/tx-signable-v1`,
+`shekyl/fcmp-spend-signing-v2` (the hash every hybrid spend signature is
+over, 64 bytes), `shekyl/msg-sign-v2` (`shekyl/msg-hash-v1` retired), the
+four proof frames `shekyl/tx-proof-{outbound,inbound}-v1`,
+`shekyl/reserve-proof-message-v1` and `shekyl/reserve-proof-dleq-context-v1`,
+`shekyl/multisig-address-v3` and
+`shekyl/archival-emission-auth-{backing,claim}-v4`.
 
 The 2026-10-18 refresh removes one mechanism-2 info label,
 `shekyl-archival-p-msg-sign-slh-dsa-192s-v1`: a persona has no address, so
