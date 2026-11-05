@@ -296,7 +296,6 @@ async fn the_pool_holds_one_spender_per_image_refuses_duplicates_and_the_floor()
                     UnixSeconds::from_raw(1),
                     view,
                     rule_set,
-                    &shekyl_network::HARNESS_NETWORK_ID,
                     &policy,
                 )
                 .expect("no fault")
@@ -367,15 +366,8 @@ async fn the_pool_holds_one_spender_per_image_refuses_duplicates_and_the_floor()
                 1,
                 "the reconcile at open removes the mined entry"
             );
-            pool.admit(
-                good,
-                UnixSeconds::from_raw(2),
-                view,
-                rule_set,
-                &shekyl_network::HARNESS_NETWORK_ID,
-                &policy,
-            )
-            .expect("no fault")
+            pool.admit(good, UnixSeconds::from_raw(2), view, rule_set, &policy)
+                .expect("no fault")
         })
         .await;
     assert_eq!(mined_dup, Admission::Duplicate(Duplicate::OnChain));
@@ -407,14 +399,7 @@ async fn an_unfluffed_transaction_is_shown_nowhere_until_the_relay_fluffs_it() {
             )
             .expect("open");
             let admitted = pool
-                .admit(
-                    good,
-                    UnixSeconds::from_raw(1),
-                    view,
-                    rule_set,
-                    &shekyl_network::HARNESS_NETWORK_ID,
-                    &policy,
-                )
+                .admit(good, UnixSeconds::from_raw(1), view, rule_set, &policy)
                 .expect("no fault");
             assert_eq!(
                 admitted,
@@ -424,14 +409,8 @@ async fn an_unfluffed_transaction_is_shown_nowhere_until_the_relay_fluffs_it() {
                 "fixture: the spend is held"
             );
             let seen = |pool: &Pool| {
-                let template = shekyl_mempool::select(
-                    pool,
-                    view,
-                    rule_set,
-                    &shekyl_network::HARNESS_NETWORK_ID,
-                    u64::MAX,
-                )
-                .expect("the template reads the chain");
+                let template = shekyl_mempool::select(pool, view, rule_set, u64::MAX)
+                    .expect("the template reads the chain");
                 (
                     pool.listing().any(|(id, _)| id == txid),
                     pool.peer_sync().any(|(id, _)| id == txid),

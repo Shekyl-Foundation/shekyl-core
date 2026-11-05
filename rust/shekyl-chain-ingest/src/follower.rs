@@ -567,7 +567,6 @@ where
             Err(PlantFault::Panicked) => return shared.fail(ServiceFault::FollowerEnded),
         }
     };
-    let network = shared.rules().trust().network_id();
     let done = with_pool(shared, move |pool, _, view, rule_set, policy, now| {
         let mut division = PoolDivision::default();
         let mut left = Vec::new();
@@ -578,8 +577,7 @@ where
             if !planted.pending.is_empty() {
                 let bodies: Vec<Transaction> =
                     planted.pending.iter().map(|(tx, _)| tx.clone()).collect();
-                let offers =
-                    pool.offer_prepared(planted.pending, now, view, rule_set, &network, policy);
+                let offers = pool.offer_prepared(planted.pending, now, view, rule_set, policy);
                 for (_, admission) in &offers.admissions {
                     if let Admission::Admitted { evicted } = admission {
                         left.extend(evicted.iter().copied());
@@ -588,7 +586,7 @@ where
                 division = divide_pool_faults(offers.faults, &bodies);
             }
         }
-        let reconciled = match pool.reconcile(view, rule_set, &network, policy) {
+        let reconciled = match pool.reconcile(view, rule_set, policy) {
             Ok(done) => {
                 left.extend(done.removed.into_iter().map(|(id, _)| id));
                 None

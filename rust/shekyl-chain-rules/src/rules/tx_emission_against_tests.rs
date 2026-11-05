@@ -69,13 +69,13 @@ fn off_the_emission_class_the_rows_are_recorded_vacuous() {
     let spend = listed_on(&chain, KI);
     chain.with_view(|view| {
         let mut coverage = RuleCoverage::EMPTY;
-        let cx =
-            TxContext::derive(&spend, TxSlot::Lone, &mut coverage).expect("a spend classifies");
+        let cx = TxContext::derive(&spend, TxSlot::Lone, &mut coverage)
+            .expect("a spend classifies")
+            .on_network(crate::HARNESS_NETWORK_ID);
         defined(judge_emission_claim(
             &cx,
             &view,
             &RuleSet::GENESIS,
-            &shekyl_network::HARNESS_NETWORK_ID,
             None,
             &mut coverage,
         ))
@@ -151,13 +151,13 @@ fn refuses_at_j23(chain: &MockChain) {
         for reference in [Some(&REFERENCE), None] {
             let mut coverage = RuleCoverage::EMPTY;
             let cx = TxContext::derive(&tx, TxSlot::Lone, &mut coverage)
-                .expect("an emission classifies");
+                .expect("an emission classifies")
+                .on_network(crate::HARNESS_NETWORK_ID);
             assert_refused(
                 defined(judge_emission_claim(
                     &cx,
                     &view,
                     &RuleSet::GENESIS,
-                    &shekyl_network::HARNESS_NETWORK_ID,
                     reference,
                     &mut coverage,
                 )),
@@ -179,13 +179,13 @@ fn j23_refuses_a_vin_it_cannot_read_when_asked_alone() {
     chain.with_view(|view| {
         let mut coverage = RuleCoverage::EMPTY;
         let cx = TxContext::derive(&tx, TxSlot::Lone, &mut coverage)
-            .expect("an emission classifies by its input kind");
+            .expect("an emission classifies by its input kind")
+            .on_network(crate::HARNESS_NETWORK_ID);
         assert_refused(
             defined(judge_emission_claim(
                 &cx,
                 &view,
                 &RuleSet::GENESIS,
-                &shekyl_network::HARNESS_NETWORK_ID,
                 Some(&REFERENCE),
                 &mut coverage,
             )),
@@ -224,13 +224,13 @@ fn j25_refuses_a_claim_the_verify_rejects_and_one_with_no_reference() {
         for reference in [Some(&REFERENCE), None] {
             let mut coverage = RuleCoverage::EMPTY;
             let cx = TxContext::derive(&tx, TxSlot::Lone, &mut coverage)
-                .expect("an emission classifies");
+                .expect("an emission classifies")
+                .on_network(crate::HARNESS_NETWORK_ID);
             assert_refused(
                 defined(judge_emission_claim(
                     &cx,
                     &view,
                     &rules,
-                    &shekyl_network::HARNESS_NETWORK_ID,
                     reference,
                     &mut coverage,
                 )),

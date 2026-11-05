@@ -15,6 +15,7 @@ use crate::harness::{Faulted, FaultingView, MockChain};
 use crate::rule_set::RuleSet;
 use crate::trust::Trust;
 use crate::verdict::Locus;
+use crate::FormClaims;
 use shekyl_difficulty::{GENESIS_DIFFICULTY, N};
 
 /// A chain of `len` blocks whose timestamps and work follow a non-uniform
@@ -399,12 +400,14 @@ fn cen_d7_fakechain_validate_mints_past_n() {
     let seed = crate::harness::expected_seed(&chain);
     let formed = crate::validate::form(
         candidate,
-        &seven,
+        &FormClaims {
+            rule_set: &seven,
+            seed,
+            target: crate::harness::expected_target(&chain, &seven),
+            references: &crate::block::ReferenceClaims::EMPTY,
+            network: crate::HARNESS_NETWORK_ID,
+        },
         &crate::harness::MockSubstrate::default(),
-        seed,
-        crate::harness::expected_target(&chain, &seven),
-        &crate::block::ReferenceClaims::EMPTY,
-        &crate::HARNESS_NETWORK_ID,
         crate::fault::FormAttempt::FIRST,
     )
     .expect("no fault")

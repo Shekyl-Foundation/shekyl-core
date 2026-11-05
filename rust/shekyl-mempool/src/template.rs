@@ -135,8 +135,8 @@ struct Candidate<'a> {
 }
 
 /// Select from `pool` the bodies a block on `parent` lists under
-/// `rule_set` on `network` (the id an emission's auths sign, CEN-J25),
-/// within `budget` weight (module docs). A candidate too heavy
+/// `rule_set` on the pool's network (the id an emission's auths sign,
+/// CEN-J25), within `budget` weight (module docs). A candidate too heavy
 /// for what is left is skipped, and a lighter one after it may still fit.
 ///
 /// # Errors
@@ -147,10 +147,9 @@ pub fn select<'id, V: ChainView<'id>>(
     pool: &Pool,
     parent: &V,
     rule_set: &RuleSet,
-    network: &NetworkId,
     budget: u64,
 ) -> Result<Selected, Fault<V::Fault>> {
-    select_admitting(pool, parent, rule_set, network, budget, |_, _| true)
+    select_admitting(pool, parent, rule_set, budget, |_, _| true)
 }
 
 /// [`select`], with the producer's admission asked of each candidate the
@@ -167,7 +166,6 @@ pub fn select_admitting<'id, V: ChainView<'id>>(
     pool: &Pool,
     parent: &V,
     rule_set: &RuleSet,
-    network: &NetworkId,
     budget: u64,
     admit: impl FnMut(u64, u64) -> bool,
 ) -> Result<Selected, Fault<V::Fault>> {
@@ -184,7 +182,7 @@ pub fn select_admitting<'id, V: ChainView<'id>>(
             anchor: held.pass.and_then(|pass| pass.proven()),
         })
         .collect();
-    choose(candidates, parent, rule_set, network, budget, admit)
+    choose(candidates, parent, rule_set, pool.network(), budget, admit)
 }
 
 /// [`select_admitting`] over a [`Pool::shown_bodies`] snapshot. The pool

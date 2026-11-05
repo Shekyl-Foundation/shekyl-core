@@ -21,7 +21,7 @@ use crate::harness::{
 use crate::rule_set::RuleSet;
 use crate::rules::{BlockContext, BlockRule};
 use crate::trust::Trust;
-use crate::validate::{form, validate};
+use crate::validate::{form, validate, FormClaims};
 use crate::verdict::{ChainValid, Locus};
 use crate::Target;
 use shekyl_types::BlockHash;
@@ -64,12 +64,14 @@ fn judge_at(chain: &MockChain, candidate: Candidate, clock: u64) -> Verdict<()> 
     };
     let formed = match form(
         candidate,
-        &RuleSet::GENESIS,
+        &FormClaims {
+            rule_set: &RuleSet::GENESIS,
+            seed: expected_seed(chain),
+            target: expected_target(chain, &RuleSet::GENESIS),
+            references: &references,
+            network: crate::HARNESS_NETWORK_ID,
+        },
         &substrate,
-        expected_seed(chain),
-        expected_target(chain, &RuleSet::GENESIS),
-        &references,
-        &crate::HARNESS_NETWORK_ID,
         FormAttempt::FIRST,
     ) {
         Ok(Ok(formed)) => formed,
@@ -91,12 +93,14 @@ fn check_alone<R: BlockRule>(chain: &MockChain, candidate: Candidate, clock: u64
     };
     let formed = form(
         candidate,
-        &RuleSet::GENESIS,
+        &FormClaims {
+            rule_set: &RuleSet::GENESIS,
+            seed: expected_seed(chain),
+            target: expected_target(chain, &RuleSet::GENESIS),
+            references: &references,
+            network: crate::HARNESS_NETWORK_ID,
+        },
         &substrate,
-        expected_seed(chain),
-        expected_target(chain, &RuleSet::GENESIS),
-        &references,
-        &crate::HARNESS_NETWORK_ID,
         FormAttempt::FIRST,
     )
     .expect("no fault")
@@ -364,12 +368,14 @@ fn at_genesis_all_three_rows_record_as_applied_and_refuse_nothing() {
     };
     let formed = form(
         candidate,
-        &RuleSet::GENESIS,
+        &FormClaims {
+            rule_set: &RuleSet::GENESIS,
+            seed: BlockHash::NULL,
+            target: expected_target(&chain, &RuleSet::GENESIS),
+            references: &crate::block::ReferenceClaims::EMPTY,
+            network: crate::HARNESS_NETWORK_ID,
+        },
         &substrate,
-        BlockHash::NULL,
-        expected_target(&chain, &RuleSet::GENESIS),
-        &crate::block::ReferenceClaims::EMPTY,
-        &crate::HARNESS_NETWORK_ID,
         FormAttempt::FIRST,
     )
     .expect("no fault")

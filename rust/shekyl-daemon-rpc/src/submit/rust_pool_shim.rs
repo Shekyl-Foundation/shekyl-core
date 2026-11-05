@@ -667,15 +667,8 @@ impl<C: ChainSource> SubmitStateShim for RustPoolShim<C> {
         let outcome = self.chain.read(|snapshot, rule_set| {
             let mut pool = self.pool();
             let view = SnapshotView::new(snapshot);
-            let admitted = pool.admit_judged(
-                parsed.tx.clone(),
-                prior,
-                now,
-                &view,
-                rule_set,
-                &self.network,
-                &self.policy,
-            );
+            let admitted =
+                pool.admit_judged(parsed.tx.clone(), prior, now, &view, rule_set, &self.policy);
             match admitted {
                 Ok(Admission::Admitted { evicted }) => {
                     departed_ids = evicted;

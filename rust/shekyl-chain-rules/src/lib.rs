@@ -255,7 +255,7 @@ pub use trust::Trust;
 pub use trust::HARNESS_NETWORK_ID;
 pub use validate::{
     form, form_judged, judge_lone_stateless, judge_slot_stateless, tx_against, tx_form, validate,
-    validate_with_memo, StatelessPass,
+    validate_with_memo, FormClaims, StatelessPass,
 };
 pub use verdict::{refused, ChainValid, InvalidBlock, Locus, TxSlot, Verdict};
 pub use view::{

@@ -19,7 +19,7 @@ use crate::fault::{Fault, FormAttempt, ViewRead};
 use crate::rule_set::RuleSet;
 use crate::rules::difficulty::{target_claim, Target};
 use crate::substrate::Substrate;
-use crate::validate::form;
+use crate::validate::{form, FormClaims};
 use crate::verdict::{InvalidBlock, Locus, Verdict};
 use crate::view::{AtHeight, ChainView};
 
@@ -157,12 +157,14 @@ pub fn formed_under(
 ) -> StructurallyValid {
     match form(
         candidate,
-        rule_set,
+        &FormClaims {
+            rule_set,
+            seed,
+            target,
+            references,
+            network: crate::HARNESS_NETWORK_ID,
+        },
         &MockSubstrate::default(),
-        seed,
-        target,
-        references,
-        &crate::HARNESS_NETWORK_ID,
         FormAttempt::FIRST,
     ) {
         Ok(Ok(formed)) => formed,
@@ -198,12 +200,14 @@ pub fn judge_on(chain: &MockChain, candidate: Candidate) -> Verdict<()> {
     let references = expected_references(chain, &candidate);
     let formed = match form(
         candidate,
-        &RuleSet::GENESIS,
+        &FormClaims {
+            rule_set: &RuleSet::GENESIS,
+            seed: expected_seed(chain),
+            target: expected_target(chain, &RuleSet::GENESIS),
+            references: &references,
+            network: crate::HARNESS_NETWORK_ID,
+        },
         &MockSubstrate::default(),
-        expected_seed(chain),
-        expected_target(chain, &RuleSet::GENESIS),
-        &references,
-        &crate::HARNESS_NETWORK_ID,
         FormAttempt::FIRST,
     ) {
         Ok(Ok(formed)) => formed,
@@ -247,6 +251,7 @@ pub fn token_for_one_rule(chain: &MockChain, candidate: Candidate) -> Structural
     StructurallyValid::new(
         candidate,
         RuleSet::GENESIS,
+        crate::HARNESS_NETWORK_ID,
         crate::coverage::RuleCoverage::EMPTY,
         crate::header_facts::HeaderFacts::for_harness(
             header,

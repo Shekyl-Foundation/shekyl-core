@@ -33,7 +33,6 @@ async fn a_body_the_admission_declines_is_passed_over_and_the_next_is_listed() {
                         UnixSeconds::from_raw(1),
                         view,
                         rule_set,
-                        &shekyl_network::HARNESS_NETWORK_ID,
                         &AdmissionPolicy::GENESIS,
                     )
                     .expect("no fault"),
@@ -45,18 +44,12 @@ async fn a_body_the_admission_declines_is_passed_over_and_the_next_is_listed() {
             }
             let dear_fee = fee_of(&dear);
             let mut offered = 0;
-            let selected = shekyl_mempool::select_admitting(
-                &pool,
-                view,
-                rule_set,
-                &shekyl_network::HARNESS_NETWORK_ID,
-                u64::MAX,
-                |_, fee| {
+            let selected =
+                shekyl_mempool::select_admitting(&pool, view, rule_set, u64::MAX, |_, fee| {
                     offered += 1;
                     fee != dear_fee
-                },
-            )
-            .expect("template");
+                })
+                .expect("template");
             (selected, offered)
         })
         .await;
@@ -94,7 +87,6 @@ async fn the_producer_prices_its_listing_at_the_built_coinbase_and_the_block_con
                         UnixSeconds::from_raw(1),
                         view,
                         rule_set,
-                        &shekyl_network::HARNESS_NETWORK_ID,
                         &AdmissionPolicy::GENESIS,
                     )
                     .expect("no fault"),
@@ -221,7 +213,6 @@ async fn a_template_on_an_older_tip_than_the_pools_posts_and_evicts_nothing() {
                     UnixSeconds::from_raw(1),
                     view,
                     rule_set,
-                    &shekyl_network::HARNESS_NETWORK_ID,
                     &AdmissionPolicy::GENESIS,
                 )
                 .expect("no fault"),
@@ -442,7 +433,6 @@ async fn the_template_rejudges_against_its_parent_and_m10_evicts_what_it_refuses
                         UnixSeconds::from_raw(1),
                         view,
                         rule_set,
-                        &shekyl_network::HARNESS_NETWORK_ID,
                         &AdmissionPolicy::GENESIS,
                     )
                     .expect("no fault"),
@@ -452,28 +442,14 @@ async fn the_template_rejudges_against_its_parent_and_m10_evicts_what_it_refuses
                 );
                 assert!(pool.fluffed(&txid).expect("publish"));
             }
-            let all = shekyl_mempool::select(
-                &pool,
-                view,
-                rule_set,
-                &shekyl_network::HARNESS_NETWORK_ID,
-                u64::MAX,
-            )
-            .expect("template");
+            let all = shekyl_mempool::select(&pool, view, rule_set, u64::MAX).expect("template");
             let weight = pool
                 .listing()
                 .find(|(txid, _)| *txid == id3)
                 .expect("shown")
                 .1
                 .weight;
-            let one = shekyl_mempool::select(
-                &pool,
-                view,
-                rule_set,
-                &shekyl_network::HARNESS_NETWORK_ID,
-                weight,
-            )
-            .expect("template");
+            let one = shekyl_mempool::select(&pool, view, rule_set, weight).expect("template");
             (all, one)
         })
         .await;
@@ -505,14 +481,7 @@ async fn the_template_rejudges_against_its_parent_and_m10_evicts_what_it_refuses
         .unwrap_or_else(|o| panic!("the twin connects: {o}"));
     let template = scenario
         .read_chain(|view, rule_set| {
-            shekyl_mempool::select(
-                &pool,
-                view,
-                rule_set,
-                &shekyl_network::HARNESS_NETWORK_ID,
-                u64::MAX,
-            )
-            .expect("template")
+            shekyl_mempool::select(&pool, view, rule_set, u64::MAX).expect("template")
         })
         .await;
     assert_eq!(
@@ -581,15 +550,8 @@ async fn a_full_pool_admits_a_better_payer_by_evicting_the_cheapest() {
             .expect("open");
             pool.set_limits(Limits { max_weight: room });
             let mut admit = |tx: &shekyl_wire::Transaction| {
-                pool.admit(
-                    tx.clone(),
-                    now,
-                    view,
-                    rule_set,
-                    &shekyl_network::HARNESS_NETWORK_ID,
-                    &policy,
-                )
-                .expect("no fault")
+                pool.admit(tx.clone(), now, view, rule_set, &policy)
+                    .expect("no fault")
             };
             let first = admit(&low);
             let second = admit(&high);
@@ -646,7 +608,6 @@ async fn an_admitted_entry_leaves_when_its_reference_leaves_the_window() {
                 UnixSeconds::from_raw(1),
                 view,
                 rule_set,
-                &shekyl_network::HARNESS_NETWORK_ID,
                 &AdmissionPolicy::GENESIS,
             )
             .expect("no fault")
@@ -663,13 +624,8 @@ async fn an_admitted_entry_leaves_when_its_reference_leaves_the_window() {
         .await;
     let reconciled = scenario
         .read_chain(|view, rule_set| {
-            pool.reconcile(
-                view,
-                rule_set,
-                &shekyl_network::HARNESS_NETWORK_ID,
-                &AdmissionPolicy::GENESIS,
-            )
-            .expect("reconcile")
+            pool.reconcile(view, rule_set, &AdmissionPolicy::GENESIS)
+                .expect("reconcile")
         })
         .await;
     match reconciled.removed.as_slice() {
@@ -706,7 +662,6 @@ async fn a_connect_under_the_pool_verifies_nothing_again() {
                         UnixSeconds::from_raw(1),
                         view,
                         rule_set,
-                        &shekyl_network::HARNESS_NETWORK_ID,
                         &AdmissionPolicy::GENESIS,
                     )
                     .expect("no fault");
@@ -731,12 +686,7 @@ async fn a_connect_under_the_pool_verifies_nothing_again() {
             };
             let before = count();
             let reconciled = pool
-                .reconcile(
-                    view,
-                    rule_set,
-                    &shekyl_network::HARNESS_NETWORK_ID,
-                    &AdmissionPolicy::GENESIS,
-                )
+                .reconcile(view, rule_set, &AdmissionPolicy::GENESIS)
                 .expect("reconcile");
             let after = count();
             (
@@ -768,15 +718,8 @@ async fn a_pass_that_no_longer_holds_is_verified_outside_the_pool_lock() {
         .read_chain(|view, rule_set| {
             let policy = AdmissionPolicy::GENESIS;
             let now = UnixSeconds::from_raw(1);
-            pool.admit(
-                spend.clone(),
-                now,
-                view,
-                rule_set,
-                &shekyl_network::HARNESS_NETWORK_ID,
-                &policy,
-            )
-            .expect("no fault");
+            pool.admit(spend.clone(), now, view, rule_set, &policy)
+                .expect("no fault");
             let held = pool.needing_step1(view, rule_set).expect("reads").len();
             let other = shekyl_chain_rules::RuleSet::GENESIS.with_levers(
                 Some(std::num::NonZeroU128::new(7).expect("non-zero")),
@@ -800,9 +743,7 @@ async fn a_pass_that_no_longer_holds_is_verified_outside_the_pool_lock() {
             .expect("judged");
             pool.stage_step1(txid, step1);
             let before = probes::fcmp_verifies();
-            let reconciled = pool
-                .reconcile(view, &other, &shekyl_network::HARNESS_NETWORK_ID, &policy)
-                .expect("reconcile");
+            let reconciled = pool.reconcile(view, &other, &policy).expect("reconcile");
             assert_eq!(reconciled.admitted, vec![txid]);
             (held, listed, probes::fcmp_verifies() - before)
         })
@@ -840,7 +781,6 @@ async fn a_body_flushed_between_the_producers_locks_posts_nothing() {
                         UnixSeconds::from_raw(1),
                         view,
                         rule_set,
-                        &shekyl_network::HARNESS_NETWORK_ID,
                         &AdmissionPolicy::GENESIS,
                     )
                     .expect("no fault"),

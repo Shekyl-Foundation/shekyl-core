@@ -10,6 +10,7 @@
 //! that switched equals the store that connected the winning branch
 //! directly, digest for digest.
 
+use shekyl_chain_rules::FormClaims;
 use shekyl_types::{BlockHash, BlockHeight};
 
 use crate::connector::{Offered, PlanMismatchReason, RunFault, Switched};
@@ -892,12 +893,14 @@ async fn a_reference_or_target_claim_the_switch_cannot_make_is_a_driver_defect()
         assert_eq!(claims.get(&reference).map(|c| c.root), Some(wrong));
         let verdict = shekyl_chain_rules::form(
             candidate,
-            &crate::scenario::RULES.in_force(at.height),
+            &FormClaims {
+                rule_set: &crate::scenario::RULES.in_force(at.height),
+                seed: at.seed,
+                target: at.target,
+                references: &claims,
+                network: shekyl_network::HARNESS_NETWORK_ID,
+            },
             &FreeHash,
-            at.seed,
-            at.target,
-            &claims,
-            &shekyl_network::HARNESS_NETWORK_ID,
             shekyl_chain_rules::FormAttempt::FIRST,
         )
         .expect("the free substrate does not fault");

@@ -384,7 +384,7 @@ mod tests {
     use crate::harness::fixture::{candidate, candidate_on, chain_of, recorded_with_work, root};
     use crate::harness::{expected_seed, expected_target, MockChain, MockSubstrate};
     use crate::trust::Trust;
-    use crate::{form, form_judged, validate};
+    use crate::{form, form_judged, validate, FormClaims};
 
     /// `judge_header` faults a rule set other than the one `form_header`
     /// kept, and the retry is the attempt that was formed, not a fresh one.
@@ -489,12 +489,14 @@ mod tests {
             .expect("the body forms");
             let from_bytes = form(
                 input.clone(),
-                &rule_set,
+                &FormClaims {
+                    rule_set: &rule_set,
+                    seed: BlockHash::NULL,
+                    target,
+                    references: &ReferenceClaims::EMPTY,
+                    network: crate::HARNESS_NETWORK_ID,
+                },
                 &substrate,
-                BlockHash::NULL,
-                target,
-                &ReferenceClaims::EMPTY,
-                &crate::HARNESS_NETWORK_ID,
                 FormAttempt::FIRST,
             )
             .expect("mock")

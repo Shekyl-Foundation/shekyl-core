@@ -44,8 +44,8 @@
 use shekyl_chain_rules::harness::{fixture, MockChain, MockSubstrate};
 use shekyl_chain_rules::{
     form, validate, AtHeight, Candidate, CenRow, ChainView, Corrupt, Fault, FormAttempt,
-    HeaderRecord, HeaderView, Locus, RecordedBlock, RecordedWeights, RuleSet, Stale, Substrate,
-    Trust, TxSlot, Verdict,
+    FormClaims, HeaderRecord, HeaderView, Locus, RecordedBlock, RecordedWeights, RuleSet, Stale,
+    Substrate, Trust, TxSlot, Verdict,
 };
 use shekyl_types::{
     ArchivalLength, BlockCount, BlockHash, BlockHeight, CurveTreeRoot, PowHash, Timestamp, TxHash,
@@ -180,12 +180,14 @@ where
         };
     let formed = match form(
         candidate,
-        &RuleSet::GENESIS,
+        &FormClaims {
+            rule_set: &RuleSet::GENESIS,
+            seed,
+            target,
+            references: &references,
+            network: shekyl_chain_rules::HARNESS_NETWORK_ID,
+        },
         env,
-        seed,
-        target,
-        &references,
-        &shekyl_chain_rules::HARNESS_NETWORK_ID,
         FormAttempt::FIRST,
     ) {
         Ok(Ok(formed)) => formed,

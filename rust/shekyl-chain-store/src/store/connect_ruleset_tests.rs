@@ -7,7 +7,7 @@
 //! value (DRS-E2 RD-Q10). levered `Fixed` reuses `RuleSetId::GENESIS`, so
 //! these two tests pin that the belt compares sets, not ids.
 
-use shekyl_chain_rules::{form, validate, FormAttempt, RuleSet, RuleSetId, Trust};
+use shekyl_chain_rules::{form, validate, FormAttempt, FormClaims, RuleSet, RuleSetId, Trust};
 use shekyl_types::BlockHash;
 
 use super::connect_fixtures::{candidate, expected_target, FixtureSubstrate};
@@ -32,12 +32,14 @@ fn a_fakechain_verdict_connects_when_the_fakechain_set_is_in_force() {
         let cand = candidate(0, BlockHash::NULL, Vec::new());
         let formed = match form(
             cand,
-            &seven,
+            &FormClaims {
+                rule_set: &seven,
+                seed: BlockHash::NULL,
+                target: expected_target(&view, &seven).expect("the view answers"),
+                references: &shekyl_chain_rules::ReferenceClaims::EMPTY,
+                network: shekyl_chain_rules::HARNESS_NETWORK_ID,
+            },
             &FixtureSubstrate,
-            BlockHash::NULL,
-            expected_target(&view, &seven).expect("the view answers"),
-            &shekyl_chain_rules::ReferenceClaims::EMPTY,
-            &shekyl_chain_rules::HARNESS_NETWORK_ID,
             FormAttempt::FIRST,
         ) {
             Ok(Ok(formed)) => formed,
@@ -83,12 +85,14 @@ fn a_fakechain_verdict_is_refused_under_genesis_in_force() {
         let cand = candidate(0, BlockHash::NULL, Vec::new());
         let formed = match form(
             cand,
-            &seven,
+            &FormClaims {
+                rule_set: &seven,
+                seed: BlockHash::NULL,
+                target: expected_target(&view, &seven).expect("the view answers"),
+                references: &shekyl_chain_rules::ReferenceClaims::EMPTY,
+                network: shekyl_chain_rules::HARNESS_NETWORK_ID,
+            },
             &FixtureSubstrate,
-            BlockHash::NULL,
-            expected_target(&view, &seven).expect("the view answers"),
-            &shekyl_chain_rules::ReferenceClaims::EMPTY,
-            &shekyl_chain_rules::HARNESS_NETWORK_ID,
             FormAttempt::FIRST,
         ) {
             Ok(Ok(formed)) => formed,

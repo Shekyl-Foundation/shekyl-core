@@ -108,8 +108,8 @@ impl Rule for I7 {
 impl TxAgainstRule for I7 {
     const SCOPE: TxScope = TxScope::NonCoinbase;
 
-    fn check<'id, V: ChainView<'id>>(
-        cx: &TxContext<'_>,
+    fn check<'id, N, V: ChainView<'id>>(
+        cx: &TxContext<'_, N>,
         view: &V,
     ) -> Result<Verdict<()>, V::Fault> {
         for (input, item) in cx.tx.prefix.inputs.iter().enumerate() {
@@ -254,8 +254,8 @@ impl I10 {
     /// `None` when there is none to look up or it is on no block of this
     /// chain. The row it refuses under is the class arm's
     /// ([`ReferenceRows::lookup`]).
-    fn lookup<'id, V: ChainView<'id>>(
-        cx: &TxContext<'_>,
+    fn lookup<'id, N, V: ChainView<'id>>(
+        cx: &TxContext<'_, N>,
         view: &V,
     ) -> Result<Option<BlockHeight>, V::Fault> {
         let Some(reference) = proof_reference(cx.tx) else {
@@ -703,8 +703,8 @@ const BOND_POST_REFERENCE: ReferenceRows = ReferenceRows {
 /// passed: those steps' rows are recorded, except where the row is the
 /// refusing one — a refused row is not recorded, whichever of its steps
 /// refused it (on an emission, every step is J21).
-fn refuse_step(
-    cx: &TxContext<'_>,
+fn refuse_step<N>(
+    cx: &TxContext<'_, N>,
     rows: ReferenceRows,
     passed: usize,
     row: CenRow,
@@ -735,8 +735,8 @@ fn refuse_step(
 /// `Option<ReferenceContext>`, `None` when `rows` staged the depth step
 /// off — the anchor then derived, recorded and dropped; no constant has
 /// staged it off since the spend's CEN-I13 landed (2026-10-08).
-fn reference_context<'id, V: ChainView<'id>>(
-    cx: &TxContext<'_>,
+fn reference_context<'id, N, V: ChainView<'id>>(
+    cx: &TxContext<'_, N>,
     view: &V,
     rows: ReferenceRows,
     coverage: &mut RuleCoverage,
@@ -786,8 +786,8 @@ fn record_passed_context(rows: ReferenceRows, coverage: &mut RuleCoverage) {
 /// passed rows are recorded only when the chain's context is the claim
 /// `form` verified — the rule the bond-post arm used to keep with a
 /// scratch, now the rule for every class.
-fn context_after_claim<'id, V: ChainView<'id>>(
-    cx: &TxContext<'_>,
+fn context_after_claim<'id, N, V: ChainView<'id>>(
+    cx: &TxContext<'_, N>,
     view: &V,
     rows: ReferenceRows,
     verified: Option<VerifiedReference>,
@@ -828,8 +828,8 @@ fn context_after_claim<'id, V: ChainView<'id>>(
 /// the bond post was a vacuous class. Until 2026-10-16 the spend and
 /// emission arms recorded their context rows before the claim was
 /// compared, and only the bond post held them back.
-pub(crate) fn judge_reference<'id, V: ChainView<'id>>(
-    cx: &TxContext<'_>,
+pub(crate) fn judge_reference<'id, N, V: ChainView<'id>>(
+    cx: &TxContext<'_, N>,
     view: &V,
     verified: Option<VerifiedReference>,
     attempt: FormAttempt,
@@ -872,8 +872,8 @@ pub(crate) fn judge_reference<'id, V: ChainView<'id>>(
 /// another height or root, or no claim at all — is
 /// [`Stale::Reference`], never a verdict, and `validate` never verifies the
 /// proof itself. Pure over its operands, so the mock earns its keep on it.
-fn compare_claim<VF>(
-    cx: &TxContext<'_>,
+fn compare_claim<N, VF>(
+    cx: &TxContext<'_, N>,
     reference: &ReferenceContext,
     verified: Option<VerifiedReference>,
     attempt: FormAttempt,

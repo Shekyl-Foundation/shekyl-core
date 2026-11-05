@@ -1717,7 +1717,6 @@ impl SeatedPool {
                 UnixSeconds::from_raw(10),
                 &view,
                 &RULES.in_force(connecting),
-                &shekyl_network::HARNESS_NETWORK_ID,
                 &AdmissionPolicy::GENESIS,
             )
             .expect("judged");

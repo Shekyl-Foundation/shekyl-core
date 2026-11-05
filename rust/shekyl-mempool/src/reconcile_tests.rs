@@ -46,6 +46,7 @@ fn two_planted(path: &std::path::Path) -> (Pool, [TxHash; 2]) {
         crate::Limits {
             max_weight: u64::MAX,
         },
+        shekyl_chain_rules::HARNESS_NETWORK_ID,
     )
     .unwrap();
     let a = pool.plant(listed_on(&chain, [0x41; 32]), ADMITTED);
@@ -71,7 +72,6 @@ fn a_chain_fault_mid_reconcile_leaves_the_pool_as_it_was() {
     let fault = pool.reconcile(
         &FaultingView::default(),
         &RuleSet::GENESIS,
-        &shekyl_chain_rules::HARNESS_NETWORK_ID,
         &AdmissionPolicy::GENESIS,
     );
     assert!(matches!(fault, Err(PoolFault::Chain(_))), "{fault:?}");
@@ -86,13 +86,8 @@ fn a_chain_fault_mid_reconcile_leaves_the_pool_as_it_was() {
     // The retry makes the judgements the faulted one would have.
     let chain = spendable_chain();
     let reconciled = chain.with_view(|view| {
-        pool.reconcile(
-            &view,
-            &RuleSet::GENESIS,
-            &shekyl_chain_rules::HARNESS_NETWORK_ID,
-            &AdmissionPolicy::GENESIS,
-        )
-        .unwrap()
+        pool.reconcile(&view, &RuleSet::GENESIS, &AdmissionPolicy::GENESIS)
+            .unwrap()
     });
     assert_eq!(reconciled.removed.len(), 2);
     assert!(pool.is_empty() && pool.key_images().is_empty());
@@ -107,14 +102,8 @@ fn a_refused_write_leaves_the_index_and_the_file_as_they_were_and_the_retry_writ
     let (mut pool, held) = two_planted(&path);
     let chain = spendable_chain();
     pool.store().refuse_next_commit();
-    let fault = chain.with_view(|view| {
-        pool.reconcile(
-            &view,
-            &RuleSet::GENESIS,
-            &shekyl_chain_rules::HARNESS_NETWORK_ID,
-            &AdmissionPolicy::GENESIS,
-        )
-    });
+    let fault =
+        chain.with_view(|view| pool.reconcile(&view, &RuleSet::GENESIS, &AdmissionPolicy::GENESIS));
     assert!(matches!(fault, Err(PoolFault::Store(_))), "{fault:?}");
     assert_eq!(pool.len(), 2, "the index did not run ahead of the file");
     assert!(held.iter().all(|txid| pool.record(txid) == Some(ADMITTED)));
@@ -126,13 +115,8 @@ fn a_refused_write_leaves_the_index_and_the_file_as_they_were_and_the_retry_writ
     );
 
     let reconciled = chain.with_view(|view| {
-        pool.reconcile(
-            &view,
-            &RuleSet::GENESIS,
-            &shekyl_chain_rules::HARNESS_NETWORK_ID,
-            &AdmissionPolicy::GENESIS,
-        )
-        .unwrap()
+        pool.reconcile(&view, &RuleSet::GENESIS, &AdmissionPolicy::GENESIS)
+            .unwrap()
     });
     assert_eq!(reconciled.removed.len(), 2, "the retry judged both again");
     assert!(pool.is_empty() && pool.key_images().is_empty());

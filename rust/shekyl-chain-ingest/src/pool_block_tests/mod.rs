@@ -8,15 +8,16 @@
 //! retention: CEN-K10 is deleted); an alternative's bodies are
 //! the store's, promoted from it whatever the pool decided, and offered to
 //! the pool for relay (CEN-K9); a connect past the cap retires an alt row
-//! and its bodies; CEN-M8's anchor spares a re-admission the proof; and the
-//! door verifies nothing the shared function does not.
+//! and its bodies; CEN-M8's anchor spares a re-admission the proof; a pass
+//! judged on one network is not a pass on another; and the door verifies
+//! nothing the shared function does not.
 //!
 //! Two drivers mine one prefix and then different branches; one's blocks
 //! arrive at the other as alternatives (the switch tests' shape).
 
 use shekyl_chain_rules::{
-    judge_slot_stateless, probes, AdmissionPolicy, CenRow, HeaderView, PolicyRow, ReferenceClaims,
-    RuleCoverage, Tip, TxSlot,
+    judge_lone_stateless, judge_slot_stateless, probes, AdmissionPolicy, CenRow, HeaderView,
+    PolicyRow, ReferenceClaims, RuleCoverage, Tip, TxSlot,
 };
 use shekyl_chain_store::pool::PoolStore;
 use shekyl_harness_spender::Spender;
@@ -186,7 +187,6 @@ async fn a_returned_spend_the_chain_refuses_is_dropped_and_the_store_keeps_its_b
                 UnixSeconds::from_raw(2),
                 view,
                 rule_set,
-                &shekyl_network::HARNESS_NETWORK_ID,
                 &AdmissionPolicy::GENESIS,
             )
             .expect("no fault")
@@ -268,15 +268,8 @@ async fn an_alternatives_bodies_are_the_stores_and_its_promotion_needs_no_pool()
     );
     let held = x
         .read_chain(|view, rule_set| {
-            pool.admit(
-                stem.clone(),
-                now,
-                view,
-                rule_set,
-                &shekyl_network::HARNESS_NETWORK_ID,
-                &policy,
-            )
-            .expect("no fault")
+            pool.admit(stem.clone(), now, view, rule_set, &policy)
+                .expect("no fault")
         })
         .await;
     assert_eq!(
@@ -299,16 +292,7 @@ async fn an_alternatives_bodies_are_the_stores_and_its_promotion_needs_no_pool()
         .expect("AL1 wrote the bodies");
     assert_eq!(bodies.transactions(), b[0].template.transactions.as_slice());
     let offers = x
-        .read_chain(|view, rule_set| {
-            pool.supplement(
-                &bodies,
-                now,
-                view,
-                rule_set,
-                &shekyl_network::HARNESS_NETWORK_ID,
-                &policy,
-            )
-        })
+        .read_chain(|view, rule_set| pool.supplement(&bodies, now, view, rule_set, &policy))
         .await;
     assert!(offers.faults.is_empty(), "{:?}", offers.faults);
     assert_eq!(offers.admissions.len(), 3);
@@ -553,14 +537,7 @@ async fn a_reconcile_on_the_same_anchor_skips_the_proof_and_an_open_verifies_it(
             )
             .expect("open");
             let admitted = pool
-                .admit(
-                    spend,
-                    now,
-                    view,
-                    rule_set,
-                    &shekyl_network::HARNESS_NETWORK_ID,
-                    &policy,
-                )
+                .admit(spend, now, view, rule_set, &policy)
                 .expect("no fault");
             assert_eq!(
                 admitted,
@@ -572,9 +549,7 @@ async fn a_reconcile_on_the_same_anchor_skips_the_proof_and_an_open_verifies_it(
 
             // The same anchor: the reconcile verifies no proof.
             let before = probes::fcmp_verifies();
-            let reconciled = pool
-                .reconcile(view, rule_set, &shekyl_network::HARNESS_NETWORK_ID, &policy)
-                .expect("reconcile");
+            let reconciled = pool.reconcile(view, rule_set, &policy).expect("reconcile");
             let same = (probes::fcmp_verifies() - before, reconciled.admitted);
             drop(pool);
 
@@ -598,6 +573,51 @@ async fn a_reconcile_on_the_same_anchor_skips_the_proof_and_an_open_verifies_it(
     assert_eq!(same, (0, vec![txid]), "the cache spares the proof");
     assert_eq!(reopened, (1, vec![txid]), "an open trusts no anchor");
     drop(std::fs::remove_file(&path));
+    scenario.close().await;
+}
+
+/// A [`StatelessPass`] is a judgement on one network (the review of #1266).
+/// The same transaction, rule set and reference on another id is not that
+/// pass: the signatures are verified again, and the cached pass is not
+/// returned.
+#[tokio::test]
+async fn a_pass_from_one_network_is_not_a_pass_on_another() {
+    let (mut scenario, mined) = matured("pool-net-pass").await;
+    let spend = paying_the_floor(&mut scenario, &mined, 0).await;
+    let other = [0x11; 16];
+    let (reused, accepted, verified) = scenario
+        .read_chain(|view, rule_set| {
+            let connecting = Tip::connecting_height(view.tip().expect("tip").as_ref());
+            let claims =
+                ReferenceClaims::for_transaction(view, connecting, &spend).expect("claims");
+            let network = &shekyl_network::HARNESS_NETWORK_ID;
+            let pass = judge_lone_stateless(&spend, rule_set, network, &claims, None)
+                .expect("the fixture admits");
+            assert!(
+                pass.holds_under(&spend, rule_set, network, &claims),
+                "the pass holds on the network it was judged on"
+            );
+            assert!(
+                !pass.holds_under(&spend, rule_set, &other, &claims),
+                "another network is not this pass"
+            );
+
+            let before = probes::signature_verifies();
+            let again = judge_lone_stateless(&spend, rule_set, network, &claims, Some(&pass))
+                .expect("the same network reuses");
+            assert_eq!(again, pass);
+            let spared = probes::signature_verifies() - before;
+
+            let before = probes::signature_verifies();
+            let judged = judge_lone_stateless(&spend, rule_set, &other, &claims, Some(&pass));
+            let same_pass = judged.as_ref().ok() == Some(&pass);
+            let verified = probes::signature_verifies() - before;
+            (spared, same_pass, verified)
+        })
+        .await;
+    assert_eq!(reused, 0, "the same network reuses the pass");
+    assert!(!accepted, "another network does not accept the cached pass");
+    assert!(verified >= 1, "the other network is judged: {verified}");
     scenario.close().await;
 }
 

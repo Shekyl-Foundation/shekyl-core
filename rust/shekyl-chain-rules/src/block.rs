@@ -11,6 +11,7 @@ use core::fmt;
 use std::collections::{BTreeMap, BTreeSet};
 
 use shekyl_difficulty::CumulativeDifficulty;
+use shekyl_network::NetworkId;
 use shekyl_types::archival::AttestationWitness;
 use shekyl_types::{
     BlockHash, BlockHeight, CurveTreeRoot, PowHash, PqcAuthHash, PrunableHash, Timestamp, TxHash,
@@ -172,6 +173,10 @@ impl Candidate {
 ///   and returns [`Stale::RuleSet`](crate::Stale::RuleSet) on a mismatch.
 ///   The id alone is not the set: a levered `Fixed` target reuses
 ///   `RuleSetId::GENESIS` (Q10), so two sets at the same id can differ.
+/// * `network` — the network id the caller bound every signature and proof
+///   under (NI-Q4). `validate` compares it with `trust.network_id()` and
+///   returns [`Stale::Network`](crate::Stale::Network) on a mismatch, then
+///   judges emission auths under the id the token carries.
 /// * `seed` — the block id the caller **claimed** sits at the seed height
 ///   (CEN-D3). `validate` verifies it against the committing view and
 ///   returns [`Stale::Seed`](crate::Stale::Seed) on a mismatch.
@@ -207,6 +212,7 @@ impl Candidate {
 /// let forged = StructurallyValid {
 ///     candidate: todo!(),
 ///     rule_set: todo!(),
+///     network: todo!(),
 ///     coverage: todo!(),
 ///     facts: todo!(),
 ///     references: todo!(),
@@ -218,6 +224,8 @@ impl Candidate {
 pub struct StructurallyValid {
     candidate: Candidate,
     rule_set: RuleSet,
+    /// The network id `form` bound signatures and proofs under.
+    network: NetworkId,
     coverage: RuleCoverage,
     /// Header, identity, clock, seed, target, attempt and the longhash.
     /// The accessors read this; the claims are not stored a second time.
@@ -233,6 +241,7 @@ impl StructurallyValid {
     pub(crate) fn new(
         candidate: Candidate,
         rule_set: RuleSet,
+        network: NetworkId,
         coverage: RuleCoverage,
         facts: crate::header_facts::HeaderFacts<crate::header_facts::Proven>,
         references: Vec<Option<VerifiedReference>>,
@@ -240,10 +249,18 @@ impl StructurallyValid {
         Self {
             candidate,
             rule_set,
+            network,
             coverage,
             facts,
             references,
         }
+    }
+
+    /// The network id `form` bound signatures and proofs under. `validate`
+    /// checks it against the trust's id before any emission auth reads it.
+    #[must_use]
+    pub const fn network_id(&self) -> NetworkId {
+        self.network
     }
 
     /// The header facts `form` established, including the longhash.
@@ -351,6 +368,7 @@ impl fmt::Debug for StructurallyValid {
         f.debug_struct("StructurallyValid")
             .field("candidate", &self.candidate.transactions.len())
             .field("rule_set", &self.rule_set)
+            .field("network", &self.network)
             .field("coverage", &self.coverage)
             .field("facts", &self.facts)
             .field("references", &self.references)

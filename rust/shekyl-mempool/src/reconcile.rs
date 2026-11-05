@@ -93,7 +93,7 @@ impl Pool {
         policy: &AdmissionPolicy,
     ) -> Result<(Self, PoolOpen, Reconciled), PoolFault<V::Fault>> {
         let limits = Limits::at(chain).map_err(PoolFault::Chain)?;
-        let (mut pool, how) = Self::create(path, limits)?;
+        let (mut pool, how) = Self::create(path, limits, *network)?;
         let latest = ReceivedHour::of(now);
         let mut dropped = Vec::new();
         let snapshot = pool.store().begin_read()?;
@@ -120,7 +120,7 @@ impl Pool {
             pool.load(txid, Held::of(tx, record, None));
         }
         drop(snapshot);
-        let mut reconciled = pool.reconcile(chain, rule_set, network, policy)?;
+        let mut reconciled = pool.reconcile(chain, rule_set, policy)?;
         if !dropped.is_empty() {
             pool.store()
                 .write(|batch| dropped.iter().try_for_each(|(txid, _)| batch.remove(txid)))?;
@@ -147,7 +147,6 @@ impl Pool {
         &mut self,
         chain: &V,
         rule_set: &RuleSet,
-        network: &NetworkId,
         policy: &AdmissionPolicy,
     ) -> Result<Reconciled, PoolFault<V::Fault>> {
         let tip = chain
@@ -191,7 +190,7 @@ impl Pool {
                     chain,
                     &key_images,
                     rule_set,
-                    network,
+                    self.network(),
                     policy,
                     prior.as_ref(),
                 )

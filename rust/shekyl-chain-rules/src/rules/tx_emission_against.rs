@@ -193,8 +193,8 @@ struct GatheredEpoch<'r> {
 impl J23 {
     /// Gather every claimed epoch, in claim order. `Ok(Err)` is this row's
     /// refusal; `Err` is the view's fault.
-    fn gather<'id, 'r, V: ChainView<'id>>(
-        cx: &TxContext<'_>,
+    fn gather<'id, 'r, N, V: ChainView<'id>>(
+        cx: &TxContext<'_, N>,
         view: &V,
         rule_set: &RuleSet,
         vin: &ArchivalRewardEmissionVin,
@@ -496,8 +496,8 @@ impl J25 {
     /// (SI-32), and a claim's epochs are the sender's to choose. An expired
     /// claim is this row's refusal, as it was when the verify reached it
     /// first; the verify still checks the window itself.
-    fn window(
-        cx: &TxContext<'_>,
+    fn window<N>(
+        cx: &TxContext<'_, N>,
         rule_set: &RuleSet,
         vin: &ArchivalRewardEmissionVin,
         connecting: BlockHeight,
@@ -521,7 +521,7 @@ impl J25 {
         reason = "the claim, its context, and the connecting height the window was checked at"
     )]
     fn verify<'id, V: ChainView<'id>>(
-        cx: &TxContext<'_>,
+        cx: &TxContext<'_, NetworkId>,
         view: &V,
         rule_set: &RuleSet,
         vin: &ArchivalRewardEmissionVin,
@@ -529,7 +529,6 @@ impl J25 {
         reference: &ReferenceContext,
         gathered: &[GatheredEpoch<'_>],
         connecting: BlockHeight,
-        network: &NetworkId,
     ) -> Result<Verdict<()>, ViewRead<V::Fault>> {
         let refuse = || Err(InvalidBlock::new(Self::ROW, cx.locus()));
         let schedule = rule_set.settlement_schedule();
@@ -583,7 +582,7 @@ impl J25 {
         if J22::signable_hash(cx).is_none() {
             return Ok(refuse());
         }
-        let signable = cx.tx.tx_signable(network);
+        let signable = cx.tx.tx_signable(cx.network());
         let Some(layers) = reference.tree_depth.checked_add(1) else {
             return Ok(refuse());
         };
@@ -604,7 +603,7 @@ impl J25 {
         else {
             return Ok(refuse());
         };
-        let Ok(auth) = emission_vin_verify_auth(vin, &commits, &signable, network) else {
+        let Ok(auth) = emission_vin_verify_auth(vin, &commits, &signable, cx.network()) else {
             return Ok(refuse());
         };
         // The join is the verdict. Its yield (`epochs_to_commit`,
@@ -659,10 +658,9 @@ const CLAIM_ROWS: [CenRow; 2] = [CenRow::J23, CenRow::J25];
 /// reads; [`ViewRead::Corrupt`] from the gather's shard-close placement
 /// ([`crate::Corrupt::ShardCloseUnplaced`]).
 pub(crate) fn judge_emission_claim<'id, V: ChainView<'id>>(
-    cx: &TxContext<'_>,
+    cx: &TxContext<'_, NetworkId>,
     view: &V,
     rule_set: &RuleSet,
-    network: &NetworkId,
     reference: Option<&ReferenceContext>,
     coverage: &mut RuleCoverage,
 ) -> Result<Verdict<()>, ViewRead<V::Fault>> {
@@ -686,7 +684,7 @@ pub(crate) fn judge_emission_claim<'id, V: ChainView<'id>>(
             return Ok(Err(InvalidBlock::new(J25::ROW, cx.locus())));
         };
         match J25::verify(
-            cx, view, rule_set, &vin, &persona, reference, &gathered, connecting, network,
+            cx, view, rule_set, &vin, &persona, reference, &gathered, connecting,
         )? {
             Ok(()) => {}
             Err(refused) => return Ok(Err(refused)),

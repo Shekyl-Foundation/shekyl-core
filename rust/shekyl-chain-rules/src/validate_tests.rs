@@ -385,12 +385,14 @@ fn form_carries_the_clock_the_seed_the_target_and_the_attempt_it_was_given() {
     };
     let formed = form(
         candidate(Vec::new()),
-        &RuleSet::GENESIS,
+        &FormClaims {
+            rule_set: &RuleSet::GENESIS,
+            seed,
+            target: expected_target(&MockChain::default(), &RuleSet::GENESIS),
+            references: &crate::block::ReferenceClaims::EMPTY,
+            network: crate::HARNESS_NETWORK_ID,
+        },
         &substrate,
-        seed,
-        expected_target(&MockChain::default(), &RuleSet::GENESIS),
-        &crate::block::ReferenceClaims::EMPTY,
-        &crate::HARNESS_NETWORK_ID,
         FormAttempt::FIRST,
     )
     .expect("the mock substrate answers")
@@ -471,12 +473,14 @@ fn a_substrate_that_cannot_read_the_clock_is_a_fault_not_a_verdict() {
     }
     let result = form(
         candidate(Vec::new()),
-        &RuleSet::GENESIS,
+        &FormClaims {
+            rule_set: &RuleSet::GENESIS,
+            seed: shekyl_types::BlockHash::NULL,
+            target: expected_target(&MockChain::default(), &RuleSet::GENESIS),
+            references: &crate::block::ReferenceClaims::EMPTY,
+            network: crate::HARNESS_NETWORK_ID,
+        },
         &NoClock,
-        shekyl_types::BlockHash::NULL,
-        expected_target(&MockChain::default(), &RuleSet::GENESIS),
-        &crate::block::ReferenceClaims::EMPTY,
-        &crate::HARNESS_NETWORK_ID,
         FormAttempt::FIRST,
     );
     assert!(matches!(result, Err(Faulted)));
@@ -490,12 +494,14 @@ fn a_rule_set_claim_the_view_stage_refutes_is_stale_with_a_bounded_retry() {
     // Formed under the rule set that admits 2; validated under GENESIS.
     let formed = form(
         input,
-        &admits_two,
+        &FormClaims {
+            rule_set: &admits_two,
+            seed: shekyl_types::BlockHash::NULL,
+            target: expected_target(&MockChain::default(), &admits_two),
+            references: &crate::block::ReferenceClaims::EMPTY,
+            network: crate::HARNESS_NETWORK_ID,
+        },
         &MockSubstrate::default(),
-        shekyl_types::BlockHash::NULL,
-        expected_target(&MockChain::default(), &admits_two),
-        &crate::block::ReferenceClaims::EMPTY,
-        &crate::HARNESS_NETWORK_ID,
         FormAttempt::FIRST,
     )
     .expect("no fault")
@@ -534,12 +540,14 @@ fn a_target_claim_the_view_does_not_derive_is_stale_with_a_bounded_retry() {
     assert_ne!(wrong, right, "the fixture's claim must be wrong");
     let formed = form(
         candidate_on(&chain, Vec::new()),
-        &RuleSet::GENESIS,
+        &FormClaims {
+            rule_set: &RuleSet::GENESIS,
+            seed: crate::harness::expected_seed(&chain),
+            target: wrong,
+            references: &crate::block::ReferenceClaims::EMPTY,
+            network: crate::HARNESS_NETWORK_ID,
+        },
         &MockSubstrate::default(),
-        crate::harness::expected_seed(&chain),
-        wrong,
-        &crate::block::ReferenceClaims::EMPTY,
-        &crate::HARNESS_NETWORK_ID,
         FormAttempt::FIRST,
     )
     .expect("no fault")
@@ -569,12 +577,14 @@ fn the_last_attempt_is_terminal() {
     let last = FormAttempt::last_for_tests();
     let formed = form(
         input,
-        &admits_two,
+        &FormClaims {
+            rule_set: &admits_two,
+            seed: shekyl_types::BlockHash::NULL,
+            target: expected_target(&MockChain::default(), &admits_two),
+            references: &crate::block::ReferenceClaims::EMPTY,
+            network: crate::HARNESS_NETWORK_ID,
+        },
         &MockSubstrate::default(),
-        shekyl_types::BlockHash::NULL,
-        expected_target(&MockChain::default(), &admits_two),
-        &crate::block::ReferenceClaims::EMPTY,
-        &crate::HARNESS_NETWORK_ID,
         last,
     )
     .expect("no fault")

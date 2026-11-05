@@ -56,8 +56,8 @@ use std::sync::Arc;
 use kameo::actor::PreparedActor;
 use kameo::error::SendError;
 use shekyl_chain_rules::{
-    form, FormAttempt, InvalidBlock, PaidEmission, ReferenceClaims, StructurallyValid, Substrate,
-    Verdict, Weights,
+    form, FormAttempt, FormClaims, InvalidBlock, PaidEmission, ReferenceClaims, StructurallyValid,
+    Substrate, Verdict, Weights,
 };
 use shekyl_chain_store::archival_snapshot::SnapshotDiff;
 use shekyl_chain_store::store::{ChainStore, StoreError};
@@ -997,12 +997,14 @@ where
             let started = std::time::Instant::now();
             let verdict = form(
                 *candidate,
-                &in_force,
+                &FormClaims {
+                    rule_set: &in_force,
+                    seed,
+                    target,
+                    references: &references,
+                    network,
+                },
                 &*substrate,
-                seed,
-                target,
-                &references,
-                &network,
                 FormAttempt::FIRST,
             );
             metrics.block_formed(started.elapsed());

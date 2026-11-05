@@ -25,7 +25,6 @@
 
 use shekyl_chain_rules::{AdmissionPolicy, ChainView, InvalidBlock, RuleSet, StatelessPass};
 use shekyl_chain_store::codec::AltBodies;
-use shekyl_network::NetworkId;
 use shekyl_types::{TxHash, UnixSeconds};
 use shekyl_wire::Transaction;
 
@@ -56,18 +55,9 @@ impl Pool {
         now: UnixSeconds,
         chain: &V,
         rule_set: &RuleSet,
-        network: &NetworkId,
         policy: &AdmissionPolicy,
     ) -> Offers<V::Fault> {
-        self.offer(
-            returned,
-            Arrival::Carried,
-            now,
-            chain,
-            rule_set,
-            network,
-            policy,
-        )
+        self.offer(returned, Arrival::Carried, now, chain, rule_set, policy)
     }
 
     /// An alternative block's listed bodies, as the store holds them
@@ -83,7 +73,6 @@ impl Pool {
         now: UnixSeconds,
         chain: &V,
         rule_set: &RuleSet,
-        network: &NetworkId,
         policy: &AdmissionPolicy,
     ) -> Offers<V::Fault> {
         self.offer(
@@ -92,14 +81,12 @@ impl Pool {
             now,
             chain,
             rule_set,
-            network,
             policy,
         )
     }
 
     /// Offer each of `transactions` to [`Pool::admit`], every one whatever
-    /// the one before it answered.
-    #[allow(clippy::too_many_arguments)] // the chain's claims beside the rule set, the network id among them (NI-Q4)
+    /// the one before it answered. Judged on this pool's network.
     fn offer<'id, V: ChainView<'id>>(
         &mut self,
         transactions: Vec<Transaction>,
@@ -107,7 +94,6 @@ impl Pool {
         now: UnixSeconds,
         chain: &V,
         rule_set: &RuleSet,
-        network: &NetworkId,
         policy: &AdmissionPolicy,
     ) -> Offers<V::Fault> {
         let mut offered = Offers {
@@ -123,7 +109,6 @@ impl Pool {
                 now,
                 chain,
                 rule_set,
-                network,
                 policy,
             ) {
                 Ok(admission) => offered.admissions.push((txid, admission)),
@@ -142,7 +127,6 @@ impl Pool {
         now: UnixSeconds,
         chain: &V,
         rule_set: &RuleSet,
-        network: &NetworkId,
         policy: &AdmissionPolicy,
     ) -> Offers<V::Fault> {
         let mut offered = Offers {
@@ -158,7 +142,6 @@ impl Pool {
                 now,
                 chain,
                 rule_set,
-                network,
                 policy,
             ) {
                 Ok(admission) => offered.admissions.push((txid, admission)),

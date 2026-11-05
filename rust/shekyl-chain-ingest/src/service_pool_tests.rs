@@ -103,7 +103,6 @@ impl Pooled {
                 UnixSeconds::from_raw(10),
                 view,
                 rule_set,
-                &shekyl_network::HARNESS_NETWORK_ID,
                 &AdmissionPolicy::GENESIS,
             )
             .expect("judged")

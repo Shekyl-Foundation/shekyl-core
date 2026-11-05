@@ -16,7 +16,7 @@ use std::sync::{Arc, PoisonError};
 
 use kameo::error::SendError;
 use shekyl_chain_rules::{
-    form, form_judged, Candidate, CenRow, Fault, FormAttempt, HeaderJudged, HeaderView,
+    form, form_judged, Candidate, CenRow, Fault, FormAttempt, FormClaims, HeaderJudged, HeaderView,
     InvalidBlock, StatelessPass, StructurallyValid, Substrate, Tip,
 };
 use shekyl_chain_store::store::{AltCannot, SnapshotView, StoreCannot, StoreError};
@@ -313,12 +313,14 @@ where
         }
         let verdict = form(
             candidate,
-            &claims.rule_set,
+            &FormClaims {
+                rule_set: &claims.rule_set,
+                seed: claims.seed,
+                target: claims.target,
+                references: &claims.references,
+                network: claims.network,
+            },
             &*substrate,
-            claims.seed,
-            claims.target,
-            &claims.references,
-            &claims.network,
             FormAttempt::FIRST,
         );
         if matches!(verdict, Ok(Err(_))) {
@@ -1012,12 +1014,14 @@ where
         let branch = Branch::new(&**worker.substrate(), &held);
         let verdict = form(
             candidate,
-            &claims.rule_set,
+            &FormClaims {
+                rule_set: &claims.rule_set,
+                seed,
+                target: claims.target,
+                references: &claims.references,
+                network: claims.network,
+            },
             &branch,
-            seed,
-            claims.target,
-            &claims.references,
-            &claims.network,
             FormAttempt::FIRST,
         );
         drop(permit);
@@ -1226,9 +1230,8 @@ where
         }
     };
     let bodies: Vec<Transaction> = prepared.iter().map(|(tx, _)| tx.clone()).collect();
-    let network = shared.rules().trust().network_id();
     let done = super::with_pool(shared, move |pool, _, view, rule_set, policy, now| {
-        pool.offer_prepared(prepared, now, view, rule_set, &network, policy)
+        pool.offer_prepared(prepared, now, view, rule_set, policy)
     })
     .await;
     let offers = match done {

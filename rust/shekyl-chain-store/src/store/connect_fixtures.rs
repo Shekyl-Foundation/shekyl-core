@@ -22,8 +22,8 @@ use shekyl_chain_rules::harness::fixture;
 use shekyl_chain_rules::target_claim;
 use shekyl_chain_rules::{
     form, validate, validate_with_memo, AtHeight, Candidate, ChainValid, ChainView, Corrupt,
-    DrawableMemo, Fault, FormAttempt, HeaderView, PaidEmission, ReferenceClaims, RuleSet,
-    StructurallyValid, Substrate, Target, Trust, ViewRead, Weights,
+    DrawableMemo, Fault, FormAttempt, FormClaims, HeaderView, PaidEmission, ReferenceClaims,
+    RuleSet, StructurallyValid, Substrate, Target, Trust, ViewRead, Weights,
 };
 use shekyl_types::{AttestationRoot, BlockHash, BlockHeight, CurveTreeRoot, PowHash, Timestamp};
 use shekyl_wire::{Block, BlockHeader, Input, Transaction};
@@ -230,12 +230,14 @@ pub(super) fn formed_under<'id, V: HeaderView<'id>>(
     Ok(
         match form(
             candidate,
-            rules,
+            &FormClaims {
+                rule_set: rules,
+                seed,
+                target: expected_target(view, rules)?,
+                references: &references,
+                network: shekyl_chain_rules::HARNESS_NETWORK_ID,
+            },
             &FixtureSubstrate,
-            seed,
-            expected_target(view, rules)?,
-            &references,
-            &shekyl_chain_rules::HARNESS_NETWORK_ID,
             FormAttempt::FIRST,
         ) {
             Ok(Ok(formed)) => formed,

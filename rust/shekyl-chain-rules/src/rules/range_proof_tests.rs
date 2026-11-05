@@ -34,6 +34,7 @@ use crate::census::CenRow;
 use crate::harness::fixture::{candidate, listed, serve_credit_only};
 use crate::rules::tx::H19;
 use crate::verdict::{InvalidBlock, Locus, TxSlot};
+use crate::FormClaims;
 
 /// The fixture spend with `proof` over `commitments` in place of its filler.
 fn carrying(seed: u8, proof: &Bulletproof, commitments: &[[u8; 32]]) -> Transaction {
@@ -307,12 +308,14 @@ fn a_block_short_of_its_proof_of_work_is_refused_before_the_batch_runs() {
         let before = BATCHES.with(core::cell::Cell::get);
         let verdict = match crate::validate::form(
             block(),
-            &seven,
+            &FormClaims {
+                rule_set: &seven,
+                seed: crate::harness::expected_seed(&chain),
+                target: claim,
+                references: &crate::block::ReferenceClaims::EMPTY,
+                network: crate::HARNESS_NETWORK_ID,
+            },
             substrate,
-            crate::harness::expected_seed(&chain),
-            claim,
-            &crate::block::ReferenceClaims::EMPTY,
-            &crate::HARNESS_NETWORK_ID,
             FormAttempt::FIRST,
         ) {
             Ok(verdict) => verdict.map(|_formed| ()),
@@ -373,12 +376,14 @@ fn form_refuses_a_bad_range_proof_with_no_view_in_scope() {
     );
     let verdict = match crate::validate::form(
         candidate(vec![good, bad]),
-        &RuleSet::GENESIS,
+        &FormClaims {
+            rule_set: &RuleSet::GENESIS,
+            seed: BlockHash::NULL,
+            target: expected_target(&MockChain::default(), &RuleSet::GENESIS),
+            references: &crate::block::ReferenceClaims::EMPTY,
+            network: crate::HARNESS_NETWORK_ID,
+        },
         &MockSubstrate::default(),
-        BlockHash::NULL,
-        expected_target(&MockChain::default(), &RuleSet::GENESIS),
-        &crate::block::ReferenceClaims::EMPTY,
-        &crate::HARNESS_NETWORK_ID,
         FormAttempt::FIRST,
     ) {
         Ok(verdict) => verdict.map(|_formed| ()),

@@ -47,7 +47,7 @@ use crate::verdict::{InvalidBlock, Verdict};
 /// `Emission`. H6 has refused a second archival vin before any rule here
 /// runs, so a class of `Emission` holds exactly one; its index is where the
 /// C++'s `archival_emission_index` points.
-pub(crate) fn the_emission<'tx>(cx: &TxContext<'tx>) -> Option<(usize, &'tx [u8])> {
+pub(crate) fn the_emission<'tx, N>(cx: &TxContext<'tx, N>) -> Option<(usize, &'tx [u8])> {
     if !matches!(cx.class, TxClass::Emission { .. }) {
         return None;
     }
@@ -183,7 +183,7 @@ impl Rule for J22 {
 
 impl J22 {
     /// The signable hash, if the class is `Emission`.
-    pub(crate) fn signable_hash(cx: &TxContext<'_>) -> Option<PrefixHash> {
+    pub(crate) fn signable_hash<N>(cx: &TxContext<'_, N>) -> Option<PrefixHash> {
         the_emission(cx)?;
         Some(cx.tx.signable_prefix_hash())
     }
@@ -225,7 +225,9 @@ impl J24 {
     /// The ordered reward commit set and its checked sum: `Ok(None)` off the
     /// emission class, `Err` under this row where the set is not
     /// well-defined.
-    pub(crate) fn reward_commits(cx: &TxContext<'_>) -> Verdict<Option<(Vec<RewardCommit>, u64)>> {
+    pub(crate) fn reward_commits<N>(
+        cx: &TxContext<'_, N>,
+    ) -> Verdict<Option<(Vec<RewardCommit>, u64)>> {
         if the_emission(cx).is_none() {
             return Ok(None);
         }

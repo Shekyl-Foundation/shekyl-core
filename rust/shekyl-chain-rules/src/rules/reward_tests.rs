@@ -31,7 +31,7 @@ use crate::rule_set::RuleSet;
 use crate::rules::block_weight::{EffectiveMedian, Medians, Weights};
 use crate::rules::miner::Emission;
 use crate::trust::Trust;
-use crate::validate::{form, validate};
+use crate::validate::{form, validate, FormClaims};
 use shekyl_economics::{effective_emission, FULL_REWARD_ZONE};
 use shekyl_types::{BlockWeight, LongTermWeight};
 use shekyl_wire::Ct;
@@ -437,12 +437,14 @@ fn validated_on(chain: &MockChain, candidate: Candidate) -> Verdict<(Weights, Pa
     let references = expected_references(chain, &candidate);
     let formed = match form(
         candidate,
-        &RuleSet::GENESIS,
+        &FormClaims {
+            rule_set: &RuleSet::GENESIS,
+            seed: expected_seed(chain),
+            target: expected_target(chain, &RuleSet::GENESIS),
+            references: &references,
+            network: crate::HARNESS_NETWORK_ID,
+        },
         &MockSubstrate::default(),
-        expected_seed(chain),
-        expected_target(chain, &RuleSet::GENESIS),
-        &references,
-        &crate::HARNESS_NETWORK_ID,
         FormAttempt::FIRST,
     ) {
         Ok(Ok(formed)) => formed,

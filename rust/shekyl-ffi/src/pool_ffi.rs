@@ -189,7 +189,7 @@ fn admit_one(door: &Installed, tx: Transaction) -> i32 {
     };
     let outcome = {
         let mut pool = lock(&door.pool);
-        pool.admit_judged(tx, prior, now(), &view, &rule_set, &network, &door.policy)
+        pool.admit_judged(tx, prior, now(), &view, &rule_set, &door.policy)
     };
     match outcome {
         Ok(Admission::Admitted { evicted }) => {

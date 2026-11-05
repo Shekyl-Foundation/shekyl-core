@@ -48,7 +48,6 @@ fn a_transaction_the_chain_holds_is_a_duplicate_and_is_not_judged() {
             UnixSeconds::from_raw(1),
             &view,
             &RuleSet::GENESIS,
-            &shekyl_chain_rules::HARNESS_NETWORK_ID,
             &AdmissionPolicy::GENESIS,
         )
         .unwrap()
@@ -82,7 +81,6 @@ fn a_refused_transaction_leaves_no_trace() {
                 UnixSeconds::from_raw(1),
                 &view,
                 &RuleSet::GENESIS,
-                &shekyl_chain_rules::HARNESS_NETWORK_ID,
                 &AdmissionPolicy::GENESIS,
             )
             .unwrap();

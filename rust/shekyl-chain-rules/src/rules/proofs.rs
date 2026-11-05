@@ -106,8 +106,7 @@ const PROOF_ROWS: [CenRow; 3] = [I15::ROW, J26::ROW, J27::ROW];
 /// whose claim has not moved does not call it
 /// ([`crate::judge_lone_stateless`]).
 pub(crate) fn judge_proofs(
-    cx: &TxContext<'_>,
-    network: &NetworkId,
+    cx: &TxContext<'_, NetworkId>,
     claims: &ReferenceClaims,
     coverage: &mut RuleCoverage,
 ) -> Verdict<Option<VerifiedReference>> {
@@ -152,7 +151,7 @@ pub(crate) fn judge_proofs(
         anchor: claim.root,
         tree_depth,
     };
-    if I15::verify(cx.tx, &to_key_slots(cx.tx), &context, network).is_err() {
+    if I15::verify(cx.tx, &to_key_slots(cx.tx), &context, cx.network()).is_err() {
         return Err(InvalidBlock::new(row, cx.locus()));
     }
     coverage.insert(row);
@@ -195,12 +194,11 @@ impl I17 {
     /// signed over the pass record instead (CEN-J10), so this row and I18
     /// are vacuous on it by construction, not by exemption.
     pub(crate) fn signed_hashes(
-        cx: &TxContext<'_>,
-        network: &NetworkId,
+        cx: &TxContext<'_, NetworkId>,
         coverage: &mut RuleCoverage,
     ) -> Vec<SigningPayloadHash> {
         coverage.insert(Self::ROW);
-        cx.tx.pqc_signing_payload_hashes(network)
+        cx.tx.pqc_signing_payload_hashes(cx.network())
     }
 }
 
@@ -242,8 +240,8 @@ impl I18 {
     /// The row is recorded only when the check passes, including the
     /// vacuous non-`Fcmp` arm. A refusal leaves it unrecorded, as
     /// [`crate::rules::run_tx`] does for a stateless rule.
-    pub(crate) fn check(
-        cx: &TxContext<'_>,
+    pub(crate) fn check<N>(
+        cx: &TxContext<'_, N>,
         hashes: &[SigningPayloadHash],
         coverage: &mut RuleCoverage,
     ) -> Verdict<()> {
@@ -285,10 +283,9 @@ impl I18 {
 /// row records at the derivation, the verification row consumes the operand
 /// it yielded.
 pub(crate) fn judge_signatures(
-    cx: &TxContext<'_>,
-    network: &NetworkId,
+    cx: &TxContext<'_, NetworkId>,
     coverage: &mut RuleCoverage,
 ) -> Verdict<()> {
-    let signed_hashes = I17::signed_hashes(cx, network, coverage);
+    let signed_hashes = I17::signed_hashes(cx, coverage);
     I18::check(cx, &signed_hashes, coverage)
 }
