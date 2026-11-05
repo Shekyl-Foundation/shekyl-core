@@ -9,9 +9,9 @@
 //!
 //! A handler never touches the FFI: it asks a [`ChainFacts`] for what it
 //! needs and decides the rest itself. The live implementation is
-//! [`crate::store_facts::StoreFacts`]. [`FfiP2pFacts`] is the sync half
-//! that still reads the C++ protocol handler (connections, sync spans,
-//! net stats) until chain sync's cutover.
+//! [`crate::store_facts::StoreFacts`]. [`FfiP2pFacts`] reads what the C++
+//! p2p remnant still holds (connections, net stats) until the p2p remnant
+//! cutover; chain sync's facts are the node's (`SyncView`).
 //!
 //! A core-reported `0` target is C5's
 //! sentinel and decodes as `None` — never [`ChainCount::from_raw`]`(0)`.

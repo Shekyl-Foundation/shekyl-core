@@ -91,7 +91,8 @@ fn bind() {
         held: 0,
     };
     let mut ctx = 0u8;
-    let bound = unsafe { shekyl_seam_bind((&raw mut ctx).cast::<c_void>(), Some(no_post)) };
+    let bound =
+        unsafe { crate::seam_ffi::bind_attached((&raw mut ctx).cast::<c_void>(), Some(no_post)) };
     assert_eq!(bound, 0);
     assert_eq!(unsafe { shekyl_seam_set_ceiling(&raw const ceiling) }, 0);
 }

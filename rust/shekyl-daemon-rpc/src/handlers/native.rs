@@ -8,8 +8,8 @@
 //! [`super::json_rpc`] is the HTTP frame: it admits the caller and
 //! returns the JSON-RPC object. This module is the dispatch. Three
 //! shapes stay a match, because they are three different runtimes:
-//! [`on_chain`] reads the store on a worker, [`run_blocking`] reads the
-//! C++ core until chain sync's cutover deletes that caller, and
+//! [`on_chain`] reads the store on a worker, [`run_blocking`] reads what
+//! the C++ p2p remnant still holds (connections, net stats), and
 //! [`from_error`] / [`blocking`] cover mining, bans, and the pool.
 
 use crate::authority::Authority;
@@ -585,7 +585,7 @@ where
 
 /// Run a native method on a worker thread holding the live core.
 ///
-/// What remains here reads the C++ handler (sync spans, connections). A
+/// What remains here reads the C++ p2p remnant (connections, net stats). A
 /// join failure is an [`InternalFault`], never a fact about the chain.
 pub(super) async fn run_blocking<T, F>(state: &Arc<AppState>, f: F) -> Result<T, RpcFault>
 where

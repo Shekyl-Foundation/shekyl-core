@@ -430,6 +430,22 @@ impl Node {
         let _gone = nudge.deregister();
     }
 
+    /// How the node's owner ended, once it has: `None` while it runs.
+    ///
+    /// # Panics
+    ///
+    /// The node was stopped.
+    #[must_use]
+    pub fn ended(&self) -> tokio::sync::watch::Receiver<Option<owner::Ended>> {
+        self.running.as_ref().expect("a running node").ended()
+    }
+
+    /// Close the node's timing engine under its running owner, as if the
+    /// process's engine had gone: the owner ends on its own.
+    pub fn close_engine(&self) {
+        self.engine.close();
+    }
+
     /// Push `frame` into `id`'s channel as its peer, from a blocking
     /// thread: the channel's send blocks.
     ///

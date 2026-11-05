@@ -29,6 +29,7 @@ use std::path::Path;
 use std::sync::Arc;
 
 use tokio::sync::oneshot::{self, Receiver};
+use tokio::sync::watch;
 
 use shekyl_daemon_config::sections::{log_location_writable, DaemonConfig, Tor};
 use shekyl_daemon_config::{announce, marker, Lock, Platform, TABLE};
@@ -298,12 +299,16 @@ pub fn main(remnant: Remnant, args: &[OsString], host: &Host) -> i32 {
 /// The `shekyld-run` thread's stack (DC-F21).
 const REMNANT_STACK_BYTES: usize = 2 * 1024 * 1024;
 
-/// `run` returned, or a stop was requested while it was still running.
-/// A small status: copied, never borrowed.
-#[derive(Clone, Copy)]
+/// `run` returned, a stop was requested while it was still running, or
+/// chain sync's owner ended on its own. A small status: copied, never
+/// borrowed.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum RunWait {
     Finished(i32),
     StopRequested,
+    /// The node's sync owner ended on its own, with this cause: the
+    /// daemon would stay up and never sync, so it stops and exits failed.
+    SyncFailed(shekyl_node::EndCause),
 }
 
 /// The remnant's RPC start completed, it was refused, or `run` ended or a
@@ -382,11 +387,17 @@ fn supervise(
     // net_node, and calls the RPC start once; its completion is the signal
     // that the core exists for step 8.
     let mut run_status = None;
-    // A network that cannot start is a failure even when `run` returned 0.
+    // A network that cannot start, and a sync owner that ends on its own,
+    // are failures even when `run` returned 0.
     let mut preserve_status = true;
-    match pool.block_on(await_built(&mut constructed, &mut done_rx)) {
-        Built::Ended(wait) => note_run(&mut run_status, wait),
-        Built::Refused => note_run(&mut run_status, pool.block_on(run_or_stop(&mut done_rx))),
+    let mut sync_ended = node.sync_ended();
+    match pool.block_on(await_built(&mut constructed, &mut done_rx, &mut sync_ended)) {
+        Built::Ended(wait) => note_run(&mut run_status, &mut preserve_status, wait),
+        Built::Refused => note_run(
+            &mut run_status,
+            &mut preserve_status,
+            pool.block_on(run_or_stop(&mut done_rx, &mut sync_ended)),
+        ),
         Built::Ready => {
             // Step 8 does not wait for Tor. Clearnet, the listeners and the
             // dialer start at once. The managed connector is parked until
@@ -404,7 +415,11 @@ fn supervise(
                     if let (Some(supervisor), Some(forward)) = (&supervisor, started.tor_forward) {
                         supervisor.note_forward(forward);
                     }
-                    note_run(&mut run_status, pool.block_on(run_or_stop(&mut done_rx)));
+                    note_run(
+                        &mut run_status,
+                        &mut preserve_status,
+                        pool.block_on(run_or_stop(&mut done_rx, &mut sync_ended)),
+                    );
                 }
                 Err(e) => {
                     tracing::error!(target: "global", "the network could not start: {e}; stopping");
@@ -449,6 +464,9 @@ fn finish(
     preserve_status: bool,
     node: shekyl_node::Node,
 ) -> i32 {
+    // Before the seam closes. The owner's end reads a stop that is
+    // already asked as a stop; a hub dropped first would be a failure.
+    node.request_sync_stop();
     network::stop();
     shekyl_daemon_rpc::ffi_exports::stop();
     // Before the remnant join, not at the end of this function: Tor's
@@ -483,6 +501,7 @@ fn finish(
 async fn await_built(
     constructed: &mut Receiver<Result<(), String>>,
     done_rx: &mut Receiver<i32>,
+    sync_ended: &mut watch::Receiver<Option<shekyl_node::SyncEnded>>,
 ) -> Built {
     tokio::select! {
         built = &mut *constructed => match built {
@@ -496,15 +515,28 @@ async fn await_built(
                 Built::Refused
             }
         },
-        waited = run_or_stop(done_rx) => Built::Ended(waited),
+        waited = run_or_stop(done_rx, sync_ended) => Built::Ended(waited),
     }
 }
 
-/// `run`'s return, or a stop request. One wait, used after the RPC start
-/// and again after step 8.
-async fn run_or_stop(done_rx: &mut Receiver<i32>) -> RunWait {
+/// `run`'s return, a stop request, or chain sync's owner ending on its own.
+/// One wait, used after the RPC start and again after step 8.
+///
+/// Only this wait reads the owner's end. Teardown asks the owner to stop
+/// before the seam closes, so that end is [`shekyl_node::SyncEnded::Stopped`],
+/// and this wait is not polled while the node is dropped. An end between
+/// the two waits (the managed Tor's start sits between them) is kept by
+/// the watch and read by the next one. A failed end is read before a stop
+/// request: the owner is stopped only in the teardown, so a stop cannot
+/// cause it.
+async fn run_or_stop(
+    done_rx: &mut Receiver<i32>,
+    sync_ended: &mut watch::Receiver<Option<shekyl_node::SyncEnded>>,
+) -> RunWait {
     tokio::select! {
+        biased;
         finished = &mut *done_rx => RunWait::Finished(finished.unwrap_or(EXIT_FAILED)),
+        cause = sync_failed(sync_ended) => RunWait::SyncFailed(cause),
         cause = signals::stop_requested() => {
             note_stop(cause);
             RunWait::StopRequested
@@ -512,9 +544,35 @@ async fn run_or_stop(done_rx: &mut Receiver<i32>) -> RunWait {
     }
 }
 
-fn note_run(run_status: &mut Option<i32>, wait: RunWait) {
-    if let RunWait::Finished(status) = wait {
-        *run_status = Some(status);
+/// Resolves when chain sync's owner has ended on its own, with the cause.
+/// A stop, and a watch whose owner went without a failure, never resolve.
+async fn sync_failed(
+    sync_ended: &mut watch::Receiver<Option<shekyl_node::SyncEnded>>,
+) -> shekyl_node::EndCause {
+    loop {
+        if let Some(shekyl_node::SyncEnded::Failed(cause)) = *sync_ended.borrow_and_update() {
+            return cause;
+        }
+        // A stop, and a watch that closed without a failure, never resolve.
+        // The biased select then stays on `run` and the stop request.
+        if sync_ended.changed().await.is_err() {
+            std::future::pending().await
+        }
+    }
+}
+
+/// Record what a wait returned: `run`'s status, or a failed sync owner,
+/// which stops the daemon through the one stop owner and makes its exit a
+/// failure.
+fn note_run(run_status: &mut Option<i32>, preserve_status: &mut bool, wait: RunWait) {
+    match wait {
+        RunWait::Finished(status) => *run_status = Some(status),
+        RunWait::StopRequested => {}
+        RunWait::SyncFailed(cause) => {
+            tracing::error!(target: "daemon", "chain sync stopped: {cause}; the daemon stops");
+            signals::fatal(cause.text());
+            *preserve_status = false;
+        }
     }
 }
 
@@ -852,5 +910,48 @@ mod tests {
         );
         // The lock was released at the end: it can be taken again.
         assert!(Lock::take(&data).is_ok());
+    }
+
+    /// **A sync owner that ends on its own stops the daemon, and the exit
+    /// is a failure** (the CS-5 tune-up). An owner that stopped on request
+    /// does not end the wait. One that failed does, with its cause: the
+    /// cause reaches the one stop owner, so every waiter sees it, and the
+    /// status the teardown returns is a failure whatever `run` returned.
+    #[test]
+    fn a_sync_owner_that_ends_on_its_own_stops_the_daemon_with_its_cause() {
+        let _serial = SERIAL
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        let rt = tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+            .expect("runtime");
+        // Clears a stop an earlier test latched.
+        signals::own(rt.handle()).expect("own");
+        let (_done_tx, mut done_rx) = oneshot::channel::<i32>();
+        let (ended_tx, mut ended) = watch::channel(None);
+        ended_tx.send_replace(Some(shekyl_node::SyncEnded::Stopped));
+        let waited = rt.block_on(async {
+            tokio::time::timeout(
+                std::time::Duration::from_millis(50),
+                run_or_stop(&mut done_rx, &mut ended),
+            )
+            .await
+        });
+        assert!(waited.is_err(), "a stopped owner ended the wait");
+        ended_tx.send_replace(Some(shekyl_node::SyncEnded::Failed(
+            shekyl_node::EndCause::RouterClosed,
+        )));
+        let wait = rt.block_on(run_or_stop(&mut done_rx, &mut ended));
+        assert_eq!(
+            wait,
+            RunWait::SyncFailed(shekyl_node::EndCause::RouterClosed)
+        );
+        let mut run_status = None;
+        let mut preserve_status = true;
+        note_run(&mut run_status, &mut preserve_status, wait);
+        assert!(!preserve_status, "the exit was not made a failure");
+        assert_eq!(run_status, None);
+        assert_eq!(rt.block_on(signals::stop_requested()), "the router closed");
     }
 }

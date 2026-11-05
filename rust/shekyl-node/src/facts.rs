@@ -248,7 +248,7 @@ impl NodeFacts for Surroundings {
     }
 
     /// The bound hub board's handshaken sessions. The per-connection sync
-    /// claims stay C++'s until chain sync's cutover and are not read here.
+    /// claims are chain sync's view (`sync_info`), not read here.
     fn sessions(&self) -> Result<SessionCounts, FactsFault> {
         if self.offline {
             return Ok(SessionCounts::NONE);

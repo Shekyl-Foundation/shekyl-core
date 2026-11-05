@@ -20,10 +20,10 @@
 # JSON, the same job as `compare.py`. It is not a second copy of that script:
 # compare.py is iai-callgrind only, and its ids cannot name a two-daemon IBD run.
 #
-# Vehicle: generateblocks is gated on check_core_ready(), which a zero-peer
-# daemon never satisfies, and the protocol handler initialises
-# m_synchronized(offline). So: generate offline, restart networked over the
-# same datadir, measure the subject syncing from it.
+# Vehicle: generateblocks needs a node that reads Synced, which a node
+# declared offline does at open, and a node on an open network does not
+# until its peers have answered. So: generate offline, restart networked
+# over the same datadir, measure the subject syncing from it.
 
 import argparse
 import hashlib
@@ -590,9 +590,9 @@ def _measure_with_probe(args, work, seed_dir, daemon, seed_daemon, addr, subj_di
         have_h = _rpc(srpc, "get_info")["result"]["height"]
         seed_reused = have_h > 1
         # A Rust seed posts its first template once its follower has looped
-        # after open (shekyl-node `sync_at_open`); a generateblocks sent
-        # before that post is refused `mine.not_synced` by a daemon whose
-        # RPC is already up. The regtest harness waits the same way
+        # after open (the owner's state at open, by the declaration); a
+        # generateblocks sent before that post is refused `mine.not_synced`
+        # by a daemon whose RPC is already up. The regtest harness waits the same way
         # (`await_posted`). An archived seed generates through its own
         # request shape and is not asked.
         if uses_this_binary:

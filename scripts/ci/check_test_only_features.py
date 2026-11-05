@@ -207,6 +207,15 @@ TEST_ONLY: dict[tuple[str, str], str] = {
     "reconcile does not know the test exists, and a shipped write commits "
     "exactly what its closure returned",
     (
+        "shekyl-chain-sync-runtime",
+        "publish-for-test",
+    ): "Running::publish_for_test asks the sync owner to publish a state. "
+    "The owner task remains the only publisher; the node's tests use it "
+    "while the seam is unbound, which is before the task accepts any "
+    "other input. cfg(test) does not cross that crate boundary. Enabled "
+    "from shekyl-node's dev-dependency edge only; a shipped owner "
+    "publishes only what the model derives",
+    (
         "shekyl-mempool",
         "pool-commit-fault",
     ): "Pool::plant holds an entry without the door, and "
@@ -352,6 +361,9 @@ PERMANENT: dict[tuple[str, str], str] = {
 # `shekyl-chain-sync` joined 2026-10-23 (CS-3). It is the pure model; its
 # one feature is the floor job's `cs2-long-run`, and its runtime half is the
 # separate crate `shekyl-chain-sync-runtime` (Rick, 2026-10-23).
+# `shekyl-chain-sync-runtime` joined 2026-11-04, the commit that declared
+# `publish-for-test` for shekyl-node's follower tests. That is its only
+# feature, and it is test-only.
 # `shekyl-bundle-producer` joined 2026-10-25, the commit whose ingest
 # feature first enables its `fetch` (`SO-D12` increment 4c).
 #
@@ -376,6 +388,7 @@ GOVERNED_OWNERS: frozenset[str] = frozenset(
         "shekyl-draw-rng",
         "shekyl-noise",
         "shekyl-chain-sync",
+        "shekyl-chain-sync-runtime",
         "shekyl-mempool",
         "shekyl-bundle-producer",
         "shekyl-curve-tree",

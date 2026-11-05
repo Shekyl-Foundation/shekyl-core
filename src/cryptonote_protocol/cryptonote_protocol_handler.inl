@@ -331,10 +331,4 @@ namespace cryptonote
     LOG_DEBUG_CC(context, "dropping connection id " << context.m_connection_id);
     m_p2p->drop_connection(context);
   }
-  //------------------------------------------------------------------------------------------------------------------------
-  template<class t_core>
-  void t_cryptonote_protocol_handler<t_core>::stop()
-  {
-    m_core.stop();
-  }
 } // namespace

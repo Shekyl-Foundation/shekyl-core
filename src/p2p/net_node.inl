@@ -349,7 +349,6 @@ namespace nodetool
       for (const auto &connection_id: connection_ids)
         zone.second.m_net_server.get_config_object().close(connection_id);
     }
-    m_payload_handler.stop();
     return true;
   }
   //-----------------------------------------------------------------------------------
