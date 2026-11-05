@@ -45,19 +45,19 @@ target_include_directories(randomx-v2-full-parity
     "${CMAKE_SOURCE_DIR}/src"
     "${MONERO_GENERATED_HEADERS_DIR}")
 
-# - cryptonote_core: the block/tx wire helpers the harness's own genesis
+# - cryptonote_basic: the block/tx wire helpers the harness's own genesis
 #   assembly uses (parse_and_validate_tx_from_blob / get_block_hash /
-#   get_block_hashing_blob, via cryptonote_basic) and, transitively, the
-#   Rust FFI image (${SHEKYL_FFI_LINK_LIBS}) that resolves
-#   shekyl_pow_randomx_v2_hash. The C++ generate_genesis_block was deleted
-#   with the C++ chain (DRS-X); this file carries the assembly itself.
+#   get_block_hashing_blob) and, transitively, the Rust FFI image
+#   (${SHEKYL_FFI_LINK_LIBS}) that resolves shekyl_pow_randomx_v2_hash. The
+#   C++ generate_genesis_block was deleted with the C++ chain (DRS-X); this
+#   file carries the assembly itself.
 # - shekyl_randomx_v2: the full-dataset C reference; the imported target
 #   propagates its include dir (randomx.h) via INTERFACE_INCLUDE_DIRECTORIES.
 # - ${SHEKYL_FFI_LINK_LIBS} is also named explicitly to mirror the sibling
 #   lwma1-cross-check harness and keep the FFI archive on the link line.
 target_link_libraries(randomx-v2-full-parity
   PRIVATE
-    cryptonote_core
+    cryptonote_basic
     shekyl_randomx_v2
     ${SHEKYL_FFI_LINK_LIBS}
     ${EXTRA_LIBRARIES}
@@ -65,7 +65,7 @@ target_link_libraries(randomx-v2-full-parity
 
 # Separate-process, miner-shaped KAT tool (provenance closure for the
 # frozen KAT; see randomx_v2_miner_kat.cpp). Deliberately links ONLY the
-# C v2 library — no cryptonote_core, no Rust FFI — so its computation is
+# C v2 library — no cryptonote_basic, no Rust FFI — so its computation is
 # independent of everything the parity harness links.
 monero_add_minimal_executable(randomx-v2-miner-kat
   randomx_v2_miner_kat.cpp

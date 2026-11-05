@@ -20,20 +20,17 @@
 //! `docs/benchmarks/zstd_ruzstd_levin_20261020.md`): a bucket carrying the
 //! old `0x10` flag bit is refused at ingress like any undefined bit.
 //!
-//! **Wiring status (2026-08-13):** the **entire emit side is
-//! production-live** through the `shekyl_levin_*` FFI
-//! (`rust/shekyl-ffi/src/levin_ffi.rs`). [`noise_notify`] and
-//! [`fragmented_notify`] back `epee::levin::make_noise_notify` /
-//! `make_fragmented_notify`, so the fragment-padding algorithm — the
-//! privacy-load-bearing emit logic — has exactly one implementation, and
-//! the byte-exact `make_fragment.*` gtests exercise this crate live.
-//!
-//! Still inert until LV-3: the read side ([`BucketReader`]) and the plain
-//! notification/request/response builders (the C++ `message_writer` keeps
-//! the hot finalize path). The **ingress policy** (PWD-B3 / PWD-B3a /
-//! PWD-B4) is live on the C++ `handle_recv` path via
-//! `shekyl_levin_ingress_admit` even while [`BucketReader`] itself is unwired
-//! — the command table is not daemon-only policy any more.
+//! **Wiring status.** Since the p2p remnant cutover
+//! (`P2P_3_REMNANT_CUTOVER_BRIEF.md`) this crate is the only Levin
+//! implementation in the tree: `shekyl-p2p-session` reads every socket
+//! through [`BucketReader`] and writes every message through [`notify`] /
+//! [`invoke`] / [`response`], and the ingress policy (PWD-B3 / PWD-B3a /
+//! PWD-B4, [`ingress_payload_cap`]) runs in the session's reader. The epee
+//! Levin stack (`levin_base`, `levin_protocol_handler_async`) and the
+//! `shekyl_levin_*` FFI shims over this crate were deleted with the C++
+//! host. *Records-was (2026-08-13 to 2026-11-05):* the emit side was live
+//! through the FFI from 2026-08-13 and the read side inert until LV-3; the
+//! C++ `handle_recv` called `shekyl_levin_ingress_admit`.
 //!
 //! Deliberate **non-goals** of this crate:
 //!
@@ -42,24 +39,19 @@
 //!   maps on top of it (LV-2b): handshake / timed-sync (1001 / 1002),
 //!   `network_address`, and
 //!   notifies 2002–2004 / 2006–2010. Cryptonote blobs stay opaque bytes
-//!   (`shekyl-wire`); RPC maps stay out. Live `shekyld` dual-stack is
-//!   the `#[ignore]` harness `tests/dual_stack.rs` (`SHEKYLD_BIN`; no
-//!   daemon in default crate tests).
+//!   (`shekyl-wire`); RPC maps stay out.
 //! - connection management, timeouts, and invoke/response correlation
-//!   (the `async_protocol_handler` layer).
+//!   (`shekyl-p2p-session`).
 //!
 //! # Parity oracle
 //!
-//! The remaining C++-side oracles are `epee::levin::make_header` (the hot
-//! `message_writer::finalize` path, still C++) and the read-side state
-//! machine in `contrib/epee/include/net/levin_protocol_handler_async.h`
-//! (`handle_recv`). `make_noise_notify` / `make_fragmented_notify` are
-//! forwarding shims over this crate and are no longer an independent
-//! implementation: the byte-level oracle for those emitters is the gtest
-//! *expectations* in `tests/unit_tests/levin.cpp` (`make_noise.*` /
-//! `make_fragment.*`), which now execute through the FFI. A CI gate
-//! (`.github/workflows/levin-constant-parity.yml`) fails the build if any
-//! wire constant here stops matching its C++ definition.
+//! There is no C++ oracle any more. The byte-level pins are
+//! `tests/oracle_kats.rs`, whose expectations were transcribed assertion
+//! for assertion from the deleted gtests (`tests/unit_tests/levin.cpp`,
+//! `make_noise.*` / `make_fragment.*`) and from `docs/LEVIN_PROTOCOL.md`'s
+//! byte layout; the wire constants are this crate's own, pinned there.
+//! The LV-1 constant-parity gate (`check_levin_constant_parity.sh`) was
+//! deleted with the C++ definitions it compared against.
 //!
 //! # Divergence census (authoritative)
 //!
@@ -67,8 +59,10 @@
 //! `docs/LEVIN_PROTOCOL.md` and the `IMPLEMENTATION_INDEX` LV row point here
 //! rather than restating it, because a second copy drifts and then lies.
 //!
-//! Every entry is *stricter* than the oracle — none accepts something the
-//! C++ rejects — and each is unreachable for a conforming sender today.
+//! Every entry is *stricter* than the deleted C++ oracle was — none accepts
+//! something it rejected — and each is unreachable for a conforming sender
+//! today. The entries are kept as the record of where this crate's
+//! behaviour was chosen over the inherited one.
 //! One entry (6) closed at the 2026-09-09 PWD-B3/B3a/B4 ingress cut; it is
 //! kept as the record of how it closed. That is deliberate, because "the
 //! difference went away" is exactly the kind of claim that rots into
@@ -100,9 +94,8 @@
 //!
 //! Emit side. [`BucketHead::write`], [`notify`] / [`invoke`] / [`response`],
 //! [`noise_notify`] and [`fragmented_notify`] are pinned assertion-for-
-//! assertion by `tests/oracle_kats.rs` and, for the wired emitters, by the
-//! `make_noise.*` / `make_fragment.*` gtests which now execute through the
-//! FFI. One caveat, which those KATs do not cover:
+//! assertion by `tests/oracle_kats.rs`. One caveat, which those KATs do
+//! not cover:
 //!
 //! 5. **emit refuses an oversize bucket** — [`noise_notify`] /
 //!    [`fragmented_notify`] reject when the bucket they would write has
@@ -118,11 +111,8 @@
 //!    a Q/S-flagged command that is not a [`Command`] is fatal; a
 //!    noise/fragment bucket (neither Q nor S) is bounded only by the packet
 //!    limit so cover traffic with command 0 is not an unknown command. The
-//!    live C++ path is `handle_recv` → `get_max_bytes(command, flags)` →
-//!    `shekyl_levin_ingress_admit`. The codec still round-trips unknown bits
-//!    (PWC-A6); ingress is what refuses to process them. [`BucketReader`]
-//!    remains unwired until LV-3; this entry is about the *policy*, which
-//!    is shared.
+//!    codec still round-trips unknown bits (PWC-A6); ingress is what
+//!    refuses to process them.
 
 mod error;
 mod fragment;

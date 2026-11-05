@@ -10,9 +10,7 @@
 //! bits (PWC-A6). This module is the **ingress** check: a field this
 //! protocol does not define is not a field it forwards, stores, or sizes a
 //! buffer from. Placement is after the header is parsed, in
-//! [`crate::BucketReader`] and — on the live C++ receive path — via the
-//! `shekyl_levin_ingress_admit` FFI that `cryptonote_connection_context`
-//! forwards into `handle_recv`.
+//! [`crate::BucketReader`].
 //!
 //! # Discriminator (PWD-B3a)
 //!

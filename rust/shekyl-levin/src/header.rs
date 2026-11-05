@@ -3,7 +3,7 @@
 // All rights reserved.
 // BSD-3-Clause
 
-//! The 29-byte Levin bucket header (`bucket_head2` in the C++ oracle) and
+//! The 29-byte Levin bucket header (`bucket_head2` in the deleted C++) and
 //! its flag word. Byte layout per `docs/LEVIN_PROTOCOL.md` §Header; all
 //! multi-byte fields are little-endian.
 
