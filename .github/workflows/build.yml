@@ -371,6 +371,17 @@ jobs:
         if: needs.changes.outputs.docs_only != 'true'
         shell: bash
         run: scripts/ci/check_binary_hardening.sh build/bin/shekyld build/bin/shekyl-cli build/bin/shekyl-wallet-rpc
+      # The cutover's outcome (P2P_3_REMNANT_CUTOVER_BRIEF.md §1; Rick,
+      # 2026-11-05): the staged shekyld needs no C++ runtime and carries none
+      # of our C++'s symbols, and no Rust extern block imports a C-linkage
+      # name declared under src/. Selftest first, so a gate that cannot
+      # fail is caught before it passes.
+      - name: the daemon is Rust alone (no C++ in its link, no Rust import of our C)
+        if: needs.changes.outputs.docs_only != 'true'
+        shell: bash
+        run: |
+          python3 scripts/ci/check_rust_only_daemon.py --selftest
+          python3 scripts/ci/check_rust_only_daemon.py build/bin/shekyld
       - name: live-daemon gates
         if: matrix.pack_ctest && needs.changes.outputs.docs_only != 'true'
         # `shell: bash` like the CTest-artifact step below, and for the same

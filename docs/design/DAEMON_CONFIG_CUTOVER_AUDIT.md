@@ -581,11 +581,12 @@ of its own, for the same reason as the negative one.
   mining replies all passed `false`. The Rust loop's below-daemon OS
   priority (DRS-X PR 3) replaces it by design; the foreground loop stays,
   the live miner until the DRS-X flip routes the Rust loop.
-- **Rust imports no C++.** `shekyld` links no C++
-  (`P2P_3_REMNANT_CUTOVER_BRIEF.md` §1), so an import in its graph fails
-  its link. `check_ffi_signatures.sh` covers the Rust exports the C++
-  tests and debug utilities call. Nothing holds a crate those C++
-  binaries link to importing no C++.
+- **Rust imports no C++.** `scripts/ci/check_rust_only_daemon.py` holds
+  it on the Linux build: the staged `shekyld` needs no C++ runtime and
+  carries none of our C++'s symbols, and no `extern` block under `rust/`
+  imports a C-linkage name declared under `src/`.
+  `check_ffi_signatures.sh` covers the Rust exports the C++ tests and
+  debug utilities call.
 - **A test for every §6 row.** Commit (a) carries a table from each §6 row
   to its test. A row that only Windows can exercise names where it runs:
   the Windows CI job, or the Windows seat by hand. A `cfg(windows)` test
