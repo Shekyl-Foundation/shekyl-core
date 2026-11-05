@@ -16,7 +16,7 @@ Those captured bytes hold every field the envelope frames. This script takes
 them apart without any help from the Rust, then computes
 
     tx_signable    = frame("shekyl/tx-signable-v1", id,
-                           [keccak256(varint(version) ‖ prefix), keccak256(base)])
+                           [keccak256(varint(version) ‖ prefix'), keccak256(base)])
     signed_hash(i) = frame("shekyl/fcmp-spend-signing-v2", id,
                            [tx_signable, header(i), key_hashes, prunable_hash])[..64]
 
@@ -42,6 +42,14 @@ Taking the payload apart:
   outputs, and the prefix's tail is varint(k), k outputs (varint(amount),
   0x00, key, view tag) and the length-prefixed extra, ending exactly at s.
 Either split must be unique, or the oracle stops: it never guesses.
+
+prefix' is CEN-J22's signable prefix: the prefix with an emission input
+(`0x04 ‖ varint(len) ‖ blob`) removed whole and the input count lowered by one,
+or the prefix itself when there is none. The oracle walks the inputs from the
+front: a to-key input is `0x01 ‖ varint(amount) ‖ varint(n) ‖ n varints ‖
+key image (32)`. CEN-H6 lets only to-key inputs share a transaction with an
+emission, so an input of any other kind means there is no emission. The walk
+must end exactly where the outputs begin.
 
 Modes: with no flag it checks that every pinned `tx_signable_by_network` and
 `signed_hashes_by_network` entry is what it computes (exit 0, or 1 on a
@@ -115,27 +123,85 @@ def base_outputs(pruned: bytes, at: int) -> int | None:
     return rest // OUTPUT_BASE_BYTES
 
 
+def outputs_then_extra_from(prefix: bytes, start: int, end: int, count: int) -> bool:
+    """Whether `prefix[start:end]` is `varint(count) ‖ count outputs ‖
+    varint(len) ‖ extra(len)`. An output is varint(amount) ‖ 0x00 ‖ key (32)
+    ‖ view tag (1)."""
+    got = varint(prefix, start)
+    if got is None or got[0] != count:
+        return False
+    at = got[1]
+    for _ in range(count):
+        amount = varint(prefix, at)
+        if amount is None or amount[1] + 34 > end or prefix[amount[1]] != 0x00:
+            return False
+        at = amount[1] + 34
+    extra = varint(prefix, at)
+    return extra is not None and extra[1] + extra[0] == end
+
+
 def outputs_then_extra_end_at(prefix: bytes, end: int, count: int) -> bool:
-    """Whether the prefix's tail is `varint(count) ‖ count outputs ‖
-    varint(len) ‖ extra(len)` ending exactly at `end`. An output is
-    varint(amount) ‖ 0x00 ‖ key (32) ‖ view tag (1)."""
-    for start in range(end):
-        got = varint(prefix, start)
-        if got is None or got[0] != count:
-            continue
-        at = got[1]
-        for _ in range(count):
-            amount = varint(prefix, at)
-            if amount is None or amount[1] + 34 > end or prefix[amount[1]] != 0x00:
-                at = None
-                break
-            at = amount[1] + 34
-        if at is None:
-            continue
-        extra = varint(prefix, at)
-        if extra is not None and extra[1] + extra[0] == end:
-            return True
-    return False
+    """Whether the prefix's tail is the outputs and extra, ending exactly
+    at `end`."""
+    return any(outputs_then_extra_from(prefix, start, end, count) for start in range(end))
+
+
+def encode_varint(value: int) -> bytes:
+    out = bytearray()
+    while True:
+        byte = value & 0x7F
+        value >>= 7
+        if value:
+            out.append(byte | 0x80)
+        else:
+            out.append(byte)
+            return bytes(out)
+
+
+TAG_INPUT_TO_KEY = 0x01
+TAG_INPUT_EMISSION = 0x04
+
+
+def signable_prefix(prefix: bytes, outputs: int) -> bytes:
+    """CEN-J22's signable prefix (module docs): `prefix` with its emission
+    input removed, or `prefix` when it has none."""
+    version = varint(prefix, 0)
+    unlock = version and varint(prefix, version[1])
+    count = unlock and varint(prefix, unlock[1])
+    if not count:
+        raise Unparsed("the prefix's header does not parse")
+    n, at = count
+    kept, emissions = [], 0
+    for _ in range(n):
+        start, tag = at, prefix[at]
+        if tag == TAG_INPUT_TO_KEY:
+            amount = varint(prefix, at + 1)
+            offsets = amount and varint(prefix, amount[1])
+            if not offsets:
+                raise Unparsed("a to-key input does not parse")
+            at = offsets[1]
+            for _ in range(offsets[0]):
+                got = varint(prefix, at)
+                if got is None:
+                    raise Unparsed("a key offset does not parse")
+                at = got[1]
+            at += 32
+            kept.append(prefix[start:at])
+        elif tag == TAG_INPUT_EMISSION:
+            got = varint(prefix, at + 1)
+            if got is None:
+                raise Unparsed("an emission input's length does not parse")
+            at = got[1] + got[0]
+            emissions += 1
+        else:
+            return prefix  # CEN-H6: no emission shares a body with this input
+    if not outputs_then_extra_from(prefix, at, len(prefix), outputs):
+        raise Unparsed("the inputs do not end where the outputs begin")
+    if emissions == 0:
+        return prefix
+    if emissions != 1:
+        raise Unparsed("more than one emission input (CEN-H6)")
+    return prefix[:unlock[1]] + encode_varint(n - 1) + b"".join(kept) + prefix[at:]
 
 
 def auths_end(tx: bytes, at: int, count: int) -> int | None:
@@ -157,7 +223,7 @@ def auths_end(tx: bytes, at: int, count: int) -> int | None:
 def take_apart(
     tx: bytes, payloads: list[bytes]
 ) -> tuple[bytes, bytes, bytes, list[bytes], bytes]:
-    """(prefix, base, prunable_hash, headers, key_hashes) from the payloads,
+    """(signable prefix, base, prunable_hash, headers, key_hashes) from the payloads,
     cross-checked against the transaction's own bytes: they start with the
     pruned segment, the auths follow it, and the prunable region after them
     hashes to the payload's prunable_hash."""
@@ -192,7 +258,8 @@ def take_apart(
     s = prefix_lens[0]
     prunable_hash = payloads[0][pl:pl + 32]
     headers = [p[pl + 32:len(p) - 32 * n] for p in payloads]
-    return pruned[:s], pruned[s:], prunable_hash, headers, key_hashes
+    outputs = base_outputs(pruned, s)
+    return signable_prefix(pruned[:s], outputs), pruned[s:], prunable_hash, headers, key_hashes
 
 
 def main() -> int:
