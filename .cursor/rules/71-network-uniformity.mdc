@@ -66,20 +66,21 @@ Nettype selecting a code path is the defect.
    arm without the check (census §7 #17, fixed §7 #18). A skipped
    check is not a check the tests exercise on another nettype; it is a
    check nothing exercises.
-3. **Enforcement is two-sided.** The negative side was the
-   `check_network_uniformity.sh` gate: it flagged any *new* public-nettype
-   equality **or inequality** branch in the C++ consensus fence
-   (`src/cryptonote_core`) against an annotated allowlist (`!= MAINNET`
-   guards control flow exactly as `== MAINNET` does — the since-deleted
-   `core::update_checkpoints` guard is the worked instance). Its fence
-   was deleted with the C++ host on 2026-11-05 and the gate with it
-   (rule 47: a gate with no subject is deleted, not left green); the
-   consensus surface is Rust's, where the network is a parameter and a
-   `Network` equality is caught in review. The positive side (stronger,
-   owed by the round that touches the surface): the same validator tests
-   run against **all** network parameter sets — a parameterized suite
-   proves there is nothing to branch on, where a gate only catches
-   someone adding a branch.
+3. **Enforcement is two-sided.** The negative side is
+   `scripts/ci/check_network_uniformity.py` (grep-gates): it flags every
+   test of a `Network` variant (`==`, `!=`, `matches!`, `if let`, a
+   `match` arm) in the non-test code of the Rust consensus crates
+   (`shekyl-chain-rules`, `-chain-ingest`, `-chain-store`, `-difficulty`,
+   `-economics`, `-consensus`, `-mempool`, `-chain-sync`) against an
+   annotated allowlist, one for one: every live hit has an entry, every
+   entry is hit, and the counts match (a duplicated branch is red on the
+   totals). `!=` guards control flow exactly as `==` does — the deleted C++
+   `core::update_checkpoints` guard is the worked instance. Passing a
+   variant as a value is data and is not a hit. The positive side
+   (stronger, owed by the round that touches the surface): the same
+   validator tests run against **all** network parameter sets — a
+   parameterized suite proves there is nothing to branch on, where a gate
+   only catches someone adding a branch.
 4. **The allowlist shrinks, never grows silently.** Adding an
    allowlist entry is a claim you defend: it requires either the rule
    2 ratification trail or a named migration owner. Data-selection

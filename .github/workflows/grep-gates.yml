@@ -227,6 +227,10 @@ jobs:
             python3 scripts/ci/check_inland_height_u64.py --selftest
           run_one "ARW-Q16: no new bare-u64 height on the archival surface" \
             python3 scripts/ci/check_inland_height_u64.py
+          run_one "Rule 71: the network selects data, not control flow (selftest)" \
+            python3 scripts/ci/check_network_uniformity.py --selftest
+          run_one "Rule 71: the network selects data, not control flow" \
+            python3 scripts/ci/check_network_uniformity.py
           run_one "Ignored tests carry their reason in the attribute" \
             scripts/ci/check_ignore_reasons.sh
           run_one "PoW test-seam containment (CEN-D2)" \
