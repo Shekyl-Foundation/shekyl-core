@@ -71,7 +71,6 @@ Use the CLI tools when you want to:
 | `shekyld` | Full node daemon -- connects to the network, syncs the chain, relays transactions |
 | `shekyl-cli` | Interactive command-line wallet |
 | `shekyl-wallet-rpc` | Wallet RPC server for programmatic access |
-| `shekyl-gen-ssl-cert` | Generate self-signed SSL certificates for RPC |
 
 ### Getting the binaries
 

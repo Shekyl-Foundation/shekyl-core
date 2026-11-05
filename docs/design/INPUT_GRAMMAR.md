@@ -654,7 +654,7 @@ The catalog `shekyl-cli` serves (IG-Q25). The C++ console is deleted (R8, DC-N2,
 | Binary | Ruling | Reason |
 |---|---|---|
 | `shekyl-blockchain-usage`, `-ancestry`, `-depth` | deleted | ring-signature-era analytics (`rct-only`, `ringsize`) with no referent under FCMP++ (rule 60) |
-| `shekyl-gen-ssl-cert` | deleted (FOLLOWUPS) | RT-11: the RPC channel replaces TLS |
+| `shekyl-gen-ssl-cert` | deleted | RT-11: the RPC channel replaces TLS |
 | `shekyl-utils-object-sizes` | deleted | a C++ debug tool with no remaining job |
 | `shekyl-blockchain-import`, `-export`, `-stats`, `shekyl-mdb-copy` | deleted | the chain store is the Rust store; these read LMDB |
 | `shekyl-utils-deserialize` | stays until `tx decode` (§12.3) lands, then goes | the decode need is real; the Rust codecs serve it |

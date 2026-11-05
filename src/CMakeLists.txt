@@ -73,7 +73,6 @@ add_subdirectory(fcmp)
 add_subdirectory(cryptonote_basic)
 if(NOT IOS)
   add_subdirectory(serialization)
-  add_subdirectory(gen_ssl_cert)
 endif()
 
 if(BUILD_DEBUG_UTILITIES)
