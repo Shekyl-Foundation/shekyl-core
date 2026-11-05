@@ -323,12 +323,13 @@ pub enum CheckedReserveProof {
 // ── Canonical address bytes ──────────────────────────────────────────
 
 /// The canonical decoded-address byte form both proof sides bind to:
-/// `network_id[16] ‖ spend_key[32] ‖ view_key[32] ‖ ml_kem_encap_key`.
+/// `spend_key[32] ‖ view_key[32] ‖ ml_kem_encap_key`.
 ///
-/// `network_id` is the address network's 16-byte genesis-derived id, at a
-/// fixed position (byte 0) with a fixed width: a tx or reserve proof is made
-/// against one chain after genesis, so it binds the id, not the network's
-/// name or code (`NETWORK_IDENTITY.md` NI-R15, NI-F13).
+/// An address, and only an address: the network a proof is valid on is
+/// the envelope's binding, the address network's genesis-derived id at
+/// position 0 of the frame each proof signs (the signing envelope §2.3;
+/// `NETWORK_IDENTITY.md` NI-R15). Proof version 2 carried the id inside
+/// these bytes, which made them mean two things.
 ///
 /// This is **payment identity**, not the full address string.
 /// `msg_sign_pk` is the message-signing anchor (SM-R-8); it is not a
@@ -346,9 +347,7 @@ pub enum CheckedReserveProof {
 /// same address (a string binding would let re-encodings break
 /// verification of an honest proof).
 pub fn canonical_address_bytes(address: &ShekylAddress) -> Vec<u8> {
-    let network_id = address.network.network_id();
-    let mut out = Vec::with_capacity(network_id.len() + 32 + 32 + address.ml_kem_encap_key.len());
-    out.extend_from_slice(&network_id);
+    let mut out = Vec::with_capacity(32 + 32 + address.ml_kem_encap_key.len());
     out.extend_from_slice(&address.spend_key);
     out.extend_from_slice(&address.view_key);
     out.extend_from_slice(&address.ml_kem_encap_key);
@@ -443,6 +442,7 @@ async fn generate_inbound<D: Rpc>(
     let proof_bytes = ctx
         .key
         .generate_inbound_proof(InboundProofRequest {
+            network_id: ctx.primary_address.network.network_id(),
             txid: txid.to_bytes(),
             address_bytes: canonical_address_bytes(&ctx.primary_address),
             message: message.as_bytes().to_vec(),
@@ -496,6 +496,7 @@ async fn generate_outbound<D: Rpc>(
     }
 
     let proof_bytes = generate_outbound_proof_with_secrets(
+        &counterparty.network.network_id(),
         &tx_key,
         &txid.to_bytes(),
         &canonical_address_bytes(counterparty),
@@ -600,6 +601,7 @@ pub(crate) async fn get_reserve_proof<D: Rpc>(
     let proof_bytes = ctx
         .key
         .generate_reserve_proof(ReserveProofRequest {
+            network_id: ctx.primary_address.network.network_id(),
             address_bytes: canonical_address_bytes(&ctx.primary_address),
             message: message.as_bytes().to_vec(),
             outputs: selected
@@ -710,11 +712,13 @@ pub async fn check_tx_proof<R: Rpc>(
     let fetched = chain.tx(rpc, txid).await?;
     let on_chain = on_chain_outputs_of(&fetched.tx)?;
     let address_bytes = canonical_address_bytes(address);
+    let network_id = address.network.network_id();
 
     let verify_result = match direction {
         TxProofDirection::Outbound => {
             let recipient_x25519 = address_x25519_pk(address)?;
             verify_outbound_proof(
+                &network_id,
                 proof_bytes,
                 &txid,
                 &address_bytes,
@@ -726,6 +730,7 @@ pub async fn check_tx_proof<R: Rpc>(
             )
         }
         TxProofDirection::Inbound => verify_inbound_proof(
+            &network_id,
             proof_bytes,
             &txid,
             &address_bytes,
@@ -837,6 +842,7 @@ pub async fn check_reserve_proof<R: Rpc>(
 
     let address_bytes = canonical_address_bytes(address);
     let verified = match verify_reserve_proof(
+        &address.network.network_id(),
         proof_bytes,
         &address_bytes,
         message.as_bytes(),

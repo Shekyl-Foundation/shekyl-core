@@ -4716,7 +4716,6 @@ dependencies = [
  "shekyl-peer-policy",
  "shekyl-peerlist",
  "shekyl-pow-randomx",
- "shekyl-proofs",
  "shekyl-relay",
  "shekyl-relay-privacy",
  "shekyl-rpc-types",
@@ -4728,7 +4727,6 @@ dependencies = [
  "shekyl-tor",
  "shekyl-tor-control-client",
  "shekyl-transport-layer",
- "shekyl-tx-builder",
  "shekyl-types",
  "shekyl-units",
  "shekyl-win-sec",
@@ -5177,6 +5175,7 @@ dependencies = [
  "sha2",
  "shekyl-crypto-pq",
  "shekyl-curve-generators",
+ "shekyl-network",
  "thiserror",
  "zeroize",
 ]

@@ -1000,6 +1000,7 @@ mod tests {
         let handle = KeyEngineHandle::spawn(blob);
         let proof = handle
             .generate_inbound_proof(InboundProofRequest {
+                network_id: shekyl_network::HARNESS_NETWORK_ID,
                 txid: tx_hash,
                 address_bytes: TEST_ADDRESS_BYTES.to_vec(),
                 message: TEST_MESSAGE.to_vec(),
@@ -1012,6 +1013,7 @@ mod tests {
             .expect("actor generates the inbound proof");
 
         let verified = verify_inbound_proof(
+            &shekyl_network::HARNESS_NETWORK_ID,
             &proof,
             &tx_hash,
             TEST_ADDRESS_BYTES,
@@ -1051,6 +1053,7 @@ mod tests {
 
         let proof = handle
             .generate_reserve_proof(ReserveProofRequest {
+                network_id: shekyl_network::HARNESS_NETWORK_ID,
                 address_bytes: TEST_ADDRESS_BYTES.to_vec(),
                 message: TEST_MESSAGE.to_vec(),
                 outputs: vec![ReserveProofOutput {
@@ -1064,6 +1067,7 @@ mod tests {
             .expect("actor generates the reserve proof");
 
         let verified = verify_reserve_proof(
+            &shekyl_network::HARNESS_NETWORK_ID,
             &proof,
             TEST_ADDRESS_BYTES,
             TEST_MESSAGE,
@@ -1080,6 +1084,7 @@ mod tests {
 
         // Message binding: a different challenge message must not verify.
         verify_reserve_proof(
+            &shekyl_network::HARNESS_NETWORK_ID,
             &proof,
             TEST_ADDRESS_BYTES,
             b"a different challenge",

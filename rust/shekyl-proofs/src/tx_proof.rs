@@ -48,15 +48,27 @@ use crate::error::ProofError;
 use shekyl_crypto_pq::kem::SharedSecret;
 use shekyl_crypto_pq::output::{derive_proof_secrets, rederive_combined_ss, ProofSecrets};
 use shekyl_crypto_pq::schnorr;
+use shekyl_network::envelope::IdDomain;
+use shekyl_network::NetworkId;
 
-/// The tx proof format's version, the proof's first byte. Version 2: the
-/// address bytes the proof binds start with the network's 16-byte id, where
-/// version 1 bound its one-byte code (`NETWORK_IDENTITY.md` NI-R15). A
-/// version-1 proof is refused as an unsupported version.
-pub const CURRENT_PROOF_VERSION: u8 = 2;
+/// The tx proof format's version, the proof's first byte. Version 3: the
+/// Schnorr signs the envelope frame of the proof's fields under the network's
+/// id ([`OUTBOUND_MESSAGE`], [`INBOUND_MESSAGE`]; the signing envelope §2.3),
+/// and the address bytes are the address alone. A proof of another version
+/// is refused as an unsupported version.
+pub const CURRENT_PROOF_VERSION: u8 = 3;
 
 const OUTBOUND_DOMAIN: &[u8] = b"shekyl-outbound-tx-proof-v1";
 const INBOUND_DOMAIN: &[u8] = b"shekyl-inbound-tx-proof-v1";
+
+/// What an outbound proof's Schnorr signs: the envelope frame, bound to the
+/// network's id, of `[txid, address_bytes, user_message, per_output_data]`
+/// (the signing envelope §2.3; NI-R15: proved against the chain, so the id).
+pub const OUTBOUND_MESSAGE: IdDomain<4> = IdDomain::new(b"shekyl/tx-proof-outbound-v1");
+
+/// What an inbound proof's Schnorr signs: the same fields under their own
+/// domain, so an outbound and an inbound proof never sign the same message.
+pub const INBOUND_MESSAGE: IdDomain<4> = IdDomain::new(b"shekyl/tx-proof-inbound-v1");
 
 const PER_OUTPUT_SIZE: usize = 132; // vout[4] + ho[32] + y[32] + z[32] + k_amount[32]
 const OUTBOUND_HEADER_SIZE: usize = 101; // version[1] + tx_key_secret[32] + sig[64] + count[4]
@@ -117,18 +129,17 @@ fn check_strictly_increasing(prev: Option<u32>, next: u32) -> Result<(), ProofEr
 // ── Message assembly (bound into Schnorr) ───────────────────────────
 
 fn assemble_proof_message(
+    domain: IdDomain<4>,
+    network_id: &NetworkId,
     txid: &[u8; 32],
     address_bytes: &[u8],
     user_message: &[u8],
     per_output_data: &[u8],
-) -> Vec<u8> {
-    let mut msg =
-        Vec::with_capacity(32 + address_bytes.len() + user_message.len() + per_output_data.len());
-    msg.extend_from_slice(txid);
-    msg.extend_from_slice(address_bytes);
-    msg.extend_from_slice(user_message);
-    msg.extend_from_slice(per_output_data);
-    msg
+) -> [u8; 32] {
+    domain.frame(
+        network_id,
+        [txid, address_bytes, user_message, per_output_data],
+    )
 }
 
 // ═══════════════════════════════════════════════════════════════════════
@@ -158,7 +169,12 @@ pub struct VerifiedOutput {
 /// - `output_indices`: which transaction-level output indices (vout) to
 ///   include; must be strictly increasing (each is carried in the proof
 ///   so the verifier knows which on-chain outputs the entries name)
+#[allow(
+    clippy::too_many_arguments,
+    reason = "the proof boundary: the network id, the transaction, the address, the message and the keys are each a distinct part of what is proved"
+)]
 pub fn generate_outbound_proof(
+    network_id: &NetworkId,
     tx_key_secret: &[u8; 32],
     txid: &[u8; 32],
     address_bytes: &[u8],
@@ -181,6 +197,7 @@ pub fn generate_outbound_proof(
     }
 
     generate_outbound_proof_with_secrets(
+        network_id,
         tx_key_secret,
         txid,
         address_bytes,
@@ -204,6 +221,7 @@ pub fn generate_outbound_proof(
 /// a proof that fails the verifier's KEM re-derivation check).
 #[allow(clippy::cast_possible_truncation)]
 pub fn generate_outbound_proof_with_secrets(
+    network_id: &NetworkId,
     tx_key_secret: &[u8; 32],
     txid: &[u8; 32],
     address_bytes: &[u8],
@@ -230,7 +248,14 @@ pub fn generate_outbound_proof_with_secrets(
         // `ps` drops here; `ProofSecrets` is `ZeroizeOnDrop`.
     }
 
-    let msg = assemble_proof_message(txid, address_bytes, user_message, &per_output_blob);
+    let msg = assemble_proof_message(
+        OUTBOUND_MESSAGE,
+        network_id,
+        txid,
+        address_bytes,
+        user_message,
+        &per_output_blob,
+    );
 
     let sk_scalar: Scalar = Option::from(Scalar::from_canonical_bytes(*tx_key_secret)).ok_or(
         ProofError::InvalidFormat("tx_key_secret is not a canonical scalar".into()),
@@ -275,6 +300,7 @@ pub struct OnChainOutput {
 ///   (each proof entry names its output by carried `vout_index`)
 #[allow(clippy::too_many_arguments)]
 pub fn verify_outbound_proof(
+    network_id: &NetworkId,
     proof_bytes: &[u8],
     txid: &[u8; 32],
     address_bytes: &[u8],
@@ -322,7 +348,14 @@ pub fn verify_outbound_proof(
 
     let per_output_blob = &proof_bytes[OUTBOUND_HEADER_SIZE..];
 
-    let msg = assemble_proof_message(txid, address_bytes, user_message, per_output_blob);
+    let msg = assemble_proof_message(
+        OUTBOUND_MESSAGE,
+        network_id,
+        txid,
+        address_bytes,
+        user_message,
+        per_output_blob,
+    );
 
     let sk_scalar: Scalar = Option::from(Scalar::from_canonical_bytes(tx_key_secret)).ok_or(
         ProofError::InvalidFormat("tx_key_secret not canonical".into()),
@@ -446,6 +479,7 @@ pub fn verify_outbound_proof(
 ///   by index
 #[allow(clippy::cast_possible_truncation)]
 pub fn generate_inbound_proof(
+    network_id: &NetworkId,
     view_secret_key: &[u8; 32],
     txid: &[u8; 32],
     address_bytes: &[u8],
@@ -465,7 +499,14 @@ pub fn generate_inbound_proof(
         write_per_output(*vout, ps, &mut per_output_blob);
     }
 
-    let msg = assemble_proof_message(txid, address_bytes, user_message, &per_output_blob);
+    let msg = assemble_proof_message(
+        INBOUND_MESSAGE,
+        network_id,
+        txid,
+        address_bytes,
+        user_message,
+        &per_output_blob,
+    );
 
     let sk_scalar: Scalar = Option::from(Scalar::from_canonical_bytes(*view_secret_key)).ok_or(
         ProofError::InvalidFormat("view_secret_key not canonical".into()),
@@ -494,7 +535,12 @@ pub fn generate_inbound_proof(
 /// - `recipient_spend_pubkey`: B (32 bytes)
 /// - `on_chain_outputs`: ALL of the transaction's outputs, in vout order
 ///   (each proof entry names its output by carried `vout_index`)
+#[allow(
+    clippy::too_many_arguments,
+    reason = "the proof boundary: the network id, the transaction, the address, the message and the keys are each a distinct part of what is proved"
+)]
 pub fn verify_inbound_proof(
+    network_id: &NetworkId,
     proof_bytes: &[u8],
     txid: &[u8; 32],
     address_bytes: &[u8],
@@ -542,7 +588,14 @@ pub fn verify_inbound_proof(
         .decompress()
         .ok_or(ProofError::InvalidFormat("invalid view public key".into()))?;
 
-    let msg = assemble_proof_message(txid, address_bytes, user_message, per_output_blob);
+    let msg = assemble_proof_message(
+        INBOUND_MESSAGE,
+        network_id,
+        txid,
+        address_bytes,
+        user_message,
+        per_output_blob,
+    );
 
     if !schnorr::verify(INBOUND_DOMAIN, &view_pk, &msg, &sig) {
         return Err(ProofError::SignatureFailed);

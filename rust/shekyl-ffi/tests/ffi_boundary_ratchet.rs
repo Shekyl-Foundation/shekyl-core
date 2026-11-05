@@ -88,7 +88,6 @@ const BASELINE: &[(&str, usize, usize)] = &[
     // Tightened so the win cannot grow back.
     ("legacy_fcmp.rs", 1, 5),
     ("legacy_frost.rs", 2, 3),
-    ("legacy_proofs.rs", 4, 0),
     ("legacy_tests.rs", 3, 0),
     // 2 -> 1 -> 0 with_capacity: the wallet-cache envelope export left with
     // the callerless cache FFI, and the collapsed-sign input vec with the
