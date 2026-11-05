@@ -111,6 +111,15 @@ impl Wire {
         drop(self.inject.take());
     }
 
+    /// Close the outbound queue with `end`'s cause, as a connector whose
+    /// write failed does before it seals the inbound end. The session's
+    /// next send is refused; its reader is still open.
+    pub fn writer_fails(&self, end: DialEnd) {
+        if let Some(hold) = self.hold.as_ref() {
+            hold.close_with(end.cause());
+        }
+    }
+
     /// Close the inbound end with `end` stored: the connector saw it.
     pub fn connector_ends(&mut self, end: DialEnd) {
         if let Some(inbound) = self.inject.take() {

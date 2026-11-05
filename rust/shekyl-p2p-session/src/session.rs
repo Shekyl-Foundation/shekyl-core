@@ -29,7 +29,7 @@ use shekyl_timing_engine::{Clock, OwnerClass};
 use shekyl_transport_layer::{ConnectorId, DialEnd, SocketId, StreamEnd};
 use tokio::sync::{oneshot, Notify, OwnedSemaphorePermit, Semaphore};
 
-use crate::handle::Established;
+use crate::handle::{Established, SendRefused};
 use crate::handshake;
 use crate::layer::{DialAim, DialOutcome, Shared, SESSION_QUEUE_DEPTH};
 use crate::nonce::{InFlightNonce, NonceTake};
@@ -157,12 +157,13 @@ impl<'a, C: Clock + Clone + Send + Sync + 'static> Task<'a, C> {
             }
             State::Handshaking(Role::Outbound { request, .. }) => {
                 let request = std::mem::take(request);
-                if let Err(refused) = self.shared.send_bytes(self.id, request) {
-                    tracing::debug!(id = ?self.id, %refused, "handshake request not queued");
-                    return Stop::Told;
+                match self.shared.send_bytes(self.id, request) {
+                    Ok(()) => {
+                        let timeout = ticks(self.shared.config.intervals.invoke_timeout);
+                        self.deadlines.set_invoke(after(now, timeout));
+                    }
+                    Err(refused) => self.unsent(&refused),
                 }
-                let timeout = ticks(self.shared.config.intervals.invoke_timeout);
-                self.deadlines.set_invoke(after(now, timeout));
             }
             State::Established(_) | State::Closing => {}
         }
@@ -267,6 +268,32 @@ impl<'a, C: Clock + Clone + Send + Sync + 'static> Task<'a, C> {
         }
     }
 
+    /// A send this task made did not queue. A full queue is the layer's
+    /// close, with the stamped end recorded, so the task stops. A closed
+    /// queue is the connector sealing the stream: it stored its end on the
+    /// inbound side, which the reader is about to deliver, so the task
+    /// keeps reading rather than ending on this node's close. A close of
+    /// this node's own has recorded its end and rung the stop already.
+    fn unsent(&mut self, refused: &SendRefused) {
+        tracing::debug!(id = ?self.id, %refused, "a bucket was not queued");
+        if matches!(refused, SendRefused::QueueFull) {
+            self.state = State::Closing;
+        }
+    }
+
+    /// Close with `end` and answer a dial whose role was already taken out
+    /// of the state. The dialer hears the end the row kept: the first end
+    /// recorded wins, so a ban or a stop that closed first is what it hears.
+    fn close_answering(
+        &mut self,
+        reply: oneshot::Sender<Result<DialOutcome, DialEnd>>,
+        end: DialEnd,
+    ) {
+        self.close(end);
+        let kept = self.shared.ended(self.id).unwrap_or(end);
+        answer(reply.send(Err(kept)));
+    }
+
     fn on_wake(&mut self) {
         let now = self.deadlines.now();
         for due in self.deadlines.due(now) {
@@ -297,9 +324,8 @@ impl<'a, C: Clock + Clone + Send + Sync + 'static> Task<'a, C> {
             self.close(DialEnd::local_close_after_channel());
             return;
         };
-        if self.shared.send_bytes(self.id, bucket).is_err() {
-            // The layer closed the session on a full queue, or it is gone.
-            self.state = State::Closing;
+        if let Err(refused) = self.shared.send_bytes(self.id, bucket) {
+            self.unsent(&refused);
             return;
         }
         let now = self.deadlines.now();
@@ -358,16 +384,13 @@ impl<'a, C: Clock + Clone + Send + Sync + 'static> Task<'a, C> {
             ) => self.outbound_response(nonce, aim, reply, payload),
             (role, _, _) => {
                 tracing::debug!(id = ?self.id, ?command, "a bucket before the handshake; refused");
-                let end = if let Role::Outbound { reply, .. } = role {
+                if let Role::Outbound { reply, .. } = role {
                     // The dialed peer answered with something else: its
                     // refusal, judged.
-                    let end = handshake::handshake_refused(self.connector);
-                    answer(reply.send(Err(end)));
-                    end
+                    self.close_answering(reply, handshake::handshake_refused(self.connector));
                 } else {
-                    handshake::form_failure()
-                };
-                self.close(end);
+                    self.close(handshake::form_failure());
+                }
             }
         }
     }
@@ -414,8 +437,8 @@ impl<'a, C: Clock + Clone + Send + Sync + 'static> Task<'a, C> {
             self.close(DialEnd::local_close_after_channel());
             return;
         };
-        if self.shared.send_bytes(self.id, bucket).is_err() {
-            self.state = State::Closing;
+        if let Err(refused) = self.shared.send_bytes(self.id, bucket) {
+            self.unsent(&refused);
             return;
         }
         self.deadlines.clear_handshake();
@@ -441,8 +464,7 @@ impl<'a, C: Clock + Clone + Send + Sync + 'static> Task<'a, C> {
         let (checked, list) = match handshake::check_response(payload, network_id, self.connector) {
             Ok(ok) => ok,
             Err(end) => {
-                answer(reply.send(Err(end)));
-                self.close(end);
+                self.close_answering(reply, end);
                 return;
             }
         };
@@ -593,8 +615,8 @@ impl<'a, C: Clock + Clone + Send + Sync + 'static> Task<'a, C> {
             self.close(DialEnd::local_close_after_channel());
             return;
         };
-        if self.shared.send_bytes(self.id, bucket).is_err() {
-            self.state = State::Closing;
+        if let Err(refused) = self.shared.send_bytes(self.id, bucket) {
+            self.unsent(&refused);
             return;
         }
         self.shared
