@@ -4319,6 +4319,7 @@ dependencies = [
  "shekyl-tor-control-daemon",
  "shekyl-types",
  "shekyl-version",
+ "shekyl-win-sec",
  "tempfile",
  "tokio",
  "tracing",
