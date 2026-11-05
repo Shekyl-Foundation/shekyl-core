@@ -140,6 +140,15 @@ impl NodePoolDoor {
         let Ok(tip) = HeaderView::tip(&view) else {
             return Admit::Fault;
         };
+        // A transaction the pool holds or the chain carries is answered
+        // before its proofs run: a peer re-sending transactions this node
+        // already has must not buy one verification each. The pool asks
+        // again under its lock when it admits.
+        match lock(&pool).duplicate(&TxHash::from_bytes(*id.as_bytes()), &view) {
+            Ok(Some(_)) => return Admit::Held(id),
+            Ok(None) => {}
+            Err(_) => return Admit::Fault,
+        }
         let height = Tip::connecting_height(tip.as_ref());
         let rule_set = self.rules.in_force(height);
         let prior = match stateless(&tx, &view, &rule_set, None) {
