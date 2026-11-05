@@ -47,8 +47,8 @@ where
 
     /// The latch watch's report. The watch is the store's answer, so this
     /// does not read the chain: a store fault must not leave a write that
-    /// landed [`AlarmWrite::InFlight`], where nothing retries it and the
-    /// model still reads the latch clear.
+    /// landed in flight, where nothing retries it and the model still
+    /// reads the latch clear.
     pub fn latch_reported(&mut self, set: bool) {
         self.alarm = set;
         if set {
