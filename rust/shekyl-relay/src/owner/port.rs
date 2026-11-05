@@ -122,6 +122,19 @@ impl RelayOwner for Port {
         if parsed.is_empty() {
             return;
         }
+        let admitted: Vec<TxId> = to_stem
+            .iter()
+            .chain(to_fluff.iter())
+            .map(|(tx, _)| *tx)
+            .collect();
+        tracing::debug!(
+            ?id,
+            fluff,
+            admitted = admitted.len(),
+            known = parsed.len() - admitted.len(),
+            txs = %TxId::short_list(&admitted),
+            "transactions received"
+        );
         self.post(Cmd::Arrived {
             source: connection_id(id),
             parsed,

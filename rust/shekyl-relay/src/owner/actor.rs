@@ -514,12 +514,21 @@ impl<C: Clock + Clone + Send + Sync + 'static> Actor<C> {
     fn apply(&mut self, effect: Effect) {
         match effect {
             Effect::Fluff { peer, blobs } => {
-                if !self.send_batch(peer, &blobs, true) {
+                if self.send_batch(peer, &blobs, true) {
+                    tracing::debug!(
+                        ?peer,
+                        count = blobs.len(),
+                        bytes = blobs.iter().map(|blob| blob.len()).sum::<usize>(),
+                        "a fluff batch was written"
+                    );
+                } else {
                     tracing::debug!(?peer, "a fluff batch was not written; the session is gone");
                 }
             }
             Effect::Stem { peer, blobs } => {
-                if !self.send_batch(peer, &blobs, false) {
+                if self.send_batch(peer, &blobs, false) {
+                    tracing::debug!(?peer, count = blobs.len(), "a reshape stem was written");
+                } else {
                     tracing::debug!(
                         ?peer,
                         "a reshape stem was not written; the next fire fluffs"
@@ -741,12 +750,22 @@ impl<C: Clock + Clone + Send + Sync + 'static> Actor<C> {
             .queue_fluff(&blobs, source, now, &mut *self.rng);
         if accepted == 0 {
             tracing::warn!("unable to send transaction(s), no available connections");
+        } else {
+            tracing::debug!(
+                accepted,
+                txs = %short_ids(txs),
+                "transactions queued for fluff"
+            );
         }
     }
 
     fn send_stem(&self, destination: ConnectionId, txs: &[(TxId, TxBlob)]) -> bool {
         let blobs: Vec<TxBlob> = txs.iter().map(|(_, blob)| TxBlob::clone(blob)).collect();
-        self.send_batch(destination, &blobs, false)
+        let sent = self.send_batch(destination, &blobs, false);
+        if sent {
+            tracing::debug!(?destination, txs = %short_ids(txs), "a stem was forwarded");
+        }
+        sent
     }
 
     /// One 2002 to `peer`, `fluff` as the batch's flag. `false` when the
@@ -782,4 +801,10 @@ impl<C: Clock + Clone + Send + Sync + 'static> Actor<C> {
         .ok()?;
         fragmented_notify(window, NOTIFY_NEW_TRANSACTIONS, &payload).ok()
     }
+}
+
+/// The transactions' short ids for a debug line ([`TxId::short_list`]).
+fn short_ids(txs: &[(TxId, TxBlob)]) -> String {
+    let ids: Vec<TxId> = txs.iter().map(|(tx, _)| *tx).collect();
+    TxId::short_list(&ids)
 }

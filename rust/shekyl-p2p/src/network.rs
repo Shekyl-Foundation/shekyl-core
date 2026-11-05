@@ -706,6 +706,7 @@ impl Network {
             max_ns = stall.max_ns,
             in_flight_at_close = stall.in_flight_at_close,
             in_flight_max_ns = stall.in_flight_at_close_max_ns,
+            histogram_ns = %write_histogram(&stall.buckets),
             "process write stall"
         );
         inner.sockets.clear_zone_caps();
@@ -779,5 +780,38 @@ async fn pump(
                 }
             }
         }
+    }
+}
+
+/// The process write histogram as one field: `2^i:n` for each bucket that
+/// counted a socket write, bucket `i` holding writes of `[2^i, 2^(i+1))`
+/// nanoseconds (`shekyl_capped_stream::WriteStall`). The stop line carried
+/// the maximum alone; the distribution is what the relay-timing register
+/// reads (`DAEMON_RELAY_PRIVACY.md` §97, the realised flush).
+fn write_histogram(buckets: &[u64]) -> String {
+    let mut out = String::new();
+    for (i, n) in buckets.iter().enumerate().filter(|(_, n)| **n > 0) {
+        if !out.is_empty() {
+            out.push(' ');
+        }
+        out.push_str(&format!("2^{i}:{n}"));
+    }
+    if out.is_empty() {
+        out.push_str("none");
+    }
+    out
+}
+
+#[cfg(test)]
+mod write_histogram_tests {
+    use super::write_histogram;
+
+    #[test]
+    fn only_counted_buckets_are_named_and_an_empty_histogram_says_so() {
+        let mut buckets = [0u64; 64];
+        buckets[13] = 7;
+        buckets[20] = 1;
+        assert_eq!(write_histogram(&buckets), "2^13:7 2^20:1");
+        assert_eq!(write_histogram(&[0u64; 64]), "none");
     }
 }

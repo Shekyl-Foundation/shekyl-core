@@ -104,6 +104,24 @@ impl TxId {
     pub const fn as_bytes(&self) -> &[u8; 32] {
         &self.0
     }
+
+    /// The ids' first eight bytes, hex, space-separated: the form the
+    /// relay's debug lines name transactions in, so one transaction can be
+    /// followed from a sender's log to a receiver's (the brief's fleet
+    /// evidence, `P2P_3_REMNANT_CUTOVER_BRIEF.md` §5).
+    #[must_use]
+    pub fn short_list(ids: &[TxId]) -> String {
+        let mut out = String::with_capacity(ids.len() * 17);
+        for (n, id) in ids.iter().enumerate() {
+            if n > 0 {
+                out.push(' ');
+            }
+            for byte in &id.0[..8] {
+                out.push_str(&format!("{byte:02x}"));
+            }
+        }
+        out
+    }
 }
 
 /// What a stem observation resolved to.
@@ -442,6 +460,19 @@ mod tests {
         let mut x = [0u8; 16];
         x[0] = b;
         ConnectionId::from_bytes(x)
+    }
+
+    #[test]
+    fn short_list_names_each_id_by_its_first_eight_bytes() {
+        let mut full = [0xabu8; 32];
+        full[7] = 0x01;
+        full[8] = 0xff;
+        assert_eq!(
+            TxId::short_list(&[tx(0x5a), TxId::from_bytes(full)]),
+            "5a00000000000000 ababababababab01",
+            "sixteen hex digits each, the ninth byte never shown, space-separated"
+        );
+        assert_eq!(TxId::short_list(&[]), "");
     }
 
     #[test]

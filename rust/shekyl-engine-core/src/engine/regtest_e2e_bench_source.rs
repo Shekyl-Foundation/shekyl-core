@@ -31,7 +31,12 @@
 //!
 //! `SHEKYL_BENCH_DAEMON_RPC` names the daemon's RPC port;
 //! `SHEKYL_BENCH_SPEND_ATOMIC` the amount each spend pays (default one
-//! SKL); `SHEKYL_BENCH_TX_COUNT` a limit on spends (default none).
+//! SKL); `SHEKYL_BENCH_TX_COUNT` a limit on spends (default none);
+//! `SHEKYL_BENCH_SPEND_EVERY_MS` a pause after each accepted spend (default
+//! none: the budget's point is the pool under load). The p2p remnant
+//! cutover's fleet run (`P2P_3_REMNANT_CUTOVER_BRIEF.md` §5) is the paced
+//! caller: one transaction every few seconds, so each relay of it stands
+//! alone in the receivers' logs.
 //!
 //! # Not production code
 //!
@@ -44,6 +49,7 @@
 
 use std::io::Write;
 use std::sync::Arc;
+use std::time::Duration;
 
 use shekyl_units::AtomicUnits;
 use tokio::sync::RwLock;
@@ -90,13 +96,27 @@ async fn bench_tx_source() {
         "address" => say(&format!("BENCH_TX_SOURCE_ADDR={address}")),
         "spend" => {
             let amount = env_u64("SHEKYL_BENCH_SPEND_ATOMIC").unwrap_or(DEFAULT_SPEND_ATOMIC);
-            spend(wallet, &address, amount, env_u64("SHEKYL_BENCH_TX_COUNT")).await;
+            let pause = env_u64("SHEKYL_BENCH_SPEND_EVERY_MS").map(Duration::from_millis);
+            spend(
+                wallet,
+                &address,
+                amount,
+                env_u64("SHEKYL_BENCH_TX_COUNT"),
+                pause,
+            )
+            .await;
         }
         other => panic!("SHEKYL_BENCH_TX_SOURCE is address or spend, got {other:?}"),
     }
 }
 
-async fn spend(wallet: Engine<SoloSigner>, address: &str, amount: u64, limit: Option<u64>) {
+async fn spend(
+    wallet: Engine<SoloSigner>,
+    address: &str,
+    amount: u64,
+    limit: Option<u64>,
+    pause: Option<Duration>,
+) {
     let arc = Arc::new(RwLock::new(wallet));
     let refreshed = match Engine::start_refresh(arc.clone(), RefreshOptions::default()).await {
         Ok(handle) => handle
@@ -136,7 +156,12 @@ async fn spend(wallet: Engine<SoloSigner>, address: &str, amount: u64, limit: Op
             .submit_pending_tx_async(pending.id, pending.content_gen)
             .await
         {
-            Ok(SubmitOutcome::Accepted { hash }) => say(&format!("ACCEPTED {hash}")),
+            Ok(SubmitOutcome::Accepted { hash }) => {
+                say(&format!("ACCEPTED {hash}"));
+                if let Some(pause) = pause {
+                    tokio::time::sleep(pause).await;
+                }
+            }
             Ok(other) => {
                 say(&format!("STOPPED submit answered {other:?}"));
                 return;
