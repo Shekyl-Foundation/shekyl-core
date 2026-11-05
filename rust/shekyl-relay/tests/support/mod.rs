@@ -181,6 +181,18 @@ impl FakePool {
         self.gate.1.notify_all();
     }
 
+    /// The pool holds `tx` without having admitted it: a transaction this
+    /// node originated, which reaches the relay by `relay_local` rather
+    /// than through `admit`.
+    pub fn hold(&self, tx: TxId) {
+        self.held.lock().expect("held").push(tx);
+    }
+
+    /// The pool no longer holds `tx`: mined, or evicted.
+    pub fn forget(&self, tx: &TxId) {
+        self.held.lock().expect("held").retain(|held| held != tx);
+    }
+
     fn record(&self, asked: Asked) {
         self.asked.lock().expect("asked").push(asked);
     }
@@ -273,6 +285,9 @@ impl ProbeSink for Others {
 pub struct Build {
     pub noise: bool,
     pub node_sync: NodeSync,
+    /// Each channel's send-queue cap. A message larger than this closes
+    /// the session it is sent on.
+    pub send_cap: usize,
 }
 
 impl Default for Build {
@@ -280,6 +295,7 @@ impl Default for Build {
         Self {
             noise: false,
             node_sync: NodeSync::Synchronised,
+            send_cap: SEND_CAP,
         }
     }
 }
@@ -294,6 +310,7 @@ pub struct Rig {
     pub node_sync: watch::Sender<NodeSync>,
     pub timing: Handle<ManualClock>,
     pub others: Arc<Others>,
+    send_cap: usize,
     /// Outlives the layer, which reads it.
     tip: watch::Sender<CoreSyncData>,
     /// A manual clock does not wake the engine by moving: a command does.
@@ -315,7 +332,7 @@ impl Rig {
         let clock = ManualClock::new(Tick::new(1_000_000));
         // No accept-rate gate: the loopback admits at a fixed tick.
         let sockets = Sockets::with_clearnet_gate(None);
-        let (loopback, dialed) = Loopback::new(sockets.clone(), CEILING, SEND_CAP);
+        let (loopback, dialed) = Loopback::new(sockets.clone(), CEILING, build.send_cap);
         let engine = EngineService::start(clock.clone());
         let timing = engine.handle();
         let nudge = timing
@@ -367,6 +384,7 @@ impl Rig {
             node_sync,
             timing,
             others,
+            send_cap: build.send_cap,
             tip: tip_tx,
             nudge,
             loopback,
@@ -388,7 +406,7 @@ impl Rig {
     /// An inbound channel from `endpoint`, adopted by the layer; the far
     /// side is returned.
     pub fn accept(&self, endpoint: Endpoint) -> Wire {
-        let (wire, channel) = self.loopback.accept(endpoint, SEND_CAP, true);
+        let (wire, channel) = self.loopback.accept(endpoint, self.send_cap, true);
         self.layer.adopt(channel);
         wire
     }
@@ -484,6 +502,32 @@ impl Rig {
             .read_within(wire, SETTLE)
             .expect("a batch within the settle window");
         batch_of(received)
+    }
+
+    /// Advance the clock `step` at a time, up to `steps` times, until
+    /// `done` holds; whether it held. Each step gives the owner a moment
+    /// to run the wake it caused: one poll emits at most one carrier
+    /// window, so a window drive moves in steps shorter than the cadence.
+    pub fn drive(&self, step: Duration, steps: u32, mut done: impl FnMut() -> bool) -> bool {
+        for _ in 0..steps {
+            if done() {
+                return true;
+            }
+            self.advance(step);
+            thread::sleep(Duration::from_millis(25));
+        }
+        done()
+    }
+
+    /// Every 2002 `wire` reads until it is quiet for [`SETTLE`]. A carrier
+    /// dummy is consumed by the reader and never shows here; a carried
+    /// stem shows as the 2002 it reassembles to.
+    pub fn batches(&self, wire: &mut Wire) -> Vec<NewTransactions> {
+        let mut out = Vec::new();
+        while let Some(received) = self.read_within(wire, SETTLE) {
+            out.push(batch_of(received));
+        }
+        out
     }
 
     /// Advance the clock a minute at a time until `wire` reads a 2002,
