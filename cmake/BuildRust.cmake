@@ -441,18 +441,20 @@ if(NOT IOS)
             "${_shekyl_rust_bin_dir}/${_bin}${CMAKE_EXECUTABLE_SUFFIX}")
     endforeach()
 
-    # The measurement build only (Rick, 2026-10-14, extended for step 7): the
-    # Tor gap deadline lifted to 120 s, and the clearnet message-size tap.
-    # Never on in a release build; scripts/ci/check_measurement_spans.py fails
-    # any release path that sets it. Clearnet's feature is empty — it does not
-    # enable the transport-layer feature — and both names sit on this one
-    # line. The features are the daemon's: cargo unifies them across the
-    # packages of one invocation, and the wallet binaries depend on neither
-    # crate, so the line changes nothing they link.
-    option(SHEKYL_MEASUREMENT_SPANS "Measurement build only: lift the Tor gap to 120 s and record Levin message sizes" OFF)
+    # The measurement build only (Rick, 2026-10-14, extended for step 7 and
+    # the remnant cutover's fleet run): the Tor gap deadline lifted to 120 s,
+    # the clearnet message-size tap, and the relay's transaction ids on its
+    # debug lines. Never on in a release build;
+    # scripts/ci/check_measurement_spans.py fails any release path that sets
+    # it. The clearnet and relay features are empty — neither enables another
+    # — and all three names sit on this one line. The features are the
+    # daemon's: cargo unifies them across the packages of one invocation, and
+    # the wallet binaries depend on none of the crates, so the line changes
+    # nothing they link.
+    option(SHEKYL_MEASUREMENT_SPANS "Measurement build only: lift the Tor gap to 120 s, record Levin message sizes, name relayed transactions in debug lines" OFF)
     set(_shekyl_rust_bin_features "")
     if(SHEKYL_MEASUREMENT_SPANS)
-        set(_shekyl_rust_bin_features --features shekyl-transport-layer/measurement-spans,shekyl-clearnet/measurement-spans)
+        set(_shekyl_rust_bin_features --features shekyl-transport-layer/measurement-spans,shekyl-clearnet/measurement-spans,shekyl-relay/measurement-spans)
         message(WARNING "SHEKYL_MEASUREMENT_SPANS is ON: this daemon is a measurement build, not a release")
     endif()
 

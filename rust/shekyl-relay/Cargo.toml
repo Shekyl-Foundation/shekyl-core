@@ -56,5 +56,15 @@ shekyl-p2p-session = { path = "../shekyl-p2p-session", features = ["harness"] }
 shekyl-peer-policy = { path = "../shekyl-peer-policy" }
 tokio = { version = "1", default-features = false, features = ["macros", "rt-multi-thread", "sync", "time"] }
 
+[features]
+# The fleet's learn-latency reading (DAEMON_RELAY_PRIVACY.md §97): the
+# relay's debug lines name each batch's transactions by short id, so one
+# transaction is followed from the origin's log to each receiver's. Empty,
+# and built only by the measurement binary (cmake/BuildRust.cmake,
+# `SHEKYL_MEASUREMENT_SPANS`): a shipped node's log must not name the
+# transactions it originated or where it first sent them. A Cargo edge
+# would fail `scripts/ci/check_measurement_spans.py`.
+measurement-spans = []
+
 [lints]
 workspace = true

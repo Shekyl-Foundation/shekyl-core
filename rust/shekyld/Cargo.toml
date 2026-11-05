@@ -40,14 +40,16 @@ shekyl-chain-ingest = { path = "../shekyl-chain-ingest" }
 shekyl-types = { path = "../shekyl-types" }
 # Direct edges with no features of their own, so the measurement build
 # (cmake/BuildRust.cmake, `SHEKYL_MEASUREMENT_SPANS`) can name
-# `shekyl-transport-layer/measurement-spans` and
-# `shekyl-clearnet/measurement-spans` on `cargo rustc -p shekyld`'s command
-# line: cargo lets a command line name a dependency's feature only through
-# the selected package's own edges. Both crates are in this binary's graph
-# already (shekyl-node, shekyl-p2p); nothing here is a feature, so
-# scripts/ci/check_measurement_spans.py's no-Cargo-edge limb holds.
+# `shekyl-transport-layer/measurement-spans`,
+# `shekyl-clearnet/measurement-spans` and `shekyl-relay/measurement-spans`
+# on `cargo rustc -p shekyld`'s command line: cargo lets a command line name
+# a dependency's feature only through the selected package's own edges. All
+# three crates are in this binary's graph already (shekyl-node, shekyl-p2p);
+# nothing here is a feature, so scripts/ci/check_measurement_spans.py's
+# no-Cargo-edge limb holds.
 shekyl-transport-layer = { path = "../shekyl-transport-layer" }
 shekyl-clearnet = { path = "../shekyl-clearnet" }
+shekyl-relay = { path = "../shekyl-relay" }
 
 [lints]
 workspace = true

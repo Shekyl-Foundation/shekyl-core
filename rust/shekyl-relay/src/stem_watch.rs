@@ -122,6 +122,16 @@ impl TxId {
         }
         out
     }
+
+    /// [`Self::short_list`] for a relay debug line, in a measurement build
+    /// only (the `measurement-spans` feature). A shipped node logs counts:
+    /// ids beside the session a batch came from, or the stem hop it went
+    /// to, would let its own log name the transactions it originated and
+    /// where it first sent them, which the C++ relay's lines never did.
+    #[must_use]
+    pub fn measured_list(ids: &[TxId]) -> Option<String> {
+        cfg!(feature = "measurement-spans").then(|| Self::short_list(ids))
+    }
 }
 
 /// What a stem observation resolved to.
@@ -473,6 +483,15 @@ mod tests {
             "sixteen hex digits each, the ninth byte never shown, space-separated"
         );
         assert_eq!(TxId::short_list(&[]), "");
+    }
+
+    /// The ids reach a debug line in a measurement build only.
+    #[test]
+    fn only_a_measurement_build_names_the_ids() {
+        assert_eq!(
+            TxId::measured_list(&[tx(0x5a)]).is_some(),
+            cfg!(feature = "measurement-spans")
+        );
     }
 
     #[test]

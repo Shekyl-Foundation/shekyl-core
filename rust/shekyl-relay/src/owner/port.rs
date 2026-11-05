@@ -132,7 +132,7 @@ impl RelayOwner for Port {
             fluff,
             admitted = admitted.len(),
             known = parsed.len() - admitted.len(),
-            txs = %TxId::short_list(&admitted),
+            txs = TxId::measured_list(&admitted).as_deref(),
             "transactions received"
         );
         self.post(Cmd::Arrived {

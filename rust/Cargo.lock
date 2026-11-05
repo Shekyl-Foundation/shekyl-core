@@ -5797,6 +5797,7 @@ dependencies = [
  "shekyl-clearnet",
  "shekyl-daemon",
  "shekyl-daemon-rpc",
+ "shekyl-relay",
  "shekyl-transport-layer",
  "shekyl-types",
 ]

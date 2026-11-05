@@ -762,7 +762,7 @@ impl<C: Clock + Clone + Send + Sync + 'static> Actor<C> {
         } else {
             tracing::debug!(
                 accepted,
-                txs = %short_ids(txs),
+                txs = measured_ids(txs).as_deref(),
                 "transactions queued for fluff"
             );
         }
@@ -772,7 +772,12 @@ impl<C: Clock + Clone + Send + Sync + 'static> Actor<C> {
         let blobs: Vec<TxBlob> = txs.iter().map(|(_, blob)| TxBlob::clone(blob)).collect();
         let sent = self.send_batch(destination, &blobs, false);
         if sent {
-            tracing::debug!(?destination, txs = %short_ids(txs), "a stem was forwarded");
+            tracing::debug!(
+                ?destination,
+                count = txs.len(),
+                txs = measured_ids(txs).as_deref(),
+                "a stem was forwarded"
+            );
         }
         sent
     }
@@ -812,8 +817,9 @@ impl<C: Clock + Clone + Send + Sync + 'static> Actor<C> {
     }
 }
 
-/// The transactions' short ids for a debug line ([`TxId::short_list`]).
-fn short_ids(txs: &[(TxId, TxBlob)]) -> String {
+/// The transactions' short ids for a debug line, in a measurement build
+/// only ([`TxId::measured_list`]).
+fn measured_ids(txs: &[(TxId, TxBlob)]) -> Option<String> {
     let ids: Vec<TxId> = txs.iter().map(|(tx, _)| *tx).collect();
-    TxId::short_list(&ids)
+    TxId::measured_list(&ids)
 }
