@@ -451,11 +451,47 @@ fi
 #     its rows while the daemon keeps running. Observed red 2026-10-17 with
 #     both dials forced to no-auth: all three timed out with the proxy
 #     seeing only method 0x00. Unix only (the configuration file's mode).
+#   session_black_box — the p2p remnant cutover's evidence
+#     (P2P_3_REMNANT_CUTOVER_BRIEF.md §5; Rick, 2026-11-04): a simulated
+#     peer over a real socket against the shipped daemon, one test per
+#     thing the session layer holds. Each observed red 2026-11-05 against
+#     a daemon built with the guard removed:
+#       an_other_network_handshake_is_dropped_and_the_host_is_not_banned —
+#         the network check made to pass: "must close the socket
+#         unanswered; the wire did Message(Response { command: 1001 ..".
+#       nothing_but_a_handshake_is_accepted_before_it — the connector's
+#         first-frame check, the session's pre-handshake refusal and its
+#         handshake deadline all removed (any one alone still closes the
+#         socket): "a timed sync before the handshake must close the
+#         socket; the wire did Quiet".
+#       a_second_handshake_closes_the_session — the refusal removed:
+#         "a second handshake must close the session" (Quiet).
+#       transactions_are_ignored_while_unsynchronised_and_judged_once_synced
+#         — the unsynchronised branch made to judge: "transactions
+#         received while unsynchronised must be ignored, not judged"; and
+#         2002 swallowed before the owner: "a malformed transaction on a
+#         synced node must sever the session".
+#       the_txpool_complement_is_served — the reply dropped: "must be
+#         served as a 2002; the wire did Quiet".
+#       a_flood_of_notifications_is_read_one_at_a_time_without_growing_memory
+#         — the permit made unlimited and each 2002 kept: "resident set
+#         grew 25040 KiB under a 33554493-byte flood".
+#     The first run against the honest daemon was red too: every clearnet
+#     admission on a Tor-off node ended as the node's own failure, because
+#     the pump that hands admissions to the session layer ended when the
+#     Tor channel (never opened) closed. Fixed in shekyl-p2p's network.rs;
+#     shekyl-p2p's start_stop test holds it at the crate.
 ARMED_LEVIN=(
   refused_inbound:the_inbound_ceiling_derived_from_the_descriptor_limit_refuses_the_next_peer
   socks_credentials:the_clearnet_dial_presents_its_pair_and_tunnels_through_the_proxy
   socks_credentials:a_refused_pair_names_its_rows_and_the_daemon_keeps_running
   socks_credentials:the_operator_tor_dial_presents_its_pair
+  session_black_box:an_other_network_handshake_is_dropped_and_the_host_is_not_banned
+  session_black_box:nothing_but_a_handshake_is_accepted_before_it
+  session_black_box:a_second_handshake_closes_the_session
+  session_black_box:transactions_are_ignored_while_unsynchronised_and_judged_once_synced
+  session_black_box:the_txpool_complement_is_served
+  session_black_box:a_flood_of_notifications_is_read_one_at_a_time_without_growing_memory
 )
 
 for entry in "${ARMED_LEVIN[@]}"; do
