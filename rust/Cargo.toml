@@ -333,12 +333,9 @@ members = [
     # the blocking pool. Dial is SOCKS5 through shekyl-socks. Inbound is
     # accept_tor, then the gap timer. See P2P_TRANSPORT_LAYER.md.
     "shekyl-tor",
-    # The seam: SocketId, one cause, posts onto the connection strand.
-    # epee's TCP server is deleted (D13).
-    "shekyl-seam",
     # The session layer: the Levin handshake both ways, the self-connection
     # nonces, timed sync, the dispatch table over `Command`, the board
-    # (P2P_3_REMNANT_CUTOVER_BRIEF.md §7). Replaces shekyl-seam.
+    # (P2P_3_REMNANT_CUTOVER_BRIEF.md §7). Replaced shekyl-seam.
     "shekyl-p2p-session",
     # The network composition: connectors per configuration, the session
     # layer and its owners, the process engine and transport runtime, the

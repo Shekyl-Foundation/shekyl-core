@@ -76,8 +76,9 @@ pub mod chain_digest_ffi;
 
 // RandomX v2 light-cache PoW verification FFI. Wraps `shekyl_pow_randomx`
 // (`compute_hash` + `CacheStore`) in a C-ABI surface: the consensus PoW
-// hash (`shekyl_pow_randomx_v2_hash`) for the C++ parity gates, and the
-// seed-epoch schedule. The daemon's PoW is the Rust ingest's.
+// hash (`shekyl_pow_randomx_v2_hash`) for the C++ parity gates. The
+// daemon's PoW is the Rust ingest's, and the seed-epoch schedule is
+// `shekyl_difficulty::seed_epoch`'s.
 pub mod pow_randomx_ffi;
 
 // Curve-tree replica FFI: an ephemeral `shekyl_curve_tree::CurveTreeClient`
@@ -115,104 +116,6 @@ pub mod archival_ffi;
 
 // General CT cleartext-balance verification FFI (`GENESIS_TX_WIRE_FORMAT.md` §2.3).
 pub mod ct_balance_ffi;
-
-// Production OsRng → RelayRng adapter shared by the relay FFI seams.
-pub mod secure_relay_rng;
-
-// Dandelion++ embargo / propagation-timeout FFI — RP-4
-// (`DAEMON_RELAY_PRIVACY.md` §17). Stem-map exports retired at RP-3a; the zone
-// owns a `StemMap` directly (`relay_zone_ffi`).
-pub mod dandelionpp_ffi;
-
-// Live relay zone FFI — RP-3a (`DAEMON_RELAY_PRIVACY.md` §18). The C++
-// `levin::notify` forwards here; `Effect` is dispatched in Rust via per-variant
-// callbacks so no enum tag crosses the boundary (§18.4a).
-pub mod relay_zone_ffi;
-
-// The relay's hop-0 verdict for a local origin, one cell for the process
-// (`GS-Q3`): written by the production zone's publish, read by the managed-Tor
-// supervisor and the RPC Health boolean.
-pub mod origin_verdict;
-
-// What this node's own Tor dials show, one cell for the process
-// (`TOR_SUPERVISOR.md` §4.2): written by the dialer, read by the managed-Tor
-// supervisor for its posture line. Display only (`TSR-Q14`).
-pub mod tor_link;
-
-// Levin ingress policy and white-noise emit FFI (IMPLEMENTATION_INDEX LV
-// row). `handle_recv` admits each bucket through these exports, and the C++
-// noise/fragment builders are marshaling shims over them.
-pub mod levin_ffi;
-
-// Inbound descriptor ceiling (PWD-I7). One call: Rust probes the process
-// and returns the admission decision. C++ passes reservations only.
-pub mod inbound_ceiling_ffi;
-/// The relay identity and the reserved descriptor count, installed once
-/// before the remnant runs. Not a snapshot field (§2.9).
-pub mod remnant_prep;
-
-// The protocol handler's door into the node's pool (DRS-X flip, DX-Q5).
-pub mod pool_ffi;
-
-/// Chain sync's slot for the seam's bind and the state `is_synchronized`
-/// reads (CS-5).
-pub mod chain_sync_ffi;
-
-// The p2p seam. C++ posts onto the connection strand. Rust records the
-// cause and the byte cap. See P2P_TRANSPORT_LAYER.md.
-pub mod seam_ffi;
-
-// Whether a close should stop dials, and the cause stored on a seam row.
-// The C++ handshake still asks. The Rust dialer will hold the cause itself.
-pub mod close_cause_ffi;
-pub mod dialer_ffi;
-pub mod peerlist_ffi;
-pub mod rpc_peerlist_ffi;
-
-// Operator link rates and the byte-stamp clock the stall check reads.
-/// The daemon's argument vector: the process entry's, and the narrow
-/// argv the snapshot export decodes (`DAEMON_CONFIG_CUTOVER.md` §2.2).
-pub mod argument_vector;
-/// The daemon's default data directory for the C++ blockchain utilities
-/// (`DAEMON_CONFIG_CUTOVER.md` §2.6): one layout, the Rust one.
-pub mod data_dir_ffi;
-// The configuration snapshot the C++ remnant reads, and its export for the
-// C++ test binaries and the importer (DAEMON_CONFIG_CUTOVER.md §2.9).
-pub mod daemon_snapshot_ffi;
-pub mod link_ffi;
-/// The notify runner: the owner of the three notify commands
-/// (`DAEMON_CONFIG_CUTOVER.md` §2.10); the C++ event sites push facts to it.
-pub mod notify_ffi;
-// The published board. Counts are integers. Address walks receive a
-// snapshot whose row is the id, the handshake flag, and the endpoint.
-pub mod seam_board_ffi;
-
-// The thread ledger at the C boundary: one executor row, and the report
-// of every row. The floor check is ExecutorBudget::above_floor; this
-// module does not reimplement it.
-pub mod executor_ffi;
-
-// Zone listen and dial. The seam stays connector-agnostic; this module is
-// where clearnet and Tor meet it.
-pub mod zone_ffi;
-
-/// Descriptors refused clearnet accepts may hold while they linger
-/// half-closed (`P2P_TRANSPORT_LAYER.md` D10.2). The daemon reserves this
-/// many beside the inbound ceiling. The figure is the transport layer's:
-/// the daemon does not take that crate as a dependency of its own.
-pub use shekyl_transport_layer::clearnet_linger_descriptors;
-
-// Production network ids. C++ asks for the 16 bytes; it does not state them.
-pub mod network_id_ffi;
-
-// Peer-attribution drop rule FFI — PWD-B7 (`SHEKYL_P2P_PROTOCOL.md`). The
-// classification is recorded by C++ as an opaque byte on the verification
-// context; whether that byte severs a connection is decided only here.
-pub mod peer_policy_ffi;
-
-/// The account's home from the operating system's account interface
-/// (IG-13), for the exports that still take a default data directory.
-pub use shekyl_process::platform;
 
 // Single-Rust-image contract: re-export shekyl-logging so its
 // `#[no_mangle]` C exports (`shekyl_log_init_*`, `shekyl_log_emit`,

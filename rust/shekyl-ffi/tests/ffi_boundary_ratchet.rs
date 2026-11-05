@@ -93,18 +93,15 @@ const BASELINE: &[(&str, usize, usize)] = &[
     // reserve, and it left with the callerless cache FFI. The remaining
     // reserve is the collapsed-sign input vec.
     ("legacy_tx.rs", 1, 1),
-    ("levin_ffi.rs", 2, 0),
+    // RETIRED (P2P_3_REMNANT_CUTOVER_BRIEF.md §3): `levin_ffi.rs` and
+    // `relay_zone_ffi/` left with the C++ p2p host. The Levin reader and the
+    // relay zone are reached as Rust crates now, with no `extern "C"` edge.
     ("pow_randomx_ffi.rs", 1, 0),
     // Curve-tree replica (test-generator surface, 2026-09-05): one typed-slice
     // borrow of the caller-owned tx / output arrays (`borrow<T>`, which
     // re-owns the isize::MAX byte bound); byte reads go through
     // `slice_from_ptr`, and there are no raw reserves.
     ("curve_tree_replica_ffi.rs", 1, 0),
-    // 5 -> 3: `read_ids` and `read_tx_ids` moved onto `slice_from_ptr`, which
-    // owns the `isize::MAX` bound `from_raw_parts` requires at the language
-    // level (PR #498 review). Tightened so the win cannot grow back.
-    ("relay_zone_ffi/mod.rs", 3, 1),
-    ("relay_zone_ffi/tests.rs", 4, 0),
 ];
 
 fn scan(dir: &Path, src_root: &Path, counts: &mut BTreeMap<String, (usize, usize)>) {

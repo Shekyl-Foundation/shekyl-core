@@ -17,8 +17,8 @@
 
 use std::time::Duration;
 
+use shekyl_daemon::notify::Runner;
 use shekyl_daemon_config::sections::Notify;
-use shekyl_ffi::notify_ffi::Runner;
 use tokio::process::Command;
 
 #[test]
