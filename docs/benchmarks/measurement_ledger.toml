@@ -845,6 +845,7 @@ stale_through = [
   { through = "5dcd0cfa97", note = "Added check_ml_kem_768_ek to kem.rs, a parse of an encapsulation key for the mining address and the address check. Decapsulation and the scan do not call it; the measured path is unchanged." },
   { through = "f7d958bf2f", note = "SB-Q2 (#1239): ScannableBlock.transactions is Vec<BoundTx>, a body bound to its txid, in place of Vec<Transaction>; the scan takes each body out of its binding with into_tx(), a move. No decapsulation, prefilter or output check is added, removed or reordered, and the rest of the commit is in the wallet and the wire crate. Not re-measured." },
   { through = "ec931d5858", note = "kem::SeedDerivation, a seed derivation the scan path never calls, left the crate (one derivation, NI-R7). The decapsulation and output scan this measures are unchanged. Not re-measured." },
+  { through = "7e78ae17bf", note = "In this path set, output.rs deletes compute_output_key_image_from_ho, the key-image entry whose one reader was a deleted FFI export, and its two tests. The scan path calls scan_output_recover and compute_output_key_image, which are unchanged; no decapsulation, derivation or comparison on it is added, removed or reordered. Not re-measured; the rows stay stale." },
 ]
 
 [[constant]]
