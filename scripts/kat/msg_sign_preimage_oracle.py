@@ -6,15 +6,15 @@
 
 `docs/test_vectors/MSG_SIGN_PREIMAGE_V2.json` pins, for each case (a classical
 segment and a message), the preimage a message signature is over on each
-network (`WALLET_MESSAGE_SIGNING.md` SM-R-3, layout version 2):
+network (`WALLET_MESSAGE_SIGNING.md` SM-R-3, wire layout version 2; the signing
+envelope §2.1, §2.6):
 
-    preimage = cSHAKE256-32(S = "shekyl/msg-sign-v1",
-        X = sig_format_version || network_id || mode ||
-            len(segment) as u16 LE || segment ||
-            cSHAKE256-32(S = "shekyl/msg-hash-v1", X = message))
+    preimage = frame("shekyl/msg-sign-v2", network_id,
+                     [u64_le(mode), segment, message])
 
-with `sig_format_version = 2`, `mode = 0x01` and `network_id` the network's
-16-byte genesis-derived id. The cases' inputs are generated here from fixed
+with `mode = 0x01` and `network_id` the network's 16-byte genesis-derived id
+at position 0. The wire layout version is not hashed: the domain's `-v2` is
+the hashed version. The cases' inputs are generated here from fixed
 rules, so the file is reproducible from this script alone; the hash goes
 through `stdlib_cshake.py`, which shares nothing with the Rust and is
 anchored before use.
@@ -40,8 +40,7 @@ cs = importlib.util.module_from_spec(_SPEC)
 _SPEC.loader.exec_module(cs)
 
 VECTORS = cs.ROOT / "docs/test_vectors/MSG_SIGN_PREIMAGE_V2.json"
-MSG_SIGN_DST = b"shekyl/msg-sign-v1"
-MSG_HASH_DST = b"shekyl/msg-hash-v1"
+MSG_SIGN_DST = b"shekyl/msg-sign-v2"
 LAYOUT_VERSION = 2
 MODE_SPEND = 0x01
 
@@ -57,25 +56,18 @@ CASES = (
 
 
 def preimage(nid: bytes, segment: bytes, message: bytes) -> bytes:
-    msg_hash = cs.cshake256(message, 32, s=MSG_HASH_DST)
-    x = (
-        bytes([LAYOUT_VERSION])
-        + nid
-        + bytes([MODE_SPEND])
-        + len(segment).to_bytes(2, "little")
-        + segment
-        + msg_hash
-    )
-    return cs.cshake256(x, 32, s=MSG_SIGN_DST)
+    return cs.frame(MSG_SIGN_DST, nid, [MODE_SPEND.to_bytes(8, "little"), segment, message])
 
 
 def build() -> dict:
     ids = {name: cs.network_id(name) for name in cs.NETWORKS}
     return {
         "description": (
-            "Message-signing preimages (WALLET_MESSAGE_SIGNING.md SM-R-3, layout "
-            "version 2; NETWORK_IDENTITY.md NI-F2): the network field is the "
-            "16-byte genesis-derived id. Generated and checked by "
+            "Message-signing preimages (WALLET_MESSAGE_SIGNING.md SM-R-3, wire "
+            "layout version 2; NETWORK_IDENTITY.md NI-F2; the signing envelope "
+            "§2.6): frame(shekyl/msg-sign-v2, network id, [u64_le(mode), segment, "
+            "message]), the id the network's 16-byte genesis-derived id. "
+            "Generated and checked by "
             "scripts/kat/msg_sign_preimage_oracle.py; read by "
             "rust/shekyl-crypto-pq/tests/kat_msg_sign_preimage_v2.rs."
         ),

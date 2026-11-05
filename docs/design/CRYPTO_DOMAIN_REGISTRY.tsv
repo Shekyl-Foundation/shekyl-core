@@ -128,8 +128,7 @@
 1	shekyl/p-socks-user-v1	rust/shekyl-p-transport/src/lib.rs	SOCKS_USER_CUSTOMIZATION	shekyl-live
 1	shekyl/output-handle-v1	rust/shekyl-crypto-pq/src/handle.rs	OUTPUT_HANDLE_CUSTOMIZATION	shekyl-live
 1	shekyl/receive-label-hash-v1	rust/shekyl-crypto-pq/src/label.rs	RECEIVE_LABEL_DISPLAY_HASH_CUSTOMIZATION	shekyl-live
-1	shekyl/msg-sign-v1	rust/shekyl-crypto-pq/src/message_signing.rs	MSG_SIGN_DOMAIN	shekyl-live
-1	shekyl/msg-hash-v1	rust/shekyl-crypto-pq/src/message_signing.rs	MSG_HASH_DOMAIN	shekyl-live
+1	shekyl/msg-sign-v2	rust/shekyl-crypto-pq/src/message_signing.rs	MSG_SIGN	shekyl-live		the message-signing preimage: frame(this domain, network_id, [u64_le(mode), classical_segment, message]) (WALLET_MESSAGE_SIGNING.md SM-R-3; the signing envelope §2.1; NETWORK_IDENTITY.md NI-F2); replaces -v1, whose input was version ‖ id ‖ mode ‖ segment ‖ the message pre-hashed under shekyl/msg-hash-v1 (retired with it)
 1	shekyl/msg-sig-ck-v1	rust/shekyl-crypto-pq/src/message_signing.rs	MSG_SIG_CHECKSUM_DOMAIN	shekyl-live
 1	shekyl/pqc-auth-tx-v1	rust/shekyl-crypto-pq/src/signature.rs	SCHEME_DOMAIN_PQC_AUTH_TX	shekyl-live
 1	shekyl/pqc-auth-tx-multisig-v1	rust/shekyl-crypto-pq/src/signature.rs	SCHEME_DOMAIN_PQC_AUTH_TX_MULTISIG	shekyl-live

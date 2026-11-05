@@ -1124,6 +1124,7 @@ dependencies = [
  "shekyl-crypto-hash",
  "shekyl-curve-generators",
  "shekyl-curve-primitives",
+ "shekyl-network",
  "shekyl-types",
  "thiserror",
  "x25519-dalek",

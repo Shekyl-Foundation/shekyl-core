@@ -20,6 +20,10 @@ test-utils = []
 
 [dependencies]
 thiserror.workspace = true
+# The signing envelope (`shekyl_network::envelope`): message signing frames
+# its preimage through it. Already a dependency of `shekyl-address`, which
+# this crate depends on, so no package is added (17-dependency-discipline).
+shekyl-network = { path = "../shekyl-network" }
 serde.workspace = true
 # Hex codec for the `EncryptedOutputField` wire form. Already a production
 # dependency of shekyl-tx-builder and shekyl-engine-core, so this adds no new

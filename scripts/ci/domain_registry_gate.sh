@@ -409,7 +409,12 @@ count_pattern() {
 # 91 -> 90. `signed_hash` in rust/shekyl-wire/src/transaction/signing_preimage.rs
 # called cshake256_32 under shekyl/fcmp-spend-signing-v1; it and the new
 # shekyl/tx-signable-v1 now reach cSHAKE only through frame.
-MECH1_EXPECTED=90
+# Message signing on the envelope (2026-11-04, the signing envelope §2.1):
+# 90 -> 88. message_preimage in rust/shekyl-crypto-pq/src/message_signing.rs
+# hashed the message under shekyl/msg-hash-v1 and the preimage under
+# shekyl/msg-sign-v1; it frames [mode, segment, message] under
+# shekyl/msg-sign-v2, and msg-hash-v1 is retired.
+MECH1_EXPECTED=88
 mech1=$(count_pattern 'cshake256_(?:32|64)\(|CShake256Core::new\(')
 if [[ "$mech1" != "$MECH1_EXPECTED" ]]; then
   echo "COUNT DRIFT mech 1 (cSHAKE call sites): found $mech1, pinned $MECH1_EXPECTED." >&2

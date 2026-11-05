@@ -3,14 +3,17 @@
 // All rights reserved.
 // BSD-3-Clause
 
-//! The message-signing preimage, layout version 2: its network field is the
-//! 16-byte genesis-derived id (`NETWORK_IDENTITY.md` NI-F2;
-//! `WALLET_MESSAGE_SIGNING.md` SM-R-3).
+//! The message-signing preimage, wire layout version 2:
+//! `frame("shekyl/msg-sign-v2", network_id, [u64_le(mode), segment,
+//! message])`, the id the network's 16-byte genesis-derived id at position 0
+//! (`NETWORK_IDENTITY.md` NI-F2; `WALLET_MESSAGE_SIGNING.md` SM-R-3; the
+//! signing envelope §2.1, §2.6).
 //!
 //! Corpus: `docs/test_vectors/MSG_SIGN_PREIMAGE_V2.json`. Oracle: every
 //! preimage and every network id in it is computed by
-//! `scripts/kat/msg_sign_preimage_oracle.py` (stdlib Keccak and cSHAKE256,
-//! anchored on hashlib's SHAKE256 and the recorded ids), which CI runs in
+//! `scripts/kat/msg_sign_preimage_oracle.py` (stdlib Keccak, cSHAKE256 and
+//! the envelope's `frame`, anchored on hashlib's SHAKE256, NIST SP 800-185's
+//! cSHAKE256 samples and the recorded ids), which CI runs in
 //! `docs-gates.yml`. The file is that script's output (`--write`); this test
 //! holds the Rust to it.
 
