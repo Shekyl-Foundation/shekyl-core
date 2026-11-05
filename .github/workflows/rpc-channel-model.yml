@@ -24,7 +24,7 @@ name: ci/rpc-channel-model
 
 on:
   pull_request:
-    types: [opened, synchronize, reopened, edited]
+    types: [opened, synchronize, reopened]
     paths:
       - "rust/shekyl-rpc-channel/model/**"
       - "docs/formal/proverif/lib/noise.pvl"
@@ -34,7 +34,7 @@ on:
   workflow_dispatch:
 
 concurrency:
-  group: rpc-channel-model-${{ github.ref }}${{ github.event.action == 'edited' && !contains(toJSON(github.event.changes), '"base":') && '-edited' || '' }}
+  group: rpc-channel-model-${{ github.ref }}
   cancel-in-progress: true
 
 permissions:
@@ -42,7 +42,6 @@ permissions:
 
 jobs:
   model:
-    if: (github.event.action != 'edited' || contains(toJSON(github.event.changes), '"base":'))
     name: "RT-P7: hybridXK ProVerif model"
     runs-on: ubuntu-latest
     # One row (a variant and one query) is one ProVerif process. run.py

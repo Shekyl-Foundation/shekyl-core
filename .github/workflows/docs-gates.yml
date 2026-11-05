@@ -43,7 +43,7 @@ on:
     types: [checks_requested]
     branches: [dev]
   pull_request:
-    types: [opened, synchronize, reopened, edited]
+    types: [opened, synchronize, reopened]
     # NO `paths:` FILTER, DELIBERATELY. This job's name is a REQUIRED status
     # context on dev, and a required context that never reports is not a
     # skipped check — it is "Expected — waiting for status to be reported",
@@ -76,7 +76,7 @@ on:
     # one 3m31s outlier), on a job already bounded at 10 minutes.
 
 concurrency:
-  group: docs-gates-${{ github.ref }}${{ github.event.action == 'edited' && !contains(toJSON(github.event.changes), '"base":') && '-edited' || '' }}
+  group: docs-gates-${{ github.ref }}
   cancel-in-progress: true
 
 permissions:
@@ -84,7 +84,6 @@ permissions:
 
 jobs:
   check-doc-links:
-    if: (github.event.action != 'edited' || contains(toJSON(github.event.changes), '"base":'))
     name: "Docs structural gates (links, banners, fossils, FOLLOWUPS, index)"
     runs-on: ubuntu-latest
     # Both checks are pure-Python over a checkout; a minute is generous.

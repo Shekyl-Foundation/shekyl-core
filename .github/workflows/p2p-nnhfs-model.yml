@@ -32,7 +32,7 @@ name: ci/p2p-nnhfs-model
 
 on:
   pull_request:
-    types: [opened, synchronize, reopened, edited]
+    types: [opened, synchronize, reopened]
     paths:
       - "docs/formal/proverif/**"
       - "rust/shekyl-p2p-transport/src/noise.rs"
@@ -45,7 +45,7 @@ on:
   workflow_dispatch:
 
 concurrency:
-  group: p2p-nnhfs-model-${{ github.ref }}${{ github.event.action == 'edited' && !contains(toJSON(github.event.changes), '"base":') && '-edited' || '' }}
+  group: p2p-nnhfs-model-${{ github.ref }}
   cancel-in-progress: true
 
 permissions:
@@ -53,7 +53,6 @@ permissions:
 
 jobs:
   model:
-    if: (github.event.action != 'edited' || contains(toJSON(github.event.changes), '"base":'))
     name: "NNhfs ProVerif model"
     runs-on: ubuntu-latest
     # The variants take about a second each; the budget is the uncached
