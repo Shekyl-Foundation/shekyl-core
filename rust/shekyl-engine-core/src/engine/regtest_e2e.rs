@@ -853,6 +853,20 @@ impl RegtestDaemon {
             .height
     }
 
+    /// The tip's hash, from `get_info`: what the chain holds, read whether
+    /// or not the node is synchronized. `get_last_block_header` refuses a
+    /// node that is catching up to a peer's claim, which a node taking a
+    /// relayed block is for the moment between the claim and the block.
+    pub(super) async fn top_block_hash(&self) -> String {
+        self.rpc
+            .json_rpc_call::<GetInfoResponse>("get_info", None)
+            .await
+            .expect("get_info")
+            .health
+            .top_block_hash
+            .to_string()
+    }
+
     /// The accepting daemon's own version string (`get_info.version`).
     ///
     /// Recorded into the live-oracle capture as provenance: a chain-attested
