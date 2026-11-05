@@ -6,10 +6,10 @@
 //! Chain-sync commands 2011–2014 (CS-Q3).
 //!
 //! Pins the encoded bytes, the cap checked before the codec runs, and the
-//! body-response partition. The ids are not [`DefinedCommand`] arms.
+//! body-response partition. The ids are [`Command`] arms.
 
 use shekyl_levin::{
-    body_budget_bytes, plan_bodies, BodiesFormFault, BodyPlanner, DefinedCommand, PayloadError,
+    body_budget_bytes, plan_bodies, BodiesFormFault, BodyPlanner, Command, PayloadError,
     PortableMap, RequestBodies, RequestHeaders, ResponseBodies, ResponseHeaders,
     BODIES_RESPONSE_BYTES, CAP_REQUEST_BODIES, CAP_REQUEST_HEADERS, CAP_RESPONSE_BODIES,
     CAP_RESPONSE_HEADERS, HASH_SIZE, HEADERS_RESPONSE_BYTES, MIN_TX_SECTION_BYTES,
@@ -83,13 +83,20 @@ fn carried(block: Vec<u8>) -> BlockBody {
 /// The chain-sync ids are named and the C++ ingress does not dispatch them:
 /// the router hands them to chain sync's owner.
 #[test]
-fn sync_commands_are_not_admitted_at_ingress() {
+fn sync_commands_are_admitted_at_ingress_under_their_caps() {
     assert_eq!(NOTIFY_REQUEST_HEADERS, 2011);
     assert_eq!(NOTIFY_RESPONSE_HEADERS, 2012);
     assert_eq!(NOTIFY_REQUEST_BODIES, 2013);
     assert_eq!(NOTIFY_RESPONSE_BODIES, 2014);
-    for id in 2011..=2014 {
-        assert_eq!(DefinedCommand::from_wire(id), None);
+    for (id, cap) in [
+        (2011, CAP_REQUEST_HEADERS),
+        (2012, CAP_RESPONSE_HEADERS),
+        (2013, CAP_REQUEST_BODIES),
+        (2014, CAP_RESPONSE_BODIES),
+    ] {
+        let command = Command::from_wire(id).expect("a chain-sync command is a Command");
+        assert_eq!(command.wire_id(), id);
+        assert_eq!(command.payload_cap(), cap);
     }
 }
 
@@ -908,7 +915,10 @@ fn the_router_admits_exactly_the_four_sync_commands_with_their_caps() {
     };
     for command in SyncCommand::ALL {
         assert_eq!(SyncCommand::from_wire(command.wire_id()), Some(command));
-        assert_eq!(DefinedCommand::from_wire(command.wire_id()), None);
+        assert_eq!(
+            Command::from_wire(command.wire_id()),
+            Some(Command::from(command))
+        );
     }
     assert_eq!(
         SyncCommand::ALL.map(SyncCommand::payload_cap),

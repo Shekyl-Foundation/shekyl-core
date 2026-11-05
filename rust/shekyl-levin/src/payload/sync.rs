@@ -5,10 +5,8 @@
 
 //! Chain-sync commands 2011–2014 (CS-Q3, `P2P_3_CHAIN_SYNC_BRIEF.md`).
 //!
-//! These are new commands with new ids. They are not [`crate::DefinedCommand`]
-//! arms: ingress admits a command for dispatch, and no handler exists until
-//! the cutover. The ids they replace (2003, 2004, 2006, 2007) stay until
-//! that cutover retires them.
+//! These are new commands with new ids, arms of [`crate::Command`] like the
+//! rest. The ids they replaced (2003, 2004, 2006, 2007) are retired.
 //!
 //! A body is a [`shekyl_wire::BlockBody`]. This module moves it; it does
 //! not judge it. The partition of a body response is judged here, because
@@ -236,10 +234,10 @@ const _: () = assert!(NOTIFY_RESPONSE_BODIES == 2014);
 /// The chain-sync commands, as chain sync's router admits them
 /// (`P2P_3_CHAIN_SYNC_BRIEF.md` CS-3 §4.2).
 ///
-/// Not [`crate::DefinedCommand`]: that set is what the C++ ingress admits
-/// for its handler, and 2011–2014 are not added to it. The router reads a
-/// bucket's command, admits these here with their caps, and hands the bytes
-/// to the sync owner; every other command goes on to the C++ handler.
+/// The four sync arms of [`crate::Command`], which carries the same ids and
+/// caps (`Command::from(SyncCommand)`). This subset exists for the attached
+/// router, which admits these four itself and hands every other command on
+/// to the C++ handler; it goes with the router (RC-Q1).
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum SyncCommand {
     /// `NOTIFY_REQUEST_HEADERS` (2011).

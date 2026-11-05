@@ -40,7 +40,7 @@
 //!   `min(packet limit, per-command cap)` after the PWD-B3a flag-class
 //!   discriminator ([`crate::ingress_payload_cap`]): unknown flag bits are
 //!   rejected; a Q/S-flagged bucket whose command is not a
-//!   [`crate::DefinedCommand`] is rejected; a noise/fragment bucket (neither
+//!   [`crate::Command`] is rejected; a noise/fragment bucket (neither
 //!   Q nor S) is bounded only by the packet limit, so cover traffic with
 //!   command 0 is not treated as an unknown command. The packet limit is
 //!   256 KiB before the handshake and 100 MB after (the caller raises it

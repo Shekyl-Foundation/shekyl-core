@@ -66,8 +66,8 @@ use std::collections::HashMap;
 use std::sync::{Arc, Mutex, PoisonError};
 
 use shekyl_levin::{
-    BucketHead, DefinedCommand, Flags, SyncCommand, COMMAND_HANDSHAKE, COMMAND_TIMED_SYNC,
-    FLAGS_DEFINED, HEADER_SIZE, NOTIFY_NEW_COMPACT_BLOCK, NOTIFY_REQUEST_COMPACT_MISSING_TX,
+    BucketHead, Command, Flags, SyncCommand, COMMAND_HANDSHAKE, COMMAND_TIMED_SYNC, FLAGS_DEFINED,
+    HEADER_SIZE, NOTIFY_NEW_COMPACT_BLOCK, NOTIFY_REQUEST_COMPACT_MISSING_TX,
 };
 use shekyl_seam::{AfterPost, ConnectorId, Post, SocketId, SyncPayload};
 use tokio::sync::mpsc;
@@ -298,8 +298,8 @@ impl Admitted {
     const fn payload_cap(self) -> u64 {
         match self {
             Self::Sync(command) => command.payload_cap(),
-            Self::Announce => DefinedCommand::NewCompactBlock.payload_cap(),
-            Self::MissingTxs => DefinedCommand::RequestCompactMissingTx.payload_cap(),
+            Self::Announce => Command::NewCompactBlock.payload_cap(),
+            Self::MissingTxs => Command::RequestCompactMissingTx.payload_cap(),
         }
     }
 }
@@ -618,18 +618,15 @@ fn tapped(bucket: &BucketHead) -> Option<Tapped> {
         && bucket.expects_response();
     let response = flags.intersects(Flags::RESPONSE) && !flags.intersects(Flags::REQUEST);
     let (kind, cap) = match bucket.command {
-        COMMAND_HANDSHAKE if request => (
-            Tapped::HandshakeRequest,
-            DefinedCommand::Handshake.payload_cap(),
-        ),
-        COMMAND_TIMED_SYNC if request => (
-            Tapped::TimedSyncRequest,
-            DefinedCommand::TimedSync.payload_cap(),
-        ),
-        COMMAND_TIMED_SYNC if response => (
-            Tapped::TimedSyncResponse,
-            DefinedCommand::TimedSync.payload_cap(),
-        ),
+        COMMAND_HANDSHAKE if request => {
+            (Tapped::HandshakeRequest, Command::Handshake.payload_cap())
+        }
+        COMMAND_TIMED_SYNC if request => {
+            (Tapped::TimedSyncRequest, Command::TimedSync.payload_cap())
+        }
+        COMMAND_TIMED_SYNC if response => {
+            (Tapped::TimedSyncResponse, Command::TimedSync.payload_cap())
+        }
         _ => return None,
     };
     (whole && defined && bucket.payload_len <= cap).then_some(kind)

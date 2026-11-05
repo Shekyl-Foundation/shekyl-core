@@ -24,11 +24,10 @@ pub const NOTIFY_NEW_COMPACT_BLOCK: u32 = 2008;
 pub const NOTIFY_REQUEST_COMPACT_MISSING_TX: u32 = 2009;
 /// `NOTIFY_GET_TXPOOL_COMPLEMENT`.
 pub const NOTIFY_GET_TXPOOL_COMPLEMENT: u32 = 2010;
-/// Chain-sync header request. The next free id after 2010. Not a
-/// [`crate::DefinedCommand`]: the attached router keeps it for chain
-/// sync's owner, and the C++ ingress never sees it. 2003, 2004, 2006 and
-/// 2007, the inherited block and chain requests, are retired (CS-5):
-/// their ids are not commands this protocol defines.
+/// Chain-sync header request. The next free id after 2010, a
+/// [`crate::Command`] arm like the rest. 2003, 2004, 2006 and 2007, the
+/// inherited block and chain requests, are retired (CS-5): their ids are
+/// not commands this protocol defines.
 pub const NOTIFY_REQUEST_HEADERS: u32 = 2011;
 /// Chain-sync header response.
 pub const NOTIFY_RESPONSE_HEADERS: u32 = 2012;

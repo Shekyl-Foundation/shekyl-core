@@ -8,7 +8,7 @@
 use std::sync::{Arc, Mutex};
 
 use shekyl_levin::{
-    invoke, notify, response, BucketHead, DefinedCommand, Flags, SyncCommand, COMMAND_HANDSHAKE,
+    invoke, notify, response, BucketHead, Command, Flags, SyncCommand, COMMAND_HANDSHAKE,
     COMMAND_TIMED_SYNC, HEADER_SIZE, NOTIFY_NEW_COMPACT_BLOCK, NOTIFY_REQUEST_COMPACT_MISSING_TX,
 };
 use shekyl_seam::{AfterPost, Endpoint, Post, SocketId, SyncPayload};
@@ -491,7 +491,7 @@ fn an_attached_router_taps_the_messages_that_carry_a_claim() {
         BucketHead::read(&fragment[..HEADER_SIZE].try_into().expect("a header")).expect("a header");
     head.flags = head.flags.union(Flags::BEGIN);
     fragment[..HEADER_SIZE].copy_from_slice(&head.write());
-    let cap = DefinedCommand::Handshake.payload_cap();
+    let cap = Command::Handshake.payload_cap();
     let oversize = invoke(
         COMMAND_HANDSHAKE,
         &vec![0; usize::try_from(cap + 1).expect("a cap")],

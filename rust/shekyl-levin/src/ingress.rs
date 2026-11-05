@@ -22,7 +22,7 @@
 //!   noise / fragment class. The command field is filler (often 0). Bound
 //!   is the packet / framing limit. Do **not** reject on the id.
 //! - Flags carry Q or S → dispatch. The command must convert to
-//!   [`DefinedCommand`], and the payload is then bounded by that command's
+//!   [`Command`], and the payload is then bounded by that command's
 //!   cap.
 //! - Bits outside the five defined flags are rejected on **every**
 //!   bucket, including noise. A bit this protocol does not define is not a
@@ -33,7 +33,7 @@
 //!
 //! # Caps (PWD-B3)
 //!
-//! Each [`DefinedCommand`] arm has a named cap. The handshake peerlist's
+//! Each [`Command`] arm has a named cap. The handshake peerlist's
 //! derivation terminates on its length bound. 2008 / 2009 / 2010 keep their
 //! inherited envelopes until a tighter bound exists on this seam — they do
 //! **not** take the packet limit. 2002 (PWD-B12) is the only arm that sits
@@ -54,8 +54,11 @@ use shekyl_peer_bounds::DISCLOSE_COUNT;
 
 use crate::header::{Flags, DEFAULT_MAX_PACKET_SIZE};
 use crate::{
-    Error, COMMAND_HANDSHAKE, COMMAND_TIMED_SYNC, HASH_SIZE, NOTIFY_GET_TXPOOL_COMPLEMENT,
-    NOTIFY_NEW_COMPACT_BLOCK, NOTIFY_NEW_TRANSACTIONS, NOTIFY_REQUEST_COMPACT_MISSING_TX,
+    Error, SyncCommand, CAP_REQUEST_BODIES, CAP_REQUEST_HEADERS, CAP_RESPONSE_BODIES,
+    CAP_RESPONSE_HEADERS, COMMAND_HANDSHAKE, COMMAND_TIMED_SYNC, HASH_SIZE,
+    NOTIFY_GET_TXPOOL_COMPLEMENT, NOTIFY_NEW_COMPACT_BLOCK, NOTIFY_NEW_TRANSACTIONS,
+    NOTIFY_REQUEST_BODIES, NOTIFY_REQUEST_COMPACT_MISSING_TX, NOTIFY_REQUEST_HEADERS,
+    NOTIFY_RESPONSE_BODIES, NOTIFY_RESPONSE_HEADERS,
 };
 
 /// The four defined Levin flag bits. Bits outside this mask are unknown at
@@ -128,12 +131,18 @@ const _: () = assert!(CAP_HANDSHAKE < 65_536);
 const _: () = assert!(CAP_NEW_COMPACT_BLOCK == 4 * 1024 * 1024);
 const _: () = assert!(HASH_SIZE == 32);
 
-/// Commands this protocol defines at ingress. Wire ids stay `u32` on the
-/// header; converting a dispatch command through [`DefinedCommand::from_wire`]
-/// is the closed set a Q/S-flagged bucket may name. The retired commands
-/// (module docs) are **not** in this set.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum DefinedCommand {
+/// The closed set of Levin commands this protocol speaks: the ten live
+/// commands, each with its wire id and its payload cap. Wire ids stay
+/// `u32` on the header; [`Command::from_wire`] is the one place an unknown
+/// id becomes `None`, and that is the set a Q/S-flagged bucket may name.
+/// The retired commands (module docs) are **not** in this set.
+///
+/// The session layer's dispatch table is an exhaustive `match` over this
+/// enum (`P2P_3_REMNANT_CUTOVER_BRIEF.md` §7.2): a new command is a new arm
+/// here, and every dispatch site then fails to build until it names an
+/// owner.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord)]
+pub enum Command {
     /// `COMMAND_HANDSHAKE` (1001).
     Handshake,
     /// `COMMAND_TIMED_SYNC` (1002).
@@ -146,19 +155,31 @@ pub enum DefinedCommand {
     RequestCompactMissingTx,
     /// `NOTIFY_GET_TXPOOL_COMPLEMENT` (2010).
     GetTxpoolComplement,
+    /// `NOTIFY_REQUEST_HEADERS` (2011).
+    RequestHeaders,
+    /// `NOTIFY_RESPONSE_HEADERS` (2012).
+    ResponseHeaders,
+    /// `NOTIFY_REQUEST_BODIES` (2013).
+    RequestBodies,
+    /// `NOTIFY_RESPONSE_BODIES` (2014).
+    ResponseBodies,
 }
 
-impl DefinedCommand {
+impl Command {
     /// Every arm, in declaration order. [`Self::wire_id`] and
     /// [`Self::from_wire`] match the same set, so a new command is a new
     /// arm in all three.
-    pub const ALL: [Self; 6] = [
+    pub const ALL: [Self; 10] = [
         Self::Handshake,
         Self::TimedSync,
         Self::NewTransactions,
         Self::NewCompactBlock,
         Self::RequestCompactMissingTx,
         Self::GetTxpoolComplement,
+        Self::RequestHeaders,
+        Self::ResponseHeaders,
+        Self::RequestBodies,
+        Self::ResponseBodies,
     ];
 
     /// Wire id this arm speaks.
@@ -171,6 +192,10 @@ impl DefinedCommand {
             Self::NewCompactBlock => NOTIFY_NEW_COMPACT_BLOCK,
             Self::RequestCompactMissingTx => NOTIFY_REQUEST_COMPACT_MISSING_TX,
             Self::GetTxpoolComplement => NOTIFY_GET_TXPOOL_COMPLEMENT,
+            Self::RequestHeaders => NOTIFY_REQUEST_HEADERS,
+            Self::ResponseHeaders => NOTIFY_RESPONSE_HEADERS,
+            Self::RequestBodies => NOTIFY_REQUEST_BODIES,
+            Self::ResponseBodies => NOTIFY_RESPONSE_BODIES,
         }
     }
 
@@ -185,6 +210,10 @@ impl DefinedCommand {
             NOTIFY_NEW_COMPACT_BLOCK => Some(Self::NewCompactBlock),
             NOTIFY_REQUEST_COMPACT_MISSING_TX => Some(Self::RequestCompactMissingTx),
             NOTIFY_GET_TXPOOL_COMPLEMENT => Some(Self::GetTxpoolComplement),
+            NOTIFY_REQUEST_HEADERS => Some(Self::RequestHeaders),
+            NOTIFY_RESPONSE_HEADERS => Some(Self::ResponseHeaders),
+            NOTIFY_REQUEST_BODIES => Some(Self::RequestBodies),
+            NOTIFY_RESPONSE_BODIES => Some(Self::ResponseBodies),
             _ => None,
         }
     }
@@ -199,6 +228,29 @@ impl DefinedCommand {
             Self::NewCompactBlock => CAP_NEW_COMPACT_BLOCK,
             Self::RequestCompactMissingTx => CAP_COMPACT_MISSING_TX,
             Self::GetTxpoolComplement => CAP_TXPOOL_COMPLEMENT,
+            Self::RequestHeaders => CAP_REQUEST_HEADERS,
+            Self::ResponseHeaders => CAP_RESPONSE_HEADERS,
+            Self::RequestBodies => CAP_REQUEST_BODIES,
+            Self::ResponseBodies => CAP_RESPONSE_BODIES,
+        }
+    }
+
+    /// Whether this command is an invoke (a request that expects a response
+    /// under the same id). Only the two session-layer commands are; every
+    /// `NOTIFY_*` is one-way, so a response flag on one is a form failure.
+    #[must_use]
+    pub const fn is_invoke(self) -> bool {
+        matches!(self, Self::Handshake | Self::TimedSync)
+    }
+}
+
+impl From<SyncCommand> for Command {
+    fn from(command: SyncCommand) -> Self {
+        match command {
+            SyncCommand::RequestHeaders => Self::RequestHeaders,
+            SyncCommand::ResponseHeaders => Self::ResponseHeaders,
+            SyncCommand::RequestBodies => Self::RequestBodies,
+            SyncCommand::ResponseBodies => Self::ResponseBodies,
         }
     }
 }
@@ -212,7 +264,7 @@ impl DefinedCommand {
 ///
 /// [`Error::UnknownFlags`] if any bit outside [`FLAGS_DEFINED`] is set.
 /// [`Error::UnknownCommand`] if this is a dispatch whose command is not
-/// a [`DefinedCommand`].
+/// a [`Command`].
 pub fn ingress_payload_cap(command: u32, flags: Flags) -> Result<u64, Error> {
     if flags.difference(FLAGS_DEFINED).bits() != 0 {
         return Err(Error::UnknownFlags {
@@ -222,8 +274,8 @@ pub fn ingress_payload_cap(command: u32, flags: Flags) -> Result<u64, Error> {
     if !flags.intersects(Flags::REQUEST.union(Flags::RESPONSE)) {
         return Ok(u64::MAX);
     }
-    DefinedCommand::from_wire(command)
-        .map(DefinedCommand::payload_cap)
+    Command::from_wire(command)
+        .map(Command::payload_cap)
         .ok_or(Error::UnknownCommand { command })
 }
 
@@ -232,29 +284,39 @@ mod tests {
     use super::*;
 
     #[test]
-    fn defined_set_has_six_arms() {
-        // 6 live commands: ping gone (PWD-B10), support flags gone
+    fn the_command_set_has_ten_arms() {
+        // 10 live commands: ping gone (PWD-B10), support flags gone
         // (2026-10-19), 2001 gone (PWD-B6), and 2003, 2004, 2006 and 2007
-        // retired by chain sync's cutover (CS-5).
-        assert_eq!(DefinedCommand::ALL.len(), 6);
+        // retired by chain sync's cutover (CS-5), whose 2011–2014 are in
+        // the one set (RC-Q1: one dispatch table, one command enum).
+        assert_eq!(Command::ALL.len(), 10);
         for retired in [1003, 1007, 2001, 2003, 2004, 2006, 2007] {
-            assert!(DefinedCommand::from_wire(retired).is_none(), "{retired}");
+            assert!(Command::from_wire(retired).is_none(), "{retired}");
         }
-        assert!(DefinedCommand::from_wire(0).is_none());
+        assert!(Command::from_wire(0).is_none());
         assert_eq!(
-            DefinedCommand::from_wire(NOTIFY_NEW_COMPACT_BLOCK),
-            Some(DefinedCommand::NewCompactBlock)
+            Command::from_wire(NOTIFY_NEW_COMPACT_BLOCK),
+            Some(Command::NewCompactBlock)
         );
         assert_eq!(
-            DefinedCommand::from_wire(NOTIFY_REQUEST_COMPACT_MISSING_TX),
-            Some(DefinedCommand::RequestCompactMissingTx)
+            Command::from_wire(NOTIFY_REQUEST_COMPACT_MISSING_TX),
+            Some(Command::RequestCompactMissingTx)
         );
+        for sync in SyncCommand::ALL {
+            let command = Command::from(sync);
+            assert_eq!(command.wire_id(), sync.wire_id());
+            assert_eq!(command.payload_cap(), sync.payload_cap());
+            assert_eq!(Command::from_wire(sync.wire_id()), Some(command));
+            assert!(!command.is_invoke());
+        }
+        assert!(Command::Handshake.is_invoke());
+        assert!(Command::TimedSync.is_invoke());
     }
 
     #[test]
     fn from_wire_roundtrips_every_arm() {
-        for cmd in DefinedCommand::ALL {
-            assert_eq!(DefinedCommand::from_wire(cmd.wire_id()), Some(cmd));
+        for cmd in Command::ALL {
+            assert_eq!(Command::from_wire(cmd.wire_id()), Some(cmd));
             assert!(cmd.payload_cap() > 0);
         }
     }
