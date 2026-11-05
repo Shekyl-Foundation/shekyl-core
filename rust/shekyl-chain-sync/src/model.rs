@@ -551,12 +551,7 @@ where
                     });
                 }
             }
-            Event::Latch { set } => {
-                self.alarm = set;
-                if set {
-                    self.alarm_write = AlarmWrite::Written;
-                }
-            }
+            Event::Latch { set } => self.latch_reported(set),
             Event::AlarmRefused => self.alarm_refused(now, out),
             Event::AlarmRetry => self.alarm_retry(out),
             Event::Fill { frontier } => self.fill_frontier = frontier,

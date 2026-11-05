@@ -45,6 +45,17 @@ where
         }
     }
 
+    /// The latch watch's report. The watch is the store's answer, so this
+    /// does not read the chain: a store fault must not leave a write that
+    /// landed [`AlarmWrite::InFlight`], where nothing retries it and the
+    /// model still reads the latch clear.
+    pub fn latch_reported(&mut self, set: bool) {
+        self.alarm = set;
+        if set {
+            self.alarm_write = AlarmWrite::Written;
+        }
+    }
+
     /// Ask for the latch write with `evidence`. It is in flight until the
     /// latch watch reports it set or the owner reports it refused.
     pub(crate) fn raise_alarm(&mut self, evidence: Evidence, out: &mut Vec<Command<K>>) {
