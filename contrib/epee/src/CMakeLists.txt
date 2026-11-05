@@ -31,8 +31,8 @@ set(EPEE_INCLUDE_DIR_BASE "${CMAKE_CURRENT_SOURCE_DIR}/../include")
 # Add headers to the file list, to be able to search for them and autosave in IDEs.
 monero_find_all_headers(EPEE_HEADERS_PUBLIC "${EPEE_INCLUDE_DIR_BASE}")
 
-monero_add_library(epee byte_slice.cpp byte_stream.cpp hex.cpp mlog.cpp net_utils_base.cpp string_tools.cpp parserse_base_utils.cpp
-    wipeable_string.cpp memwipe.c mlocker.cpp buffer.cpp net_ssl.cpp
+monero_add_library(epee byte_slice.cpp byte_stream.cpp hex.cpp mlog.cpp string_tools.cpp parserse_base_utils.cpp
+    wipeable_string.cpp memwipe.c mlocker.cpp net_ssl.cpp
     int-util.cpp portable_storage.cpp
     file_io_utils.cpp
     net_parse_helpers.cpp

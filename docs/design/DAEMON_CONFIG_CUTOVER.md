@@ -377,9 +377,9 @@ a typed code. That closes the pre-created-directory hole of §7 item 7.
   deleted: it was a silent path move standing in for a lock.
 - SOCKS credentials are typed secrets: zeroized, shown in the
   effective-configuration line only as set (IG-6, IG-14), held in Rust,
-  never in the snapshot, handed to the dialer with the endpoint. Today they
-  are parsed ([`src/net/parse.cpp:267-296`](../../src/net/parse.cpp)) and
-  never reach Rust (DC-F3); `rust/shekyl-socks` already speaks RFC 1929
+  never in the snapshot, handed to the dialer with the endpoint: the
+  section's pair becomes the proxy's RFC 1929 credential in `proxy_of`
+  (`rust/shekyl-daemon/src/network.rs`), which `rust/shekyl-socks` speaks
   ([`rust/shekyl-socks/src/lib.rs:6-36`](../../rust/shekyl-socks/src/lib.rs)).
 
 ### 2.6 The network and the marker (DC-Q5)

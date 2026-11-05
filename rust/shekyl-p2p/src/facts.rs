@@ -50,7 +50,7 @@ pub struct ConnectionFacts {
     pub current_speed_up: f64,
     /// The peer's port; 0 for an inbound Tor session.
     pub port: u16,
-    /// epee's `address_type`: 1 IPv4, 2 IPv6, 4 Tor.
+    /// The RPC's `address_type`: 1 IPv4, 2 IPv6, 4 Tor.
     pub address_type: u8,
     /// Inbound.
     pub incoming: bool,

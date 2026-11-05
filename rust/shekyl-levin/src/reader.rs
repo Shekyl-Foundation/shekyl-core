@@ -199,10 +199,8 @@ impl BucketReader {
     /// out of bytes already consumed or a burst of buckets is O(n²). The
     /// proportional trigger below bounds each drain's memmove by the bytes
     /// consumed since the previous one, making a stream amortized O(n) for
-    /// any feed size. (The oracle's `epee::net_utils::buffer::erase`,
-    /// `contrib/epee/include/net/buffer.h`, only advances an offset and
-    /// resets storage when the buffer is fully consumed — the fully-consumed
-    /// branch here is that case.)
+    /// any feed size. A fully consumed buffer resets its storage instead of
+    /// moving an empty tail.
     fn compact(&mut self) {
         if self.read_pos == 0 {
             return;

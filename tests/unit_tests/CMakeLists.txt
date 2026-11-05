@@ -51,7 +51,6 @@ set(unit_tests_sources
   mtp_boundary.cpp
   mul_div.cpp
   multiexp.cpp
-  net.cpp
   parse_amount.cpp
   random.cpp
   rpc_target_wire_contract.cpp
@@ -88,7 +87,6 @@ target_link_libraries(unit_tests
   PRIVATE
     fcmp
     cryptonote_basic
-    net
     serialization
     epee
     # The one Rust archive a C++ binary links (libshekyl_ffi.a; the
