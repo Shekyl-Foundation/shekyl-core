@@ -12,7 +12,7 @@
 use std::io::{Read, Write};
 use std::net::{Ipv4Addr, SocketAddr, TcpStream};
 use std::sync::Arc;
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 use shekyl_levin::{
     invoke, BasicNodeData, BucketReader, HandshakeRequest, PortableMap, Received, COMMAND_HANDSHAKE,
@@ -195,6 +195,14 @@ fn a_clearnet_handshake_is_answered_with_tor_off() {
         answered,
         "the handshake must be answered: the connection was closed instead"
     );
+    // The session layer writes the response before it marks the session
+    // established, so no owner's first message can precede it; the board
+    // can therefore trail the bytes this peer has just read. Wait for the
+    // board, bounded: a session that closed instead never shows.
+    let by = Instant::now() + Duration::from_secs(5);
+    while network.session_counts() != (0, 1) && Instant::now() < by {
+        std::thread::sleep(Duration::from_millis(10));
+    }
     assert_eq!(
         network.session_counts(),
         (0, 1),
