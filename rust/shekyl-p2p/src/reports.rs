@@ -97,8 +97,45 @@ fn report_lateness(engine: &Handle<MonotonicClock>) -> bool {
             homes_late_1ms = totals.homes_at_least(1_000_000),
             homes_late_100ms = totals.homes_at_least(100_000_000),
             replaced_wakes = totals.replaced_wakes,
+            wake_histogram_ns = %pow2_histogram(&totals.wake_buckets),
+            home_histogram_ns = %pow2_histogram(&totals.home_buckets),
             "engine lateness"
         );
     }
     true
+}
+
+/// A power-of-two histogram as one log field: `2^i:n` for each bucket that
+/// counted, bucket `i` holding values in `[2^i, 2^(i+1))` nanoseconds
+/// (`shekyl_timing_engine::ClassLateness`'s buckets and
+/// `shekyl_capped_stream::WriteStall`'s share the shape), `none` when
+/// nothing counted. The distribution is what the relay-timing register
+/// reads (`DAEMON_RELAY_PRIVACY.md` §97): the maximum and two thresholds
+/// said whether a tail existed, not its shape.
+pub(crate) fn pow2_histogram(buckets: &[u64]) -> String {
+    let mut out = String::new();
+    for (i, n) in buckets.iter().enumerate().filter(|(_, n)| **n > 0) {
+        if !out.is_empty() {
+            out.push(' ');
+        }
+        out.push_str(&format!("2^{i}:{n}"));
+    }
+    if out.is_empty() {
+        out.push_str("none");
+    }
+    out
+}
+
+#[cfg(test)]
+mod pow2_histogram_tests {
+    use super::pow2_histogram;
+
+    #[test]
+    fn only_counted_buckets_are_named_and_an_empty_histogram_says_so() {
+        let mut buckets = [0u64; 64];
+        buckets[13] = 7;
+        buckets[20] = 1;
+        assert_eq!(pow2_histogram(&buckets), "2^13:7 2^20:1");
+        assert_eq!(pow2_histogram(&[0u64; 64]), "none");
+    }
 }
