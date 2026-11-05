@@ -667,6 +667,49 @@ session_test!(
     }
 );
 
+// Our timed sync is outstanding while an owner holds the session's
+// permit, and the peer's response waits unread past the invoke deadline.
+// The stall is this node's: the session stays, and the response is read
+// once the permit is back.
+session_test!(
+    an_owner_holding_the_session_is_not_the_peers_timeout,
+    async {
+        let mut rig = Rig::new(Settings {
+            intervals: Intervals {
+                invoke_timeout: Duration::from_millis(200),
+                timed_sync_min: Duration::from_millis(150),
+                timed_sync_jitter: Duration::from_millis(0),
+            },
+            ..Settings::default()
+        });
+        let (mut wire, _gap) = rig.accept(inbound_clearnet(28));
+        let _session = rig.establish_inbound(&mut wire).await;
+        wire.inject(new_transactions(1)).await;
+        let Event::Relay(_, _, taken) = rig.event().await else {
+            panic!("relay");
+        };
+        let Received::Request { command, .. } = wire.read().await else {
+            panic!("our timed sync");
+        };
+        assert_eq!(command, Command::TimedSync.wire_id());
+        wire.inject(timed_sync_response(vec![common::entry(7)]))
+            .await;
+        // Three invoke deadlines pass with the permit held.
+        tokio::time::sleep(Duration::from_millis(700)).await;
+        assert_eq!(
+            rig.layer.len(),
+            1,
+            "the session was closed for this node's stall"
+        );
+        drop(taken);
+        let Event::Claim(id, _, ClaimCarrier::TimedSync) = rig.event().await else {
+            panic!("the response, read once the permit is back");
+        };
+        assert_eq!(id, wire.id);
+        assert_eq!(rig.layer.len(), 1);
+    }
+);
+
 session_test!(the_tip_read_at_each_timed_sync_is_the_current_one, async {
     let mut rig = Rig::new(quick_sync());
     let (mut wire, _gap) = rig.accept(inbound_clearnet(12));
@@ -796,7 +839,7 @@ session_test!(a_relay_payload_that_does_not_decode_is_refused, async {
 });
 
 session_test!(
-    timed_sync_is_not_blocked_by_a_message_an_owner_holds,
+    a_timed_sync_request_waits_for_the_permit_an_owner_holds,
     async {
         let mut rig = Rig::new(Settings::default());
         let (mut wire, _gap) = rig.accept(inbound_clearnet(19));

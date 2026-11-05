@@ -185,7 +185,10 @@ impl<'a, C: Clock + Clone + Send + Sync + 'static> Task<'a, C> {
                         // The engine closed: the daemon is stopping.
                         return Stop::Told;
                     }
-                    self.on_wake();
+                    // No permit: an owner holds the last message, and the
+                    // stream waits unread on this node.
+                    let held = self.permits.available_permits() == 0;
+                    self.on_wake(held);
                     continue;
                 }
                 permit = Arc::clone(&self.permits).acquire_owned() => {
@@ -209,7 +212,7 @@ impl<'a, C: Clock + Clone + Send + Sync + 'static> Task<'a, C> {
                         if wake.is_err() {
                             return Stop::Told;
                         }
-                        self.on_wake();
+                        self.on_wake(false);
                         if let State::Closing = self.state {
                             return Stop::Told;
                         }
@@ -294,10 +297,23 @@ impl<'a, C: Clock + Clone + Send + Sync + 'static> Task<'a, C> {
         answer(reply.send(Err(kept)));
     }
 
-    fn on_wake(&mut self) {
+    /// Serve the deadlines due now. `held` is an owner holding the
+    /// session's permit: the stream is unread on this node's account.
+    fn on_wake(&mut self, held: bool) {
         let now = self.deadlines.now();
         for due in self.deadlines.due(now) {
             match due {
+                Due::Invoke if held => {
+                    // The response may be in the stream, unread because an
+                    // owner of this node's holds the session. The stall is
+                    // ours, not the peer's: its window starts again.
+                    tracing::debug!(
+                        id = ?self.id,
+                        "the invoke deadline passed while an owner held the session; deferred"
+                    );
+                    let timeout = ticks(self.shared.config.intervals.invoke_timeout);
+                    self.deadlines.set_invoke(after(now, timeout));
+                }
                 Due::Handshake => {
                     tracing::debug!(id = ?self.id, "inbound handshake did not arrive in time");
                     self.close(DialEnd::levin_handshake_timeout());
