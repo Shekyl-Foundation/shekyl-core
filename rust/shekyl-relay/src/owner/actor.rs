@@ -557,6 +557,15 @@ impl<C: Clock + Clone + Send + Sync + 'static> Actor<C> {
                     .get(&peer)
                     .is_some_and(|session: &Established| session.send_window(send.bytes()).is_ok());
                 if written {
+                    // Timestamp and size only: the realised cadence is read
+                    // from these lines (`DAEMON_RELAY_PRIVACY.md` §97); whether
+                    // a window carried a stem or a dummy is not written down.
+                    tracing::debug!(
+                        channel,
+                        ?peer,
+                        bytes = send.bytes().len(),
+                        "a carrier window was written"
+                    );
                     send.sent(queue);
                 } else {
                     send.failed(queue);
