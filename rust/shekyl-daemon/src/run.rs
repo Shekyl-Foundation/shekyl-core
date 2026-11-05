@@ -210,7 +210,7 @@ pub fn main(remnant: Remnant, args: &[OsString], host: &Host) -> i32 {
     // stops it) and the start fails here, rather than inside open where
     // the same stop would run twice.
     if config.mine.start {
-        if let Err(refused) = node.mining().start(None) {
+        if let Err(refused) = node.mining().start(None, None) {
             tell(
                 &mut std::io::stderr(),
                 &format!("shekyld: the miner did not start: {refused}"),

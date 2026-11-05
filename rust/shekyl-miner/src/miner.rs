@@ -16,7 +16,7 @@ use shekyl_difficulty::check_hash;
 use shekyl_hash_budget::{Budget, Class};
 use shekyl_pow_randomx::{compute_hash, CacheStore, Seedhash};
 use shekyl_thread_ledger::{spawn_dedicated, DedicatedThread, ThreadName};
-use shekyl_types::PowHash;
+use shekyl_types::{BlockHeight, PowHash};
 
 use crate::address::MiningAddress;
 use crate::drain::Draining;
@@ -53,14 +53,20 @@ impl std::error::Error for MinerStartRefused {}
 /// The OS thread name and ledger label of every worker.
 const WORKER_NAME: &str = "sk-miner";
 
-/// What the miner is started with: where it pays and how many threads it
-/// searches with.
+/// What the miner is started with: where it pays, how many threads it
+/// searches with, and the highest block it mines.
 #[derive(Debug, Clone)]
 pub struct MinerConfig {
     /// The address the template producer pays.
     pub address: MiningAddress,
     /// Worker threads.
     pub threads: NonZeroUsize,
+    /// The highest block this miner mines: a posted job above it is not
+    /// searched, and every worker waits for the next posting instead. A
+    /// worker that never hashes a job above the ceiling finds no block
+    /// above it, so a miner started to add `n` blocks adds exactly `n`
+    /// (`generateblocks`). `None` mines whatever is posted.
+    pub ceiling: Option<BlockHeight>,
 }
 
 /// The miner's state as `mining_status` reports it.
@@ -84,6 +90,8 @@ pub struct MinerStatus {
 
 struct Shared {
     board: Arc<JobBoard>,
+    /// [`MinerConfig::ceiling`], fixed for this miner's life.
+    ceiling: Option<BlockHeight>,
     caches: Arc<CacheStore>,
     /// The daemon's one hasher budget: a permit per hash (PR2-Q3).
     budget: Budget,
@@ -158,6 +166,7 @@ impl PreparedMiner {
         Ok(Self {
             shared: Arc::new(Shared {
                 board,
+                ceiling: config.ceiling,
                 caches,
                 budget,
                 found,
@@ -245,6 +254,16 @@ fn work(shared: &Shared, index: usize, range: RangeInclusive<u32>) {
     let mut seen = NONE_SEEN;
     while let Some(posted) = shared.board.next_after(seen, &shared.stop) {
         seen = posted.generation;
+        // Above the ceiling: not searched. The next `next_after` waits for
+        // a newer posting, so the worker parks rather than spins. A job's
+        // height is fixed when it is posted, so nothing found from here
+        // on is above the ceiling.
+        if shared
+            .ceiling
+            .is_some_and(|ceiling| posted.job.height > ceiling)
+        {
+            continue;
+        }
         let seed = Seedhash::from_bytes(*posted.job.seed.as_bytes());
         // A derivation would publish into the transient slot and evict the
         // validator's spare, and the seed is the job's, not one this loop

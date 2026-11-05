@@ -263,7 +263,7 @@ fn mine_on_mines_a_real_block_with_no_rpc_call() {
     })
     .unwrap_or_else(|error| panic!("the node did not open: {error}"));
     assert!(!node.mining().running(), "open does not start the miner");
-    match node.mining().start(None) {
+    match node.mining().start(None, None) {
         Ok(()) => {}
         Err(MiningRefused::Start(shekyl_miner::MinerStartRefused::OnePermit)) => return,
         Err(other) => panic!("the miner did not start: {other}"),
@@ -350,7 +350,7 @@ fn no_miner_starts_after_the_node_stops() {
     let node = open_posted(dir.path(), &[]);
     let mining = node.mining();
     node.stop();
-    let refused = mining.start(None);
+    let refused = mining.start(None, None);
     let running = mining.running();
     let _stopped = mining.stop();
     assert!(
@@ -502,7 +502,7 @@ fn close_during_arming_signals_before_a_worker_runs() {
         signaled_hook.store(flag.is_signaled(), Ordering::SeqCst);
         ran_hook.store(true, Ordering::SeqCst);
     });
-    let outcome = mining.start(NonZeroUsize::new(1));
+    let outcome = mining.start(NonZeroUsize::new(1), None);
     node.stop();
     if !ran.load(Ordering::SeqCst) {
         assert!(
@@ -657,7 +657,7 @@ fn stopping_the_miner_from_a_task_leaves_the_node_running() {
     let dir = tempfile::tempdir().expect("temp");
     let node = open_mining(dir.path(), "regtest", shekyl_address::Network::Regtest);
     let mining = node.mining();
-    match mining.start(NonZeroUsize::new(1)) {
+    match mining.start(NonZeroUsize::new(1), None) {
         Ok(()) => {}
         Err(MiningRefused::Start(shekyl_miner::MinerStartRefused::OnePermit)) => {
             // A one-permit host never mines; there is nothing to stop.

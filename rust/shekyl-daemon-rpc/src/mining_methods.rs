@@ -209,7 +209,7 @@ pub async fn start_mining(
             Some(NonZeroUsize::try_from(count).map_err(|_| RpcError::from(FactsFault::Internal))?)
         }
     };
-    on_a_blocking_thread(mining, move |mining| mining.start(threads))
+    on_a_blocking_thread(mining, move |mining| mining.start(threads, None))
         .await?
         .map_err(|refused| RpcError::new(ErrorClass::RefusedByMethod, refused))?;
     Ok(StatusOnlyResponse {
@@ -404,6 +404,13 @@ impl Drop for StartedMiner {
 /// call is dropped mid-wait. The blocks are the node's own template's,
 /// paying its `mine-address` (N2).
 ///
+/// **Exactly `count` blocks when this call starts the miner.** The miner
+/// is started with the target height as its ceiling, so no worker searches
+/// a job above it, and the block a worker could otherwise find between the
+/// target connecting and the stop does not exist. A miner already running
+/// (`start_mining`) is not this call's to bound: the tip is then at least
+/// `count` higher, and the reply's `height` says where it is.
+///
 /// It is refused at once while [`MiningFacts::refusal`] is `Some` (not
 /// synced, no address, the pool retired, a build that stayed withdrawn),
 /// and the wait ends when it becomes so: no miner can move the tip without
@@ -450,7 +457,7 @@ pub async fn generateblocks(
     let started = {
         let guard_mining = std::sync::Arc::clone(mining);
         match on_a_blocking_thread(mining, move |facts| {
-            Ok(match facts.start(None)? {
+            Ok(match facts.start(None, Some(target))? {
                 Ok(()) => Ok(StartedMiner(Some(guard_mining))),
                 Err(running) if running.code == codes::RUNNING => Ok(StartedMiner(None)),
                 Err(refused) => Err(refused),
@@ -584,6 +591,17 @@ mod tests {
     /// call waits for is already reached.
     struct Starting {
         stops: std::sync::atomic::AtomicUsize,
+        /// The ceiling `start` was given, once it was called.
+        ceiling: std::sync::Mutex<Option<Option<shekyl_types::BlockHeight>>>,
+    }
+
+    impl Starting {
+        fn new() -> Self {
+            Self {
+                stops: std::sync::atomic::AtomicUsize::new(0),
+                ceiling: std::sync::Mutex::new(None),
+            }
+        }
     }
 
     impl MiningFacts for Starting {
@@ -601,7 +619,9 @@ mod tests {
         fn start(
             &self,
             _threads: Option<NonZeroUsize>,
+            ceiling: Option<shekyl_types::BlockHeight>,
         ) -> Result<Result<(), Diagnostic>, FactsFault> {
+            *self.ceiling.lock().expect("ceiling") = Some(ceiling);
             Ok(Ok(()))
         }
         fn stop(&self) -> Result<bool, FactsFault> {
@@ -690,9 +710,7 @@ mod tests {
     /// #1165, N4). Red edit: refuse whenever no job is posted.
     #[tokio::test]
     async fn generateblocks_waits_out_a_reason_that_clears_itself() {
-        let mining: MiningHandle = std::sync::Arc::new(Starting {
-            stops: std::sync::atomic::AtomicUsize::new(0),
-        });
+        let mining: MiningHandle = std::sync::Arc::new(Starting::new());
         let row = shekyl_rpc_types::methods::json_rpc("generateblocks").expect("a row");
         let generated = generateblocks(
             &mining,
@@ -704,6 +722,32 @@ mod tests {
         .await
         .expect("waited out, not refused");
         assert_eq!(generated.height, 1);
+    }
+
+    /// The miner `generateblocks` starts mines no block above the target:
+    /// on a chain of one block, `count` 3 starts it with ceiling height 3,
+    /// the tip the call waits for. That ceiling is what makes the count
+    /// exact (`MinerConfig::ceiling`); without it the miner can land one
+    /// block past the target before the stop. Red edit: start with `None`.
+    #[tokio::test]
+    async fn generateblocks_starts_its_miner_with_the_target_as_its_ceiling() {
+        let starting = std::sync::Arc::new(Starting::new());
+        let mining: MiningHandle = starting.clone();
+        let row = shekyl_rpc_types::methods::json_rpc("generateblocks").expect("a row");
+        generateblocks(
+            &mining,
+            &Reached,
+            &Genesis,
+            shekyl_rpc_types::methods::admit_armed(row, true).expect("armed"),
+            GenerateBlocksRequest { count: 3 },
+        )
+        .await
+        .expect("generated");
+        assert_eq!(
+            *starting.ceiling.lock().expect("ceiling"),
+            Some(Some(shekyl_types::BlockHeight::from_raw(3))),
+            "started once, with the target tip as its ceiling"
+        );
     }
 
     /// `start` blocks until released. Dropping `generateblocks` while it is
@@ -727,6 +771,7 @@ mod tests {
         fn start(
             &self,
             _threads: Option<NonZeroUsize>,
+            _ceiling: Option<shekyl_types::BlockHeight>,
         ) -> Result<Result<(), Diagnostic>, FactsFault> {
             let (lock, cv) = &*self.entered;
             *lock.lock().expect("entered") = true;
@@ -830,6 +875,7 @@ mod tests {
         fn start(
             &self,
             _threads: Option<NonZeroUsize>,
+            _ceiling: Option<shekyl_types::BlockHeight>,
         ) -> Result<Result<(), Diagnostic>, FactsFault> {
             unreachable!("this status starts nothing")
         }

@@ -258,7 +258,8 @@ impl MiningControl {
 
     /// Start the miner with `threads` workers; `None` is the `mine-threads`
     /// row's count, and that row's `auto` is the host's parallelism, which
-    /// is also the most a count may ask for.
+    /// is also the most a count may ask for. `ceiling` is the highest block
+    /// it mines ([`MinerConfig::ceiling`]); `None` mines whatever is posted.
     ///
     /// Joins the one stopped set still hashing, then spawns, holding the
     /// join gate across both. A restart waits out that one hash, and a
@@ -269,7 +270,11 @@ impl MiningControl {
     /// # Errors
     ///
     /// [`MiningRefused`].
-    pub fn start(&self, threads: Option<NonZeroUsize>) -> Result<(), MiningRefused> {
+    pub fn start(
+        &self,
+        threads: Option<NonZeroUsize>,
+        ceiling: Option<BlockHeight>,
+    ) -> Result<(), MiningRefused> {
         let Some(address) = self.address.clone() else {
             return Err(MiningRefused::NoAddress);
         };
@@ -304,7 +309,11 @@ impl MiningControl {
                 }
                 drop(running);
                 PreparedMiner::arm(
-                    &MinerConfig { address, threads },
+                    &MinerConfig {
+                        address,
+                        threads,
+                        ceiling,
+                    },
                     board,
                     caches,
                     budget,
@@ -496,8 +505,12 @@ impl MiningFacts for MiningControl {
         Ok(Err(no_job_diagnostic(&why)))
     }
 
-    fn start(&self, threads: Option<NonZeroUsize>) -> Result<Result<(), Diagnostic>, FactsFault> {
-        Ok(Self::start(self, threads).map_err(|refused| {
+    fn start(
+        &self,
+        threads: Option<NonZeroUsize>,
+        ceiling: Option<BlockHeight>,
+    ) -> Result<Result<(), Diagnostic>, FactsFault> {
+        Ok(Self::start(self, threads, ceiling).map_err(|refused| {
             let code = match &refused {
                 MiningRefused::NoAddress => codes::NO_ADDRESS,
                 MiningRefused::Running => codes::RUNNING,
