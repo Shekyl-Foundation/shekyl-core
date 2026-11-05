@@ -26,7 +26,7 @@ use shekyl_chain_ingest::service::{
 use shekyl_chain_ingest::{
     ChainRules, CorpusReader, IngestEvent, Inject, ProductionSubstrate, ServeCredit, Source,
 };
-use shekyl_chain_rules::{AtHeight, FakechainSchedule, SettlementEpochBlocks};
+use shekyl_chain_rules::{AtHeight, CappedEpoch, SettlementEpochBlocks};
 use shekyl_chain_store::apply_policy::ApplyPolicy;
 use shekyl_chain_store::store::{ChainStore, Horizons};
 use shekyl_hash_budget::Budget;
@@ -88,6 +88,35 @@ impl Corpus {
         }
     }
 
+    /// The corpus's rules with the reorg cap at `depth`: what a regtest
+    /// node started with `--dev-archival-reorg-depth depth` runs (regtest's
+    /// `ArchivalReorgDepth` permit, `NETWORK_IDENTITY.md` NI-R6). Only the
+    /// constant moves; the switch, the cap check and the latch are the
+    /// production ones.
+    ///
+    /// # Panics
+    ///
+    /// `depth` is not strictly inside the corpus's settlement epoch.
+    #[must_use]
+    pub fn rules_under_reorg_depth(&self, depth: u64) -> ChainRules {
+        self.rules_with(self.fixed_difficulty, depth)
+    }
+
+    /// The corpus's epoch, at `difficulty` and reorg cap `cap`.
+    fn rules_with(&self, difficulty: u128, cap: u64) -> ChainRules {
+        let schedule = CappedEpoch::new(
+            SettlementEpochBlocks::new(self.epoch).expect("a captured epoch"),
+            BlockCount::from_raw(cap),
+        )
+        .expect("a reorg cap inside the epoch");
+        ChainRules::new(
+            shekyl_network::Network::Regtest,
+            Some(NonZeroU128::new(difficulty).expect("non-zero")),
+            schedule,
+        )
+        .expect("regtest's row permits its levers")
+    }
+
     /// The rules the corpus was mined under.
     #[must_use]
     pub fn rules(&self) -> ChainRules {
@@ -102,15 +131,7 @@ impl Corpus {
     /// `difficulty` is zero, or the manifest's pair is not a schedule.
     #[must_use]
     pub fn rules_at(&self, difficulty: u128) -> ChainRules {
-        let schedule = FakechainSchedule::new(
-            SettlementEpochBlocks::new(self.epoch).expect("a captured epoch"),
-            BlockCount::from_raw(self.cap),
-        )
-        .expect("a captured schedule");
-        ChainRules::Regtest {
-            fixed_difficulty: Some(NonZeroU128::new(difficulty).expect("non-zero")),
-            schedule,
-        }
+        self.rules_with(difficulty, self.cap)
     }
 
     /// Every step, in order.
@@ -125,9 +146,7 @@ impl Corpus {
         self.steps_through(self.tip_height)
     }
 
-    /// The steps through the block at `last`. A corpus read past a block
-    /// its reader refuses (a retired transaction kind) is read only this
-    /// far.
+    /// The steps through the block at `last`.
     ///
     /// # Panics
     ///

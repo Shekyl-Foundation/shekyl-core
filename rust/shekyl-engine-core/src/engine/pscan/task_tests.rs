@@ -17,7 +17,7 @@ use std::collections::BTreeMap;
 use std::sync::Mutex;
 
 use shekyl_archival_retention::MAX_CLAIM_AGE_W;
-use shekyl_crypto_pq::account::{DerivationNetwork, SeedFormat, MASTER_SEED_BYTES};
+use shekyl_crypto_pq::account::{Network, MASTER_SEED_BYTES};
 use shekyl_crypto_pq::archival_p::{derive_archival_p_keys, ArchivalPKeys};
 use shekyl_crypto_pq::kem::HybridKemPublicKey;
 use shekyl_engine_state::pscan_cursor::PScanCursor;
@@ -33,8 +33,7 @@ use crate::engine::test_support::{make_synthetic_block, TestDaemon, DEFAULT_TEST
 const SEED: [u8; MASTER_SEED_BYTES] = [0x33u8; MASTER_SEED_BYTES];
 
 fn persona(slot: u32) -> ArchivalPKeys {
-    derive_archival_p_keys(&SEED, DerivationNetwork::Mainnet, SeedFormat::Bip39, slot)
-        .expect("derive persona")
+    derive_archival_p_keys(&SEED, Network::Mainnet, slot).expect("derive persona")
 }
 
 fn canonical_id(p: &ArchivalPKeys) -> PCanonicalId {

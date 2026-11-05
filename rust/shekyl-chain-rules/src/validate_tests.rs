@@ -521,9 +521,9 @@ fn a_rule_set_claim_the_view_stage_refutes_is_stale_with_a_bounded_retry() {
 #[test]
 fn a_target_claim_the_view_does_not_derive_is_stale_with_a_bounded_retry() {
     let chain = spendable_chain();
-    let seven = RuleSet::fakechain(
+    let seven = RuleSet::GENESIS.with_levers(
         core::num::NonZeroU128::new(7),
-        crate::FakechainSchedule::PRODUCTION,
+        crate::CappedEpoch::PRODUCTION,
     );
     let wrong = expected_target(&chain, &seven);
     let right = expected_target(&chain, &RuleSet::GENESIS);
@@ -588,9 +588,9 @@ fn a_fakechain_rule_set_mints_at_genesis_with_d6_in_coverage() {
     // The Fixed arm used to return a Target without recording D6;
     // `covers_landed` then panicked at mint. Genesis and the set's id
     // coinciding with GENESIS is the shape that hid it.
-    let seven = RuleSet::fakechain(
+    let seven = RuleSet::GENESIS.with_levers(
         core::num::NonZeroU128::new(7),
-        crate::FakechainSchedule::PRODUCTION,
+        crate::CappedEpoch::PRODUCTION,
     );
     MockChain::default().with_view(|view| {
         let formed = formed_under(
@@ -614,9 +614,9 @@ fn a_fakechain_rule_set_mints_at_genesis_with_d6_in_coverage() {
 
 #[test]
 fn a_fakechain_set_is_stale_against_genesis_even_at_the_same_id() {
-    let seven = RuleSet::fakechain(
+    let seven = RuleSet::GENESIS.with_levers(
         core::num::NonZeroU128::new(7),
-        crate::FakechainSchedule::PRODUCTION,
+        crate::CappedEpoch::PRODUCTION,
     );
     assert_eq!(seven.id(), RuleSet::GENESIS.id());
     let formed = formed_under(
@@ -645,13 +645,13 @@ fn a_fakechain_set_is_stale_against_genesis_even_at_the_same_id() {
 
 #[test]
 fn two_fakechain_targets_are_distinct_sets() {
-    let three = RuleSet::fakechain(
+    let three = RuleSet::GENESIS.with_levers(
         core::num::NonZeroU128::new(3),
-        crate::FakechainSchedule::PRODUCTION,
+        crate::CappedEpoch::PRODUCTION,
     );
-    let seven = RuleSet::fakechain(
+    let seven = RuleSet::GENESIS.with_levers(
         core::num::NonZeroU128::new(7),
-        crate::FakechainSchedule::PRODUCTION,
+        crate::CappedEpoch::PRODUCTION,
     );
     let formed = formed_under(
         candidate(Vec::new()),

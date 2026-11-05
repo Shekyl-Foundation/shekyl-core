@@ -18,15 +18,12 @@ use shekyl_wire::{PowBlob, SkeletonTx};
 use crate::corpus::CorpusReader;
 use crate::source::{IngestEvent, Source};
 use crate::vectors_tests::captured_chains;
-use crate::vectors_tests::retired_keyless_join::UntilRetiredJoin;
 
 fn each_captured_block(mut body: impl FnMut(&str, &shekyl_chain_rules::Candidate)) {
     let mut blocks = 0u64;
     for (dir, manifest) in captured_chains() {
         let bytes = std::fs::read(dir.join("corpus.e2")).expect("read corpus");
-        let mut reader = UntilRetiredJoin::new(
-            CorpusReader::open(Cursor::new(bytes.as_slice())).expect("open corpus"),
-        );
+        let mut reader = CorpusReader::open(Cursor::new(bytes.as_slice())).expect("open corpus");
         while let Some(sequenced) = reader.next().expect("corpus reads") {
             let IngestEvent::Extend(candidate) = sequenced.event else {
                 continue;
@@ -34,7 +31,6 @@ fn each_captured_block(mut body: impl FnMut(&str, &shekyl_chain_rules::Candidate
             body(&manifest.shape, &candidate);
             blocks += 1;
         }
-        reader.finish(&manifest.shape);
     }
     assert!(blocks > 0, "the captured chains contain no blocks");
 }

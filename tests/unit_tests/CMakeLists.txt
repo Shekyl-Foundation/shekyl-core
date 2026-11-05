@@ -27,7 +27,6 @@
 # THE USE OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 
 set(unit_tests_sources
-  account.cpp
   apply_permutation.cpp
   block_reward.cpp
   economics_c2a_prime.cpp
@@ -73,7 +72,6 @@ set(unit_tests_sources
   varint.cpp
   fcmp.cpp
   vercmp.cpp
-  wallet_bip39_residency.cpp
   wipeable_string.cpp
   is_hdd.cpp
   aligned.cpp
@@ -141,6 +139,10 @@ SET_PROPERTY(SOURCE archival_serve_credit_integration.cpp PROPERTY COMPILE_DEFIN
 # macro expands to a valid C string literal — verified in build.ninja.
 SET_PROPERTY(SOURCE archival_bond_record_v7_corpus.cpp PROPERTY COMPILE_DEFINITIONS
   ARCHIVAL_BOND_RECORD_V7_CORPUS_PATH="${CMAKE_SOURCE_DIR}/docs/test_vectors/ARCHIVAL_BOND_RECORD_V7.json")
+# The network table's mainnet genesis transaction, a production coinbase
+# fixture (NETWORK_IDENTITY.md NI-Q3).
+SET_PROPERTY(SOURCE json_serialization.cpp tx_prunable_region_sole_occupant.cpp APPEND PROPERTY COMPILE_DEFINITIONS
+  MAINNET_GENESIS_TX_HEX_PATH="${CMAKE_SOURCE_DIR}/rust/shekyl-network/genesis/mainnet.tx.hex")
 SET_PROPERTY(SOURCE mtp_boundary.cpp PROPERTY COMPILE_DEFINITIONS
   MTP_BOUNDARY_VECTOR_PATH="${CMAKE_SOURCE_DIR}/docs/test_vectors/MTP_BOUNDARY_V1.json")
 SET_PROPERTY(SOURCE pruned_tx_hash_parity.cpp PROPERTY COMPILE_DEFINITIONS

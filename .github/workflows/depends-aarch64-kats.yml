@@ -100,14 +100,14 @@ jobs:
         # `archival_p` is the third cross-arch-deterministic primitive (after
         # reward-arithmetic and the standoff draw). A divergent bit on aarch64
         # means an ARM-phone user cannot recover their own bond, so the
-        # ARCHIVAL_P_DERIVE_V1 KAT (+ corpus freeze self-check) must run under
+        # ARCHIVAL_P_DERIVE_V2 KAT (+ corpus freeze self-check) must run under
         # qemu, not just compile. Scoped to the KAT binary so the slow
         # ML-KEM/ML-DSA keygen path runs only for the pinned vectors; the
         # p_canonical_id cross-check is exercised via the
         # shekyl-archival-retention run above (it depends on archival_p).
         cargo test --locked -p shekyl-crypto-pq \
           --target aarch64-unknown-linux-gnu \
-          --test kat_archival_p_derive_v1
+          --test kat_archival_p_derive_v2
         # The FN-DSA hybrid (scheme 3) is the fourth. Its key generation and
         # verification are integer-only and must agree across architectures;
         # its signing uses hardware f64, and a deterministic Falcon signer

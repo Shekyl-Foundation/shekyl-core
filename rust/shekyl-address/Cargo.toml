@@ -14,6 +14,7 @@ license.workspace = true
 [dependencies]
 shekyl-encoding = { path = "../shekyl-encoding" }
 shekyl-crypto-hash = { path = "../shekyl-crypto-hash" }
+shekyl-network = { path = "../shekyl-network" }
 bech32 = "0.11"
 thiserror.workspace = true
 serde = { workspace = true, optional = true }
@@ -23,7 +24,7 @@ tempfile = "3"
 
 [features]
 default = []
-serde = ["dep:serde"]
+serde = ["dep:serde", "shekyl-network/serde"]
 
 [lints]
 workspace = true

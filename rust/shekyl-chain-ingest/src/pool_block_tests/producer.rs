@@ -710,9 +710,9 @@ async fn a_pass_that_no_longer_holds_is_verified_outside_the_pool_lock() {
             pool.admit(spend.clone(), now, view, rule_set, &policy)
                 .expect("no fault");
             let held = pool.needing_step1(view, rule_set).expect("reads").len();
-            let other = shekyl_chain_rules::RuleSet::fakechain(
+            let other = shekyl_chain_rules::RuleSet::GENESIS.with_levers(
                 Some(std::num::NonZeroU128::new(7).expect("non-zero")),
-                shekyl_chain_rules::FakechainSchedule::PRODUCTION,
+                shekyl_chain_rules::CappedEpoch::PRODUCTION,
             );
             assert_ne!(other, *rule_set, "fixture");
             let listed: Vec<_> = pool

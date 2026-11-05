@@ -10,7 +10,7 @@
 //! the genesis rules, which an exemption keyed on the test networks would
 //! not reach. This test applies the same mutation to the captured
 //! `spend-1in-2out` chain — a regtest chain, replayed under its own
-//! `FakechainSchedule` — so an exemption restored for the test networks
+//! `CappedEpoch` — so an exemption restored for the test networks
 //! refuses on a later row here and fails.
 
 use std::path::Path;
@@ -22,7 +22,6 @@ use shekyl_types::{BlockCount, BlockHeight};
 use shekyl_wire::Input;
 
 use super::replay::replay_open;
-use super::retired_keyless_join::UntilRetiredJoin;
 use super::{captured_chains, mock_with_the_real_clock};
 use crate::corpus::CorpusReader;
 use crate::mutation::{Environment, Mutated, Mutation};
@@ -66,9 +65,7 @@ async fn the_ninth_input_is_refused_on_a_captured_regtest_chain() {
     let corpus = std::fs::read(dir.join("corpus.e2")).expect("read corpus.e2");
     let trace = std::fs::read(dir.join("trace.e2")).expect("read trace.e2");
     let source = Mutated::new(
-        UntilRetiredJoin::new(
-            CorpusReader::open(std::io::Cursor::new(corpus.as_slice())).expect("open corpus"),
-        ),
+        CorpusReader::open(std::io::Cursor::new(corpus.as_slice())).expect("open corpus"),
         at,
         Mutation::TooManyInputs,
         Environment {
@@ -79,7 +76,7 @@ async fn the_ninth_input_is_refused_on_a_captured_regtest_chain() {
             resigned: None,
         },
     );
-    let (report, path, _rules, _source) = replay_open(
+    let (report, path, _rules) = replay_open(
         &manifest,
         substrate,
         ApplyPolicy::Full,

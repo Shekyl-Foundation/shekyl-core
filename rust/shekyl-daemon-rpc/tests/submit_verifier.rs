@@ -591,7 +591,7 @@ fn bond_mutated(f: impl FnOnce(&mut Transaction)) -> ParsedSubmission {
 fn build_bond_fixture(receipt: Option<&shekyl_types::archival::ReceiptSignPk>) -> BondFixture {
     use shekyl_archival_bond_builder::{build_join_market_vin, verify_credit_funding};
     use shekyl_archival_retention::{bond_floor, HoldingsDescriptor, HoldingsKind, ShardSet};
-    use shekyl_crypto_pq::account::{DerivationNetwork, SeedFormat};
+    use shekyl_crypto_pq::account::Network;
     use shekyl_crypto_pq::archival_p::derive_archival_p_keys;
     use shekyl_crypto_pq::signature::{HybridEd25519MlDsa, SignatureScheme};
     use shekyl_tx_builder::{sign_transaction_with_terms, tx_prefix_hash_from_parts_with_extra};
@@ -605,8 +605,7 @@ fn build_bond_fixture(receipt: Option<&shekyl_types::archival::ReceiptSignPk>) -
     // ── P identity + holdings (CompleteTree: floor = the flat constant) ──
     let p_keys = derive_archival_p_keys(
         &[0x5B; shekyl_crypto_pq::account::MASTER_SEED_BYTES],
-        DerivationNetwork::Fakechain,
-        SeedFormat::Raw32,
+        Network::Regtest,
         0,
     )
     .expect("derive archival P keys");
@@ -1520,7 +1519,7 @@ fn release_admitting_facts() -> SubmitFacts {
 
 fn build_release_fixture(auth_key: ReleaseAuthKey) -> ReleaseFixture {
     use shekyl_archival_bond_builder::{build_release_vin, verify_debit_funding};
-    use shekyl_crypto_pq::account::{DerivationNetwork, SeedFormat};
+    use shekyl_crypto_pq::account::Network;
     use shekyl_crypto_pq::archival_p::derive_archival_p_keys;
     use shekyl_crypto_pq::signature::{HybridEd25519MlDsa, SignatureScheme};
     use shekyl_tx_builder::{sign_transaction_with_terms, tx_prefix_hash_from_parts_with_extra};
@@ -1533,8 +1532,7 @@ fn build_release_fixture(auth_key: ReleaseAuthKey) -> ReleaseFixture {
 
     let p_keys = derive_archival_p_keys(
         &[0x5B; shekyl_crypto_pq::account::MASTER_SEED_BYTES],
-        DerivationNetwork::Fakechain,
-        SeedFormat::Raw32,
+        Network::Regtest,
         0,
     )
     .expect("derive archival P keys");

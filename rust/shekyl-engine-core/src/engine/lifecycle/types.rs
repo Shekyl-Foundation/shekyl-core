@@ -8,7 +8,7 @@
 use std::path::Path;
 
 use shekyl_address::Network;
-use shekyl_crypto_pq::account::{SeedFormat, MASTER_SEED_BYTES};
+use shekyl_crypto_pq::account::SEED_BYTES;
 use shekyl_crypto_pq::wallet_envelope::KdfParams;
 use shekyl_engine_file::SafetyOverrides;
 use shekyl_engine_prefs::WalletPrefs;
@@ -184,20 +184,15 @@ impl<
 /// The enum shape is kept because it is the create-side parse boundary
 /// a ratified future capability would join through.
 pub enum CapabilityInput<'a> {
-    /// Spendable wallet. The wallet file persists the 64-byte master
-    /// seed under the envelope; every open re-derives the spend / view
-    /// scalars and the ML-KEM decapsulation key from this seed.
+    /// Spendable wallet. The wallet file persists the 32-byte seed
+    /// under the envelope; every open re-derives the spend / view
+    /// scalars and the ML-KEM decapsulation key from it, and the 24
+    /// words are its spelling (`NETWORK_IDENTITY.md` NI-R7).
     Full {
-        /// 64-byte master seed bytes the envelope persists. Must be
-        /// the value the caller intends to be the long-term identity
-        /// material — this function does **not** generate a fresh
-        /// seed.
-        master_seed_64: &'a [u8; MASTER_SEED_BYTES],
-        /// Declared seed format. Bound to the wallet-file AAD so a
-        /// raw-seed wallet cannot be silently reopened as BIP-39 (or
-        /// vice versa). Must satisfy
-        /// [`DerivationNetwork::permitted_seed_format`].
-        seed_format: SeedFormat,
+        /// The wallet's 32-byte seed. Must be the value the caller
+        /// intends to be the long-term identity material — this
+        /// function does **not** generate a fresh seed.
+        seed: &'a [u8; SEED_BYTES],
     },
 }
 
@@ -269,31 +264,21 @@ pub struct EngineCreateParams<'a> {
 #[cfg(test)]
 impl<'a> EngineCreateParams<'a> {
     /// Test-only helper. Builds a FULL-capability `EngineCreateParams`
-    /// with the supplied `base_path`, `credentials`, and
-    /// `master_seed_64`, and pins all other fields to known-good
-    /// defaults: `Network::Stagenet`, `SeedFormat::Bip39`,
+    /// with the supplied `base_path`, `credentials`, and `seed`, and pins
+    /// all other fields to known-good defaults: `Network::Stagenet`,
     /// `creation_timestamp = 0`, `restore_height_hint = 0`,
     /// minimum-wall-clock KDF, [`SafetyOverrides::none`], and
-    /// [`WalletPrefs::default`].
-    ///
-    /// `Stagenet + Bip39` is a permitted `(network, seed_format)` pair
-    /// per [`DerivationNetwork::permitted_seed_format`]; passing an
-    /// arbitrary 64-byte master seed is fine — the format byte is
-    /// only used as a derivation-salt component, not as a re-derivation
-    /// pre-check on the bytes themselves.
+    /// [`WalletPrefs::default`]. Any 32 bytes are a seed.
     pub(crate) fn for_test_full(
         base_path: &'a Path,
         credentials: &'a Credentials<'a>,
-        master_seed_64: &'a [u8; MASTER_SEED_BYTES],
+        seed: &'a [u8; SEED_BYTES],
     ) -> Self {
         Self {
             base_path,
             credentials,
             network: Network::Stagenet,
-            capability: CapabilityInput::Full {
-                master_seed_64,
-                seed_format: SeedFormat::Bip39,
-            },
+            capability: CapabilityInput::Full { seed },
             creation_timestamp: 0,
             restore_height_hint: 0,
             // Minimum-wall-clock KDF; matches the relaxation other

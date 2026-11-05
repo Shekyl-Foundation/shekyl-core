@@ -12,7 +12,7 @@ use shekyl_types::{BlockHash, BlockHeight};
 
 use super::GenesisPin;
 
-const NETWORKS: [Network; 3] = [Network::Mainnet, Network::Testnet, Network::Stagenet];
+const NETWORKS: [Network; 4] = Network::ALL;
 
 const fn height(raw: u64) -> BlockHeight {
     BlockHeight::from_raw(raw)
@@ -22,11 +22,11 @@ const fn hash(fill: u8) -> BlockHash {
     BlockHash::from_bytes([fill; 32])
 }
 
-/// Every public network pins its genesis and nothing else, and each
-/// network's genesis is its own. Rule 71 rides along: the three tables
-/// have the same shape and differ only in the datum a network is.
+/// Every network pins its genesis and nothing else, and each network's
+/// genesis is its own. Rule 71 rides along: the four tables have the same
+/// shape and differ only in the datum a network is.
 #[test]
-fn every_public_network_pins_its_own_genesis_and_nothing_above_it() {
+fn every_network_pins_its_own_genesis_and_nothing_above_it() {
     let mut seen = std::collections::BTreeSet::new();
     for network in NETWORKS {
         let table = GenesisPin::for_network(network);
@@ -46,73 +46,25 @@ fn every_public_network_pins_its_own_genesis_and_nothing_above_it() {
     }
 }
 
-/// The genesis hashes are **derived**, not restated: rebuild each network's
-/// genesis block from `cryptonote_config.h`'s `GENESIS_TX` / `GENESIS_NONCE`
-/// pins the way `generate_genesis_block` does (the genesis tool's builder,
-/// which `geblock verify` holds byte-equal to the pins) and assert the
-/// table carries that block's identity. A remint of genesis fails here
-/// until the table follows.
+/// The pin is the network table's genesis (`NETWORK_IDENTITY.md` NI-Q3),
+/// which the genesis tool rebuilds from each recipients file, and the
+/// client identity's pin (`shekyl_rpc_types::genesis_hash_for`, `VC-D18`)
+/// is the same fact.
 #[test]
-fn the_genesis_pin_is_the_configured_genesis_block() {
-    use shekyl_genesis_tool::builder::genesis_block;
-    use shekyl_genesis_tool::config_pin::parse_config_genesis;
-    let config_h = include_str!("../../../src/cryptonote_config.h");
-    let pins = parse_config_genesis(config_h).expect("cryptonote_config.h carries the pins");
+fn the_genesis_pin_is_the_tables_genesis() {
     for network in NETWORKS {
-        let pin = pins.for_network(network);
-        let tx_bytes = unhex(&pin.genesis_tx_hex);
-        let tx = shekyl_wire::Transaction::from_bytes(&tx_bytes).expect("GENESIS_TX decodes");
-        let block = genesis_block(tx, pin.genesis_nonce).expect("genesis block assembles");
+        let table = BlockHash::from_bytes(network.genesis().hash());
         assert_eq!(
             GenesisPin::for_network(network).expected_at(height(0)),
-            Some(block.hash()),
-            "{network:?}: the pin is the block cryptonote_config.h configures"
+            Some(table),
+            "{network}"
         );
-    }
-}
-
-/// The client identity's genesis pins (`shekyl_rpc_types::genesis_hash_for`,
-/// `VC-D18`) and this table are two Rust homes of one fact; they cannot
-/// drift.
-#[test]
-fn the_genesis_pin_agrees_with_the_client_identity_pins() {
-    use shekyl_rpc_types::DaemonNetwork;
-    for (network, daemon) in [
-        (Network::Mainnet, DaemonNetwork::Mainnet),
-        (Network::Testnet, DaemonNetwork::Testnet),
-        (Network::Stagenet, DaemonNetwork::Stagenet),
-    ] {
         assert_eq!(
-            GenesisPin::for_network(network).expected_at(height(0)),
-            Some(BlockHash::from_bytes(shekyl_rpc_types::genesis_hash_for(
-                daemon
-            ))),
-            "{network:?}"
+            BlockHash::from_bytes(shekyl_rpc_types::genesis_hash_for(network)),
+            table,
+            "{network}: the client identity's pin"
         );
     }
-}
-
-/// Regtest's pin is the genesis a regtest node connects: the client
-/// identity's fakechain genesis, which is mainnet's configured block.
-#[test]
-fn the_fakechain_pin_is_the_genesis_a_regtest_node_connects() {
-    use shekyl_rpc_types::DaemonNetwork;
-    assert_eq!(
-        GenesisPin::FAKECHAIN.expected_at(height(0)),
-        Some(BlockHash::from_bytes(shekyl_rpc_types::genesis_hash_for(
-            DaemonNetwork::Fakechain
-        )))
-    );
-}
-
-/// Lowercase hex to bytes, for the `GENESIS_TX` pin. Local so the crate does
-/// not take a hex dependency for one test.
-fn unhex(hex: &str) -> Vec<u8> {
-    assert!(hex.len().is_multiple_of(2), "even-length hex");
-    (0..hex.len())
-        .step_by(2)
-        .map(|i| u8::from_str_radix(&hex[i..i + 2], 16).expect("hex digit"))
-        .collect()
 }
 
 /// A fixture pin answers at height 0 only, and the empty table nowhere.

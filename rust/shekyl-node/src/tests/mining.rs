@@ -21,8 +21,7 @@ fn a_block_made_from_the_template_connects_through_submit_block() {
     let handles = node.handles();
     let reply = get_block_template(&*handles.mining).expect("a template");
     assert_eq!(reply.height, 1);
-    let genesis =
-        BlockHash::from_bytes(shekyl_rpc_types::genesis_hash_for(DaemonNetwork::Fakechain));
+    let genesis = BlockHash::from_bytes(shekyl_rpc_types::genesis_hash_for(Network::Regtest));
     assert_eq!(reply.prev_hash.to_bytes(), genesis.to_bytes());
     let mut blob = hex::decode(&reply.blocktemplate_blob).expect("hex");
     let extra = usize::try_from(reply.reserved_offset).expect("fits");
@@ -238,7 +237,7 @@ fn a_thread_count_past_the_hosts_parallelism_starts_nothing() {
 fn mine_on_mines_a_real_block_with_no_rpc_call() {
     let dir = tempfile::tempdir().expect("temp");
     std::fs::create_dir_all(dir.path()).expect("dir");
-    let address = mining_address(shekyl_address::Network::Mainnet);
+    let address = mining_address(shekyl_address::Network::Regtest);
     let config = config_on(
         dir.path(),
         "regtest",
@@ -491,7 +490,7 @@ fn close_during_arming_signals_before_a_worker_runs() {
     use std::sync::atomic::{AtomicBool, Ordering};
     use std::sync::Arc;
     let dir = tempfile::tempdir().expect("temp");
-    let node = open_mining(dir.path(), "regtest", shekyl_address::Network::Mainnet);
+    let node = open_mining(dir.path(), "regtest", shekyl_address::Network::Regtest);
     let mining = node.mining();
     let ran = Arc::new(AtomicBool::new(false));
     let signaled = Arc::new(AtomicBool::new(false));
@@ -586,7 +585,7 @@ fn pop_blocks_refuses_genesis_pops_one_and_the_node_stays_up() {
 #[test]
 fn a_regtest_node_with_an_address_posts_its_template_with_no_sessions() {
     let dir = tempfile::tempdir().expect("temp");
-    let node = open_mining(dir.path(), "regtest", shekyl_address::Network::Mainnet);
+    let node = open_mining(dir.path(), "regtest", shekyl_address::Network::Regtest);
     let mut posting = node.posting();
     let started = std::time::Instant::now();
     while !matches!(*posting.borrow_and_update(), Posting::Posted(_)) {
@@ -599,8 +598,7 @@ fn a_regtest_node_with_an_address_posts_its_template_with_no_sessions() {
     }
     let (_, job) = node.mining.board.posted().expect("the job");
     assert_eq!(job.height, BlockHeight::from_raw(1));
-    let genesis =
-        BlockHash::from_bytes(shekyl_rpc_types::genesis_hash_for(DaemonNetwork::Fakechain));
+    let genesis = BlockHash::from_bytes(shekyl_rpc_types::genesis_hash_for(Network::Regtest));
     assert_eq!(job.block.header.previous, genesis);
     let status = node.mining().status();
     assert_eq!(status.no_job, None);
@@ -657,7 +655,7 @@ fn a_node_on_an_open_network_posts_nothing_until_chain_sync_says_synced() {
 #[test]
 fn stopping_the_miner_from_a_task_leaves_the_node_running() {
     let dir = tempfile::tempdir().expect("temp");
-    let node = open_mining(dir.path(), "regtest", shekyl_address::Network::Mainnet);
+    let node = open_mining(dir.path(), "regtest", shekyl_address::Network::Regtest);
     let mining = node.mining();
     match mining.start(NonZeroUsize::new(1)) {
         Ok(()) => {}

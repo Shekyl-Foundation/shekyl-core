@@ -22,8 +22,7 @@ use std::time::Instant;
 use shekyl_chain_ingest::{CorpusReader, IngestEvent, Source};
 use shekyl_chain_rules::harness::fixture::{candidate_on, chain_of};
 use shekyl_chain_rules::{
-    AtHeight, FakechainSchedule, HeaderRecord, HeaderView, RuleSet, SettlementEpochBlocks, Tip,
-    Trust,
+    AtHeight, CappedEpoch, HeaderRecord, HeaderView, RuleSet, SettlementEpochBlocks, Tip, Trust,
 };
 use shekyl_difficulty::CumulativeDifficulty;
 use shekyl_draw_rng::RelayRng;
@@ -114,9 +113,8 @@ fn a_spend_chain_skeleton_is_bound_and_wanted_in_full_from_another_session() {
         })
         .collect();
     let epoch = SettlementEpochBlocks::new(10_000).expect("the corpus epoch");
-    let schedule =
-        FakechainSchedule::new(epoch, BlockCount::from_raw(720)).expect("the corpus cap");
-    let rules = RuleSet::fakechain(NonZeroU128::new(1), schedule);
+    let schedule = CappedEpoch::new(epoch, BlockCount::from_raw(720)).expect("the corpus cap");
+    let rules = RuleSet::GENESIS.with_levers(NonZeroU128::new(1), schedule);
     let mut sync = Sync::new(Trust::UNPINNED, move |_| rules);
     let genesis = Prefix(&records[..1]);
     let tip = genesis.tip().expect("genesis").expect("a tip");

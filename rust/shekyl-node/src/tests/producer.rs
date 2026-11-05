@@ -18,7 +18,7 @@ use super::*;
 #[test]
 fn the_producer_holds_its_reads_descriptors_only_when_it_runs() {
     let dir = tempfile::tempdir().expect("temp");
-    let address = mining_address(shekyl_address::Network::Mainnet);
+    let address = mining_address(shekyl_address::Network::Regtest);
     let reads = u64::try_from(shekyl_bundle_producer::read::READS_AT_ONCE.get()).expect("small");
     assert_eq!(
         reads,

@@ -183,8 +183,8 @@ argon2 = { version = "0.5", default-features = false, features = ["alloc", "zero
 # nonces are collision-safe for the entire lifetime of a wallet file).
 # Used for:
 #   - the wrap AEAD that encrypts file_kek under the Argon2id-derived wrap_key
-#   - the region 1 AEAD under HKDF(file_kek, "shekyl-region1-aead-v1")
-#   - the region 2 AEAD under HKDF(file_kek, "shekyl-region2-aead-v1" || addr)
+#   - the region 1 AEAD under HKDF(file_kek, "shekyl-region1-aead-v2")
+#   - the region 2 AEAD under HKDF(file_kek, "shekyl-region2-aead-v2" || addr)
 # All three AEADs use the same primitive; the distinctions are (key, nonce,
 # AAD) tuples, never the cipher.
 chacha20poly1305 = { version = "0.10", default-features = false, features = ["alloc"] }
@@ -223,7 +223,7 @@ rand_chacha = "0.3"
 # that feature, and a separate integration-test crate cannot see the in-crate
 # `cfg(test)` gate. Standard cargo idiom for feature-enabling one's own tests.
 shekyl-crypto-pq = { path = ".", features = ["test-utils"] }
-# Note: the ARCHIVAL_P_DERIVE_V1 KAT computes its p_canonical_id via an inline
+# Note: the ARCHIVAL_P_DERIVE_V2 KAT computes its p_canonical_id via an inline
 # cSHAKE256 (so the `shekyl-archival-retention` cross-check proves the two
 # cSHAKE paths agree). It uses `sha3` directly, which is already a normal
 # `[dependencies]` entry and is therefore available to tests without a separate

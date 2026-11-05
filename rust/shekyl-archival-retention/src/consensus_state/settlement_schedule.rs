@@ -30,7 +30,7 @@ use shekyl_types::{BlockHeight, SettlementEpoch};
 /// **Two ways to obtain one, and which is whose.** The validator reads the
 /// schedule off the rule set in force
 /// (`shekyl_chain_rules::RuleSet::settlement_schedule`) — the genesis
-/// constant on every issued set, a regtest lever's value on a Fakechain set
+/// constant on every issued set, a regtest lever's value on a levered set
 /// — and so never reads a process's environment (rule 71; DRS-E4 `ARW-15`).
 /// The C++ daemon, the FFI shims and the wallet, which hold no rule set,
 /// read [`Self::effective`]: the process-latched schedule the daemon arms

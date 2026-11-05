@@ -75,7 +75,7 @@
 //! tip, so the walk stays above it when
 //! `(k + 1)·SEB + reorg_cap ≤ (k + n)·SEB + reorg_cap`. Both sides scale
 //! with `SEB` and carry the same cap, so the relation is in epochs and
-//! holds under every schedule, Fakechain's included:
+//! holds under every schedule, a levered one included:
 //! [`WALK_BACK_EPOCHS`] against that floor's epochs, asserted at compile
 //! time. The Release journal is retired at [`crate::ReleaseJournalFloor`],
 //! one above `h_open` of the oldest epoch the settling family keeps,

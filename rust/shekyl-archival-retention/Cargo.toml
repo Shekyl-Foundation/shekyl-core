@@ -53,7 +53,7 @@ shekyl-archival-retention = { path = ".", features = ["consensus-kat"] }
 shekyl-crypto-pq = { path = "../shekyl-crypto-pq", features = ["test-utils"] }
 shekyl-curve-tree = { path = "../shekyl-curve-tree" }
 serde_json = { workspace = true }
-# ARCHIVAL_P_DERIVE_V1 p_canonical_id cross-check: derive `P` via
+# ARCHIVAL_P_DERIVE_V2 p_canonical_id cross-check: derive `P` via
 # `shekyl-crypto-pq::archival_p` and confirm `id::p_canonical_id_from_hybrid_pubkey`
 # reproduces the KAT-pinned value (the second of the two independent cSHAKE256
 # paths the crypto-pq KAT establishes).

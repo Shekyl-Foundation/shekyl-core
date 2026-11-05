@@ -10,7 +10,7 @@ use std::path::Path;
 use tracing::warn;
 
 use shekyl_address::Network;
-use shekyl_crypto_pq::account::{rederive_account, SeedFormat};
+use shekyl_crypto_pq::account::{account_from_seed, rederive_account};
 use shekyl_crypto_pq::wallet_envelope::{CapabilityContent, EXPECTED_CLASSICAL_ADDRESS_BYTES};
 use shekyl_engine_file::{
     CreateParams as FileCreateParams, OpenOutcome, SafetyOverrides, WalletFile,
@@ -23,9 +23,7 @@ use crate::engine::error::{IoError, KeyError, OpenError};
 use crate::engine::stake_engine::PSlot;
 use crate::engine::{Capability, DaemonClient, Engine, SoloSigner};
 
-use super::support::{
-    is_default_overrides, map_wallet_file_error, network_to_derivation, rederivation_failure_detail,
-};
+use super::support::{is_default_overrides, map_wallet_file_error, rederivation_failure_detail};
 use super::{CapabilityInput, Credentials, EngineCreateParams, FirstStakeIntent, OpenedEngine};
 
 impl Engine<SoloSigner> {
@@ -48,8 +46,7 @@ impl Engine<SoloSigner> {
     /// - [`OpenError::Io`] for filesystem / envelope failures
     ///   (including the keys-file-already-exists case).
     /// - [`OpenError::Key`] for re-derivation failures (envelope's
-    ///   own `expected_classical_address` cross-check, or the
-    ///   `(network, seed_format)` permission check).
+    ///   own `expected_classical_address` cross-check).
     pub fn create(params: EngineCreateParams<'_>, daemon: DaemonClient) -> Result<Self, OpenError> {
         let EngineCreateParams {
             base_path,
@@ -63,25 +60,17 @@ impl Engine<SoloSigner> {
             prefs,
         } = params;
 
-        let CapabilityInput::Full {
-            master_seed_64,
-            seed_format,
-        } = capability;
+        let CapabilityInput::Full { seed } = capability;
 
-        // Re-derive the AllKeysBlob first so we can compute the
+        // Derive the AllKeysBlob first so we can compute the
         // expected_classical_address that the wallet-file's AAD
         // commits to. The envelope cross-checks this on every open,
         // so getting it right here is load-bearing.
-        let derivation_network = network_to_derivation(network);
-        if !derivation_network.permitted_seed_format(seed_format) {
-            return Err(OpenError::Key(KeyError::UnsupportedDerivationPair));
-        }
-        let blob =
-            rederive_account(master_seed_64, derivation_network, seed_format).map_err(|e| {
-                OpenError::Key(KeyError::Primitive {
-                    detail: rederivation_failure_detail(&e),
-                })
-            })?;
+        let (master_seed_64, blob) = account_from_seed(seed, network).map_err(|e| {
+            OpenError::Key(KeyError::Primitive {
+                detail: rederivation_failure_detail(&e),
+            })
+        })?;
 
         // The envelope stores (and AAD-commits, and KEK-binds) the 65-byte
         // `version ‖ spend ‖ view` PREFIX of the classical bytes — the
@@ -97,13 +86,12 @@ impl Engine<SoloSigner> {
             initial_ledger.sync_state.restore_from_height =
                 BlockHeight::from_raw(u64::from(restore_height_hint));
         }
-        let cap_content = CapabilityContent::Full { master_seed_64 };
+        let cap_content = CapabilityContent::Full { seed };
 
         let file_params = FileCreateParams {
             base_path,
             password: credentials.password(),
             network,
-            seed_format: seed_format.as_u8(),
             capability: &cap_content,
             creation_timestamp,
             restore_height_hint,
@@ -150,8 +138,7 @@ impl Engine<SoloSigner> {
         Self::assemble(
             file,
             blob,
-            master_seed_64,
-            seed_format,
+            &master_seed_64,
             initial_ledger,
             indexes,
             prefs,
@@ -234,25 +221,17 @@ impl Engine<SoloSigner> {
         let capability = file.capability();
         debug_assert_eq!(capability, Capability::Full);
 
-        // Pull the master seed out of the FULL-mode envelope and
-        // re-derive every key. This is the load-bearing step: the
+        // Pull the seed out of the FULL-mode envelope and re-derive
+        // every key. This is the load-bearing step: the
         // re-derived bytes must match the AAD-committed
         // `expected_classical_address` or we refuse loudly.
         let inputs = file.extract_rederivation_inputs();
 
-        let seed_format = SeedFormat::from_u8(file.opened_keys().seed_format)
-            .ok_or(OpenError::Key(KeyError::UnsupportedDerivationPair))?;
-        let derivation_network = network_to_derivation(network);
-        if !derivation_network.permitted_seed_format(seed_format) {
-            return Err(OpenError::Key(KeyError::UnsupportedDerivationPair));
-        }
-
-        let blob = rederive_account(&inputs.master_seed_64, derivation_network, seed_format)
-            .map_err(|e| {
-                OpenError::Key(KeyError::Primitive {
-                    detail: rederivation_failure_detail(&e),
-                })
-            })?;
+        let blob = rederive_account(&inputs.master_seed_64, network).map_err(|e| {
+            OpenError::Key(KeyError::Primitive {
+                detail: rederivation_failure_detail(&e),
+            })
+        })?;
 
         // Public-bytes cross-check: the envelope's AAD commits to the
         // 65-byte `version ‖ spend ‖ view` classical PREFIX; rederive must
@@ -296,7 +275,6 @@ impl Engine<SoloSigner> {
             file,
             blob,
             &inputs.master_seed_64,
-            seed_format,
             ledger,
             indexes,
             prefs,

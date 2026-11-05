@@ -60,7 +60,7 @@ use shekyl_archival_retention::{
     PASS_DELIVERY_DIGEST_LEN, PASS_NONCE_LEN, PASS_REQUEST_HEADER_LEN, WITNESS_ENTRY_LEN,
     WITNESS_PREFIX_LEN,
 };
-use shekyl_crypto_pq::account::{DerivationNetwork, SeedFormat};
+use shekyl_crypto_pq::account::Network;
 use shekyl_crypto_pq::archival_p::derive_archival_p_keys;
 use shekyl_crypto_pq::signature::{
     HybridEd25519MlDsa, HybridPublicKey, HybridSecretKey, HybridSignature, SignatureScheme,
@@ -637,13 +637,8 @@ fn sig_digest() -> [u8; PASS_DELIVERY_DIGEST_LEN] {
 }
 
 fn pinned_persona() -> (HybridPublicKey, HybridSecretKey, [u8; 32]) {
-    let keys = derive_archival_p_keys(
-        &MASTER_SEED,
-        DerivationNetwork::Mainnet,
-        SeedFormat::Bip39,
-        P_SLOT,
-    )
-    .expect("derive pinned persona");
+    let keys = derive_archival_p_keys(&MASTER_SEED, Network::Mainnet, P_SLOT)
+        .expect("derive pinned persona");
     let pk_bytes = keys.hybrid_sign_pk.to_canonical_bytes().expect("pk bytes");
     let p_id = *shekyl_archival_retention::p_canonical_id_from_hybrid_pubkey(&pk_bytes).as_bytes();
     (

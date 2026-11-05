@@ -167,7 +167,9 @@ ARMED=(
   # diff assertion inverted to "NOT-THE-TIP": panicked at "the in-process
   # diff must name the live tip".
   engine::regtest_e2e::origin::daemon_words_answer_through_shekyl_cli
-  engine::regtest_e2e::the_armed_switch_on_testnet_serves_two_levers_and_knows_no_third
+  # Renamed 2026-11-04 (NI-R8): dev-rpc is regtest's alone, so the armed
+  # switch is held on regtest; a testnet daemon given it is refused at load.
+  engine::regtest_e2e::the_armed_switch_serves_two_levers_and_knows_no_third
   engine::regtest_e2e::sync::a_dialing_node_hands_its_tip_to_the_peer_it_dials
   # Observed red 2026-10-30 on the flip at e4280bfbf5 before the sync-head
   # fix: the joiner stood at height 21 of 101 (one span) until the deadline.

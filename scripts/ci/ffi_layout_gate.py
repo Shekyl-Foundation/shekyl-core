@@ -43,9 +43,7 @@ GROUPS = [
             "rust/shekyl-seam/src/endpoint.rs",
             "rust/shekyl-archival-retention/src/pass_anchor.rs",
         ],
-        # Its array bounds are aliases of constants in shekyl-crypto-pq and
-        # shekyl-address, which alias further constants; see EXEMPT.
-        "exclude": ["ShekylAllKeysBlob"],
+        "exclude": [],
         "pairs": {
             # The configuration snapshot the C++ remnant reads, and the
             # importer's and core_tests' (daemon_snapshot_ffi.rs, §2.9).
@@ -107,12 +105,6 @@ GROUPS = [
 # Structs a header defines that no pair compares, each with its reason.
 EXEMPT = {
     "ShekylOwnedBuffer": "C++ only: an RAII owner of a ShekylBuffer; it never crosses",
-    "ShekylAllKeysBlob": (
-        "its array bounds are shekyl-crypto-pq constants aliasing shekyl-address "
-        "constants that alias further ones, the cross-crate limitation the "
-        "FOLLOWUPS entry names; its Rust layout is pinned by "
-        "struct_layout_matches in account_ffi.rs"
-    ),
     "shekyl_close_cause": (
         "CloseKind is declared through a macro, which cbindgen does not expand "
         "on stable; the pair is pinned both ways by the CLOSE_CAUSE_* constants "

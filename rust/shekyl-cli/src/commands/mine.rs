@@ -241,14 +241,14 @@ mod tests {
     use super::BUILT_IN_MINER_NOTICE;
     use crate::daemon::identity_line;
     use shekyl_rpc_types::{
-        genesis_hash_for, DaemonNetwork, GetVersionResponse, HashHex, IdentityExpectation,
-        Nullable, RpcStatus, CONSENSUS_CONSTANTS_DIGEST_HASH, CORE_RPC_VERSION,
+        genesis_hash_for, GetVersionResponse, HashHex, IdentityExpectation, Network, Nullable,
+        RpcStatus, CONSENSUS_CONSTANTS_DIGEST_HASH, CORE_RPC_VERSION,
     };
 
     const URL: &str = "http://127.0.0.1:12029";
 
     /// What a daemon of this build answers `get_version` with on `network`.
-    fn version_reply(network: DaemonNetwork) -> serde_json::Value {
+    fn version_reply(network: Network) -> serde_json::Value {
         serde_json::to_value(GetVersionResponse {
             status: RpcStatus::ok(),
             version: CORE_RPC_VERSION,
@@ -264,11 +264,8 @@ mod tests {
 
     #[test]
     fn the_gate_passes_a_daemon_on_this_clis_network() {
-        for network in [
-            DaemonNetwork::Mainnet,
-            DaemonNetwork::Testnet,
-            DaemonNetwork::Stagenet,
-        ] {
+        // Every network the table has, regtest included (NI-R1, NI-R4).
+        for network in Network::ALL {
             IdentityExpectation::exact(network)
                 .read(&version_reply(network))
                 .unwrap_or_else(|error| panic!("{network}: {error:?}"));
@@ -279,8 +276,8 @@ mod tests {
     /// refused, and the refusal names both networks and the endpoint.
     #[test]
     fn the_gate_refuses_a_daemon_on_another_network() {
-        let refused = IdentityExpectation::exact(DaemonNetwork::Testnet)
-            .read(&version_reply(DaemonNetwork::Mainnet))
+        let refused = IdentityExpectation::exact(Network::Testnet)
+            .read(&version_reply(Network::Mainnet))
             .expect_err("a mainnet daemon is not a testnet daemon");
         let line = identity_line(&refused.mismatch, URL);
         assert!(
@@ -292,25 +289,24 @@ mod tests {
         );
     }
 
-    /// A `--regtest` daemon reports `fakechain`. No CLI network is that, so
-    /// mining control refuses it, as it did when the network came from
-    /// `get_info`.
+    /// A regtest daemon reports `regtest`, a network like the others
+    /// (NI-Q8): a mainnet CLI refuses it on the network axis, naming it.
     #[test]
-    fn the_gate_refuses_a_fakechain_daemon() {
-        let refused = IdentityExpectation::exact(DaemonNetwork::Mainnet)
-            .read(&version_reply(DaemonNetwork::Fakechain))
-            .expect_err("a fakechain daemon is not a mainnet daemon");
+    fn the_gate_refuses_a_regtest_daemon_from_mainnet() {
+        let refused = IdentityExpectation::exact(Network::Mainnet)
+            .read(&version_reply(Network::Regtest))
+            .expect_err("a regtest daemon is not a mainnet daemon");
         let line = identity_line(&refused.mismatch, URL);
-        assert!(line.contains("reports fakechain"), "{line}");
+        assert!(line.contains("reports regtest"), "{line}");
     }
 
     /// The reply has no network to compare unless it is this build's reply:
     /// a daemon on another RPC version is refused on that, by version.
     #[test]
     fn the_gate_refuses_a_daemon_on_another_rpc_version() {
-        let mut reply = version_reply(DaemonNetwork::Testnet);
+        let mut reply = version_reply(Network::Testnet);
         reply["version"] = (CORE_RPC_VERSION - 1).into();
-        let refused = IdentityExpectation::exact(DaemonNetwork::Testnet)
+        let refused = IdentityExpectation::exact(Network::Testnet)
             .read(&reply)
             .expect_err("an older daemon");
         let line = identity_line(&refused.mismatch, URL);
@@ -323,9 +319,9 @@ mod tests {
     /// A reply that does not name a network is not a daemon on this one.
     #[test]
     fn the_gate_refuses_a_reply_without_a_network() {
-        let mut reply = version_reply(DaemonNetwork::Testnet);
+        let mut reply = version_reply(Network::Testnet);
         reply.as_object_mut().expect("object").remove("nettype");
-        let refused = IdentityExpectation::exact(DaemonNetwork::Testnet)
+        let refused = IdentityExpectation::exact(Network::Testnet)
             .read(&reply)
             .expect_err("no network named");
         let line = identity_line(&refused.mismatch, URL);
@@ -360,7 +356,7 @@ mod tests {
             "http://127.0.0.1:18081",
             None,
             None,
-            DaemonNetwork::Mainnet,
+            Network::Mainnet,
         )
         .expect("loopback parses");
         assert!(super::remote_mining_note(&daemon).is_none());
@@ -380,7 +376,7 @@ mod tests {
             "http://203.0.113.5:18081",
             None,
             None,
-            DaemonNetwork::Mainnet,
+            Network::Mainnet,
         )
         .expect("remote address parses");
         let note = super::remote_mining_note(&remote).expect("a remote daemon is reminded");
@@ -403,7 +399,7 @@ mod tests {
             &format!("http://{address}"),
             None,
             None,
-            DaemonNetwork::Mainnet,
+            Network::Mainnet,
         )
         .expect("the route server parses");
 

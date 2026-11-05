@@ -219,7 +219,7 @@ impl MultisigAddressPayload {
         buf.push(self.version);
         buf.push(self.group_version);
         buf.push(self.spend_auth_version);
-        buf.push(self.network.as_u8());
+        buf.push(self.network.code());
         buf.push(self.n_total);
         buf.push(self.m_required);
         buf.extend_from_slice(&self.b_group);
@@ -248,7 +248,7 @@ impl MultisigAddressPayload {
         let n_total = data[4];
         let m_required = data[5];
 
-        let network = Network::from_u8(network_byte)
+        let network = Network::from_code(network_byte)
             .ok_or(MultisigAddressError::UnknownNetwork { byte: network_byte })?;
 
         if n_total == 0 || n_total > MAX_MULTISIG_PARTICIPANTS {

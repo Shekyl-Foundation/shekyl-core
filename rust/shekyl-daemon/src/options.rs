@@ -45,7 +45,7 @@ impl DaemonOptions {
     /// the networks its row names (IG-8).
     fn exists(&self, row: &Row) -> bool {
         match row.visibility {
-            Visibility::Dev { networks } => networks.contains(&self.network.name()),
+            Visibility::Dev { gate } => gate.admits(self.network),
             Visibility::Public => true,
             Visibility::Rejected { .. } | Visibility::Reserved { .. } => false,
         }
@@ -198,7 +198,7 @@ impl OptionsFacts for DaemonOptions {
                             .param(
                                 "networks",
                                 match row.visibility {
-                                    Visibility::Dev { networks } => networks.join(", "),
+                                    Visibility::Dev { gate } => gate.networks(),
                                     _ => String::new(),
                                 },
                             )

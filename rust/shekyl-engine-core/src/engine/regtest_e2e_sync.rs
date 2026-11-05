@@ -27,7 +27,7 @@ use super::*;
 #[tokio::test(flavor = "multi_thread")]
 #[ignore = "Track-2 regtest: requires SHEKYLD_BIN; two daemons, ~2 min"]
 async fn a_node_syncs_a_chain_longer_than_the_doors_window_from_a_peer() {
-    sync_from_a_peer(100, [0x5au8; 64]).await;
+    sync_from_a_peer(100, [0x5au8; 32]).await;
 }
 
 /// A node syncs fifteen spans from one peer: more than the handler
@@ -42,18 +42,18 @@ async fn a_node_syncs_a_chain_longer_than_the_doors_window_from_a_peer() {
 #[tokio::test(flavor = "multi_thread")]
 #[ignore = "Track-2 regtest: requires SHEKYLD_BIN; two daemons and 300 blocks, several min"]
 async fn a_node_syncs_fifteen_spans_from_a_peer() {
-    sync_from_a_peer(300, [0x5bu8; 64]).await;
+    sync_from_a_peer(300, [0x5bu8; 32]).await;
 }
 
 /// The two-daemon sync walk: a source linked to a sink that requests
 /// nothing (`dev-sync off`) mines `blocks`; a joiner linked to the source
 /// must reach its tip, moving at least every 120 s.
-async fn sync_from_a_peer(blocks: u64, seed: [u8; 64]) {
+async fn sync_from_a_peer(blocks: u64, seed: [u8; shekyl_crypto_pq::account::SEED_BYTES]) {
     let serial = serial_lock().lock_owned().await;
     let source_p2p = RegtestDaemon::free_port();
     let sink_p2p = RegtestDaemon::free_port_excluding(&[source_p2p]);
     let joiner_p2p = RegtestDaemon::free_port_excluding(&[source_p2p, sink_p2p]);
-    let address = mine_address_from_seed(&seed, shekyl_address::Network::Mainnet);
+    let address = mine_address_from_seed(&seed, shekyl_address::Network::Regtest);
     let _sink = RegtestDaemon::spawn(RegtestSpawn::new(None).with_peering(Peering::Linked {
         p2p_port: sink_p2p,
         peer_p2p_port: source_p2p,
@@ -287,7 +287,7 @@ async fn a_node_and_an_alpha_11_node_refuse_each_other_cleanly() {
     let node_p2p = RegtestDaemon::free_port();
     let sink_p2p = RegtestDaemon::free_port_excluding(&[node_p2p]);
     let alpha_p2p = RegtestDaemon::free_port_excluding(&[node_p2p, sink_p2p]);
-    let address = mine_address_from_seed(&[7u8; 64], shekyl_address::Network::Mainnet);
+    let address = mine_address_from_seed(&[7u8; 32], shekyl_address::Network::Regtest);
     let _sink = RegtestDaemon::spawn(RegtestSpawn::new(None).with_peering(Peering::Linked {
         p2p_port: sink_p2p,
         peer_p2p_port: node_p2p,
@@ -433,7 +433,7 @@ async fn a_closed_node_whose_peer_is_down_mines_and_opens_when_it_arrives() {
     let serial = serial_lock().lock_owned().await;
     let node_p2p = RegtestDaemon::free_port();
     let peer_p2p = RegtestDaemon::free_port_excluding(&[node_p2p]);
-    let address = mine_address_from_seed(&[0x5f; 64], shekyl_address::Network::Mainnet);
+    let address = mine_address_from_seed(&[0x5f; 32], shekyl_address::Network::Regtest);
     let node = RegtestDaemon::spawn(
         RegtestSpawn::new(Some(serial))
             .with_mine_address(address)
@@ -582,7 +582,7 @@ async fn a_block_a_node_mines_reaches_its_peer_by_relay() {
     let serial = serial_lock().lock_owned().await;
     let a_p2p = RegtestDaemon::free_port();
     let b_p2p = RegtestDaemon::free_port_excluding(&[a_p2p]);
-    let address = mine_address_from_seed(&[0x6b; 64], shekyl_address::Network::Mainnet);
+    let address = mine_address_from_seed(&[0x6b; 32], shekyl_address::Network::Regtest);
     let b = RegtestDaemon::spawn(RegtestSpawn::new(None).with_peering(Peering::Linked {
         p2p_port: b_p2p,
         peer_p2p_port: a_p2p,

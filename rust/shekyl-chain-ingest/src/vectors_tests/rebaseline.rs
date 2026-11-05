@@ -3,7 +3,7 @@
 // All rights reserved.
 // BSD-3-Clause
 
-//! The re-baseline's own witness: every captured chain that reads whole,
+//! The re-baseline's own witness: every captured chain, read whole and
 //! replayed against the trace [`crate::rebaseline::trace_of`] writes from a
 //! replay of the same chain, compares at every height and at the checkpoint,
 //! and agrees. `spend-1in-2out` alone would leave an empty archival snapshot
@@ -16,40 +16,23 @@ use shekyl_chain_store::store::{ChainStore, Horizons};
 use shekyl_types::BlockHeight;
 
 use super::replay::replay_open;
-use super::retired_keyless_join::UntilRetiredJoin;
-use super::{
-    captured_chains, mock_with_the_real_clock, retired_keyless_join, Manifest,
-    RETIRED_KEYLESS_JOINS,
-};
+use super::{captured_chains, mock_with_the_real_clock, Manifest};
 use crate::corpus::CorpusReader;
 use crate::pipeline::RunReport;
 use crate::rebaseline::trace_of;
 use crate::test_support::cleanup;
 use crate::trace::Trace;
 
-/// The chains a replay reads to the tip: every capture whose retired-join
-/// record is absent. The set is asserted, not discovered (rule 47).
+/// The chains a replay reads to the tip: every capture. The subject is
+/// asserted, not discovered (rule 47): `bond-post` is the chain whose
+/// archival snapshot is not empty.
 fn chains_read_whole() -> Vec<(std::path::PathBuf, Manifest)> {
-    let captured = captured_chains();
-    let captured_len = captured.len();
-    let whole: Vec<_> = captured
-        .into_iter()
-        .filter(|(_, manifest)| retired_keyless_join(&manifest.shape).is_none())
-        .collect();
-    assert!(
-        !whole.is_empty(),
-        "a chain read whole is the subject of the round-trip"
-    );
+    let whole = captured_chains();
     assert!(
         whole
             .iter()
             .any(|(_, manifest)| manifest.shape == "bond-post"),
-        "bond-post reads whole: its JoinMarket carries a key"
-    );
-    assert_eq!(
-        whole.len() + RETIRED_KEYLESS_JOINS.len(),
-        captured_len,
-        "every captured chain is either read whole or named in RETIRED_KEYLESS_JOINS"
+        "bond-post is captured: its snapshot is the one that is not empty"
     );
     whole
 }
@@ -60,10 +43,8 @@ async fn replay_corpus(
     trace: Trace,
     tag: &str,
 ) -> (RunReport, std::path::PathBuf) {
-    let source = UntilRetiredJoin::new(
-        CorpusReader::open(std::io::Cursor::new(corpus)).expect("open corpus"),
-    );
-    let (report, path, _rules, source) = replay_open(
+    let source = CorpusReader::open(std::io::Cursor::new(corpus)).expect("open corpus");
+    let (report, path, _rules) = replay_open(
         manifest,
         mock_with_the_real_clock(),
         ApplyPolicy::Full,
@@ -73,7 +54,6 @@ async fn replay_corpus(
     )
     .await;
     let report = report.expect("the captured chain replays");
-    source.finish(&manifest.shape);
     (report, path)
 }
 

@@ -42,6 +42,8 @@
 #include "gtest/gtest.h"
 
 #include <cstring>
+#include <fstream>
+#include <stdexcept>
 #include <sstream>
 
 #include "cryptonote_basic/cryptonote_basic.h"
@@ -160,12 +162,28 @@ void expect_prunable_region_has_one_occupant(transaction &t, const char *what)
 
 } // namespace
 
+// The network table's mainnet genesis transaction (`shekyl_network`,
+// `rust/shekyl-network/genesis/mainnet.tx.hex`): a production coinbase the
+// Rust genesis tool writes. The path is CMake's.
+#ifndef MAINNET_GENESIS_TX_HEX_PATH
+#define MAINNET_GENESIS_TX_HEX_PATH "rust/shekyl-network/genesis/mainnet.tx.hex"
+#endif
+static std::string mainnet_genesis_tx_hex()
+{
+  std::ifstream ifs(MAINNET_GENESIS_TX_HEX_PATH);
+  if (!ifs.good())
+    throw std::runtime_error(std::string("missing the network table's genesis at ") + MAINNET_GENESIS_TX_HEX_PATH);
+  std::string hex;
+  ifs >> hex;
+  return hex;
+}
+
 // A miner tx: CTTypeNull, so the assertion is that its tail is empty. This arm is
 // the one that catches an append landing on the coinbase path, where the null
 // early-out means nothing commits to the appended bytes at all.
 //
-// The fixture is the pinned mainnet GENESIS_TX: a production coinbase written
-// by the Rust writer (five founder outputs, PQC tx_extra), not a C++
+// The fixture is the network table's mainnet genesis: a production coinbase
+// written by the Rust writer (five founder outputs, PQC tx_extra), not a C++
 // constructor's — `construct_miner_tx` was deleted with the C++ chain. The
 // Rust statement of the same tail is shekyl-wire's
 // `coinbase_segments_are_the_whole_blob_and_two_empty_tails`.
@@ -173,7 +191,7 @@ TEST(tx_prunable_region, miner_tx_has_no_prunable_tail)
 {
   blobdata blob;
   ASSERT_TRUE(epee::string_tools::parse_hexstr_to_binbuff(
-      get_config(MAINNET).GENESIS_TX, blob));
+      mainnet_genesis_tx_hex(), blob));
   // Parsing through the binary archive stamps `unprunable_size`: it is only
   // assigned inside the serializer (cryptonote_basic.h:635/707).
   transaction parsed;
@@ -181,7 +199,7 @@ TEST(tx_prunable_region, miner_tx_has_no_prunable_tail)
   ASSERT_TRUE(std::holds_alternative<txin_gen>(parsed.vin.at(0)));
   ASSERT_EQ(ct::CTTypeNull, parsed.ct_signatures.type);
 
-  expect_prunable_region_has_one_occupant(parsed, "GENESIS_TX coinbase");
+  expect_prunable_region_has_one_occupant(parsed, "genesis coinbase");
 }
 
 // The serve-credit arm: the one shape whose prunable region is EMPTY *by

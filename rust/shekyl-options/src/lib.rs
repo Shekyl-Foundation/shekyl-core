@@ -28,4 +28,4 @@ pub use kind::{
     is_global_unicast, Dimension, EndpointRule, KeyRule, Kind, PeerEndpoint, PeerRule, Secret,
     Value,
 };
-pub use table::{lexical, Default, Grant, Row, Surface, Table, Visibility};
+pub use table::{lexical, Default, DevGate, Grant, Row, Surface, Table, Visibility};

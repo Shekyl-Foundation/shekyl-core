@@ -269,7 +269,7 @@ pub use connector::{
     Reorganize, Rewind, Rewound, RunEnd, RunFault, SwitchDone, SwitchPlan, Switched, TableRows,
     TemplateFacts, TipChanged, WatchDeepReorg, WatchLatch, WatchTip,
 };
-pub use corpus::{CorpusFault, CorpusNet, CorpusReader, CorpusWriter, CORPUS_FORMAT_VERSION};
+pub use corpus::{CorpusFault, CorpusReader, CorpusWriter, CORPUS_FORMAT_VERSION};
 #[cfg(feature = "fetch")]
 pub use fetch::{fetch_corpus, FetchFault};
 pub use metrics::{Concurrency, Metrics, MetricsArtifact};
@@ -279,7 +279,7 @@ pub use pipeline::{
     run, Checkpoint, Disagreement, PipelineConfig, PipelineFault, RunReport, Switch,
 };
 #[cfg(feature = "pipeline")]
-pub use schedule::{Chain, ChainRules, RegtestLever, RegtestLeverRefused};
+pub use schedule::{ChainRules, LeverRefused};
 #[cfg(feature = "pipeline")]
 pub use seed::{SeedClaim, SeedLedger};
 #[cfg(feature = "pipeline")]

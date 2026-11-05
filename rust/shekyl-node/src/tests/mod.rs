@@ -15,7 +15,6 @@ use shekyl_daemon_rpc::chain_facts::FactsFault;
 use shekyl_difficulty::Difficulty;
 use shekyl_miner::Job;
 use shekyl_options::read_cli;
-use shekyl_rpc_types::DaemonNetwork;
 use shekyl_types::BlockHash;
 
 use super::*;
@@ -58,7 +57,7 @@ fn open_at(dir: &Path, stop: Arc<dyn Fn() + Send + Sync>) -> Node {
 /// `extra` options, once its first template is posted.
 fn open_posted(dir: &Path, extra: &[&str]) -> Node {
     std::fs::create_dir_all(dir).expect("dir");
-    let address = mining_address(shekyl_address::Network::Mainnet);
+    let address = mining_address(shekyl_address::Network::Regtest);
     let mut args = vec!["--mine-address", address.as_str(), "--dev-difficulty", "1"];
     args.extend(extra);
     let config = config_on(dir, "regtest", &args);
@@ -119,11 +118,11 @@ fn mine_one(node: &Node, above: u64) -> BlockHash {
         .expect("it connects");
     BlockHash::from_bytes(made.block_id.to_bytes())
 }
-/// A full address on `network`, from a fixed seed's keys.
+/// A full address on `network`, from a fixed seed's keys derived on that
+/// network (the salt is the network's name, NI-R10).
 fn mining_address(network: shekyl_address::Network) -> String {
-    use shekyl_crypto_pq::account::{rederive_account, DerivationNetwork, SeedFormat};
-    let blob = rederive_account(&[0x5a; 64], DerivationNetwork::Mainnet, SeedFormat::Bip39)
-        .expect("the keys");
+    use shekyl_crypto_pq::account::rederive_account;
+    let blob = rederive_account(&[0x5a; 64], network).expect("the keys");
     shekyl_address::ShekylAddress::new(
         network,
         *blob.spend_pk.as_canonical_bytes(),
@@ -163,7 +162,7 @@ fn open_mining_with(
     .expect("node")
 }
 fn genesis_hash() -> BlockHash {
-    BlockHash::from_bytes(shekyl_rpc_types::genesis_hash_for(DaemonNetwork::Fakechain))
+    BlockHash::from_bytes(shekyl_rpc_types::genesis_hash_for(Network::Regtest))
 }
 fn put_chain_version(path: &std::path::Path, version: u64) {
     use shekyl_chain_store::codec::{PropertyCellBytes, SchemaVersion};

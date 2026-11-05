@@ -234,7 +234,7 @@ namespace nodetool
     bool res = true;
 
     {
-      const auto id = cryptonote::get_config(m_nettype).NETWORK_ID;
+      const auto id = cryptonote::network_id_for(m_nettype);
       memcpy(&m_network_id, &id, 16);
     }
 

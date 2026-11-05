@@ -70,7 +70,11 @@ replay-cli = [
 # TEST_ONLY feature (check_test_only_features.py): no feature here enables
 # it, `default` included, and the only enabler is that crate's
 # [dev-dependencies] edge. A shipping build never carries a second producer.
+# It forwards `shekyl-chain-rules/harness` because `ChainRules::unpinned()`
+# here reads `GenesisPin::NONE`, which exists only under that feature; an
+# enabler that turns on this crate's harness alone must still compile.
 harness = [
+    "shekyl-chain-rules/harness",
     "dep:shekyl-archival-retention",
     "dep:shekyl-crypto-pq",
     "dep:shekyl-tx-builder",
@@ -100,6 +104,9 @@ shekyl-chain-store = { path = "../shekyl-chain-store" }
 # `Network`: which public schedule a run resolves rules from (rule 71 —
 # data, never control flow). Default features only.
 shekyl-address = { path = "../shekyl-address" }
+# The network table: a run's network, its schedule, and the levers its row
+# permits (NETWORK_IDENTITY.md NI-R4, NI-R6).
+shekyl-network = { path = "../shekyl-network" }
 # CumulativeDifficulty — the accumulator the trace records for SI-10.
 shekyl-difficulty = { path = "../shekyl-difficulty" }
 shekyl-consensus = { path = "../shekyl-consensus" }

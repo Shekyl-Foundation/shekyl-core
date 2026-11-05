@@ -122,7 +122,7 @@ namespace cryptonote
       * @brief records the network and the relay entry
       *
       * The chain is the Rust store; this opens no database. The snapshot's
-      * network code selects FAKECHAIN as regtest does.
+      * network code selects the network, regtest included.
       *
       * @param snapshot the daemon's resolved configuration
       *
@@ -163,13 +163,6 @@ namespace cryptonote
       *
       */
      std::time_t get_start_time() const;
-
-     /**
-      * @brief get the network type we're on
-      *
-      * @return which network are we on?
-      */     
-     network_type get_nettype() const { return m_nettype; };
 
      /**
       * @brief returns the set of transactions in the txpool which are not in the argument

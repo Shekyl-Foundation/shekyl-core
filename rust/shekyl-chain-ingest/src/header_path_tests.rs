@@ -34,7 +34,7 @@ use crate::corpus::CorpusReader;
 use crate::source::{IngestEvent, Source};
 use crate::test_support::{cleanup, open_store_under, tmp};
 use crate::vectors_tests::replay::rules_for;
-use crate::vectors_tests::{captured_chains, mock_with_the_real_clock, UntilRetiredJoin};
+use crate::vectors_tests::{captured_chains, mock_with_the_real_clock};
 
 /// What a path concluded. A stale claim is the world having moved, not a row.
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -47,16 +47,13 @@ enum Said {
 
 fn load(dir: &std::path::Path, shape: &str) -> Vec<Candidate> {
     let bytes = std::fs::read(dir.join("corpus.e2")).expect("read corpus");
-    let mut reader = UntilRetiredJoin::new(
-        CorpusReader::open(Cursor::new(bytes.as_slice())).expect("open corpus"),
-    );
+    let mut reader = CorpusReader::open(Cursor::new(bytes.as_slice())).expect("open corpus");
     let mut blocks = Vec::new();
     while let Some(sequenced) = reader.next().expect("corpus reads") {
         if let IngestEvent::Extend(candidate) = sequenced.event {
             blocks.push(*candidate);
         }
     }
-    reader.finish(shape);
     assert!(!blocks.is_empty(), "{shape}: the corpus has no blocks");
     blocks
 }

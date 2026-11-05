@@ -4,9 +4,10 @@
 // BSD-3-Clause
 
 //! The release-carried genesis pin: the block the binary **defines** as
-//! each public network's block 0 — `GENESIS_TX` and `GENESIS_NONCE` in
-//! `cryptonote_config.h`, the block `generate_genesis_block` assembles from
-//! them (CEN-F11's "as configured" half; `CHAIN_RULES_SLICE_4.md` Q3).
+//! each network's block 0 — the network table's genesis
+//! (`shekyl_network::Genesis`, `NETWORK_IDENTITY.md` NI-Q3), the block the
+//! genesis tool assembles from each network's recipients file (CEN-F11's
+//! "as configured" half; `CHAIN_RULES_SLICE_4.md` Q3).
 //!
 //! The pin is chain identity, not trust: the network *is* its genesis, and
 //! every node that runs a network agrees on it. It is verified by equality,
@@ -26,11 +27,9 @@
 //!   and calls it.
 //! - **`Trust`** carries the pin into `validate`.
 //!
-//! The hashes are **derived**, not restated: `genesis_pin_tests` rebuilds each
-//! network's genesis block from `cryptonote_config.h`'s pins through the
-//! genesis tool and asserts the table equals it, and asserts the table
-//! equals the client identity's copy (`shekyl_rpc_types::genesis_hash_for`,
-//! `VC-D18`), so the two Rust homes cannot drift.
+//! The hashes are **read**, not restated: [`for_network`](GenesisPin::for_network)
+//! takes the table's genesis hash, which the genesis tool's table test
+//! rebuilds from each network's recipients file.
 
 use core::fmt;
 
@@ -41,51 +40,23 @@ use shekyl_types::{BlockHash, BlockHeight};
 ///
 /// There is no public constructor from an arbitrary hash: the only tables
 /// are the per-network constants [`for_network`](Self::for_network) selects
-/// and [`NONE`](Self::NONE) — nettype selects *data*, never control flow
+/// and `NONE` (test and harness builds) — nettype selects *data*, never control flow
 /// (rule 71), and no path exists for a pin the release did not carry.
 #[derive(Clone, Copy, PartialEq, Eq)]
 pub struct GenesisPin {
     /// The genesis identity the binary defines for this network; verified
     /// by equality (CEN-E1 at height 0, CEN-E5 at open), assumed by nothing.
-    /// `None` only on the table no release vouches for ([`NONE`](Self::NONE)).
+    /// `None` only on the table no release vouches for (`NONE`).
     genesis: Option<BlockHash>,
 }
 
 impl GenesisPin {
-    /// Nothing pinned. [`Trust::UNPINNED`](crate::Trust::UNPINNED) carries
-    /// this into `validate`, so a harness chain can mine its own genesis.
-    /// A regtest node's open pins [`FAKECHAIN`](Self::FAKECHAIN) instead:
-    /// the store is held to the block a regtest node connects, and
-    /// `validate` is not.
+    /// Nothing pinned: the table no release vouches for, so test and
+    /// harness builds only. [`Trust::UNPINNED`](crate::Trust::UNPINNED)
+    /// carries it into `validate`, so a harness chain can mine its own
+    /// genesis.
+    #[cfg(any(test, feature = "harness"))]
     pub const NONE: Self = Self { genesis: None };
-
-    /// Regtest's genesis. A regtest node connects mainnet's configured
-    /// genesis block (`get_config(FAKECHAIN)`, `shekyl-node`'s `genesis.rs`),
-    /// so its block 0 is mainnet's. The pin is the chain's identity: a store
-    /// opened as regtest whose block 0 is testnet's or stagenet's is
-    /// refused. A mainnet store shares regtest's block 0, so only the
-    /// network marker tells those two apart.
-    pub const FAKECHAIN: Self = Self::MAINNET;
-
-    /// Mainnet: its genesis (`geblock block-id --network mainnet`; derived
-    /// from `cryptonote_config.h` in `genesis_pin_tests`).
-    const MAINNET: Self = Self::genesis_only([
-        0xd7, 0xaf, 0x38, 0x23, 0x39, 0xb2, 0xcd, 0x0c, 0x4e, 0xe4, 0xb2, 0xea, 0x0a, 0xfe, 0x74,
-        0x26, 0xf3, 0x4b, 0xc2, 0x97, 0x14, 0x95, 0xd9, 0x87, 0x3f, 0xd4, 0xce, 0xc2, 0x10, 0x7a,
-        0xd8, 0xed,
-    ]);
-    /// Testnet: its genesis.
-    const TESTNET: Self = Self::genesis_only([
-        0xe8, 0x95, 0xbf, 0x2b, 0xaa, 0x4e, 0xa4, 0xcc, 0xb0, 0x76, 0x20, 0xd3, 0x54, 0xe5, 0x44,
-        0xa4, 0xbe, 0x24, 0x3b, 0xf3, 0x29, 0x92, 0x5f, 0x6a, 0x8a, 0x51, 0x63, 0x1d, 0xa1, 0x80,
-        0x33, 0xda,
-    ]);
-    /// Stagenet: its genesis.
-    const STAGENET: Self = Self::genesis_only([
-        0x37, 0x1e, 0x8f, 0xa3, 0x10, 0xaf, 0xb0, 0xc6, 0x08, 0x9e, 0x47, 0x39, 0x8e, 0xbe, 0x02,
-        0xc4, 0xe2, 0xaa, 0x18, 0x20, 0xe8, 0xcc, 0xfd, 0x32, 0xe3, 0x28, 0x55, 0x8b, 0x99, 0x67,
-        0x7c, 0x60,
-    ]);
 
     const fn genesis_only(genesis: [u8; 32]) -> Self {
         Self {
@@ -93,19 +64,15 @@ impl GenesisPin {
         }
     }
 
-    /// The genesis pin the release carries for `network`. Three values,
-    /// one lookup.
+    /// The genesis pin the release carries for `network`: the table's
+    /// genesis hash. One lookup, the same for every network (rule 71).
     #[must_use]
     pub const fn for_network(network: Network) -> Self {
-        match network {
-            Network::Mainnet => Self::MAINNET,
-            Network::Testnet => Self::TESTNET,
-            Network::Stagenet => Self::STAGENET,
-        }
+        Self::genesis_only(network.genesis().hash())
     }
 
     /// A pin from an explicit hash, for fixtures only. Production tables
-    /// are the constants above.
+    /// are the table's ([`for_network`](Self::for_network)).
     #[cfg(any(test, feature = "harness"))]
     #[must_use]
     pub const fn for_tests(genesis: Option<BlockHash>) -> Self {

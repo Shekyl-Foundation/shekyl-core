@@ -10,8 +10,9 @@
 //! block short of its proof-of-work costs RandomX and nothing more (#1081's
 //! review, item 1). The target is a function of the headers below the
 //! connecting height alone: the LWMA-1 window of `N + 1` timestamps and
-//! cumulative difficulties, or a Fakechain's fixed value. `form` runs ahead
-//! of `connect`, in parallel, on blocks the store has not recorded yet, so
+//! cumulative difficulties, or the fixed target a levered rule set names.
+//! `form` runs ahead of `connect`, in parallel, on blocks the store has
+//! not recorded yet, so
 //! the driver keeps those headers itself, as it keeps the seed's
 //! ([`crate::seed`]):
 //!

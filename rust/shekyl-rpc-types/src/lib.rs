@@ -114,9 +114,7 @@ pub use chain_reads::{
     GetCurveTreeCheckpointResponse, GetCurveTreeInfoResponse, CORE_RPC_ERROR_CODE_WRONG_BLOCKBLOB,
     CORE_RPC_ERROR_CODE_WRONG_BLOCKBLOB_SIZE,
 };
-pub use consensus_digest::{
-    DaemonNetwork, CONSENSUS_CONSTANTS_DIGEST, CONSENSUS_CONSTANTS_DIGEST_HASH,
-};
+pub use consensus_digest::{Network, CONSENSUS_CONSTANTS_DIGEST, CONSENSUS_CONSTANTS_DIGEST_HASH};
 pub use hash::{HashHex, HashHexError};
 pub use headers::{
     BlockHeaderSlot, FeeTier, FeeTiers, GetBlockHeaderByHashRequest, GetBlockHeaderByHashResponse,

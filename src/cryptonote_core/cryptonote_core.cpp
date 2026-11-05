@@ -96,9 +96,9 @@ namespace cryptonote
     // §2.9).
     m_nettype = static_cast<network_type>(snapshot.network);
 
-    // Seeds follow the network just settled, including FAKECHAIN. The id
-    // derivation is pure (`get_config` builds every network's id on first
-    // use), so it cannot carry this record.
+    // Seeds follow the network just settled, regtest included. The id
+    // derivation is pure (`network_id_for` asks the Rust table), so it
+    // cannot carry this record.
     CHECK_AND_ASSERT_MES(
       shekyl_dialer_note_network(static_cast<std::uint8_t>(m_nettype)) == 0,
       false, "Failed to record the dialer's network");

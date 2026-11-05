@@ -59,7 +59,7 @@ mod session;
 mod support;
 mod types;
 
-pub(crate) use support::{drive_persistence, network_to_derivation};
+pub(crate) use support::drive_persistence;
 pub(crate) use types::FirstStakeIntent;
 pub use types::{CapabilityInput, Credentials, EngineCreateParams, OpenedEngine};
 
@@ -70,7 +70,7 @@ use crate::engine::error::{IoError, OpenError};
 #[cfg(test)]
 use crate::engine::{Capability, Engine, SoloSigner};
 #[cfg(test)]
-use shekyl_crypto_pq::account::MASTER_SEED_BYTES;
+use shekyl_crypto_pq::account::SEED_BYTES;
 #[cfg(test)]
 use shekyl_engine_file::{SafetyOverrides, WalletFile};
 

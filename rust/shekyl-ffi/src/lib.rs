@@ -54,15 +54,6 @@ compile_error!(
      before attempting to revert this gate."
 );
 
-// Stabilized v1 account-derivation FFI surface. See `account_ffi.rs` for
-// per-function docs and the fail-closed / out-pointer / pinned-size
-// disciplines. The legacy `shekyl_kem_keypair_generate` and
-// `shekyl_seed_derive_{spend,view,ml_kem}` FFIs in this file remain for
-// the duration of the wallet-account-rewire slice; they are replaced by
-// `shekyl_account_*` callers and removed once C++ no longer references
-// them.
-pub mod account_ffi;
-
 // LWMA-1 difficulty-adjustment FFI export. Wraps `shekyl_difficulty::
 // lwma1_next` in a C-ABI surface using the `ShekylU128` two-u64
 // decomposition per `DAA_LWMA1.md` §6.1. Consumed by the Phase 2

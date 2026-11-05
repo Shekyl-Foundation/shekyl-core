@@ -212,10 +212,9 @@ pub use relay_floor::{
 };
 pub use reorg::{journal_horizon, journal_horizon_under, SlashLogFloor, D_MAX};
 pub use rule_set::{
-    AdmissionPolicy, AdmissionPolicyId, DifficultyRule, FakechainSchedule,
-    FakechainScheduleRefused, ReorgCapNotInsideEpoch, ReorgCapOutrunsSeedEpoch,
-    ResponseWindowOutrunsAnchor, RuleSchedule, RuleSet, RuleSetId, SettlementEpochBlocks,
-    SettlementSchedule,
+    AdmissionPolicy, AdmissionPolicyId, CappedEpoch, CappedEpochRefused, DifficultyRule,
+    ReorgCapNotInsideEpoch, ReorgCapOutrunsSeedEpoch, ResponseWindowOutrunsAnchor, RuleSchedule,
+    RuleSet, RuleSetId, SettlementEpochBlocks, SettlementSchedule,
 };
 pub use rules::block_weight::{
     block_weight_limit_at, effective_median_at, effective_median_at_windows, even_pair_median,

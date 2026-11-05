@@ -21,7 +21,7 @@ use shekyl_engine_prefs::PrefsError;
 use shekyl_engine_state::WalletLedgerError;
 use shekyl_engine_state::{SetNoteError, TxNoteTooLong};
 use shekyl_rpc_client::{
-    DaemonFault, DaemonNetwork, HashHex, IdentityMismatch, RejectCause, SubmitVerdict,
+    DaemonFault, HashHex, IdentityMismatch, Network, RejectCause, SubmitVerdict,
 };
 use thiserror::Error;
 
@@ -563,9 +563,9 @@ pub enum WalletRpcError {
     )]
     DaemonNetworkMismatch {
         /// The network this wallet is for.
-        wallet: DaemonNetwork,
+        wallet: Network,
         /// The network the daemon runs.
-        daemon: DaemonNetwork,
+        daemon: Network,
     },
     /// `-29208`: the daemon's chain starts at another genesis block.
     #[error(
@@ -574,7 +574,7 @@ pub enum WalletRpcError {
     )]
     DaemonChainMismatch {
         /// The network whose genesis was compared.
-        network: DaemonNetwork,
+        network: Network,
         /// The genesis block this wallet expects.
         wallet_genesis: HashHex,
         /// The daemon's genesis block.
@@ -1875,6 +1875,7 @@ fn from_envelope_error(e: &WalletEnvelopeError, whole: &WalletFileError) -> Wall
         | E::CapContentLenMismatch { .. }
         | E::StateSeedBlockMismatch => WalletRpcError::WalletFileCorrupt,
         E::FormatVersionTooNew { .. }
+        | E::FormatVersionRetired { .. }
         | E::UnsupportedKdfAlgo(_)
         | E::UnsupportedWrapCount(_)
         | E::UnknownCapabilityMode(_) => WalletRpcError::WalletFileVersionUnsupported,
@@ -1931,7 +1932,6 @@ fn from_key_error(err: &KeyError) -> WalletRpcError {
             tracing::warn!("keys file public material does not match its seed");
             WalletRpcError::WalletFileCorrupt
         }
-        KeyError::UnsupportedDerivationPair => WalletRpcError::WalletFileVersionUnsupported,
         KeyError::Primitive { detail } => internal_detail("key derivation primitive", detail),
     }
 }
@@ -3186,6 +3186,13 @@ mod tests {
                 WalletRpcErrorCode::WalletFileVersionUnsupported,
             ),
             (
+                WalletFileError::Envelope(WalletEnvelopeError::FormatVersionRetired {
+                    got: 1,
+                    current: 2,
+                }),
+                WalletRpcErrorCode::WalletFileVersionUnsupported,
+            ),
+            (
                 WalletFileError::Payload(PayloadError::BadMagic),
                 WalletRpcErrorCode::WalletFileCorrupt,
             ),
@@ -3491,8 +3498,8 @@ mod tests {
             ),
             (
                 DaemonFault::Identity(IdentityMismatch::Network {
-                    ours: DaemonNetwork::Mainnet,
-                    theirs: DaemonNetwork::Testnet,
+                    ours: Network::Mainnet,
+                    theirs: Network::Testnet,
                 }),
                 C::DaemonNetworkMismatch,
                 Some(json!({ "wallet": "mainnet", "daemon": "testnet" })),
@@ -3501,7 +3508,7 @@ mod tests {
                 DaemonFault::Identity(IdentityMismatch::Genesis {
                     ours: digest(3),
                     theirs: digest(4),
-                    network: DaemonNetwork::Testnet,
+                    network: Network::Testnet,
                 }),
                 C::DaemonChainMismatch,
                 Some(json!({
@@ -3552,8 +3559,8 @@ mod tests {
         assert!(newer.message().contains("update this wallet"), "{newer}");
         let network = from_daemon_fault(
             DaemonFault::Identity(IdentityMismatch::Network {
-                ours: DaemonNetwork::Stagenet,
-                theirs: DaemonNetwork::Mainnet,
+                ours: Network::Stagenet,
+                theirs: Network::Mainnet,
             }),
             DAEMON_TEXT,
         );
@@ -3574,8 +3581,8 @@ mod tests {
             CollectUnstakedError, DrainToPrincipalError, FirstStakeError, UnstakeError,
         };
         let wrong_network = DaemonFault::Identity(IdentityMismatch::Network {
-            ours: DaemonNetwork::Mainnet,
-            theirs: DaemonNetwork::Testnet,
+            ours: Network::Mainnet,
+            theirs: Network::Testnet,
         });
         for (fault, code) in [
             (

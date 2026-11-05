@@ -56,7 +56,7 @@
 use std::collections::HashMap;
 
 use curve25519_dalek::{constants::ED25519_BASEPOINT_POINT, Scalar};
-use shekyl_crypto_pq::account::{generate_account_from_raw_seed, AllKeysBlob, DerivationNetwork};
+use shekyl_crypto_pq::account::{account_from_seed, AllKeysBlob, Network};
 use shekyl_crypto_pq::kem::HybridCiphertext;
 use shekyl_crypto_pq::output::construct_output;
 use shekyl_curve_primitives::Commitment;
@@ -86,7 +86,7 @@ const DISPATCH_BENCH_STRANGER_SEED: [u8; 32] = [0x9Eu8; 32];
 /// ciphertext), so any fixed non-zero value is fine.
 const DISPATCH_BENCH_TX_KEY_SECRET: [u8; 32] = [0x11u8; 32];
 
-/// Rederive a fresh [`AllKeysBlob`] from `seed` (testnet, raw32).
+/// Rederive a fresh [`AllKeysBlob`] from `seed` (testnet).
 ///
 /// Duplicated from the `key_actor` / `local_keys` test helpers per the
 /// bench-fixture duplication discipline (`STAGE_0_HARNESS.md` §4.2:
@@ -96,8 +96,8 @@ const DISPATCH_BENCH_TX_KEY_SECRET: [u8; 32] = [0x11u8; 32];
 /// and the `LocalKeys` baseline share key material despite `AllKeysBlob`
 /// being non-`Clone`.
 fn make_blob(seed: [u8; 32]) -> AllKeysBlob {
-    let (_master_seed, blob) = generate_account_from_raw_seed(&seed, DerivationNetwork::Testnet)
-        .expect("bench rederivation succeeds for raw32 testnet seeds");
+    let (_master_seed, blob) = account_from_seed(&seed, Network::Testnet)
+        .expect("bench derivation succeeds for a testnet seed");
     blob
 }
 

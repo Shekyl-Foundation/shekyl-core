@@ -3830,6 +3830,7 @@ dependencies = [
  "serde",
  "shekyl-crypto-hash",
  "shekyl-encoding",
+ "shekyl-network",
  "tempfile",
  "thiserror",
 ]
@@ -3993,6 +3994,7 @@ dependencies = [
  "shekyl-hash-budget",
  "shekyl-mempool",
  "shekyl-miner",
+ "shekyl-network",
  "shekyl-p-host",
  "shekyl-p-loopback",
  "shekyl-p-serve",
@@ -4054,6 +4056,7 @@ dependencies = [
  "shekyl-fcmp",
  "shekyl-harness-spender",
  "shekyl-harness-wallet",
+ "shekyl-network",
  "shekyl-store-codec",
  "shekyl-types",
  "shekyl-units",
@@ -4325,6 +4328,7 @@ dependencies = [
  "shekyl-address",
  "shekyl-crypto-pq",
  "shekyl-logging",
+ "shekyl-network",
  "shekyl-onion-v3",
  "shekyl-options",
  "shekyl-win-sec",
@@ -4389,6 +4393,7 @@ dependencies = [
  "shekyl-dialer",
  "shekyl-draw-rng",
  "shekyl-levin",
+ "shekyl-network",
  "shekyl-onion-v3",
  "shekyl-peer-policy",
  "shekyl-peerlist",
@@ -4746,6 +4751,7 @@ dependencies = [
  "shekyl-crypto-hash",
  "shekyl-crypto-pq",
  "shekyl-fcmp",
+ "shekyl-network",
  "shekyl-types",
  "shekyl-wire",
  "thiserror",
@@ -4775,6 +4781,8 @@ name = "shekyl-harness-wallet"
 version = "3.1.0"
 dependencies = [
  "curve25519-dalek",
+ "hkdf",
+ "sha2",
  "shekyl-crypto-pq",
  "shekyl-wire",
  "zeroize",
@@ -4874,6 +4882,15 @@ name = "shekyl-net-address"
 version = "3.1.0"
 
 [[package]]
+name = "shekyl-network"
+version = "3.1.0"
+dependencies = [
+ "serde",
+ "serde_json",
+ "shekyl-crypto-hash",
+]
+
+[[package]]
 name = "shekyl-node"
 version = "3.1.0"
 dependencies = [
@@ -4950,6 +4967,7 @@ dependencies = [
 name = "shekyl-options"
 version = "3.1.0"
 dependencies = [
+ "shekyl-network",
  "shekyl-onion-v3",
  "shekyl-rpc-grants",
  "strsim",
@@ -5067,6 +5085,7 @@ dependencies = [
  "shekyl-hash-budget",
  "shekyl-levin",
  "shekyl-miner",
+ "shekyl-network",
  "shekyl-peer-policy",
  "shekyl-pow-randomx",
  "shekyl-runtime",
@@ -5092,6 +5111,7 @@ dependencies = [
  "shekyl-crypto-hash",
  "shekyl-crypto-pq",
  "shekyl-levin",
+ "shekyl-network",
  "shekyl-noise",
  "x25519-dalek",
  "zeroize",
@@ -5288,6 +5308,7 @@ dependencies = [
  "serde_json",
  "sha2",
  "shekyl-address",
+ "shekyl-network",
  "shekyl-portable-storage",
  "shekyl-rpc-grants",
  "shekyl-units",

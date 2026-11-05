@@ -10,8 +10,8 @@ use std::sync::Arc;
 use std::time::Instant;
 
 use shekyl_address::ShekylAddress;
+use shekyl_crypto_pq::account::account_from_seed;
 use shekyl_crypto_pq::account::AllKeysBlob;
-use shekyl_crypto_pq::account::{generate_account_from_raw_seed, DerivationNetwork};
 use shekyl_curve_tree::{
     select_reference_height, AssembleInput, BlockHash, BlockHeight, CurveTreeClient, CurveTreeRoot,
     Gindex, ReferenceBlock, REF_ANCHOR_AGE,
@@ -53,7 +53,7 @@ use crate::engine::transaction_submitter::{
 use crate::engine::tx_counts::{InputCount, OutputCount};
 use crate::engine::LocalLedger;
 
-/// Deterministic raw32 test seed. Distinct from `SIGNER_TEST_MASTER_SEED`
+/// Deterministic 32-byte test seed. Distinct from `SIGNER_TEST_MASTER_SEED`
 /// (`engine/signer.rs`) so pending-tx tests do not share derivation state
 /// with the C4α `LocalSigner` fixtures.
 const PENDING_TX_TEST_RAW_SEED: [u8; 32] = {
@@ -69,9 +69,8 @@ const PENDING_TX_TEST_RAW_SEED: [u8; 32] = {
 const TEST_OUTPUT_TX_KEY: [u8; 32] = [11u8; 32];
 
 fn test_account_blob() -> AllKeysBlob {
-    let (_master, blob) =
-        generate_account_from_raw_seed(&PENDING_TX_TEST_RAW_SEED, DerivationNetwork::Testnet)
-            .expect("testnet raw32 rederivation succeeds");
+    let (_master, blob) = account_from_seed(&PENDING_TX_TEST_RAW_SEED, Network::Testnet)
+        .expect("testnet derivation succeeds");
     blob
 }
 
@@ -2597,7 +2596,7 @@ struct RealTreeBondProofs {
 async fn real_tree_bond_post_proofs() -> RealTreeBondProofs {
     use shekyl_archival_bond_builder::{build_join_market_vin, verify_credit_funding};
     use shekyl_archival_retention::{bond_floor, HoldingsDescriptor, HoldingsKind, ShardSet};
-    use shekyl_crypto_pq::account::{SeedFormat, MASTER_SEED_BYTES};
+    use shekyl_crypto_pq::account::MASTER_SEED_BYTES;
     use shekyl_crypto_pq::archival_p::derive_archival_p_keys;
     use shekyl_crypto_pq::kem::HybridCiphertext;
     use shekyl_crypto_pq::output::construct_output;
@@ -2605,13 +2604,8 @@ async fn real_tree_bond_post_proofs() -> RealTreeBondProofs {
     use shekyl_tx_builder::{sign_transaction_with_terms, LeafEntry, SpendInput, TreeContext};
 
     // ── Bond persona `P` + holdings → bond floor ─────────────────────
-    let p_keys = derive_archival_p_keys(
-        &[0x33u8; MASTER_SEED_BYTES],
-        DerivationNetwork::Mainnet,
-        SeedFormat::Bip39,
-        0,
-    )
-    .expect("derive archival P keys");
+    let p_keys = derive_archival_p_keys(&[0x33u8; MASTER_SEED_BYTES], Network::Mainnet, 0)
+        .expect("derive archival P keys");
     let holdings = HoldingsDescriptor {
         kind: HoldingsKind::ShardSetCompact,
         shard_ids: ShardSet::new(vec![7, 42]).unwrap(),

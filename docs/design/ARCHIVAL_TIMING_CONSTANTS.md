@@ -119,7 +119,7 @@ history — moot in PoW (an attacker who out-hashed that window has already won)
 is not a constant: the sweep keeps each table exactly as long as a block may still read it.
 
 Wallet refresh (P2B-5) tracks **`ARCHIVAL_REORG_DEPTH_BLOCKS`**, not the retention.
-Ordinary scan safety (`NetworkSafetyConstants::max_reorg_depth`, default 10 confirmations)
+Ordinary scan safety (`WalletSafetyConstants::max_reorg_depth`: the lock window, 10 confirmations)
 is a separate, shallower UX finality knob — see §2.3.
 
 ### 1.2 SEB and F1 (emission cadence — not a structural F1 lever)

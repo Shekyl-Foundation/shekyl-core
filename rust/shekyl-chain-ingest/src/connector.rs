@@ -492,7 +492,7 @@ impl Writer {
     /// state without the bit, so the run is over.
     fn inject(
         &mut self,
-        trust: shekyl_chain_rules::Trust,
+        permit: shekyl_network::Permit,
         credit: ServeCredit,
     ) -> Result<BlockHeight, RunFault> {
         if let Some(end) = self.over {
@@ -500,7 +500,7 @@ impl Writer {
         }
         let result = self
             .store
-            .regtest_inject_serve_credit(trust, credit.persona, credit.shard, credit.epoch)
+            .regtest_inject_serve_credit(permit, credit.persona, credit.shard, credit.epoch)
             .map_err(RunFault::Store);
         self.latch(result)
     }
@@ -509,7 +509,7 @@ impl Writer {
     /// [`Self::inject`] and terminal on the same refusals.
     fn issue_draws(
         &mut self,
-        trust: shekyl_chain_rules::Trust,
+        permit: shekyl_network::Permit,
         issue: &IssueDraws,
     ) -> Result<(), RunFault> {
         if let Some(end) = self.over {
@@ -517,7 +517,7 @@ impl Writer {
         }
         let result = self
             .store
-            .regtest_issue_draws(trust, issue.epoch, &issue.draws, issue.digest)
+            .regtest_issue_draws(permit, issue.epoch, &issue.draws, issue.digest)
             .map_err(RunFault::Store);
         self.latch(result)
     }
@@ -892,13 +892,13 @@ impl Message<Inject> for Connector {
 
     async fn handle(&mut self, msg: Inject, _ctx: &mut Context<Self, Self::Reply>) -> Self::Reply {
         let Inject(credit) = msg;
-        if !matches!(self.rules, ChainRules::Regtest { .. }) {
-            return Err(RunFault::InjectOffRegtest {
+        let Some(permit) = self.rules.permit(shekyl_network::Lever::InjectServeCredit) else {
+            return Err(RunFault::InjectNotPermitted {
                 credit,
-                rules: self.rules,
+                network: self.rules.network(),
             });
-        }
-        let at = self.writer.inject(self.rules.trust(), credit)?;
+        };
+        let at = self.writer.inject(permit, credit)?;
         Ok(Injected { at })
     }
 }
@@ -911,13 +911,13 @@ impl Message<IssueDraws> for Connector {
         msg: IssueDraws,
         _ctx: &mut Context<Self, Self::Reply>,
     ) -> Self::Reply {
-        if !matches!(self.rules, ChainRules::Regtest { .. }) {
-            return Err(RunFault::IssueOffRegtest {
+        let Some(permit) = self.rules.permit(shekyl_network::Lever::IssueDraws) else {
+            return Err(RunFault::IssueNotPermitted {
                 epoch: msg.epoch,
-                rules: self.rules,
+                network: self.rules.network(),
             });
-        }
-        self.writer.issue_draws(self.rules.trust(), &msg)
+        };
+        self.writer.issue_draws(permit, &msg)
     }
 }
 

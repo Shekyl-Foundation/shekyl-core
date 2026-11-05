@@ -34,7 +34,7 @@
 //! first spend's own archival length rather than a number written down.
 
 use shekyl_archival_retention::{draw_count, draw_horizon};
-use shekyl_chain_rules::{FakechainSchedule, SettlementEpochBlocks, SettlementSchedule};
+use shekyl_chain_rules::{CappedEpoch, SettlementEpochBlocks, SettlementSchedule};
 use shekyl_types::archival::COUNTED_DRAWS;
 use shekyl_types::archival::SHARD_LENGTH;
 use shekyl_types::{BlockCount, BlockHeight, ChainCount, ShardId};
@@ -58,14 +58,14 @@ pub const REORG_CAP_BLOCKS: u64 = 10;
 /// Regtest rules under the levered schedule: the pair every scenario that
 /// closes a shard mines under.
 pub fn levered_rules() -> ChainRules {
-    ChainRules::Regtest {
-        fixed_difficulty: Some(std::num::NonZeroU128::MIN),
-        schedule: FakechainSchedule::new(
+    ChainRules::harness_regtest(
+        Some(std::num::NonZeroU128::MIN),
+        CappedEpoch::new(
             SettlementEpochBlocks::new(EPOCH_BLOCKS).expect("non-zero"),
             BlockCount::from_raw(REORG_CAP_BLOCKS),
         )
         .expect("the cap sits inside the epoch"),
-    }
+    )
 }
 
 /// The settlement schedule [`levered_rules`] runs.
@@ -249,14 +249,14 @@ fn issues_every_pair(blocks: u64, pairs: u64) -> bool {
 /// Regtest rules under the settled schedule ([`settled_epoch_blocks`]),
 /// with the levered reorg cap.
 pub fn settled_rules() -> ChainRules {
-    ChainRules::Regtest {
-        fixed_difficulty: Some(std::num::NonZeroU128::MIN),
-        schedule: FakechainSchedule::new(
+    ChainRules::harness_regtest(
+        Some(std::num::NonZeroU128::MIN),
+        CappedEpoch::new(
             SettlementEpochBlocks::new(settled_epoch_blocks()).expect("non-zero"),
             BlockCount::from_raw(REORG_CAP_BLOCKS),
         )
         .expect("the cap sits inside the settled epoch"),
-    }
+    )
 }
 
 /// The settlement schedule [`settled_rules`] runs.

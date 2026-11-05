@@ -1190,7 +1190,7 @@ fn join_market_bond_post_signs_and_verifies_through_prover() {
         BondPostError, BondTerm, HoldingsDescriptor, HoldingsKind, ShardSet,
     };
     use shekyl_bulletproofs::{verify_batch, BatchEntry, Bulletproof};
-    use shekyl_crypto_pq::account::{DerivationNetwork, SeedFormat, MASTER_SEED_BYTES};
+    use shekyl_crypto_pq::account::{Network, MASTER_SEED_BYTES};
     use shekyl_crypto_pq::archival_p::derive_archival_p_keys;
     use shekyl_crypto_pq::kem::HybridCiphertext;
     // (the bond vin carries no on-chain signature; surface-A signing over the
@@ -1207,13 +1207,8 @@ fn join_market_bond_post_signs_and_verifies_through_prover() {
     // Wallet keys fund the transaction; the bond persona `P` is a separate
     // identity that authorizes the post (credit paths sign under P_pubkey).
     let keys = LocalKeys::from_test_seed(TEST_SEED);
-    let p_keys = derive_archival_p_keys(
-        &[0x33u8; MASTER_SEED_BYTES],
-        DerivationNetwork::Mainnet,
-        SeedFormat::Bip39,
-        0,
-    )
-    .expect("derive archival P keys");
+    let p_keys = derive_archival_p_keys(&[0x33u8; MASTER_SEED_BYTES], Network::Mainnet, 0)
+        .expect("derive archival P keys");
 
     let holdings = HoldingsDescriptor {
         kind: HoldingsKind::ShardSetCompact,

@@ -28,8 +28,9 @@
 //! `salt|info`, because a derivation's
 //! separation comes from the (salt, info) pair, not the info alone: the three
 //! shared info labels (`shekyl-ed25519-spend/-view/-ml-kem-768`) appear as both a
-//! const (composed `salt_for` salt) and an inline `SeedDerivation` (fixed
-//! `shekyl-master-derive-v1` salt) — legitimately distinct derivations that a
+//! const (composed `salt_for` salt) and the harness fixture wallet's inline
+//! `fixture_expand` (fixed `shekyl-master-derive-v1` salt, test-only) —
+//! legitimately distinct derivations that a
 //! bare-info test would wrongly report as a collision, and which SA-3b is NOT
 //! permitted to "fix" (it mutates zero domain values).
 //!
@@ -61,8 +62,8 @@ const REGISTRY: &str = include_str!("../../../docs/design/CRYPTO_DOMAIN_REGISTRY
 /// The CBOM table (docs/CRYPTOGRAPHIC_INVENTORY.md §3) is a dated snapshot of
 /// these numbers.
 const PRODUCTION_PINS: [(&str, usize, usize); 7] = [
-    ("1", 55, 0), // support stream: +2 (archival-support-draw-v1, archival-support-challenge-nonce-v1); SO-D12 increment 2: +1 (archival-drawable-epoch-v1); FCMP++ batch weights (R3): +2 (fcmp-pp-batch-weights-v1, fcmp-membership-only-batch-weights-v1); CEN-H19 (ruling R3): +1 (bp-plus-batch-weights-v1); bundle verifier: +4 (archival-witness-bundle-scheme-v1, scheme 3; archival-serve-credit-bundle-v1, archival-bundle-prunable-v1, archival-bundle-root-v1); RT-W8: +2 (rpc-rendezvous-name-v1, rpc-static-fingerprint-v1); public urn deleted: -1 (archival-challenge-assignment-v1); Slice C: +4 (archival-draw-v1, archival-draw-commit-v1, archival-challenge-nonce-v1, archival-serve-credit-batch-v1); WSS-Q1: +2 (p-store-aead-v1, p-store-slot-v1); FN-DSA hybrid: +2 (archival-receipt-scheme-v1, archival-witness-carrier-scheme-v1, both scheme 3); settlement: +2 (archival-settlement-select-v1, archival-issued-index-v1); PL-D3: +2 (pqc-leaf-key-v1, pqc-leaf-record-v1); DRS-P0d: +3 (chain-digest/v0{,/chain,/spent-elem}); SF-D8: -1 (attestation-nonce-v1 retired); S-CHAIN-W: +1 (chain-store/undo-log/post-image-v1); PWD-T5: +1 (p2p-wire-prefix-v1); network id: +1 (p2p-network-id-v1); SF-D8 v3: +1 (archival-pass-delivery-digest-v1); SV-D1: +1 (archival-shard-view-hash-v1)
-    ("2", 48, 0), // persona SLH-DSA key deleted (2026-10-18, FND-25): -1 (archival-p msg-sign identity); receipt key: +2 (archival-p-receipt-ed25519-v1, archival-p-receipt-fn-dsa-1024-v1); PL-D3: +2 (pqc-leaf-blind, pqc-leaf-record-blind); fork-(ii) layout: +1 (archival-p msg-sign identity, the 7th P label)
+    ("1", 56, 0), // network name: +1 (network-name-v1, the signing envelope §2.6); support stream: +2 (archival-support-draw-v1, archival-support-challenge-nonce-v1); SO-D12 increment 2: +1 (archival-drawable-epoch-v1); FCMP++ batch weights (R3): +2 (fcmp-pp-batch-weights-v1, fcmp-membership-only-batch-weights-v1); CEN-H19 (ruling R3): +1 (bp-plus-batch-weights-v1); bundle verifier: +4 (archival-witness-bundle-scheme-v1, scheme 3; archival-serve-credit-bundle-v1, archival-bundle-prunable-v1, archival-bundle-root-v1); RT-W8: +2 (rpc-rendezvous-name-v1, rpc-static-fingerprint-v1); public urn deleted: -1 (archival-challenge-assignment-v1); Slice C: +4 (archival-draw-v1, archival-draw-commit-v1, archival-challenge-nonce-v1, archival-serve-credit-batch-v1); WSS-Q1: +2 (p-store-aead-v1, p-store-slot-v1); FN-DSA hybrid: +2 (archival-receipt-scheme-v1, archival-witness-carrier-scheme-v1, both scheme 3); settlement: +2 (archival-settlement-select-v1, archival-issued-index-v1); PL-D3: +2 (pqc-leaf-key-v1, pqc-leaf-record-v1); DRS-P0d: +3 (chain-digest/v0{,/chain,/spent-elem}); SF-D8: -1 (attestation-nonce-v1 retired); S-CHAIN-W: +1 (chain-store/undo-log/post-image-v1); PWD-T5: +1 (p2p-wire-prefix-v1); network id: +1 (p2p-network-id-v1); SF-D8 v3: +1 (archival-pass-delivery-digest-v1); SV-D1: +1 (archival-shard-view-hash-v1)
+    ("2", 44, 0), // one derivation (NI-R7, 2026-11-03): -4 (the fixed-salt seed derivation left production for the harness fixture wallet: shekyl-master-derive-v1 + its three infos, now test-only); persona SLH-DSA key deleted (2026-10-18, FND-25): -1 (archival-p msg-sign identity); receipt key: +2 (archival-p-receipt-ed25519-v1, archival-p-receipt-fn-dsa-1024-v1); PL-D3: +2 (pqc-leaf-blind, pqc-leaf-record-blind); fork-(ii) layout: +1 (archival-p msg-sign identity, the 7th P label)
     ("3", 1, 3),
     ("4", 8, 0), // PL-D3: -1 (shekyl-pqc-leaf retired; the leaf key hash is mech 1 now)
     ("5", 6, 8), // SA-3c: -1 (snapshot-id left mechanism 5)
@@ -73,7 +74,8 @@ const PRODUCTION_PINS: [(&str, usize, usize); 7] = [
 // RT-W9 step 6: +2 (the two Noise protocol names, one reason: the RPC
 // channel's hybridXK and the P2P handshake's NNhfs).
 const EXCLUDED_EXPECTED: usize = 10;
-const TEST_ONLY_EXPECTED: usize = 8;
+// One derivation (NI-R7): +4 (the harness fixture wallet's fixed salt and its three infos).
+const TEST_ONLY_EXPECTED: usize = 12;
 // PC-D3: +1 — the retired `-v1` leaf label, kept only so the negative control
 // can assert the `-v2` derivation does not reproduce it.
 
@@ -368,7 +370,7 @@ fn test_domains_are_segregated_from_production() {
 }
 
 /// Guards the mechanism-2 model itself: the three shared info labels MUST still
-/// appear as two rows each (const site + inline SeedDerivation), distinct only by
+/// appear as two rows each (const site + the harness's inline fixture_expand), distinct only by
 /// salt. If a future edit collapses one, this fails — surfacing that the
 /// salt-keyed distinctness model no longer matches the code, rather than letting
 /// the main test pass on a silently-changed shape.

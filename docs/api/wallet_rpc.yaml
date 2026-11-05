@@ -1619,7 +1619,7 @@ components:
           $ref: "#/components/schemas/CapabilityMode"
         network:
           type: string
-          enum: [MAINNET, TESTNET, STAGENET]
+          enum: [MAINNET, TESTNET, STAGENET, REGTEST]
         restore_height_hint:
           type: integer
           format: int64
@@ -1642,39 +1642,28 @@ components:
       required: [wallet]
       description: >
         On success the wallet is open. Backup material is returned exactly
-        once: BIP-39 `mnemonic` on mainnet/stagenet, or `raw_seed_hex` on
-        testnet (32-byte entropy, lowercase hex). Clients must persist the
-        backup before discarding the response; the server does not re-emit it.
+        once: the wallet's 24-word BIP-39 `mnemonic`, on every network
+        (NETWORK_IDENTITY.md NI-R7). Clients must persist the backup before
+        discarding the response; the server does not re-emit it.
       properties:
         wallet:
           $ref: "#/components/schemas/WalletHandle"
         mnemonic:
           type: string
           description: >
-            24-word BIP-39 English mnemonic (mainnet/stagenet). Absent on
-            testnet. Equally secret with the master seed — never log.
-        raw_seed_hex:
-          type: string
-          pattern: "^[0-9a-f]{64}$"
-          description: >
-            32-byte raw seed as lowercase hex (testnet only). Absent on
-            mainnet/stagenet.
+            24-word BIP-39 English mnemonic: the spelling of the wallet's
+            32-byte seed. Equally secret with the seed — never log.
 
     RestoreWalletParams:
       type: object
       required: [name, password, mnemonic]
       description: >
         Recreate a wallet from its seed backup (WI-RPC-2a). The name must
-        not collide with an existing wallet file (-29002). Seed format is
-        NETWORK-GOVERNED, mirroring create's output: mainnet/stagenet
-        take the 24-word BIP-39 mnemonic; testnet takes the 32-byte raw
-        seed as 64-char hex (exactly CreateWalletResult.raw_seed_hex) —
-        ratified through the WI-RPC-2a high-review pass 2026-07-23;
-        contract reconciled to the shipped lifecycle.rs behavior
-        2026-07-24 (the earlier "testnet refuses with -32602" text
-        contradicted dev). Format failures refuse with -32602; the
-        invalid-seed error messages are stable and never reflect the
-        supplied material.
+        not collide with an existing wallet file (-29002). Every network
+        takes the wallet's 24-word BIP-39 mnemonic, exactly
+        CreateWalletResult.mnemonic (NETWORK_IDENTITY.md NI-R7). Anything
+        else refuses with -32602; the error message is stable and never
+        reflects the supplied material.
       properties:
         name:
           type: string
@@ -1684,10 +1673,8 @@ components:
         mnemonic:
           type: string
           description: >
-            Network-governed seed material: 24-word BIP-39 English
-            mnemonic (mainnet/stagenet) or 64-hex raw seed (testnet),
-            from CreateWalletResult. Equally secret with the master
-            seed — never log.
+            The wallet's 24-word BIP-39 English mnemonic, from
+            CreateWalletResult. Equally secret with the seed — never log.
         restore_height:
           type: integer
           format: int64
@@ -1700,8 +1687,7 @@ components:
           type: string
           default: en
           description: >
-            BIP-39 wordlist language of the supplied mnemonic
-            (mainnet/stagenet path only; ignored for testnet raw seeds).
+            BIP-39 wordlist language of the supplied mnemonic.
 
     RestoreWalletResult:
       type: object
@@ -2369,7 +2355,7 @@ components:
           $ref: "#/components/schemas/CapabilityMode"
         network:
           type: string
-          enum: [MAINNET, TESTNET, STAGENET]
+          enum: [MAINNET, TESTNET, STAGENET, REGTEST]
         address:
           type: string
         wallet_height:

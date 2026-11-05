@@ -68,12 +68,8 @@ fn blobs(height: u64, n: usize) -> (Candidate, Vec<u8>, Vec<Vec<u8>>) {
 }
 
 fn write(records: &[(Vec<u8>, Vec<Vec<u8>>)]) -> Vec<u8> {
-    let mut w = CorpusWriter::create(
-        Cursor::new(Vec::new()),
-        CorpusNet::Fakechain,
-        BlockHeight::ZERO,
-    )
-    .expect("header");
+    let mut w = CorpusWriter::create(Cursor::new(Vec::new()), Network::Regtest, BlockHeight::ZERO)
+        .expect("header");
     for (block, txs) in records {
         w.append(block, txs).expect("verified record");
     }
@@ -88,7 +84,7 @@ fn a_corpus_round_trips_as_an_extend_only_source_in_height_order() {
     let bytes = write(&[(b0, t0), (b1, t1), (b2, t2)]);
 
     let mut reader = CorpusReader::open(Cursor::new(bytes)).expect("open");
-    assert_eq!(reader.net(), CorpusNet::Fakechain);
+    assert_eq!(reader.net(), Network::Regtest);
     assert_eq!(reader.declared(), 3);
     let mut seen = Vec::new();
     while let Some(Sequenced { seq, event }) = reader.next().expect("record") {
@@ -120,12 +116,8 @@ fn the_writer_refuses_a_pruned_sources_shortfall_by_height() {
     let (_, b0, t0) = blobs(0, 0);
     let (_, b1, mut t1) = blobs(1, 2);
     t1.pop();
-    let mut w = CorpusWriter::create(
-        Cursor::new(Vec::new()),
-        CorpusNet::Testnet,
-        BlockHeight::ZERO,
-    )
-    .expect("header");
+    let mut w = CorpusWriter::create(Cursor::new(Vec::new()), Network::Testnet, BlockHeight::ZERO)
+        .expect("header");
     w.append(&b0, &t0).expect("genesis");
     let refused = w.append(&b1, &t1).expect_err("one body short");
     assert!(
@@ -153,12 +145,8 @@ fn trailing_bytes_inside_a_length_prefix_are_malformed_not_verified() {
     // cannot be read as the canonical body.
     let (_, mut block, txs) = blobs(0, 0);
     block.push(0x00);
-    let mut w = CorpusWriter::create(
-        Cursor::new(Vec::new()),
-        CorpusNet::Fakechain,
-        BlockHeight::ZERO,
-    )
-    .expect("header");
+    let mut w = CorpusWriter::create(Cursor::new(Vec::new()), Network::Regtest, BlockHeight::ZERO)
+        .expect("header");
     let refused = w.append(&block, &txs).expect_err("padded block");
     assert!(
         matches!(refused, CorpusFault::Malformed { what: "block", .. }),
@@ -167,12 +155,8 @@ fn trailing_bytes_inside_a_length_prefix_are_malformed_not_verified() {
 
     let (_, block, mut txs) = blobs(0, 1);
     txs[0].push(0x00);
-    let mut w = CorpusWriter::create(
-        Cursor::new(Vec::new()),
-        CorpusNet::Mainnet,
-        BlockHeight::ZERO,
-    )
-    .expect("header");
+    let mut w = CorpusWriter::create(Cursor::new(Vec::new()), Network::Mainnet, BlockHeight::ZERO)
+        .expect("header");
     let refused = w.append(&block, &txs).expect_err("padded body");
     assert!(
         matches!(
@@ -190,12 +174,8 @@ fn trailing_bytes_inside_a_length_prefix_are_malformed_not_verified() {
 fn the_writer_refuses_bodies_out_of_header_order() {
     let (_, b, mut t) = blobs(0, 2);
     t.swap(0, 1);
-    let mut w = CorpusWriter::create(
-        Cursor::new(Vec::new()),
-        CorpusNet::Mainnet,
-        BlockHeight::ZERO,
-    )
-    .expect("header");
+    let mut w = CorpusWriter::create(Cursor::new(Vec::new()), Network::Mainnet, BlockHeight::ZERO)
+        .expect("header");
     let refused = w.append(&b, &t).expect_err("reordered");
     assert!(
         matches!(refused, CorpusFault::BodyMismatch { index: 0, .. }),
@@ -250,7 +230,7 @@ fn an_unfinished_corpus_is_refused_by_count() {
     let (_, b1, t1) = blobs(1, 0);
     let mut w = CorpusWriter::create(
         Cursor::new(Vec::new()),
-        CorpusNet::Stagenet,
+        Network::Stagenet,
         BlockHeight::ZERO,
     )
     .expect("header");
@@ -343,7 +323,7 @@ fn height_exhaustion_is_a_fault_on_both_sides_and_writes_nothing() {
     let last = BlockHeight::from_raw(u64::MAX);
     let (_, b_last, t_last) = blobs(u64::MAX, 0);
     let mut w =
-        CorpusWriter::create(Cursor::new(Vec::new()), CorpusNet::Fakechain, last).expect("header");
+        CorpusWriter::create(Cursor::new(Vec::new()), Network::Regtest, last).expect("header");
     w.append(&b_last, &t_last)
         .expect("the last height is representable");
     let (_, b_more, t_more) = blobs(0, 0);
@@ -381,7 +361,7 @@ fn height_exhaustion_is_a_fault_on_both_sides_and_writes_nothing() {
     let (_, b_prev, t_prev) = blobs(u64::MAX - 1, 0);
     let mut w = CorpusWriter::create(
         Cursor::new(Vec::new()),
-        CorpusNet::Fakechain,
+        Network::Regtest,
         BlockHeight::from_raw(u64::MAX - 1),
     )
     .expect("header");
@@ -442,7 +422,7 @@ fn a_rewind_must_be_backward_inside_the_corpus_and_after_a_block() {
     let (_, b2, t2) = blobs(2, 1);
     let mut w = CorpusWriter::create(
         Cursor::new(Vec::new()),
-        CorpusNet::Fakechain,
+        Network::Regtest,
         BlockHeight::from_raw(0),
     )
     .expect("header");
@@ -463,7 +443,7 @@ fn a_rewind_must_be_backward_inside_the_corpus_and_after_a_block() {
     let (_, b6, t6) = blobs(6, 0);
     let mut w5 = CorpusWriter::create(
         Cursor::new(Vec::new()),
-        CorpusNet::Fakechain,
+        Network::Regtest,
         BlockHeight::from_raw(5),
     )
     .expect("header");
@@ -526,12 +506,8 @@ fn an_inject_round_trips_at_its_position_and_occupies_no_height() {
     let (c0, b0, t0) = blobs(0, 0);
     let (c1, b1, t1) = blobs(1, 1);
     let (c2, b2, t2) = blobs(2, 0);
-    let mut w = CorpusWriter::create(
-        Cursor::new(Vec::new()),
-        CorpusNet::Fakechain,
-        BlockHeight::ZERO,
-    )
-    .expect("header");
+    let mut w = CorpusWriter::create(Cursor::new(Vec::new()), Network::Regtest, BlockHeight::ZERO)
+        .expect("header");
     w.append(&b0, &t0).expect("0");
     w.append(&b1, &t1).expect("1");
     w.inject(BlockHeight::from_raw(1), credit(0x5a))
@@ -560,12 +536,8 @@ fn an_inject_round_trips_at_its_position_and_occupies_no_height() {
 fn an_inject_needs_a_regtest_corpus_a_tip_and_the_tips_height() {
     let (_, b0, t0) = blobs(0, 0);
     let (_, b1, t1) = blobs(1, 0);
-    let mut w = CorpusWriter::create(
-        Cursor::new(Vec::new()),
-        CorpusNet::Fakechain,
-        BlockHeight::ZERO,
-    )
-    .expect("header");
+    let mut w = CorpusWriter::create(Cursor::new(Vec::new()), Network::Regtest, BlockHeight::ZERO)
+        .expect("header");
     assert!(matches!(
         w.inject(BlockHeight::ZERO, credit(1)).expect_err("no tip"),
         CorpusFault::InjectOnEmpty
@@ -595,36 +567,29 @@ fn an_inject_needs_a_regtest_corpus_a_tip_and_the_tips_height() {
 
     // Off regtest: the writer refuses, and so does the reader when a
     // regtest corpus's net tag is patched to another chain.
-    let mut main = CorpusWriter::create(
-        Cursor::new(Vec::new()),
-        CorpusNet::Testnet,
-        BlockHeight::ZERO,
-    )
-    .expect("header");
+    let mut main =
+        CorpusWriter::create(Cursor::new(Vec::new()), Network::Testnet, BlockHeight::ZERO)
+            .expect("header");
     main.append(&b0, &t0).expect("0");
     assert!(matches!(
         main.inject(BlockHeight::ZERO, credit(1))
             .expect_err("no injector off regtest"),
-        CorpusFault::InjectOffFakechain {
-            net: CorpusNet::Testnet
+        CorpusFault::InjectNotPermitted {
+            net: Network::Testnet
         }
     ));
-    let mut w = CorpusWriter::create(
-        Cursor::new(Vec::new()),
-        CorpusNet::Fakechain,
-        BlockHeight::ZERO,
-    )
-    .expect("header");
+    let mut w = CorpusWriter::create(Cursor::new(Vec::new()), Network::Regtest, BlockHeight::ZERO)
+        .expect("header");
     w.append(&b0, &t0).expect("0");
     w.inject(BlockHeight::ZERO, credit(1)).expect("at the tip");
     let mut bytes = w.finish().expect("finish").into_inner();
-    bytes[12] = CorpusNet::Testnet as u8;
+    bytes[12] = Network::Testnet as u8;
     let mut reader = CorpusReader::open(Cursor::new(bytes)).expect("open");
     assert!(reader.next().expect("0").is_some());
     assert!(matches!(
         reader.next().expect_err("the reader applies the same law"),
-        CorpusFault::InjectOffFakechain {
-            net: CorpusNet::Testnet
+        CorpusFault::InjectNotPermitted {
+            net: Network::Testnet
         }
     ));
 }

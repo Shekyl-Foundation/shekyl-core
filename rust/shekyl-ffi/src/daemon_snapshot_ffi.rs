@@ -47,7 +47,7 @@ use shekyl_daemon_config::{load, Platform, TABLE};
 #[derive(Clone, Copy, Debug)]
 pub struct ShekylDaemonSnapshot {
     /// The network, as `cryptonote::network_type`: 0 mainnet, 1 testnet,
-    /// 2 stagenet, 3 fakechain (regtest). Read by core and the p2p server.
+    /// 2 stagenet, 3 regtest.
     pub network: u8,
     /// Offline: both connectors off; read by the p2p server.
     pub offline: bool,
@@ -81,7 +81,7 @@ impl SnapshotData {
     #[must_use]
     pub fn new(config: &DaemonConfig) -> Self {
         Self {
-            network: config.network.cryptonote_code(),
+            network: config.network.code(),
             offline: config.offline(),
         }
     }

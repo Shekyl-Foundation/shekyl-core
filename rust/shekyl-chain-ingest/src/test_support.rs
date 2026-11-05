@@ -69,9 +69,10 @@ use shekyl_wire::{Block, BlockHeader, Input, Transaction};
 
 #[cfg(feature = "pipeline")]
 use crate::connector::{Connector, ConnectorArgs};
-use crate::corpus::{CorpusNet, CorpusWriter};
+use crate::corpus::CorpusWriter;
 use crate::source::{IngestEvent, SequenceNo, Sequenced, Source};
 use crate::trace::{Digest, Facts, Trace, TraceWriter};
+use shekyl_network::Network;
 
 mod growing;
 mod tree;
@@ -394,7 +395,7 @@ pub fn reorg_of(main: Vec<(Block, Vec<Transaction>)>, to: u64, fork_len: u64) ->
 
 /// The reorg as a corpus: main's blocks, a rewind record, the fork's.
 pub fn corpus_of_reorg(r: &Reorg) -> Vec<u8> {
-    let mut w = CorpusWriter::create(std::io::Cursor::new(Vec::new()), CorpusNet::Fakechain, h(0))
+    let mut w = CorpusWriter::create(std::io::Cursor::new(Vec::new()), Network::Regtest, h(0))
         .expect("header");
     for (b, txs) in &r.main {
         let (bytes, bodies) = wire(b, txs);
@@ -427,12 +428,8 @@ pub fn corpus_of(chain: &[(Block, Vec<Transaction>)]) -> Vec<u8> {
 
 /// The corpus of `chain`, whose first block is at `first`.
 pub fn corpus_from(first: BlockHeight, chain: &[(Block, Vec<Transaction>)]) -> Vec<u8> {
-    let mut w = CorpusWriter::create(
-        std::io::Cursor::new(Vec::new()),
-        CorpusNet::Fakechain,
-        first,
-    )
-    .expect("header");
+    let mut w = CorpusWriter::create(std::io::Cursor::new(Vec::new()), Network::Regtest, first)
+        .expect("header");
     for (b, txs) in chain {
         let (bb, bodies) = wire(b, txs);
         w.append(&bb, &bodies).expect("verified");

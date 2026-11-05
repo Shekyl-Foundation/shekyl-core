@@ -95,7 +95,7 @@ use std::time::{Duration, Instant};
 
 use kameo::actor::Spawn as _;
 use shekyl_archival_retention::PASS_ANCHOR_DEPTH_BLOCKS;
-use shekyl_crypto_pq::account::{DerivationNetwork, SeedFormat};
+use shekyl_crypto_pq::account::Network;
 use shekyl_crypto_pq::signature::HybridPublicKey;
 use shekyl_p_fetch::{
     DiscardTxs, ExpectedShard, FetchError, FetchTarget, PFetchClient, RequestHeader,
@@ -687,8 +687,7 @@ impl Apparatus {
         for (slot, tor) in serving_tors.into_iter().enumerate() {
             let tor = tor.ok_or(ApparatusError::Bootstrap)?;
             let slot = PSlot::from_raw(u32::try_from(slot).expect("slot fits u32"));
-            let identity =
-                derive_onion_identity(&seed, DerivationNetwork::Mainnet, SeedFormat::Bip39, slot);
+            let identity = derive_onion_identity(&seed, Network::Mainnet, slot);
             let service_id = identity.service_id().clone();
             // The "bond record" the client leg will dial from: the endpoint
             // column is the onion's public key, and the two encodings of it

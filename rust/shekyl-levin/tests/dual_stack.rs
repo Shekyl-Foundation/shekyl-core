@@ -15,8 +15,8 @@
 //! ```
 //!
 //! `--offline` skips the p2p bind (`net_node.inl`); this harness uses
-//! `--p2p-bind-ip 127.0.0.1` plus `--out-peers 0`. `--regtest` (FAKECHAIN)
-//! speaks the id derived from fakechain's genesis pin.
+//! `--p2p-bind-ip 127.0.0.1` plus `--out-peers 0`. `--network regtest`
+//! speaks the id derived from regtest's own genesis pin (NI-Q8).
 
 use std::io::{Read, Write};
 use std::net::{SocketAddr, TcpStream};
@@ -30,11 +30,10 @@ use shekyl_levin::{
     COMMAND_TIMED_SYNC, DEFAULT_MAX_PACKET_SIZE,
 };
 
-/// FAKECHAIN (`--regtest`) derives its id from fakechain's genesis pin,
-/// which is mainnet's genesis today.
+/// Regtest (`--network regtest`) derives its id from its own genesis pin.
 fn regtest_network_id() -> shekyl_p2p_transport::NetworkId {
     shekyl_p2p_transport::network_id_from_genesis(&shekyl_rpc_types::genesis_hash_for(
-        shekyl_rpc_types::DaemonNetwork::Fakechain,
+        shekyl_rpc_types::Network::Regtest,
     ))
 }
 

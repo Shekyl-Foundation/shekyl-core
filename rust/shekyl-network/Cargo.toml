@@ -1,0 +1,25 @@
+# Copyright (c) 2026, The Shekyl Foundation
+#
+# All rights reserved.
+# BSD-3-Clause
+
+[package]
+name = "shekyl-network"
+description = "The one network table: every Shekyl network's name, code, prefixes, ports, genesis and permitted levers"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+
+[dependencies]
+shekyl-crypto-hash = { path = "../shekyl-crypto-hash" }
+serde = { workspace = true, optional = true }
+
+[dev-dependencies]
+serde_json.workspace = true
+
+[features]
+serde = ["dep:serde"]
+
+[lints]
+workspace = true

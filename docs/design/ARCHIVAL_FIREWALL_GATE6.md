@@ -8,7 +8,7 @@
   `ARCHIVAL_P_DERIVE_V1` KAT + `archival_p` module **landed** (Bond-PR 0 #152 — verified at source:
   [`archival_p.rs`](../../rust/shekyl-crypto-pq/src/archival_p.rs) carries all eight §9.3 labels
   incl. the `bond_spend_*` pair and the GF-9 `hs_id` label (SPIKE-F-4, §10.13);
-  [`kat_archival_p_derive_v1.rs`](../../rust/shekyl-crypto-pq/tests/kat_archival_p_derive_v1.rs)).
+  [`kat_archival_p_derive_v1.rs`](../../rust/shekyl-crypto-pq/tests/kat_archival_p_derive_v2.rs)).
   **C-1 dependency discharged:** the emission vin-layer ML-DSA equality check **landed** (PR #277,
   `dev` `13c368707`; `emission_verify.rs`) — quantum spend-authority no longer classical-only.
 - **Round 2 closed (2026-07-11)** — network + transport (§10). All §10.10 exit dispositions
@@ -555,7 +555,7 @@ artifact where one exists.
       incl. the `shekyl-archival-p-bond-spend-{ed25519,ml-dsa-65}-v1` labels → `bond_spend_pk`
       (GF-1; §9.3 / §9.4). **code (Bond-PR 0 #152, verified 2026-07-11):**
       [`archival_p.rs`](../../rust/shekyl-crypto-pq/src/archival_p.rs) (7 labels present),
-      [`kat_archival_p_derive_v1.rs`](../../rust/shekyl-crypto-pq/tests/kat_archival_p_derive_v1.rs).
+      [`kat_archival_p_derive_v1.rs`](../../rust/shekyl-crypto-pq/tests/kat_archival_p_derive_v2.rs).
 - [ ] Pin off-chain announce/backing presentation wire (daemon + wallet). **R2 transport half
       pinned** (GF-5 broadcast, §10.5 / §10.13); the *wire* half is the residual (§10.13 carry).
 - [ ] Pin rotation ceremony (over-enumeration; holdings/bond migration). **→ R3** (§11; §2.3 P2B-1
@@ -602,7 +602,7 @@ artifact where one exists.
 
 ```text
 master_seed_64   // wallet file — same as principal ([account.rs](../../rust/shekyl-crypto-pq/src/account.rs))
-network, format  // DerivationNetwork + SeedFormat — same salt_for() as principal
+network          // the network (NI-R7: no seed format) — same salt_for() as principal
 p_slot: u32      // rotation slot; genesis default 0; increment on pure over-enumeration rotation
 ```
 
@@ -616,8 +616,9 @@ new keys**). Consensus sees only the resulting `P_canonical_id`.
 Reuse the principal salt and wide-reduce discipline:
 
 ```text
-salt = salt_for(network, format)
-       // e.g. b"shekyl-master-derive-v1-mainnet-bip39"
+salt = salt_for(network)
+       // = name_id(network) || b"shekyl-master-derive-v3"
+       //   (NETWORK_IDENTITY.md NI-R7, NI-R10; V3_WALLET_DECISION_LOG.md 2026-11-04)
 
 HKDF-SHA-512(salt, ikm = master_seed_64, info = LABEL || 0x00 || p_slot.to_le_bytes(), L = per-row)
 ```
@@ -978,7 +979,7 @@ note).
 - [x] Reviewer sign-off on Round 1 draft (2026-06-13 — GF-1 resolved, GF-2 made architectural, GF-8/11/4 corrected, downstream round criteria named).
 - [x] `ARCHIVAL_P_DERIVE_V1` KAT manifest (fixed `master_seed` + `p_slot` → known `p_canonical_id`
       **and `bond_spend_pk`** — the §9.3 `shekyl-archival-p-bond-spend-*` labels, GF-1). **Landed**
-      (Bond-PR 0 #152): [`kat_archival_p_derive_v1.rs`](../../rust/shekyl-crypto-pq/tests/kat_archival_p_derive_v1.rs).
+      (Bond-PR 0 #152): [`kat_archival_p_derive_v1.rs`](../../rust/shekyl-crypto-pq/tests/kat_archival_p_derive_v2.rs).
 - [x] `shekyl-crypto-pq::archival_p` implementation + unit tests. **Landed:**
       [`archival_p.rs`](../../rust/shekyl-crypto-pq/src/archival_p.rs) (eight §9.3 labels present,
       verified at source 2026-07-11; the GF-9 `hs_id` label added by SPIKE-F-4, 2026-08-05).

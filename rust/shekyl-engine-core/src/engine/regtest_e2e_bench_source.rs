@@ -83,7 +83,7 @@ async fn bench_tx_source() {
         env_u64("SHEKYL_BENCH_DAEMON_RPC").expect("SHEKYL_BENCH_DAEMON_RPC is the daemon's port"),
     )
     .expect("a port");
-    let seed = [SEED_BYTE; shekyl_crypto_pq::account::MASTER_SEED_BYTES];
+    let seed = [SEED_BYTE; shekyl_crypto_pq::account::SEED_BYTES];
     let (wallet, _tmp) = create_wallet(port, &seed, b"bench-source").await;
     let address = wallet.primary_address().encode().expect("encode address");
     match mode.as_str() {

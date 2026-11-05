@@ -30,8 +30,8 @@
 //! D6 — *"a zero next-block difficulty rejects the block"* — is held **by
 //! the type**: [`Target`] wraps [`NonZeroU128`], the one `Difficulty` →
 //! [`Target`] edge is [`D6::mint`], and every already-valid target
-//! (genesis-block `1`, Fakechain `Fixed`) records the row through
-//! [`D6::record`] so a Fakechain verdict can mint.
+//! (genesis-block `1`, levered `Fixed`) records the row through
+//! [`D6::record`] so a levered verdict can mint.
 //!
 //! **What zero at the mint IS (premise refuted 2026-09-20, DRS-E2 RD-F17).**
 //! Slice 2 wrote zero as a corrupt-view fault on the premise that LWMA-1
@@ -77,7 +77,7 @@ use crate::view::HeaderView;
 /// (CEN-D6). The inner type is [`NonZeroU128`]: a zero target cannot be
 /// assembled, only refused — `D6::mint` is the one `Difficulty` →
 /// [`Target`] edge, and every path that already has a `Target` (genesis
-/// block, Fakechain `Fixed`) still records CEN-D6 through
+/// block, levered `Fixed`) still records CEN-D6 through
 /// [`D6::record`](D6::record) so coverage is complete under every rule
 /// set. No public constructor and no `From<Difficulty>`.
 #[derive(Clone, Copy, PartialEq, Eq, Hash)]
@@ -107,9 +107,7 @@ impl Target {
         Difficulty::from_raw(self.0.get())
     }
 
-    /// A fixed target for a Fakechain rule set (`RuleSet::fakechain`,
-    /// CEN-D7). Non-zero by the argument's type.
-    /// A target at `difficulty` that no header chain derived — for a test
+    /// A target at `difficulty` that no header chain derived, for a test
     /// that needs a claim the headers refute (`Stale::Target`).
     #[cfg(any(test, feature = "harness"))]
     #[must_use]
@@ -117,6 +115,8 @@ impl Target {
         Self::fixed(difficulty)
     }
 
+    /// A fixed target (`RuleSet::with_levers`, CEN-D7). Non-zero by the
+    /// argument's type.
     pub(crate) const fn fixed(fixed: NonZeroU128) -> Self {
         Self(fixed)
     }
@@ -197,7 +197,7 @@ impl Rule for D6 {
 impl D6 {
     /// Record this row against an already-valid [`Target`]. Every path
     /// that produces a target for a verdict — LWMA-1, genesis-block `1`,
-    /// Fakechain `Fixed` — goes through here, so `covers_landed` cannot
+    /// levered `Fixed` — goes through here, so `covers_landed` cannot
     /// depend on which arm D4 took.
     pub(crate) fn record(target: Target, coverage: &mut RuleCoverage) -> Target {
         coverage.insert(Self::ROW);
@@ -331,10 +331,11 @@ impl D4 {
 /// CEN-D7: `--fixed-difficulty` overrides the DAA on regtest, height 0
 /// forced to 1.
 ///
-/// Ported as **data on a Fakechain rule set** (`DifficultyRule::Fixed`,
-/// `RuleSet::fakechain`; slice 2 §4.5, arm (d)), not as a flag the validator
-/// consults: no override path exists on any nettype other than Fakechain,
-/// by type. The row is *evaluated* on every block — is the target
+/// Ported as **data on a levered rule set** (`DifficultyRule::Fixed`,
+/// `RuleSet::with_levers`; slice 2 §4.5, arm (d)), not as a flag the validator
+/// consults. The issued-set path cannot name `Fixed`. Which network may
+/// pull the lever is its row's `permits`, checked by `ChainRules::new`.
+/// The row is *evaluated* on every block — is the target
 /// overridden here? — and records either way, so coverage is complete under
 /// every rule set; under an issued set the answer is always "no".
 pub(crate) struct D7;

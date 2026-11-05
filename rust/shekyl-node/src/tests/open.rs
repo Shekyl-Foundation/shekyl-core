@@ -14,7 +14,7 @@ use super::*;
 fn an_empty_store_holds_the_pinned_genesis_and_the_chain_handle_answers_it() {
     let dir = tempfile::tempdir().expect("temp");
     let node = open_at(dir.path(), Arc::new(|| {}));
-    let want = BlockHash::from_bytes(shekyl_rpc_types::genesis_hash_for(DaemonNetwork::Fakechain));
+    let want = BlockHash::from_bytes(shekyl_rpc_types::genesis_hash_for(Network::Regtest));
     let identity = node.handles().chain.identity().expect("identity");
     assert_eq!(identity.genesis_hash, want);
     let at = node
@@ -108,8 +108,7 @@ fn stop_closes_the_store_withdraws_the_board_and_a_second_stop_is_a_no_op() {
         "stop withdraws the board"
     );
     node.stop();
-    let rules =
-        ChainRules::new(Chain::Regtest, None, FakechainSchedule::PRODUCTION).expect("rules");
+    let rules = ChainRules::new(Network::Regtest, None, CappedEpoch::PRODUCTION).expect("rules");
     let horizons = Horizons::under(&rules.in_force(BlockHeight::ZERO)).expect("horizons");
     let (store, _cut) = ChainStore::with_genesis(
         dir.path().join("chain.db"),
@@ -120,7 +119,7 @@ fn stop_closes_the_store_withdraws_the_board_and_a_second_stop_is_a_no_op() {
     .expect("the store closed, so it opens again");
     let snap = store.begin_read().expect("read");
     let tip = snap.tip().expect("tip").recorded.expect("genesis");
-    let want = BlockHash::from_bytes(shekyl_rpc_types::genesis_hash_for(DaemonNetwork::Fakechain));
+    let want = BlockHash::from_bytes(shekyl_rpc_types::genesis_hash_for(Network::Regtest));
     assert_eq!(tip.hash, want);
     assert_eq!(
         node.handles().chain.identity(),
@@ -323,7 +322,7 @@ fn a_regtest_node_refuses_a_testnet_store_and_leaves_it_unwritten() {
             assert_eq!(conflict.expected, genesis_hash());
             assert_eq!(
                 conflict.recorded,
-                BlockHash::from_bytes(shekyl_rpc_types::genesis_hash_for(DaemonNetwork::Testnet))
+                BlockHash::from_bytes(shekyl_rpc_types::genesis_hash_for(Network::Testnet))
             );
         }
         Err(other) => panic!("another network's store is a genesis refusal, got {other}"),

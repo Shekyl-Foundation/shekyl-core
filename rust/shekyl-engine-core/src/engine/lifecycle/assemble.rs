@@ -13,7 +13,7 @@ use tracing::warn;
 
 use shekyl_address::Network;
 use shekyl_crypto_pq::account::AllKeysBlob;
-use shekyl_crypto_pq::account::{DerivationNetwork, SeedFormat, MASTER_SEED_BYTES};
+use shekyl_crypto_pq::account::MASTER_SEED_BYTES;
 use shekyl_crypto_pq::archival_p::derive_archival_p_keys;
 use shekyl_engine_file::WalletFile;
 use shekyl_engine_prefs::WalletPrefs;
@@ -23,7 +23,7 @@ use crate::engine::error::{IoError, KeyError, OpenError};
 use crate::engine::stake_engine::{PSlot, StakeEngineHandle, ARCHIVAL_PERSONA_LOOKAHEAD};
 use crate::engine::{Capability, DaemonClient, Engine, SoloSigner};
 
-use super::support::{network_to_derivation, rederivation_failure_detail};
+use super::support::rederivation_failure_detail;
 use super::FirstStakeIntent;
 
 impl Engine<SoloSigner> {
@@ -36,7 +36,6 @@ impl Engine<SoloSigner> {
         mut file: WalletFile,
         keys: AllKeysBlob,
         master_seed: &[u8; MASTER_SEED_BYTES],
-        seed_format: SeedFormat,
         mut ledger: WalletLedger,
         indexes: LedgerIndexes,
         prefs: WalletPrefs,
@@ -63,7 +62,6 @@ impl Engine<SoloSigner> {
         // spawn still applies the hint-fed `monotone_current_slot_from_record`.
         // The staker's scan path still fails loud on the same corrupt seal
         // at `start_pscan`.
-        let derivation_network = network_to_derivation(network);
         // Cache-first, identity-only on miss: persona ids are pure functions
         // of the seed and never invalidate, so a slot already in the sealed
         // `persona_id_cache` costs zero keygens here (the reconcile re-reads
@@ -83,8 +81,7 @@ impl Engine<SoloSigner> {
             }
             let identity_pk = shekyl_crypto_pq::archival_p::derive_archival_p_identity_pk(
                 master_seed,
-                derivation_network,
-                seed_format,
+                network,
                 slot,
             )
             .map_err(|e| {
@@ -272,8 +269,7 @@ impl Engine<SoloSigner> {
         // body store, both values, so both files are closed.
         let stake_ready = Self::prepare_stake_engine_if_staker(
             master_seed,
-            network_to_derivation(network),
-            seed_format,
+            network,
             &ledger.staking,
             first_stake_intent,
             p_store_key,
@@ -412,8 +408,7 @@ impl Engine<SoloSigner> {
     /// contract as `rederive_account`).
     fn prepare_stake_engine_if_staker(
         master_seed: &[u8; MASTER_SEED_BYTES],
-        derivation_network: DerivationNetwork,
-        seed_format: SeedFormat,
+        network: Network,
         staking: &StakingBlock,
         first_stake_intent: Option<FirstStakeIntent>,
         p_store_key: Option<shekyl_p_store::StoreKey>,
@@ -479,8 +474,7 @@ impl Engine<SoloSigner> {
 
         let mut bundles = std::collections::BTreeMap::new();
         for &slot in &slots {
-            let keys = derive_archival_p_keys(master_seed, derivation_network, seed_format, slot)
-                .map_err(|e| {
+            let keys = derive_archival_p_keys(master_seed, network, slot).map_err(|e| {
                 OpenError::Key(KeyError::Primitive {
                     detail: rederivation_failure_detail(&e),
                 })

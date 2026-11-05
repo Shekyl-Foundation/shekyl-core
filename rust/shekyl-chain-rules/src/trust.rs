@@ -27,10 +27,10 @@
 //! - **Not on the `form` token.** `form` is stateless and has no height;
 //!   E1 is view-bound.
 //!
-//! [`Trust::full`] is the constructor. [`Trust::UNPINNED`] is
-//! `full(GenesisPin::NONE)`: `validate` on regtest does not hold a harness
-//! chain to a genesis. A regtest node's open pins
-//! [`GenesisPin::FAKECHAIN`](crate::GenesisPin::FAKECHAIN) separately.
+//! [`Trust::full`] is the constructor; every network a release runs,
+//! regtest included, carries its table genesis. `Trust::UNPINNED`
+//! (`full(GenesisPin::NONE)`) exists in test and harness builds only, for
+//! a harness chain that mines its own genesis.
 
 use crate::genesis_pin::GenesisPin;
 
@@ -44,10 +44,11 @@ pub struct Trust {
 }
 
 impl Trust {
-    /// Nothing pinned. A harness chain mines its own genesis. A public
-    /// network is [`full`](Self::full)`(GenesisPin::for_network(_))`. A
-    /// regtest node's open pins [`GenesisPin::FAKECHAIN`] separately, so
-    /// the store is held to that block and `validate` is not.
+    /// Nothing pinned: a harness chain that mines its own genesis. Test
+    /// and harness builds only; every network a release runs is
+    /// [`full`](Self::full)`(GenesisPin::for_network(_))`, regtest
+    /// included (`NETWORK_IDENTITY.md` NI-Q8).
+    #[cfg(any(test, feature = "harness"))]
     pub const UNPINNED: Self = Self::full(GenesisPin::NONE);
 
     /// Carry `genesis` into `validate`.

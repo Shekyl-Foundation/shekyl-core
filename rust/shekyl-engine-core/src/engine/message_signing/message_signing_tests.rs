@@ -24,9 +24,7 @@ use super::*;
 
 use std::path::PathBuf;
 
-use shekyl_crypto_pq::account::{
-    generate_account_from_raw_seed, DerivationNetwork, MASTER_SEED_BYTES,
-};
+use shekyl_crypto_pq::account::{account_from_seed, Network, SEED_BYTES};
 use shekyl_crypto_pq::message_signing as ms;
 use shekyl_crypto_pq::schnorr;
 use tempfile::TempDir;
@@ -39,7 +37,7 @@ use crate::engine::Engine;
 use crate::engine::test_support::dummy_daemon;
 
 /// This suite's deterministic seed (multiplier 7).
-fn fixed_seed() -> [u8; MASTER_SEED_BYTES] {
+fn fixed_seed() -> [u8; SEED_BYTES] {
     crate::engine::test_support::fixed_seed(7)
 }
 
@@ -63,7 +61,7 @@ fn make_create_fixture() -> CreateFixture {
 fn assert_outer_half_binds(
     armored: &str,
     spend_pk: &[u8; 32],
-    network: DerivationNetwork,
+    network: Network,
     segment: &shekyl_address::BoundClassicalSegment,
     message: &[u8],
 ) {
@@ -150,7 +148,7 @@ async fn sign_message_round_trips_through_wallet_file() {
     assert_outer_half_binds(
         &armored,
         &addr.spend_key,
-        crate::engine::lifecycle::network_to_derivation(network),
+        network,
         &addr.bound_classical_segment(),
         message,
     );
@@ -222,14 +220,11 @@ fn stopped_key_actor_is_its_own_terminal_error() {
 /// consistency without the wallet-file layer in the way.
 #[tokio::test]
 async fn sign_message_outer_with_real_keys() {
-    // Raw 32-byte seed (Testnet-permitted `SeedFormat::Raw32`); distinct
-    // from the Engine-create fixture's 64-byte master seed.
-    let raw_seed = [7u8; 32];
-    let network = DerivationNetwork::Testnet;
-    let seed_format = SeedFormat::Raw32;
+    // A 32-byte seed distinct from the Engine-create fixture's seed.
+    let seed = [7u8; SEED_BYTES];
+    let network = Network::Testnet;
 
-    let (master_seed, blob) =
-        generate_account_from_raw_seed(&raw_seed, network).expect("test rederivation succeeds");
+    let (master_seed, blob) = account_from_seed(&seed, network).expect("test derivation succeeds");
     let spend_pk = *blob.spend_pk.as_canonical_bytes();
     let classical = blob.classical_address_bytes;
     let ml_kem_ek = blob.ml_kem_ek;
@@ -240,8 +235,7 @@ async fn sign_message_outer_with_real_keys() {
 
     let message = b"actor end to end";
     let (preimage, sig_pq) =
-        ms::sign_message_pq_half(&master_seed, network, seed_format, &segment, message)
-            .expect("pq half");
+        ms::sign_message_pq_half(&master_seed, network, &segment, message).expect("pq half");
     let sig_cl = handle
         .sign_message_outer(ms::outer_bytes(&preimage, &sig_pq))
         .await

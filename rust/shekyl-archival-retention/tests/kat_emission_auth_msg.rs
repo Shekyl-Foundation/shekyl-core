@@ -14,7 +14,7 @@
 //! the differential suite green while silently forking the consensus digest.
 //! These absolute pins are the tripwire (`30-cryptography.mdc`: "vectors define
 //! consensus and cannot drift silently"; same discipline as
-//! `kat_p_canonical_id_cross_check.rs` / `ARCHIVAL_P_DERIVE_V1`).
+//! `kat_p_canonical_id_cross_check.rs` / `ARCHIVAL_P_DERIVE_V2`).
 //!
 //! The pinned hexes mirror `docs/test_vectors/EMISSION_AUTH_MSG_V1/vectors.json`.
 //! A deliberate digest/wire-format change (pre-genesis only!) must regenerate

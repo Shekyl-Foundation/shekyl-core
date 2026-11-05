@@ -1,0 +1,63 @@
+{
+  "_comment": [
+    "Self-pinned (tier-3) format vectors for the wallet keys file, format 0x02 —",
+    "drift tripwires per 50-testing.mdc's vector-oracle taxonomy, NOT Known Answer",
+    "Tests: their oracle is the sealing module itself. Each fixture is the",
+    "output of seal_keys_file_with_entropy (or, for state_for_full.hex,",
+    "seal_state_file_with_entropy) called with the inputs below.",
+    "",
+    "Regeneration is a decision, not a command: the regenerator refuses to",
+    "run unless SHEKYL_PINNED_REGEN_DECISION cites the V3_WALLET_DECISION_LOG",
+    "entry authorizing the move. See",
+    "  SHEKYL_PINNED_REGEN_DECISION='YYYY-MM-DD <rationale>' \\",
+    "    cargo test -p shekyl-crypto-pq pinned_fixtures_regenerate -- --ignored",
+    "",
+    "Argon2id runs at m_log2=0x08 (256 KiB) here — fixture-only relaxation so",
+    "the cargo-test cycle stays fast. Production wallets always use",
+    "DEFAULT_KDF_* (m_log2=0x10, t=3, p=1).",
+    "",
+    "Last regenerated: 2026-11-04, 'The derivation salt is the name's 16-byte",
+    "binding, then the purpose' — see V3_WALLET_DECISION_LOG.md 2026-11-04: the",
+    "fixture seed derives a different address under salt name_id || purpose, so",
+    "region 2's AAD and both files move; the format is unchanged. Format 0x02",
+    "(2026-11-03, 'One secret, one derivation (NI-R7, NI-R10)'): region 1 stores",
+    "the wallet's 32-byte seed and no seed format, and the region wrap keys use",
+    "the -v2 labels (WALLET_FILE_FORMAT_V1.md §2.6). WALLET_FILE_FORMAT_V1/full.hex",
+    "is kept as the retired format's file, the input to",
+    "a_retired_format_file_is_refused_with_its_reason."
+  ],
+  "format_version": "0x02",
+  "kdf": {
+    "algo": "Argon2id",
+    "m_log2": "0x08",
+    "t": 1,
+    "p": 1
+  },
+  "password_ascii": "shekyl-kat-pw-v1",
+  "fixed_entropy": {
+    "wrap_salt_hex": "000102030405060708090a0b0c0d0e0f",
+    "wrap_nonce_hex": "101112131415161718191a1b1c1d1e1f2021222324252627",
+    "region1_nonce_hex": "303132333435363738393a3b3c3d3e3f4041424344454647",
+    "file_kek_seed_hex": "505152535455565758595a5b5c5d5e5f606162636465666768696a6b6c6d6e6f",
+    "state_nonce_hex": "707172737475767778797a7b7c7d7e7f8081828384858687"
+  },
+  "common_region1_inputs": {
+    "creation_timestamp": 1700000000,
+    "restore_height_hint": 2500000,
+    "expected_classical_address_provenance": "DERIVED, not chosen: the 65-byte version||spend_pk||view_pk prefix of account_from_seed(seed, Mainnet).classical_address_bytes — the production derivation the engine open path runs. pinned_fixture_address_derives_from_fixture_seed re-checks this against the frozen bytes.",
+    "expected_classical_address_hex": "018731d562d5b122b9f3034d657037772302a3592e806a08729b06638d1b44fff18a34fcf57735aca4c117d782f1eb5c3c3b5fff77302a3458efe4d7317be46063"
+  },
+  "fixtures": {
+    "full.hex": {
+      "mode": "FULL (0x01)",
+      "network": 0,
+      "cap_content_description": "seed[32] with byte i set to 0x80 | (i & 0x7f)",
+      "sealed_bytes": 255
+    },
+    "state_for_full.hex": {
+      "companion_keys_file": "full.hex",
+      "state_payload_ascii": "shekyl-kat-state-v1",
+      "sealed_bytes": 68
+    }
+  }
+}

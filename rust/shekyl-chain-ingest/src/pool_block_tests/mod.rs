@@ -395,14 +395,14 @@ async fn a_switch_back_promotes_a_demoted_body_the_door_refused() {
 /// cap wide enough for a long branch to sit inside it, and small enough to
 /// cross in a test.
 fn rules_with_cap(cap: u64) -> crate::schedule::ChainRules {
-    crate::schedule::ChainRules::Regtest {
-        fixed_difficulty: Some(std::num::NonZeroU128::MIN),
-        schedule: shekyl_chain_rules::FakechainSchedule::new(
+    crate::schedule::ChainRules::harness_regtest(
+        Some(std::num::NonZeroU128::MIN),
+        shekyl_chain_rules::CappedEpoch::new(
             shekyl_chain_rules::SettlementEpochBlocks::new(100).expect("non-zero"),
             shekyl_types::BlockCount::from_raw(cap),
         )
         .expect("the cap sits inside the epoch"),
-    }
+    )
 }
 
 /// Offer every block of `branch` to `x` and require each to be held.

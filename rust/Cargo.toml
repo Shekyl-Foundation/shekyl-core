@@ -12,6 +12,9 @@ members = [
     "shekyl-chacha",
     "shekyl-crypto-pq",
     "shekyl-crypto-hash",
+    # The one network table (NETWORK_IDENTITY.md, NI-Q3): every network's
+    # name, code, prefixes, ports, genesis and permitted levers.
+    "shekyl-network",
     "shekyl-consensus",
 
     # DISPOSABLE measurement spike (SP-T3 / PD-F-2): the Tor-borne shard-fetch
