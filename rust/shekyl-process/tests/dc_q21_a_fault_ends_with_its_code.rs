@@ -50,7 +50,7 @@ use std::process::{Command, Output, Stdio};
 use std::sync::{Arc, Mutex, PoisonError, Weak};
 use std::time::{Duration, Instant};
 
-use shekyl_ffi::harden::harden_process;
+use shekyl_process::harden::harden_process;
 use windows_sys::Win32::Foundation::{
     STATUS_ACCESS_VIOLATION, STATUS_STACK_BUFFER_OVERRUN, STATUS_STACK_OVERFLOW,
 };
@@ -388,7 +388,7 @@ fn a_panic_under_the_hook_after_hardening_ends_with_aborts_code_and_writes_no_du
     if child_mode().as_deref() == Some("panic") {
         clear_inherited_error_mode();
         harden_process().expect("hardening applies to an ordinary process");
-        shekyl_ffi::panic_hook::install();
+        shekyl_process::panic_hook::install();
         panic!("the panic under test");
     }
     let policy = policy();

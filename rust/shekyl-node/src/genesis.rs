@@ -41,6 +41,17 @@ pub(crate) fn daemon_network(network: DaemonNet) -> DaemonNetwork {
     }
 }
 
+/// The handshake's network id for `network`: `network_id_from_genesis` of
+/// the pinned genesis hash (`SHEKYL_P2P_PROTOCOL.md` PWD-B1). A total
+/// derivation: every network this daemon runs has a pinned genesis, so
+/// there is no network without an id. Regtest shares mainnet's.
+#[must_use]
+pub fn network_id(network: DaemonNet) -> [u8; 16] {
+    shekyl_p2p_transport::network_id_from_genesis(&shekyl_rpc_types::genesis_hash_for(
+        daemon_network(network),
+    ))
+}
+
 /// The genesis block this build connects, and the hash the release pins.
 pub(crate) fn pinned_genesis(network: DaemonNet) -> Result<(Block, BlockHash), OpenError> {
     let pins = parse_config_genesis(CONFIG_H)
@@ -61,4 +72,50 @@ pub(crate) fn pinned_genesis(network: DaemonNet) -> Result<(Block, BlockHash), O
         )));
     }
     Ok((block, hash))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use shekyl_p2p_transport::prefix_for;
+
+    /// Recorded output of `network_id(net)`. A regenesis that moves the
+    /// hash fails this until the bytes are re-recorded with it. These are
+    /// not a second definition of the id.
+    const MAINNET_ID: [u8; 16] = [
+        0x49, 0xCD, 0xEE, 0x7D, 0xEA, 0x1A, 0x61, 0x29, 0x1C, 0x56, 0xAB, 0xD4, 0xDE, 0x5E, 0x03,
+        0x64,
+    ];
+    const TESTNET_ID: [u8; 16] = [
+        0x5E, 0x0B, 0xAD, 0xE9, 0x7E, 0xA2, 0x93, 0x8C, 0xB4, 0x9E, 0x8F, 0x6E, 0x90, 0xF1, 0x5D,
+        0x4E,
+    ];
+    const STAGENET_ID: [u8; 16] = [
+        0xE7, 0xE7, 0x70, 0x40, 0x5F, 0x89, 0x8E, 0x61, 0x57, 0xE5, 0xA7, 0x6E, 0xCF, 0xDA, 0x38,
+        0xCF,
+    ];
+    const MAINNET_PREFIX: [u8; 8] = [0xC5, 0xF5, 0xE2, 0xDD, 0x59, 0xB3, 0x53, 0x41];
+    const TESTNET_PREFIX: [u8; 8] = [0x69, 0x40, 0xEC, 0x75, 0x97, 0xD7, 0x60, 0x1B];
+    const STAGENET_PREFIX: [u8; 8] = [0x42, 0xBB, 0xA1, 0xCC, 0x92, 0xD3, 0xE1, 0x80];
+
+    #[test]
+    fn each_genesis_derives_its_recorded_id_and_prefix() {
+        let cases = [
+            (DaemonNet::Mainnet, MAINNET_ID, MAINNET_PREFIX),
+            (DaemonNet::Testnet, TESTNET_ID, TESTNET_PREFIX),
+            (DaemonNet::Stagenet, STAGENET_ID, STAGENET_PREFIX),
+        ];
+        for (net, id_kat, prefix_kat) in cases {
+            let id = network_id(net);
+            assert_eq!(id, id_kat);
+            assert_eq!(prefix_for(&id), prefix_kat);
+        }
+        assert_eq!(network_id(DaemonNet::Regtest), MAINNET_ID);
+        assert_ne!(MAINNET_ID, TESTNET_ID);
+        assert_ne!(MAINNET_ID, STAGENET_ID);
+        assert_ne!(TESTNET_ID, STAGENET_ID);
+        assert_ne!(MAINNET_PREFIX, TESTNET_PREFIX);
+        assert_ne!(MAINNET_PREFIX, STAGENET_PREFIX);
+        assert_ne!(TESTNET_PREFIX, STAGENET_PREFIX);
+    }
 }

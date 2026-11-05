@@ -71,6 +71,7 @@ mod producer;
 mod sync_owner;
 
 pub use facts::free_bytes;
+pub use genesis::network_id;
 pub use mining::{MiningControl, MiningRefused, MiningStatus, PostedJob};
 pub use producer::descriptors as producer_descriptors;
 pub use shekyl_chain_sync::Declaration;
@@ -89,6 +90,7 @@ use shekyl_chain_ingest::service::{
     ArrivalTag, Follow, PoolWiring, Reply, Service, ServiceConfig, ServiceFault,
 };
 use shekyl_chain_ingest::{Chain, ChainRules, Metrics, ProductionSubstrate, SubstrateFault};
+pub use shekyl_chain_ingest::{ChainTip, TipChanged};
 use shekyl_chain_rules::{AdmissionPolicy, FakechainSchedule, GenesisPin, RuleSet};
 use shekyl_chain_store::apply_policy::ApplyPolicy;
 use shekyl_chain_store::pool::PoolOpen;
@@ -237,6 +239,9 @@ pub struct Node {
     sync: tokio::sync::watch::Receiver<SyncState>,
     /// What the board holds, as the follower last left it.
     posting: tokio::sync::watch::Receiver<Posting>,
+    /// The chain's tip, as ingest last published it (`DRS_X_STORE_FLIP.md`
+    /// DX-Q2 item 5): the one source the handshake and the notify runner read.
+    tips: tokio::sync::watch::Receiver<TipChanged>,
     mining: Arc<MiningControl>,
     /// The `dev-rpc` row: whether the armed test levers are served.
     armed: bool,
@@ -595,7 +600,7 @@ impl Node {
                 pool_health.clone(),
                 Arc::clone(&departed),
             )),
-            door: Arc::new(DoorBridge::new(Arc::clone(&door_slot), tips)),
+            door: Arc::new(DoorBridge::new(Arc::clone(&door_slot), tips.clone())),
             mining: Arc::clone(&mining) as _,
             bans: Arc::new(BansBridge::new(network.bans().clone())),
             stop: Arc::new(StopBridge::new(Arc::clone(&args.request_stop))),
@@ -615,6 +620,7 @@ impl Node {
             slots,
             sync,
             posting,
+            tips,
             mining,
             armed: args.config.dev.rpc,
             sockets,
@@ -652,6 +658,14 @@ impl Node {
     #[must_use]
     pub fn posting(&self) -> tokio::sync::watch::Receiver<Posting> {
         self.posting.clone()
+    }
+
+    /// The chain's tip as ingest publishes it: `None` until genesis is
+    /// connected, then every connect and every switch. The `notify-block`
+    /// runner reads it (DC-Q14).
+    #[must_use]
+    pub fn tips(&self) -> tokio::sync::watch::Receiver<TipChanged> {
+        self.tips.clone()
     }
 
     /// Chain sync's state, which the follower posts a job on only while it

@@ -4297,19 +4297,24 @@ dependencies = [
 name = "shekyl-daemon"
 version = "3.1.0"
 dependencies = [
+ "rustix",
  "shekyl-address",
+ "shekyl-archival-retention",
  "shekyl-daemon-config",
  "shekyl-daemon-rpc",
- "shekyl-ffi",
+ "shekyl-difficulty",
  "shekyl-logging",
  "shekyl-node",
  "shekyl-onion-v3",
  "shekyl-options",
+ "shekyl-p2p",
+ "shekyl-process",
  "shekyl-runtime",
  "shekyl-socks",
  "shekyl-timing-engine",
  "shekyl-tor-control-client",
  "shekyl-tor-control-daemon",
+ "shekyl-types",
  "shekyl-version",
  "tempfile",
  "tokio",
@@ -4705,6 +4710,7 @@ dependencies = [
  "shekyl-peer-policy",
  "shekyl-peerlist",
  "shekyl-pow-randomx",
+ "shekyl-process",
  "shekyl-proofs",
  "shekyl-relay",
  "shekyl-relay-privacy",
@@ -4899,6 +4905,7 @@ dependencies = [
  "shekyl-miner",
  "shekyl-options",
  "shekyl-p2p",
+ "shekyl-p2p-transport",
  "shekyl-pow-randomx",
  "shekyl-relay",
  "shekyl-rpc-types",
@@ -5054,6 +5061,7 @@ dependencies = [
  "shekyl-capped-stream",
  "shekyl-clearnet",
  "shekyl-dialer",
+ "shekyl-draw-rng",
  "shekyl-onion-v3",
  "shekyl-p2p-session",
  "shekyl-peer-policy",
@@ -5175,6 +5183,19 @@ dependencies = [
  "argon2",
  "blake2",
  "criterion",
+]
+
+[[package]]
+name = "shekyl-process"
+version = "3.1.0"
+dependencies = [
+ "libc",
+ "shekyl-daemon-config",
+ "shekyl-tor-control-client",
+ "shekyl-win-sec",
+ "tempfile",
+ "tracing",
+ "windows-sys 0.61.2",
 ]
 
 [[package]]

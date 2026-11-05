@@ -40,6 +40,8 @@ shekyl-miner = { path = "../shekyl-miner" }
 # The network the node builds and stops (P2P_3_REMNANT_CUTOVER_BRIEF.md
 # section 2): the one way sockets, sessions and the relay are reached.
 shekyl-p2p = { path = "../shekyl-p2p" }
+# The handshake network id from the pinned genesis (PWD-B1).
+shekyl-p2p-transport = { path = "../shekyl-p2p-transport" }
 shekyl-pow-randomx = { path = "../shekyl-pow-randomx" }
 shekyl-rpc-types = { path = "../shekyl-rpc-types" }
 shekyl-runtime = { path = "../shekyl-runtime" }

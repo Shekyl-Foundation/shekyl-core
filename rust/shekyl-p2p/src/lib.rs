@@ -44,5 +44,6 @@ pub use shekyl_peer_policy::InboundCeiling;
 pub use shekyl_relay::owner::{Admit, PoolDoor, RelayHandle};
 pub use shekyl_relay::{NodeSync, OriginVerdict, TxId};
 pub use shekyl_transport_layer::{
-    BanLeft, ConnectorId, DownCause, InboundFacet, Ipv4Subnet, ListedBan, NetworkAddress, Sockets,
+    clearnet_linger_descriptors, dial_profile, BanLeft, ConnectorId, DownCause, InboundCause,
+    InboundFacet, Ipv4Subnet, ListedBan, NetworkAddress, Sockets,
 };

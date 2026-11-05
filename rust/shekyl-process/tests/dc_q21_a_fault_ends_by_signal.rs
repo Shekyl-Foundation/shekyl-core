@@ -26,7 +26,7 @@ use std::os::unix::process::{CommandExt, ExitStatusExt};
 use std::path::Path;
 use std::process::{Command, Output};
 
-use shekyl_ffi::harden::harden_process;
+use shekyl_process::harden::harden_process;
 
 const CHILD_MARKER: &str = "SHEKYL_HARDEN_CHILD";
 

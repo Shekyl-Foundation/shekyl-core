@@ -450,9 +450,12 @@ members = [
     # the table, precedence, the file, the lock, the marker, the sections.
     "shekyl-daemon-config",
 
+    # The daemon's process: hardening (DC-Q21), the panic hook, the account's
+    # roots from the operating system (IG-13).
+    "shekyl-process",
+
     # The daemon's Rust main() and its one signal owner (DAEMON_CONFIG_CUTOVER.md
-    # §2.2); the C++ remnant is a run/stop pair it drives. Called by the
-    # `shekyld` binary crate (DC-Q19).
+    # §2.2). Called by the `shekyld` binary crate (DC-Q19).
     "shekyl-daemon",
 
     # The daemon's one Node (DRS_X_STORE_FLIP.md DX-Q6, N1): the store, the

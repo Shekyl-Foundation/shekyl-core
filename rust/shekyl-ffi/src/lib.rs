@@ -210,15 +210,9 @@ pub mod network_id_ffi;
 // context; whether that byte severs a connection is decided only here.
 pub mod peer_policy_ffi;
 
-/// The account's home from the operating system's account interface (IG-13).
-pub mod platform;
-
-/// Process hardening: no core, and a same-account process cannot attach
-/// (DC-Q21). The first statement of `shekyl_daemon::main`.
-pub mod harden;
-
-/// The daemon's panic hook: a panic is never silent under `panic = "abort"`.
-pub mod panic_hook;
+/// The account's home from the operating system's account interface
+/// (IG-13), for the exports that still take a default data directory.
+pub use shekyl_process::platform;
 
 // Single-Rust-image contract: re-export shekyl-logging so its
 // `#[no_mangle]` C exports (`shekyl_log_init_*`, `shekyl_log_emit`,

@@ -3,27 +3,30 @@
 // All rights reserved.
 // BSD-3-Clause
 
-//! The network owners, each reading its section (`DAEMON_CONFIG_CUTOVER.md`
-//! §2.2 steps 6 and 8, §3).
+//! The network's plan, from the sections (`DAEMON_CONFIG_CUTOVER.md` §2.2
+//! steps 6 and 8, §3; `P2P_3_REMNANT_CUTOVER_BRIEF.md` §2).
 //!
-//! Two moments. [`record`] runs before the remnant is constructed: what
-//! the owners read at their build, which the seam's bind in the remnant's
-//! `init` triggers — offline, the local-address rule, the relay's
-//! posture, the descriptors reserved for the inbound ceiling, the link
-//! bounds and the ban file's entries. [`start`] runs at step 8, once the
-//! remnant's one RPC start has completed: this node's own addresses and
-//! the dialer's peers first, then the zone host's listeners and owner
-//! loops. The loops start after the p2p section, so a closed network is
-//! the population at the first wake.
-//!
-//! Nothing here branches on the network: the sections already did.
+//! The daemon reads its configuration once and hands the node a
+//! [`NetworkPlan`]: the connectors to start, this node's own addresses,
+//! the dialer's peers, the relay's posture, the descriptors reserved for
+//! the inbound ceiling, the link bounds and the ban files' entries. The
+//! node builds the [`shekyl_p2p::Network`] from it; nothing here reaches
+//! a socket, and nothing here branches on the network: the sections
+//! already did.
 
 use std::net::SocketAddr;
 use std::path::Path;
 
 use shekyl_daemon_config::sections::{Ban, Clearnet, DaemonConfig, Socks, Tor};
-use shekyl_ffi::dialer_ffi::{ConnectorId, NetworkAddress};
-use shekyl_ffi::zone_ffi::ZoneStart;
+use shekyl_daemon_config::Network as DaemonNet;
+use shekyl_node::{
+    BanTarget, ClearnetPlan, LinkLimits, NetworkPlan, PeerPlan, SeedNetwork, TorPlan,
+};
+use shekyl_options::kind::PeerEndpoint;
+use shekyl_p2p::{
+    clearnet_linger_descriptors, dial_profile, ConnectorId, Ipv4Subnet, NetworkAddress,
+    PROBE_DESCRIPTORS,
+};
 use shekyl_socks::{Proxy, SocksUsername};
 
 /// The address file the peer lists persist under the data directory.
@@ -62,7 +65,7 @@ pub fn connectors(config: &DaemonConfig) -> Vec<ConnectorId> {
 /// dials either.
 ///
 /// Clearnet adds its linger cap
-/// ([`shekyl_ffi::clearnet_linger_descriptors`]): a refused accept is held
+/// ([`shekyl_p2p::clearnet_linger_descriptors`]): a refused accept is held
 /// half-closed until its first flight arrives or the handshake span passes
 /// (`P2P_TRANSPORT_LAYER.md` D10.2), each one a descriptor outside the
 /// inbound occupancy, up to that cap. With the written clearnet rates the
@@ -70,7 +73,7 @@ pub fn connectors(config: &DaemonConfig) -> Vec<ConnectorId> {
 /// handshake span, and every listener shares it.
 #[must_use]
 pub fn reserved_descriptors(config: &DaemonConfig) -> u64 {
-    reservation(config, shekyl_ffi::clearnet_linger_descriptors())
+    reservation(config, clearnet_linger_descriptors())
 }
 
 /// [`reserved_descriptors`] with the clearnet linger cap given.
@@ -90,7 +93,7 @@ fn reservation(config: &DaemonConfig, clearnet_linger: u64) -> u64 {
     connectors(config)
         .into_iter()
         .map(|c| {
-            let profile = shekyl_ffi::dialer_ffi::dial_profile(c);
+            let profile = dial_profile(c);
             let bound = u64::try_from(profile.in_flight_bound).unwrap_or(u64::MAX);
             u64::from(profile.target).saturating_add(bound)
         })
@@ -100,42 +103,6 @@ fn reservation(config: &DaemonConfig, clearnet_linger: u64) -> u64 {
                 .saturating_add(linger),
             u64::saturating_add,
         )
-}
-
-/// The descriptors the managed Tor's probe holds: its SOCKS stream, one
-/// probe at a time.
-pub const PROBE_DESCRIPTORS: u64 = 1;
-
-/// What the owners read at their build, recorded before the remnant is
-/// constructed (step 6). The relay identity and the reserved descriptor
-/// count are one preparation. A second install that disagrees is refused.
-///
-/// # Errors
-/// [`shekyl_ffi::remnant_prep::PrepDisagreement`] when the preparation was
-/// already installed with different facts.
-pub fn record(config: &DaemonConfig) -> Result<(), shekyl_ffi::remnant_prep::PrepDisagreement> {
-    let prep = shekyl_ffi::remnant_prep::RemnantPrep {
-        relay: shekyl_ffi::relay_zone_ffi::relay_identity(
-            &connectors(config),
-            config.dev.relay_cover,
-        ),
-        reserved_descriptors: reserved_descriptors(config),
-    };
-    shekyl_ffi::remnant_prep::install(prep)?;
-    shekyl_ffi::peerlist_ffi::allow_local(config.p2p.local);
-    shekyl_ffi::link_ffi::set_limits(config.p2p.upload_max, config.p2p.download_max);
-    for ban in &config.p2p.bans {
-        match ban {
-            Ban::Subnet(ip, prefix) => {
-                if let Some(subnet) = shekyl_ffi::seam_ffi::bans::Subnet::new(*ip, *prefix) {
-                    shekyl_ffi::seam_ffi::bans::ban_subnet_permanent(subnet);
-                }
-            }
-            Ban::Host(ip) => shekyl_ffi::seam_ffi::bans::ban_host_permanent(*ip),
-            Ban::Peer(endpoint) => shekyl_ffi::seam_ffi::bans::ban_host_permanent(endpoint.ip()),
-        }
-    }
-    Ok(())
 }
 
 /// This node's own clearnet addresses: `clearnet-advertise` (§2.8), the
@@ -158,25 +125,6 @@ pub fn own_clearnet(config: &DaemonConfig) -> Vec<NetworkAddress> {
             .collect(),
         Clearnet::Off => Vec::new(),
     }
-}
-
-/// What this node states as its own on each connector when it starts: the
-/// connectors whose own addresses the configuration knows. Clearnet, when
-/// it is on: `clearnet-advertise`, none for dial-only. Tor, on the
-/// operator's arm: the named onion, none for dial-only (`INPUT_GRAMMAR.md`
-/// IG-Q18). A managed Tor always publishes: its per-boot onion is stated
-/// when Tor publishes it (`dialer_ffi::note_own_onion`). A connector that
-/// is off states nothing.
-#[must_use]
-pub fn own_at_start(config: &DaemonConfig) -> Vec<(ConnectorId, Vec<NetworkAddress>)> {
-    let mut own = Vec::new();
-    if matches!(config.clearnet, Clearnet::On { .. }) {
-        own.push((ConnectorId::Clearnet, own_clearnet(config)));
-    }
-    if matches!(config.tor, Tor::Operator { .. }) {
-        own.push((ConnectorId::Tor, own_onion(config).into_iter().collect()));
-    }
-    own
 }
 
 /// This node's own onion on the operator's Tor, when one is named.
@@ -207,133 +155,112 @@ pub fn proxy_of(socks: &Socks) -> Proxy {
     }
 }
 
-/// The Tor SOCKS proxy the zone host dials through at step 8: the
-/// operator's, with its pair, or the managed Tor's once it bootstrapped,
-/// which takes none.
-#[derive(Clone, Debug)]
-pub enum TorSocks {
-    /// No Tor this boot.
-    None,
-    /// The operator's Tor. Its route is published now.
-    Operator {
-        /// The SOCKS proxy.
-        socks: Proxy,
-        /// The operator's onion listen endpoint, when that Tor forwards an
-        /// onion to this node.
-        onion_listen: Option<SocketAddr>,
-    },
-    /// The managed Tor. The connector starts with no route. The supervisor
-    /// publishes one when Tor is running.
-    Managed,
-}
-
-/// What step 8 started.
-#[derive(Debug, Default)]
-pub struct Started {
-    /// The clearnet endpoints bound.
-    pub clearnet: Vec<SocketAddr>,
-    /// The loopback endpoint the managed onion forwards to, when the Tor
-    /// zone listens.
-    pub tor_forward: Option<SocketAddr>,
-}
-
-/// Why step 8 failed; the daemon stops with status 1.
-#[derive(Debug)]
-pub enum StartError {
-    /// A connector could not start.
-    Zone(ZoneStart),
-    /// The dialer does not exist: the remnant did not bind the seam.
-    NoDialer,
-}
-
-impl std::fmt::Display for StartError {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        match self {
-            Self::Zone(e) => write!(f, "{e}"),
-            Self::NoDialer => f.write_str("the remnant did not bind the seam"),
-        }
-    }
-}
-
-impl From<ZoneStart> for StartError {
-    fn from(e: ZoneStart) -> Self {
-        Self::Zone(e)
-    }
-}
-
-impl From<shekyl_ffi::dialer_ffi::NoDialer> for StartError {
-    fn from(_: shekyl_ffi::dialer_ffi::NoDialer) -> Self {
-        Self::NoDialer
-    }
-}
-
-/// Step 8: this node's own addresses and the dialer's peers, then the
-/// zone host's connectors. `tor` is what the Tor owner resolved at this
-/// point.
-///
-/// The p2p section is applied before any owner loop. The loop arms its
-/// first wake half a second after it starts, and until a closed network
-/// is installed every gray address is eligible, including the compiled
-/// seeds. Listeners come up after that declaration.
-///
-/// # Errors
-/// [`StartError`]; nothing started is undone here, the stop path does that.
-pub fn start(
-    config: &DaemonConfig,
-    network_id: [u8; 16],
-    tor: TorSocks,
-) -> Result<Started, StartError> {
-    let mut started = Started::default();
-    // Offline: no connector, so the remnant bound no seam and there is no
-    // dialer to tell; the sections already refuse a peer with both
-    // connectors off, and the lists' own entry has nothing to be own on.
-    if config.offline() {
-        return Ok(started);
-    }
-    for (connector, own) in own_at_start(config) {
-        shekyl_ffi::dialer_ffi::set_own_addresses(connector, own)?;
-    }
-    shekyl_ffi::dialer_ffi::apply_p2p(&config.p2p, &address_file(&config.data_dir))?;
-    if let Clearnet::On { listen, socks, .. } = &config.clearnet {
-        started.clearnet = shekyl_ffi::zone_ffi::start_clearnet(
-            listen,
-            socks.as_ref().map(proxy_of),
-            config.dev.clearnet_encrypt,
-            network_id,
-        )?;
-        for bound in &started.clearnet {
-            tracing::info!(target: "global", "clearnet bound to {bound}");
-        }
-    }
-    match tor {
-        TorSocks::None => {}
-        TorSocks::Managed => {
-            started.tor_forward = Some(shekyl_ffi::zone_ffi::start_managed_tor(network_id)?);
-        }
-        TorSocks::Operator {
-            socks,
-            onion_listen,
-        } => {
-            if onion_listen.is_some() {
-                let forward = shekyl_ffi::zone_ffi::start_tor(socks, onion_listen, network_id)?;
-                started.tor_forward = Some(forward);
-            } else {
-                shekyl_ffi::zone_ffi::dial_through_tor(socks, network_id)?;
-            }
-        }
-    }
-    Ok(started)
-}
-
 /// The address file's path under the data directory.
 #[must_use]
 pub fn address_file(data_dir: &Path) -> std::path::PathBuf {
     data_dir.join(ADDRESS_FILE)
 }
 
-/// Stops the dialer and the zone host (step 9, first).
-pub fn stop() {
-    shekyl_ffi::zone_ffi::shutdown();
+/// A configured peer as the lists hold it.
+fn network_address(peer: &PeerEndpoint) -> NetworkAddress {
+    match peer {
+        PeerEndpoint::Ip(SocketAddr::V4(a)) => NetworkAddress::Ipv4 {
+            ip: *a.ip(),
+            port: a.port(),
+        },
+        PeerEndpoint::Ip(SocketAddr::V6(a)) => NetworkAddress::Ipv6 {
+            ip: *a.ip(),
+            port: a.port(),
+        },
+        PeerEndpoint::Onion { host, port } => NetworkAddress::Tor {
+            host: host.clone(),
+            port: *port,
+        },
+    }
+}
+
+/// Which compiled seed list the dialer admits: mainnet's and testnet's
+/// are compiled; stagenet and regtest have none and dial only what the
+/// operator names.
+fn seeds(network: DaemonNet) -> SeedNetwork {
+    match network {
+        DaemonNet::Mainnet => SeedNetwork::Mainnet,
+        DaemonNet::Testnet => SeedNetwork::Testnet,
+        DaemonNet::Stagenet | DaemonNet::Regtest => SeedNetwork::None,
+    }
+}
+
+/// The ban files' entries as the network applies them before its first
+/// accept: a host and a subnet are banned for the life of the process; a
+/// peer entry bans its host.
+fn bans(config: &DaemonConfig) -> Vec<BanTarget> {
+    config
+        .p2p
+        .bans
+        .iter()
+        .filter_map(|ban| match ban {
+            Ban::Subnet(ip, prefix) => Ipv4Subnet::new(*ip, *prefix).map(BanTarget::Subnet),
+            Ban::Host(ip) => Some(BanTarget::Host(*ip)),
+            Ban::Peer(endpoint) => Some(BanTarget::Host(endpoint.ip())),
+        })
+        .collect()
+}
+
+/// The network's plan from the sections. The connectors whose own
+/// addresses the configuration knows state them here: clearnet, when it
+/// is on, with `clearnet-advertise` or none for dial-only; Tor on the
+/// operator's arm with the named onion, or none for dial-only
+/// (`INPUT_GRAMMAR.md` IG-Q18). A managed Tor states its per-boot onion
+/// when Tor publishes it ([`shekyl_p2p::Network::note_own_onion`]).
+///
+/// Offline (both connectors off) plans no connector: the network starts
+/// its session layer and owners with nothing to accept or dial, and the
+/// sections already refuse a peer in that configuration.
+#[must_use]
+pub fn plan(config: &DaemonConfig, network_id: [u8; 16]) -> NetworkPlan {
+    let clearnet = match &config.clearnet {
+        Clearnet::Off => None,
+        Clearnet::On { listen, socks, .. } => Some(ClearnetPlan {
+            listen: listen.clone(),
+            proxy: socks.as_ref().map(proxy_of),
+            encrypt: config.dev.clearnet_encrypt,
+            own: own_clearnet(config),
+        }),
+    };
+    let tor = match &config.tor {
+        Tor::Off => TorPlan::None,
+        Tor::Managed { .. } => TorPlan::Managed,
+        Tor::Operator { socks, onion } => TorPlan::Operator {
+            socks: proxy_of(socks),
+            onion_listen: onion.as_ref().map(|onion| onion.listen),
+            own: own_onion(config).into_iter().collect(),
+        },
+    };
+    NetworkPlan {
+        network_id,
+        seeds: seeds(config.network),
+        allow_local: config.p2p.local,
+        reserved_descriptors: reserved_descriptors(config),
+        limits: LinkLimits {
+            upload: config.p2p.upload_max,
+            download: config.p2p.download_max,
+        },
+        relay_noise: config.dev.relay_cover,
+        clearnet,
+        tor,
+        peers: PeerPlan {
+            address_file: address_file(&config.data_dir),
+            operator: config.p2p.peers.iter().map(network_address).collect(),
+            exclusive: config
+                .p2p
+                .closed_peers
+                .iter()
+                .map(network_address)
+                .collect(),
+            disclose_early: config.p2p.disclose_early,
+        },
+        bans: bans(config),
+    }
 }
 
 #[cfg(test)]
@@ -373,11 +300,11 @@ mod tests {
     #[test]
     fn the_reservation_is_the_rpc_cap_plus_each_connectors_target_and_bound() {
         let held = |c: ConnectorId| {
-            let profile = shekyl_ffi::dialer_ffi::dial_profile(c);
+            let profile = dial_profile(c);
             u64::from(profile.target) + u64::try_from(profile.in_flight_bound).expect("small")
         };
         // Clearnet's refused accepts linger half-closed, up to its cap.
-        let linger = shekyl_ffi::clearnet_linger_descriptors();
+        let linger = clearnet_linger_descriptors();
         assert!(
             linger > 0,
             "clearnet's accept rates are written, so it lingers"
@@ -430,7 +357,7 @@ mod tests {
         assert_eq!(reservation(&off, 37), reservation(&off, 0));
         assert_eq!(
             reserved_descriptors(&on),
-            reservation(&on, shekyl_ffi::clearnet_linger_descriptors())
+            reservation(&on, clearnet_linger_descriptors())
         );
     }
 
@@ -534,93 +461,128 @@ mod tests {
     /// brief, item 5; IG-Q18): clearnet when it is on, with
     /// `clearnet-advertise` or none for dial-only; Tor on the operator's
     /// arm, with its onion or none for dial-only. A managed Tor states its
-    /// per-boot onion when Tor publishes it, so nothing is stated for it
-    /// here, and an off connector states nothing.
+    /// per-boot onion when Tor publishes it, so the plan carries none for
+    /// it, and an off connector is not planned.
     #[test]
-    fn own_addresses_are_stated_at_start_only_where_the_config_knows_them() {
-        let connectors = |c: &DaemonConfig| -> Vec<ConnectorId> {
-            own_at_start(c)
-                .into_iter()
-                .map(|(connector, _)| connector)
-                .collect()
-        };
+    fn own_addresses_are_planned_only_where_the_config_knows_them() {
+        let defaults = plan(&config(&[]), [1; 16]);
         assert_eq!(
-            own_at_start(&config(&[])),
-            vec![(ConnectorId::Clearnet, Vec::new())],
-            "defaults: clearnet dial-only; the managed onion comes when published"
+            defaults.connectors(),
+            [ConnectorId::Clearnet, ConnectorId::Tor]
         );
-        assert_eq!(
-            connectors(&config(&["--clearnet", "off", "--tor", "off"])),
-            Vec::<ConnectorId>::new()
+        assert!(
+            defaults
+                .clearnet
+                .as_ref()
+                .expect("clearnet is on")
+                .own
+                .is_empty(),
+            "defaults: clearnet dial-only"
         );
-        let dial_only = config(&["--tor", "operator", "--tor-socks", "127.0.0.1:9050"]);
-        assert_eq!(
-            own_at_start(&dial_only),
-            vec![
-                (ConnectorId::Clearnet, Vec::new()),
-                (ConnectorId::Tor, Vec::new())
-            ],
-            "the operator's Tor with no onion is dial-only on Tor"
+        assert!(
+            matches!(defaults.tor, TorPlan::Managed),
+            "the managed onion comes when published"
         );
+        let offline = plan(&config(&["--clearnet", "off", "--tor", "off"]), [1; 16]);
+        assert!(offline.connectors().is_empty());
+        assert!(offline.clearnet.is_none());
+        assert!(matches!(offline.tor, TorPlan::None));
+        let dial_only = plan(
+            &config(&["--tor", "operator", "--tor-socks", "127.0.0.1:9050"]),
+            [1; 16],
+        );
+        match &dial_only.tor {
+            TorPlan::Operator {
+                own, onion_listen, ..
+            } => {
+                assert!(
+                    own.is_empty(),
+                    "the operator's Tor with no onion is dial-only"
+                );
+                assert_eq!(*onion_listen, None);
+            }
+            other => panic!("{other:?}"),
+        }
         let host = onion_host();
-        let with_onion = config(&[
-            "--clearnet",
-            "off",
-            "--tor",
-            "operator",
-            "--tor-socks",
-            "127.0.0.1:9050",
-            "--tor-onion",
-            &format!("{host}:11021"),
-            "--tor-onion-listen",
-            "127.0.0.1:41021",
-        ]);
-        assert_eq!(
-            own_at_start(&with_onion),
-            vec![(
-                ConnectorId::Tor,
-                vec![NetworkAddress::Tor { host, port: 11021 }]
-            )]
+        let with_onion = plan(
+            &config(&[
+                "--clearnet",
+                "off",
+                "--tor",
+                "operator",
+                "--tor-socks",
+                "127.0.0.1:9050",
+                "--tor-onion",
+                &format!("{host}:11021"),
+                "--tor-onion-listen",
+                "127.0.0.1:41021",
+            ]),
+            [1; 16],
         );
+        assert_eq!(with_onion.connectors(), [ConnectorId::Tor]);
+        match &with_onion.tor {
+            TorPlan::Operator {
+                own, onion_listen, ..
+            } => {
+                assert_eq!(own, &[NetworkAddress::Tor { host, port: 11021 }]);
+                assert_eq!(*onion_listen, Some("127.0.0.1:41021".parse().unwrap()));
+            }
+            other => panic!("{other:?}"),
+        }
     }
 
-    /// Offline starts nothing and needs no seam: the remnant binds none
-    /// when both connectors are off, and that is not a refusal.
+    /// The sections' peers, bans and bounds reach the plan as the network
+    /// takes them: operator peers and the closed set as list addresses, a
+    /// ban file's host and subnet as permanent targets (the C++
+    /// `--ban-list` tests' subject) with a peer entry banning its host,
+    /// the link bounds, and the seed list by network (mainnet's and
+    /// testnet's compiled; stagenet and regtest none).
     #[test]
-    fn offline_starts_nothing_and_needs_no_dialer() {
-        let c = config(&["--clearnet", "off", "--tor", "off"]);
-        let started = start(&c, [1u8; 16], TorSocks::None).expect("nothing to start");
-        assert!(started.clearnet.is_empty());
-        assert_eq!(started.tor_forward, None);
-    }
-
-    /// The ban file's entries are permanent bans, applied at the record
-    /// (the C++ `--ban-list` tests' subject): a host and a subnet from the
-    /// file are banned for the life of the process, and a host outside
-    /// the subnet is not.
-    #[test]
-    fn the_ban_files_entries_are_permanent_bans() {
-        // `main` replaces the process socket table. This test writes bans
-        // onto it, so it takes the same lock the daemon-start test holds.
-        let _serial = crate::run::hold_process_table();
+    fn the_sections_peers_bans_and_bounds_reach_the_plan() {
         let d = tempfile::tempdir().unwrap();
         let file = d.path().join("bans");
         std::fs::write(&file, "203.0.113.9\n198.51.100.0/24\n").unwrap();
         let c = config(&[
-            "--clearnet",
-            "off",
-            "--tor",
-            "off",
+            "--p2p-peer",
+            "203.0.113.5:18080",
             "--p2p-ban-file",
             file.to_str().unwrap(),
+            "--p2p-upload-max",
+            "1MiB/s",
         ]);
         assert_eq!(c.p2p.bans.len(), 2);
-        record(&c).expect("the ban file's preparation installs");
-        let banned =
-            |host: &str| shekyl_ffi::seam_ffi::bans::is_banned_permanently(host.parse().unwrap());
-        assert!(banned("203.0.113.9"), "permanent");
-        assert!(banned("198.51.100.77"), "in the subnet: permanent");
-        assert!(!banned("198.51.101.1"), "outside it: not banned");
+        let plan = plan(&c, [7; 16]);
+        assert_eq!(plan.network_id, [7; 16]);
+        assert_eq!(plan.seeds, SeedNetwork::Mainnet);
+        assert_eq!(
+            plan.peers.operator,
+            [NetworkAddress::Ipv4 {
+                ip: std::net::Ipv4Addr::new(203, 0, 113, 5),
+                port: 18080
+            }]
+        );
+        assert!(plan.peers.exclusive.is_empty());
+        assert_eq!(plan.peers.address_file, c.data_dir.join(ADDRESS_FILE));
+        assert_eq!(plan.limits.upload, c.p2p.upload_max);
+        assert!(plan.limits.upload.is_some(), "the row parsed");
+        assert_eq!(plan.limits.download, None);
+        assert_eq!(plan.reserved_descriptors, reserved_descriptors(&c));
+        assert_eq!(
+            plan.bans,
+            [
+                BanTarget::Host("203.0.113.9".parse().unwrap()),
+                BanTarget::Subnet(
+                    Ipv4Subnet::new(std::net::Ipv4Addr::new(198, 51, 100, 0), 24).unwrap()
+                ),
+            ]
+        );
+        for (args, seeds) in [
+            (&["--network", "testnet"][..], SeedNetwork::Testnet),
+            (&["--network", "stagenet"][..], SeedNetwork::None),
+            (&["--network", "regtest"][..], SeedNetwork::None),
+        ] {
+            assert_eq!(super::plan(&config(args), [0; 16]).seeds, seeds, "{args:?}");
+        }
     }
 
     /// `clearnet-advertise` is the lists' own clearnet entry (§2.8); unset

@@ -139,6 +139,8 @@ shekyl-peerlist = { path = "../shekyl-peerlist" }
 shekyl-dialer = { path = "../shekyl-dialer" }
 # The sections the daemon's owners read (DAEMON_CONFIG_CUTOVER.md §3).
 shekyl-daemon-config = { path = "../shekyl-daemon-config" }
+# The account's roots (IG-13), for the data-directory exports.
+shekyl-process = { path = "../shekyl-process" }
 shekyl-options = { path = "../shekyl-options" }
 shekyl-thread-ledger = { path = "../shekyl-thread-ledger" }
 curve25519-dalek = "4"
@@ -205,27 +207,8 @@ shekyl-win-sec = { path = "../shekyl-win-sec" }
 # The snapshot export's narrow argv is the active code page. `windows-sys`
 # 0.61 is already in the lock through shekyl-win-sec; this names the
 # modules this crate calls: `argument_vector`'s (`MultiByteToWideChar`,
-# `CP_ACP`) and `platform::harden_process`'s (`SetErrorMode`,
-# `SetUnhandledExceptionFilter` and `EXCEPTION_POINTERS`, which the crate
-# gates behind `Win32_System_Kernel` for the `CONTEXT` they carry,
-# `TerminateProcess`, the `STATUS_*` codes; DC-Q21, DC-F38).
+# `CP_ACP`; DC-F38). The hardening's calls are `shekyl-process`'s.
 windows-sys = { version = "0.61", features = [
   "Win32_Foundation",
   "Win32_Globalization",
-  "Win32_System_Diagnostics_Debug",
-  "Win32_System_Kernel",
-  "Win32_System_Threading",
-] }
-
-[target.'cfg(windows)'.dev-dependencies]
-# `tests/dc_q21_a_fault_ends_with_its_code.rs` sets a per-application
-# `LocalDumps` scratch policy for its own binary and removes it: the
-# registry module, and `Win32_Security` for the `SECURITY_ATTRIBUTES`
-# parameter `RegCreateKeyExW` is gated on (the `W` variant that takes the
-# 64-bit-view flag). It also clears the error mode its parent handed it
-# before hardening (`GetErrorMode`; DC-F44). Test-only: no shipped binary
-# writes the registry.
-windows-sys = { version = "0.61", features = [
-  "Win32_Security",
-  "Win32_System_Registry",
 ] }

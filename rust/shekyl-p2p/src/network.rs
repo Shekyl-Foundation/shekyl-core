@@ -54,7 +54,7 @@ use crate::descriptors;
 use crate::dial::{ClearnetReady, Connectors, Spans, ACCEPT_BACKOFF};
 use crate::facts::{self, ConnectionsSnapshot, LinkTotals, ListedPeer, PeerCounts};
 use crate::peers::{self, OwnerLoops, Peers};
-use crate::plan::{NetworkPlan, TorPlan};
+use crate::plan::{LinkLimits, NetworkPlan, TorPlan};
 use crate::tor::{TorLink, TOR_SOCKS_TIMEOUT};
 
 pub use shekyl_dialer::TorLinkTally;
@@ -632,6 +632,23 @@ impl Network {
             .tor_link
             .record_managed(published.incarnation(), socks);
         published.incarnation()
+    }
+
+    /// The operator's link budget, changed while running (`option set`,
+    /// `DAEMON_CONFIG_CUTOVER.md` §2.7): the same gate the start set.
+    pub fn set_limits(&self, limits: LinkLimits) {
+        node_gate().set_up(limits.upload);
+        node_gate().set_down(limits.download);
+    }
+
+    /// One uniform draw from the OS CSPRNG, for the managed Tor's probe
+    /// delay (`TOR_SUPERVISOR.md` §4.5). The supervisor's core maps it onto
+    /// the delay range; a predictable delay is the self-probe signature the
+    /// jitter exists to hide.
+    #[must_use]
+    pub fn probe_delay_draw(&self) -> u64 {
+        use shekyl_draw_rng::RelayRng;
+        SecureRelayRng.next_u64()
     }
 
     /// The managed Tor's SOCKS address while the link is that route.
