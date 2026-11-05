@@ -73,7 +73,10 @@ impl Message {
     /// same [`Encoded`] to every session that gets it.
     ///
     /// # Errors
-    /// The payload did not serialize: a value the codec's bounds refuse.
+    /// The payload did not serialize: a value the codec's bounds refuse,
+    /// or a payload over its command's cap
+    /// ([`PayloadError::OverCap`]), which the peer's ingress refuses and
+    /// closes the session for, so it is never queued.
     pub fn encode(&self) -> Result<Encoded, PayloadError> {
         let payload = match self {
             Self::NewTransactions(m) => m.store()?,
@@ -86,6 +89,13 @@ impl Message {
             Self::ResponseBodies(m) => m.store()?,
         };
         let command = self.command();
+        let max = usize::try_from(command.payload_cap()).unwrap_or(usize::MAX);
+        if payload.len() > max {
+            return Err(PayloadError::OverCap {
+                got: payload.len(),
+                max,
+            });
+        }
         Ok(Encoded {
             command,
             bytes: notify(command.wire_id(), &payload),
@@ -272,5 +282,30 @@ impl Deref for Established {
 
     fn deref(&self) -> &SessionHandle {
         &self.0
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use shekyl_levin::{Command, GetTxpoolComplement, PayloadError};
+
+    use super::Message;
+
+    /// A payload over its command's cap is refused at encode, so nothing
+    /// the peer's ingress would close the session for is ever queued.
+    #[test]
+    fn a_payload_over_its_commands_cap_is_not_encoded() {
+        let cap = usize::try_from(Command::GetTxpoolComplement.payload_cap()).expect("fits");
+        let over = Message::GetTxpoolComplement(GetTxpoolComplement {
+            hashes: vec![[7u8; 32]; cap / 32 + 1],
+        });
+        assert!(matches!(
+            over.encode(),
+            Err(PayloadError::OverCap { got, max }) if got > max && max == cap
+        ));
+        let under = Message::GetTxpoolComplement(GetTxpoolComplement {
+            hashes: vec![[7u8; 32]; 16],
+        });
+        assert!(under.encode().is_ok());
     }
 }

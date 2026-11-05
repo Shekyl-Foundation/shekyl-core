@@ -17,7 +17,7 @@
 use std::collections::HashSet;
 use std::sync::Arc;
 
-use shekyl_levin::{GetTxpoolComplement, NewTransactions};
+use shekyl_levin::{Command, GetTxpoolComplement, NewTransactions};
 use shekyl_p2p_session::{
     CloseCause, CloseKind, DialEnd, Established, Message, RelayOwner, SessionFacts, Taken,
 };
@@ -61,6 +61,50 @@ impl Port {
         // session layer closes with it.
         let _gone = self.inbox.send(cmd);
     }
+}
+
+/// The payload bytes one complement batch may hold: the 2002 cap less
+/// room for the envelope (the padding and flag keys, the array's own
+/// header) and a length prefix per entry, which [`complement_batches`]
+/// charges separately.
+fn complement_budget() -> usize {
+    usize::try_from(Command::NewTransactions.payload_cap())
+        .unwrap_or(usize::MAX)
+        .saturating_sub(COMPLEMENT_ENVELOPE)
+}
+
+/// Headroom for a 2002's envelope, well above what portable storage
+/// writes around the array.
+const COMPLEMENT_ENVELOPE: usize = 1024;
+
+/// What one entry costs beyond its bytes: a portable-storage length
+/// prefix is at most 9 bytes.
+const COMPLEMENT_ENTRY: usize = 9;
+
+/// `txs` in order, as batches whose bytes and prefixes fit `budget`; at
+/// least one, so an empty complement is still answered with an empty
+/// 2002. A blob too large for a batch of its own is left out: no 2002 can
+/// carry it, and a transaction that size is not one consensus admits.
+fn complement_batches(txs: Vec<Vec<u8>>, budget: usize) -> Vec<Vec<Vec<u8>>> {
+    let mut batches = Vec::new();
+    let mut batch = Vec::new();
+    let mut used = 0usize;
+    for tx in txs {
+        let cost = tx.len().saturating_add(COMPLEMENT_ENTRY);
+        if cost > budget {
+            continue;
+        }
+        if used.saturating_add(cost) > budget {
+            batches.push(std::mem::take(&mut batch));
+            used = 0;
+        }
+        used += cost;
+        batch.push(tx);
+    }
+    if !batch.is_empty() || batches.is_empty() {
+        batches.push(batch);
+    }
+    batches
 }
 
 impl RelayOwner for Port {
@@ -152,15 +196,20 @@ impl RelayOwner for Port {
     ) {
         let known: Vec<TxId> = request.hashes.into_iter().map(TxId::from_bytes).collect();
         let txs = self.pool.complement(&known);
-        // The flag is left at the inherited reply's value: the C++ handler
-        // never set it, and the field zero-initialises to false (stem).
-        let reply = Message::NewTransactions(NewTransactions {
-            txs,
-            padding: Vec::new(),
-            dandelionpp_fluff: false,
-        });
-        if let Err(refused) = session.send(&reply) {
-            tracing::debug!(id = ?session.id(), %refused, "the pool complement was not sent");
+        // A pool can hold more than one 2002 may carry, so the complement
+        // goes as batches under the cap. The flag is left at the inherited
+        // reply's value: the C++ handler never set it, and the field
+        // zero-initialises to false (stem).
+        for txs in complement_batches(txs, complement_budget()) {
+            let reply = Message::NewTransactions(NewTransactions {
+                txs,
+                padding: Vec::new(),
+                dandelionpp_fluff: false,
+            });
+            if let Err(refused) = session.send(&reply) {
+                tracing::debug!(id = ?session.id(), %refused, "the pool complement was not sent");
+                return;
+            }
         }
     }
 
@@ -170,5 +219,39 @@ impl RelayOwner for Port {
 
     fn on_closed(&self, facts: &SessionFacts, _end: DialEnd) {
         self.post(Cmd::Closed(facts.id));
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{complement_batches, COMPLEMENT_ENTRY};
+
+    #[test]
+    fn an_empty_complement_is_one_empty_batch() {
+        assert_eq!(
+            complement_batches(Vec::new(), 1024),
+            vec![Vec::<Vec<u8>>::new()]
+        );
+    }
+
+    /// Every transaction once, in order, and no batch over the budget.
+    #[test]
+    fn a_complement_over_the_budget_is_split_in_order() {
+        let txs: Vec<Vec<u8>> = (0..10u8).map(|n| vec![n; 100]).collect();
+        let budget = 3 * (100 + COMPLEMENT_ENTRY);
+        let batches = complement_batches(txs.clone(), budget);
+        assert_eq!(batches.len(), 4, "3 + 3 + 3 + 1");
+        for batch in &batches {
+            let used: usize = batch.iter().map(|tx| tx.len() + COMPLEMENT_ENTRY).sum();
+            assert!(used <= budget, "a batch of {used} bytes over {budget}");
+        }
+        assert_eq!(batches.concat(), txs);
+    }
+
+    #[test]
+    fn a_blob_no_batch_can_carry_is_left_out() {
+        let txs = vec![vec![1u8; 10], vec![2u8; 5000], vec![3u8; 10]];
+        let batches = complement_batches(txs, 1000);
+        assert_eq!(batches, vec![vec![vec![1u8; 10], vec![3u8; 10]]]);
     }
 }
