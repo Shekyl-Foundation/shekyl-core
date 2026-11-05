@@ -4,13 +4,13 @@
 // BSD-3-Clause
 
 //! One node under test: a real store and ingest service, the daemon's
-//! hasher budget and RandomX, the seam hub with the Rust router as its
-//! post sink, and the sync owner on its own row.
+//! hasher budget and RandomX, the session layer over loopback channels,
+//! and the sync owner on the layer's dispatch table through its port.
 //!
-//! The C++ Levin handler is a stub on its own thread. It receives what the
-//! router forwards, finishes each delivery from that thread (never from
-//! inside the hub's post), refuses a delivery whose bucket header does not
-//! read, as the C++ ingress does, and records the commands it was handed.
+//! The peers and relay owners are a recorder: nothing in these tests
+//! reaches them but a session's establishment and its close, which the
+//! recorder keeps so a test can ask how a session ended after its row has
+//! left the board.
 //!
 //! The node's clock is a hand clock: a deadline fires only when a test
 //! moves it ([`Node::advance`]).
@@ -20,12 +20,9 @@
 //! node does (`shekyl-node`): the follower posts a template only while
 //! that state is `Synced`.
 
-use std::collections::HashMap;
 use std::net::{IpAddr, Ipv4Addr};
 use std::num::NonZeroUsize;
-use std::sync::mpsc;
 use std::sync::{Arc, Mutex};
-use std::thread::JoinHandle;
 use std::time::{Duration, Instant};
 
 use shekyl_block_template::MinerKeys;
@@ -36,35 +33,42 @@ use shekyl_chain_ingest::{Metrics, ProductionSubstrate};
 use shekyl_chain_sync::SyncState;
 use shekyl_chain_sync_runtime::executor::Executor;
 use shekyl_chain_sync_runtime::owner::{self, OwnerParts, Running};
-use shekyl_chain_sync_runtime::router::Router;
-use shekyl_draw_rng::RelayRng;
+use shekyl_chain_sync_runtime::port;
+use shekyl_draw_rng::{RelayRng, SplitMix64};
 use shekyl_hash_budget::Budget;
+use shekyl_levin::{GetTxpoolComplement, NewTransactions, PeerlistEntry};
 use shekyl_miner::{FoundBlocks, JobBoard};
+use shekyl_p2p_session::{
+    CoreSyncData, DialAim, DialOutcome, Endpoint, Established, Intervals, Owners, Parts, PeerOwner,
+    PerConnector, ProbeArrival, ProbeSink, RelayOwner, SessionConfig, SessionFacts, SessionLayer,
+    SocketId, Taken,
+};
 use shekyl_peer_policy::InboundCeiling;
 use shekyl_pow_randomx::CacheStore;
-use shekyl_seam::{Endpoint, Hub, Post, SocketId, SyncPayload};
 use shekyl_timing_engine::{Clock, EngineService, ManualClock, OwnerClass, Tick};
-use shekyl_transport_layer::{CloseKind, Direction, Sockets};
+use shekyl_transport_layer::{CloseKind, ConnectorId, DialEnd, Direction, Sockets};
 
 use super::chain::Chain;
-use super::dial::{Buckets, PeerDial, SyncPeer};
+use super::dial::{empty_claim, PeerDial, SyncPeer};
 
-/// What the stub C++ handler was handed.
-#[derive(Debug, Default)]
-pub struct StubLog {
-    /// Every command forwarded to it, by session, in order.
-    pub commands: Vec<(SocketId, u32)>,
-    /// Deliveries it refused: a bucket header that does not read.
-    pub refused: Vec<SocketId>,
-    /// Handshake results it was handed.
-    pub handshakes: Vec<SocketId>,
-    /// Every delivery's bytes, as forwarded.
-    pub delivered: Vec<(SocketId, Vec<u8>)>,
+/// The network every harness node and peer names in its handshake.
+pub const NETWORK_ID: [u8; 16] = [0x5a; 16];
+
+/// Each channel's outbound byte cap.
+const SEND_CAP: usize = 64 * 1024 * 1024;
+
+/// What the owners that are not under test were told (module docs).
+#[derive(Debug, Default, Clone)]
+pub struct Record {
+    /// Sessions established, in order.
+    pub established: Vec<SocketId>,
+    /// Sessions a 2002 arrived on, one entry per batch, in order.
+    pub transactions: Vec<SocketId>,
     /// Closes, with the cause that won.
     pub closed: Vec<(SocketId, CloseKind)>,
 }
 
-impl StubLog {
+impl Record {
     /// Whether `id` was closed, and why.
     #[must_use]
     pub fn closed(&self, id: SocketId) -> Option<CloseKind> {
@@ -73,6 +77,50 @@ impl StubLog {
             .find(|(closed, _)| *closed == id)
             .map(|(_, kind)| *kind)
     }
+}
+
+/// The peers and relay owners, and the probe sink: a recorder.
+#[derive(Default)]
+struct Recorder {
+    record: Mutex<Record>,
+}
+
+impl Recorder {
+    fn record(&self) -> std::sync::MutexGuard<'_, Record> {
+        self.record.lock().expect("the record")
+    }
+}
+
+impl PeerOwner for Recorder {
+    fn disclosure(&self, _connector: ConnectorId) -> Vec<PeerlistEntry> {
+        Vec::new()
+    }
+    fn list_received(&self, _session: &Established, _list: Vec<PeerlistEntry>) {}
+    fn on_established(&self, session: &Established) {
+        self.record().established.push(session.id());
+    }
+    fn on_closed(&self, facts: &SessionFacts, end: DialEnd) {
+        self.record().closed.push((facts.id, end.cause().kind()));
+    }
+}
+
+impl RelayOwner for Recorder {
+    fn new_transactions(&self, session: &Established, _batch: NewTransactions, taken: Taken) {
+        self.record().transactions.push(session.id());
+        drop(taken);
+    }
+    fn txpool_complement(
+        &self,
+        _session: &Established,
+        _request: GetTxpoolComplement,
+        taken: Taken,
+    ) {
+        drop(taken);
+    }
+}
+
+impl ProbeSink for Recorder {
+    fn probe_arrived(&self, _arrival: ProbeArrival) {}
 }
 
 /// The tip follower's job seat on a node that mines (module docs).
@@ -89,9 +137,9 @@ pub struct MinerSeat {
 pub struct Node {
     /// The node's store and service.
     pub chain: Chain,
-    /// The seam.
-    pub hub: Hub,
-    /// The dialer whose channels end at scripted peers.
+    /// The session layer.
+    pub layer: SessionLayer<ManualClock>,
+    /// The connectors whose channels end at scripted peers.
     pub dial: Arc<PeerDial>,
     /// The node's hand clock.
     pub clock: ManualClock,
@@ -99,14 +147,14 @@ pub struct Node {
     pub state: tokio::sync::watch::Sender<SyncState>,
     /// The substrate's measurements: one sink for ingest and the executor.
     pub metrics: Arc<Metrics>,
-    /// What the stub handler recorded.
-    pub stub: Arc<Mutex<StubLog>>,
     /// The follower's job seat, on a node started to mine.
     pub miner: Option<MinerSeat>,
+    recorder: Arc<Recorder>,
     engine: EngineService<ManualClock>,
     running: Option<Running>,
-    stub_thread: Option<JoinHandle<()>>,
-    stub_tx: Option<mpsc::Sender<Option<Post>>>,
+    /// What this node claims to its peers, as the layer sends it; the
+    /// layer holds the receiver.
+    tip: tokio::sync::watch::Sender<CoreSyncData>,
     next_ip: u8,
 }
 
@@ -227,49 +275,64 @@ impl Node {
         );
         chain.apply(before).await;
 
-        let stub = Arc::new(Mutex::new(StubLog::default()));
-        let (stub_tx, stub_rx) = mpsc::channel::<Option<Post>>();
-        let forward_tx = Mutex::new(stub_tx.clone());
-        let forward: shekyl_chain_sync_runtime::router::Forward = Arc::new(move |post| {
-            let _gone = forward_tx.lock().expect("stub sender").send(Some(post));
-        });
-        let (routed_tx, routed_rx) = tokio::sync::mpsc::unbounded_channel();
-        let sink = Router::attached(forward, routed_tx).into_sink();
         let clock = ManualClock::new(Tick::new(1));
-        let sockets = Sockets::new();
-        let hub = Hub::new(
-            sockets.clone(),
-            InboundCeiling::Bounded(64),
-            sink,
-            Arc::new(clock.clone()),
-        );
-        let dial = Arc::new(PeerDial::new(sockets, 64 * 1024 * 1024));
-        hub.install_dial(Arc::clone(&dial) as Arc<dyn shekyl_seam::Dial>);
-        let stub_thread = {
-            let hub = hub.clone();
-            let stub = Arc::clone(&stub);
-            std::thread::spawn(move || run_stub(&hub, &stub_rx, &stub))
-        };
-
         let engine = EngineService::start(clock.clone());
-        let timer = engine
-            .handle()
-            .register(OwnerClass::Sync)
-            .expect("registered");
+        let timing = engine.handle();
+        let timer = timing.register(OwnerClass::Sync).expect("registered");
         let executor = Arc::new(Executor::new(budget, substrate));
-        // The harness's seam is bound already: the hub goes at once.
-        let (hub_tx, hub_rx) = tokio::sync::oneshot::channel();
-        assert!(
-            hub_tx.send(Arc::new(hub.clone())).is_ok(),
-            "the receiver is held here"
-        );
+        let sockets = Sockets::new();
+        let dial = Arc::new(PeerDial::new(
+            sockets.clone(),
+            NETWORK_ID,
+            InboundCeiling::Bounded(64),
+            SEND_CAP,
+        ));
+        let recorder = Arc::new(Recorder::default());
+        let (sync_port, inbound) = port::port();
+        // The handshake's tip, as the daemon's node publishes it: the
+        // chain's tip, re-read on every change.
+        let mut tips = chain.service.watch_tip().await.expect("the tip watch");
+        let (tip_tx, tip_rx) =
+            tokio::sync::watch::channel(core_sync_data(tips.borrow_and_update().tip));
+        {
+            let tip_tx = tip_tx.clone();
+            tokio::spawn(async move {
+                while tips.changed().await.is_ok() {
+                    let tip = tips.borrow_and_update().tip;
+                    tip_tx.send_replace(core_sync_data(tip));
+                }
+            });
+        }
+        let layer = SessionLayer::new(Parts {
+            sockets,
+            config: SessionConfig {
+                network_id: NETWORK_ID,
+                handshake_within: PerConnector::both(Duration::from_secs(24 * 3600)),
+                // A hand clock: the timed sync never falls due on its own.
+                intervals: Intervals {
+                    invoke_timeout: Duration::from_secs(365 * 24 * 3600),
+                    timed_sync_min: Duration::from_secs(365 * 24 * 3600),
+                    timed_sync_jitter: Duration::from_secs(1),
+                },
+            },
+            owners: Owners {
+                peers: Arc::clone(&recorder) as Arc<dyn PeerOwner>,
+                sync: Arc::new(sync_port),
+                relay: Arc::clone(&recorder) as Arc<dyn RelayOwner>,
+                probes: Arc::clone(&recorder) as Arc<dyn ProbeSink>,
+            },
+            connectors: Arc::clone(&dial) as Arc<dyn shekyl_p2p_session::Dial>,
+            timing: timing.clone(),
+            tip: tip_rx,
+            runtime: tokio::runtime::Handle::current(),
+            rng: Box::new(SplitMix64::new(0x5e55_1011)),
+        });
         let parts = OwnerParts {
             store: Arc::clone(&chain.store),
             door: chain.service.door(),
             alarm: chain.service.alarm(),
             tips: chain.service.watch_tip().await.expect("the tip watch"),
             latch: chain.service.watch_latch().await.expect("the latch watch"),
-            hub: hub_rx,
             executor,
             timer,
             rules,
@@ -279,7 +342,7 @@ impl Node {
             declaration: shekyl_chain_sync::Declaration::Open,
             rng,
             pool_hashes: Arc::new(Vec::new),
-            routed: routed_rx,
+            inbound,
             state: state.clone(),
         };
         // The owner's log lines carry the node's tag.
@@ -289,65 +352,100 @@ impl Node {
             .expect("the owner row");
         Self {
             chain,
-            hub,
+            layer,
             dial,
             clock,
             state,
             metrics,
-            stub,
             miner,
+            recorder,
             engine,
             running: Some(running),
-            stub_thread: Some(stub_thread),
-            stub_tx: Some(stub_tx),
+            tip: tip_tx,
             next_ip: 1,
         }
     }
 
-    /// Dial a scripted peer. `claim` is the outbound handshake's sync
-    /// payload; `None` posts none.
+    /// Dial a scripted peer and keep the session. `claim` is what the
+    /// peer answers the handshake with; `None` claims this node's own tip,
+    /// a peer level with us and so no source. Returns once the owners
+    /// hold the session.
     ///
     /// # Panics
     ///
-    /// The channel was not admitted.
-    pub fn connect(&mut self, peer: Box<dyn SyncPeer>, claim: Option<SyncPayload>) -> SocketId {
-        self.session(peer, claim, Direction::Outbound)
-    }
-
-    /// A scripted peer that dialed this node. Its handshake is the C++
-    /// handler's, so no claim is posted: the claim arrives in the peer's
-    /// handshake request, which the router's claim tap copies to the owner.
-    ///
-    /// # Panics
-    ///
-    /// The channel was not admitted.
-    pub fn accept(&mut self, peer: Box<dyn SyncPeer>) -> SocketId {
-        self.session(peer, None, Direction::Inbound)
-    }
-
-    fn session(
+    /// The dial or the handshake failed.
+    pub async fn connect(
         &mut self,
         peer: Box<dyn SyncPeer>,
-        claim: Option<SyncPayload>,
-        direction: Direction,
+        claim: Option<CoreSyncData>,
     ) -> SocketId {
+        let (ip, endpoint) = self.next_endpoint(Direction::Outbound);
+        self.dial
+            .expect(ip, peer, claim.unwrap_or_else(|| self.level()));
+        let dialed = self.layer.connect(endpoint).await.expect("admitted");
+        let id = dialed.id();
+        let outcome = dialed
+            .handshake(DialAim::Keep)
+            .await
+            .expect("the handshake passes");
+        assert!(matches!(outcome, DialOutcome::Kept { .. }));
+        id
+    }
+
+    /// A scripted peer that dialed this node, its handshake request
+    /// claiming `claim` (`None` claims this node's own tip, a peer level
+    /// with us and so no source). Returns once the session is established.
+    ///
+    /// # Panics
+    ///
+    /// The channel was not admitted, or the handshake did not complete.
+    pub async fn accept(
+        &mut self,
+        peer: Box<dyn SyncPeer>,
+        claim: Option<CoreSyncData>,
+    ) -> SocketId {
+        let (_, endpoint) = self.next_endpoint(Direction::Inbound);
+        // The far side's first frame is injected with a blocking send, so
+        // the channel is opened off the runtime's worker threads.
+        let dial = Arc::clone(&self.dial);
+        let claim = claim.unwrap_or_else(|| self.level());
+        let channel = tokio::task::spawn_blocking(move || dial.accept(endpoint, peer, claim))
+            .await
+            .expect("the accept thread ends")
+            .expect("admitted");
+        let id = channel.open.id();
+        self.layer.adopt(channel);
+        assert!(
+            self.wait(Duration::from_secs(10), |node| node
+                .layer
+                .board()
+                .get(id)
+                .is_some_and(|row| row.established()))
+                .await,
+            "the inbound handshake did not complete"
+        );
+        id
+    }
+
+    /// The claim of a peer level with this node: its own tip, or genesis
+    /// alone before the chain reports one. A claim of no chain at all is
+    /// refused by the sync owner (`PayloadRefused::Height`), so a scripted
+    /// peer that is to be no source claims this instead.
+    fn level(&self) -> CoreSyncData {
+        self.tip.borrow().clone()
+    }
+
+    fn next_endpoint(&mut self, direction: Direction) -> (IpAddr, Endpoint) {
         let ip = IpAddr::V4(Ipv4Addr::new(10, 0, 0, self.next_ip));
         self.next_ip += 1;
-        self.dial.expect(ip, peer);
-        let endpoint = Endpoint::Clearnet {
+        (
             ip,
-            port: 18080,
-            direction,
-        };
-        let attached = self.hub.connect(&endpoint).expect("admitted");
-        // The Levin handshake is the stub's to finish; it has.
-        self.hub.session_established(attached.id);
-        if let Some(sync) = claim {
-            self.hub
-                .post_handshake_result(attached.id, endpoint.connector(), sync);
-        }
-        self.hub.drive(attached.id, attached.session);
-        attached.id
+            Endpoint::Clearnet {
+                ip,
+                port: 18080,
+                direction,
+            },
+        )
     }
 
     /// The published sync state.
@@ -403,11 +501,22 @@ impl Node {
         self.chain.tip().map_or(0, |(count, _, _)| count)
     }
 
-    /// Whether `id` was closed, and why: the stub's record, which
-    /// outlives the hub's row.
+    /// Whether `id` was closed, and why: the recorder's, which outlives
+    /// the board's row.
     #[must_use]
     pub fn closed(&self, id: SocketId) -> Option<CloseKind> {
-        self.stub.lock().expect("stub log").closed(id)
+        self.recorder.record().closed(id)
+    }
+
+    /// What the peers and relay owners were told, so far.
+    #[must_use]
+    pub fn record(&self) -> Record {
+        self.recorder.record().clone()
+    }
+
+    /// Close `id` as this node's own close.
+    pub fn close(&self, id: SocketId) {
+        self.layer.close(id, DialEnd::local_close());
     }
 
     /// Move the hand clock by `by`, and have the engine read it.
@@ -453,8 +562,8 @@ impl Node {
     ///
     /// The blocking task panicked.
     pub async fn inject(&self, id: SocketId, frame: Vec<u8>) -> bool {
-        let hub = self.hub.clone();
-        tokio::task::spawn_blocking(move || hub.inject(id, frame))
+        let dial = Arc::clone(&self.dial);
+        tokio::task::spawn_blocking(move || dial.inject(id, frame))
             .await
             .expect("the inject returns")
     }
@@ -465,66 +574,32 @@ impl Node {
         self.metrics.snapshot().hashes
     }
 
-    /// Stop the owner, the hub, the stub and the service, and remove the
-    /// store.
+    /// Stop the owner, the layer and the service, and remove the store.
     pub async fn stop(mut self) {
         if let Some(running) = self.running.take() {
             tokio::task::spawn_blocking(move || running.stop(Duration::from_secs(10)))
                 .await
                 .expect("the owner stops");
         }
-        let hub = self.hub.clone();
-        tokio::task::spawn_blocking(move || hub.shutdown())
-            .await
-            .expect("the hub stops");
-        if let Some(tx) = self.stub_tx.take() {
-            let _gone = tx.send(None);
-        }
-        if let Some(thread) = self.stub_thread.take() {
-            let _joined = tokio::task::spawn_blocking(move || thread.join()).await;
-        }
+        self.layer.shutdown();
         self.engine.close();
         let Self { chain, .. } = self;
         chain.stop().await;
     }
 }
 
-fn run_stub(hub: &Hub, posts: &mpsc::Receiver<Option<Post>>, log: &Mutex<StubLog>) {
-    let mut sessions: HashMap<SocketId, Buckets> = HashMap::new();
-    while let Ok(Some(post)) = posts.recv() {
-        match post {
-            Post::Established { id, .. } => {
-                sessions.insert(id, Buckets::cpp_ingress());
-                hub.handler_armed(id, true);
-            }
-            Post::Deliver { id, bytes, .. } => {
-                let buckets = sessions.entry(id).or_insert_with(Buckets::cpp_ingress);
-                let commands = buckets.feed(&bytes);
-                let broken = buckets.broken();
-                let mut log = log.lock().expect("stub log");
-                log.delivered.push((id, bytes.clone()));
-                log.commands
-                    .extend(commands.into_iter().map(|(command, _)| (id, command)));
-                if broken {
-                    log.refused.push(id);
-                }
-                drop(log);
-                hub.delivery_finished(id, !broken);
-            }
-            Post::HandshakeResult { id, .. } => {
-                log.lock().expect("stub log").handshakes.push(id);
-            }
-            // The owner's; the router keeps it.
-            Post::Opened { .. } => {}
-            Post::Closed { id, end, .. } => {
-                log.lock()
-                    .expect("stub log")
-                    .closed
-                    .push((id, end.cause().kind()));
-                sessions.remove(&id);
-                hub.handler_gone(id);
-                hub.reap(id);
-            }
+/// The chain tip as the handshake and timed sync carry it; no tip is the
+/// empty claim.
+fn core_sync_data(tip: Option<shekyl_chain_ingest::ChainTip>) -> CoreSyncData {
+    tip.map_or_else(empty_claim, |tip| {
+        let wide = tip.cumulative_difficulty.to_raw();
+        CoreSyncData {
+            current_height: tip.count.to_raw(),
+            cumulative_difficulty: u64::try_from(wide & u128::from(u64::MAX))
+                .expect("masked to the low 64 bits"),
+            cumulative_difficulty_top64: u64::try_from(wide >> 64)
+                .expect("a u128 shifted by 64 fits"),
+            top_id: tip.top_id.to_bytes(),
         }
-    }
+    })
 }

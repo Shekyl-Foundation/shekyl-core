@@ -64,7 +64,7 @@ async fn a_sync_times_every_phase_of_each_block() {
     let (count, _, _) = held.tip().expect("a chain");
     let mut node = Node::start("profile", corpus.rules(), &steps[..1], 2, rng()).await;
     let (peer, _asked) = ServingPeer::new(Arc::clone(&held.store), Bodies::Honest);
-    node.connect(Box::new(peer), Some(claim_of(&held)));
+    node.connect(Box::new(peer), Some(claim_of(&held))).await;
     wait_synced(&node, count).await;
     let fetched = count - 1;
     // The entry answers an offer after the connector commits it, and the
@@ -295,7 +295,7 @@ async fn a_node_posts_no_template_while_it_is_behind() {
         })
     };
     let (peer, _asked) = ServingPeer::new(Arc::clone(&held.store), Bodies::Honest);
-    node.connect(Box::new(peer), Some(claim_of(&held)));
+    node.connect(Box::new(peer), Some(claim_of(&held))).await;
     wait_synced(&node, count).await;
     let seat = node.miner.as_ref().expect("a mining node");
     let posted = node
@@ -368,11 +368,12 @@ async fn the_last_supplier_closing_stalls_and_a_new_claim_recovers() {
     let mut node = Node::start("stall", corpus.rules(), &steps[..1], 2, rng()).await;
     let (own, work, top) = node.chain.tip().expect("a chain");
     let (level, _) = ServingPeer::new(Arc::clone(&held.store), Bodies::Honest);
-    node.connect(Box::new(level), Some(claim(own, work, top)));
+    node.connect(Box::new(level), Some(claim(own, work, top)))
+        .await;
     let frames = Arc::new(Mutex::new(Vec::new()));
     let (supplier, seen) =
         ServingPeer::new(Arc::clone(&held.store), Bodies::Hold(Arc::clone(&frames)));
-    let id = node.connect(Box::new(supplier), Some(full));
+    let id = node.connect(Box::new(supplier), Some(full.clone())).await;
     assert!(
         node.wait(LIMIT, |node| seen.headers() >= 1
             && seen.bodies() >= 1
@@ -384,7 +385,7 @@ async fn the_last_supplier_closing_stalls_and_a_new_claim_recovers() {
         seen.bodies()
     );
     assert!(!node.view().stalled, "a span in flight is not a stall");
-    node.hub.close(id);
+    node.close(id);
     assert!(
         node.wait(LIMIT, |node| node.view().stalled).await,
         "view {:?}",
@@ -397,31 +398,29 @@ async fn the_last_supplier_closing_stalls_and_a_new_claim_recovers() {
     assert!(view.sessions[0].body_requests.is_empty(), "{view:?}");
 
     let (recovery, _) = ServingPeer::new(Arc::clone(&held.store), Bodies::Honest);
-    node.connect(Box::new(recovery), Some(full));
+    node.connect(Box::new(recovery), Some(full)).await;
     wait_synced(&node, count).await;
     assert!(!node.view().stalled, "view {:?}", node.view());
     node.stop().await;
     held.stop().await;
 }
 
-/// The inherited chain request (2006) is retired (CS-5 §6): the attached
-/// router does not keep it, so it reaches the C++ handler's ingress, which
-/// refuses it as it refuses any command this protocol does not define and
-/// closes the session cleanly, with no fault.
+/// The inherited chain request (2006) is retired (CS-5 §6): the session
+/// layer's ingress refuses it as it refuses any command this protocol
+/// does not define, and closes the session cleanly, with no fault.
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
-async fn a_retired_chain_request_is_refused_by_the_cpp_ingress() {
+async fn a_retired_chain_request_is_refused_by_the_ingress() {
     logs();
     let (corpus, steps) = spend();
     let mut node = Node::start("retired", corpus.rules(), &steps[..1], 1, rng()).await;
     let (peer, _) = HeaderChainPeer::new(Vec::new(), 0);
-    let id = node.connect(Box::new(peer), None);
+    let id = node.connect(Box::new(peer), None).await;
     assert!(node.inject(id, notify(2006, b"chain")).await);
     assert!(
         node.wait(LIMIT, |node| node.closed(id).is_some()).await,
         "the session stayed open"
     );
     assert_eq!(node.closed(id), Some(CloseKind::SessionRefused));
-    assert_eq!(node.stub.lock().expect("stub").refused, vec![id]);
     node.stop().await;
 }
 
@@ -483,7 +482,9 @@ async fn the_owner_serves_a_missing_tx_request_and_closes_on_its_faults() {
     };
 
     let answers = Arc::new(Mutex::new(CompactAnswers::default()));
-    let id = node.connect(Box::new(CompactAsker(Arc::clone(&answers))), None);
+    let id = node
+        .connect(Box::new(CompactAsker(Arc::clone(&answers))), None)
+        .await;
     assert!(node.inject(id, ask(vec![0], hash)).await);
     assert!(
         node.wait(LIMIT, |_| !answers
@@ -513,7 +514,9 @@ async fn the_owner_serves_a_missing_tx_request_and_closes_on_its_faults() {
         (vec![0], unknown, "an unknown block"),
     ] {
         let answers = Arc::new(Mutex::new(CompactAnswers::default()));
-        let id = node.connect(Box::new(CompactAsker(Arc::clone(&answers))), None);
+        let id = node
+            .connect(Box::new(CompactAsker(Arc::clone(&answers))), None)
+            .await;
         assert!(node.inject(id, ask(indices, block)).await);
         assert!(
             node.wait(LIMIT, |node| node.closed(id).is_some()).await,

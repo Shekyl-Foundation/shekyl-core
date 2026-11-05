@@ -37,11 +37,11 @@ shekyl-chain-store = { path = "../shekyl-chain-store" }
 shekyl-chain-sync = { path = "../shekyl-chain-sync" }
 shekyl-chain-sync-runtime = { path = "../shekyl-chain-sync-runtime" }
 shekyl-difficulty = { path = "../shekyl-difficulty" }
-shekyl-draw-rng = { path = "../shekyl-draw-rng" }
+shekyl-draw-rng = { path = "../shekyl-draw-rng", features = ["splitmix"] }
 shekyl-hash-budget = { path = "../shekyl-hash-budget" }
 shekyl-miner = { path = "../shekyl-miner" }
 shekyl-pow-randomx = { path = "../shekyl-pow-randomx" }
-shekyl-seam = { path = "../shekyl-seam" }
+shekyl-p2p-session = { path = "../shekyl-p2p-session", features = ["harness"] }
 shekyl-types = { path = "../shekyl-types" }
 shekyl-wire = { path = "../shekyl-wire" }
 tracing = "0.1"

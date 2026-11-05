@@ -15,61 +15,37 @@ use std::time::Duration;
 
 use shekyl_chain_ingest::service::{ArrivalTag, Reply};
 use shekyl_chain_sync::SyncState;
-use shekyl_levin::{
-    invoke, BasicNodeData, CoreSyncData, HandshakeRequest, PortableMap, COMMAND_HANDSHAKE,
-};
 use shekyl_p2p_harness::sync::{announcement, Bodies, Node, ServingPeer, Step};
+use shekyl_p2p_session::harness::timed_sync_request;
 
 #[path = "chain_sync/support.rs"]
 mod support;
 
 use support::{claim, claim_of, logs, rng, source, spend, wait_synced, LIMIT};
 
-/// An inbound session's claim arrives in its handshake request, which the
-/// router's claim tap copies to the owner (CS-Q10, Rick 2026-10-24):
-/// before it the session is no source; after it the session serves the
-/// headers and the bodies, with no outbound dial.
+/// An inbound session's claim arrives in its handshake request and in
+/// every timed sync, and the session layer hands each to the owner
+/// (CS-Q10, Rick 2026-10-24; brief §2.1): a session whose handshake
+/// claimed nothing is no source; once its timed sync claims the chain,
+/// the session serves the headers and the bodies, with no outbound dial.
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
-async fn an_inbound_session_serves_the_sync_after_its_handshake_request() {
+async fn an_inbound_session_serves_the_sync_after_its_claim() {
     logs();
     let (corpus, steps) = spend();
     let held = source("inbound-src", &corpus, &steps).await;
     let (count, _, _) = held.tip().expect("a chain");
     let mut node = Node::start("inbound", corpus.rules(), &steps[..1], 2, rng()).await;
     let (peer, seen) = ServingPeer::new(Arc::clone(&held.store), Bodies::Honest);
-    let id = node.accept(Box::new(peer));
+    let id = node.accept(Box::new(peer), None).await;
     tokio::time::sleep(Duration::from_secs(2)).await;
     assert_eq!(
         seen.headers(),
         0,
         "an inbound session with no claim is no source"
     );
-    let claim = claim_of(&held);
-    let request = HandshakeRequest {
-        node_data: BasicNodeData {
-            network_id: [0; 16],
-        },
-        payload_data: CoreSyncData {
-            current_height: claim.current_height,
-            cumulative_difficulty: claim.cumulative_difficulty,
-            cumulative_difficulty_top64: claim.cumulative_difficulty_top64,
-            top_id: claim.top_id,
-        },
-        nonce: [0; 32],
-    }
-    .store()
-    .expect("the request encodes");
-    assert!(node.inject(id, invoke(COMMAND_HANDSHAKE, &request)).await);
+    assert!(node.inject(id, timed_sync_request(claim_of(&held))).await);
     wait_synced(&node, count).await;
     assert!(seen.headers() >= 1 && seen.bodies() >= 1);
-    assert!(
-        node.stub
-            .lock()
-            .expect("stub")
-            .commands
-            .contains(&(id, COMMAND_HANDSHAKE)),
-        "the C++ handler still receives the handshake"
-    );
     node.stop().await;
     held.stop().await;
 }
@@ -90,7 +66,10 @@ async fn a_connected_announcement_is_relayed_to_every_other_session() {
     for _ in 0..3 {
         let (peer, asked) = ServingPeer::new(Arc::clone(&held.store), Bodies::Honest);
         seen.push(asked);
-        ids.push(node.connect(Box::new(peer), Some(claim(count - 1, work, top))));
+        ids.push(
+            node.connect(Box::new(peer), Some(claim(count - 1, work, top)))
+                .await,
+        );
     }
     assert!(
         node.wait(LIMIT, |node| node.state() == SyncState::Synced)
@@ -143,7 +122,8 @@ async fn a_block_fetched_by_sync_is_relayed_to_all_but_its_supplier() {
     let mut level = Vec::new();
     for _ in 0..2 {
         let (peer, seen) = ServingPeer::new(Arc::clone(&held.store), Bodies::Honest);
-        node.connect(Box::new(peer), Some(claim(count - 1, work, top)));
+        node.connect(Box::new(peer), Some(claim(count - 1, work, top)))
+            .await;
         level.push(seen);
     }
     assert!(
@@ -153,7 +133,7 @@ async fn a_block_fetched_by_sync_is_relayed_to_all_but_its_supplier() {
         node.state()
     );
     let (peer, supplier) = ServingPeer::new(Arc::clone(&held.store), Bodies::Honest);
-    node.connect(Box::new(peer), Some(full));
+    node.connect(Box::new(peer), Some(full)).await;
     assert!(
         node.wait(LIMIT, |node| node.count() == count).await,
         "the next block was not fetched"
@@ -193,7 +173,8 @@ async fn a_block_this_node_mined_is_relayed_to_every_session() {
     for _ in 0..3 {
         let (peer, asked) = ServingPeer::new(Arc::clone(&held.store), Bodies::Honest);
         seen.push(asked);
-        node.connect(Box::new(peer), Some(claim(count - 1, work, top)));
+        node.connect(Box::new(peer), Some(claim(count - 1, work, top)))
+            .await;
     }
     assert!(
         node.wait(LIMIT, |node| node.state() == SyncState::Synced)

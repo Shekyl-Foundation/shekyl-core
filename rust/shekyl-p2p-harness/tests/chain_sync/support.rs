@@ -19,8 +19,8 @@ use std::time::Duration;
 use shekyl_chain_sync::SyncState;
 use shekyl_draw_rng::SplitMix64;
 use shekyl_hash_budget::Budget;
+use shekyl_levin::CoreSyncData;
 use shekyl_p2p_harness::sync::{substrate, Chain, Corpus, Node, Step};
-use shekyl_seam::SyncPayload;
 use shekyl_types::BlockHash;
 use tracing::field::{Field, Visit};
 use tracing::span::{Attributes, Id};
@@ -227,8 +227,8 @@ pub(crate) fn rng() -> SplitMix64 {
 }
 
 /// A peer's handshake claim: its block count and cumulative work.
-pub(crate) fn claim(count: u64, work: u128, top: BlockHash) -> SyncPayload {
-    SyncPayload {
+pub(crate) fn claim(count: u64, work: u128, top: BlockHash) -> CoreSyncData {
+    CoreSyncData {
         current_height: count,
         cumulative_difficulty: u64::try_from(work & u128::from(u64::MAX)).expect("low"),
         cumulative_difficulty_top64: u64::try_from(work >> 64).expect("high"),
@@ -237,7 +237,7 @@ pub(crate) fn claim(count: u64, work: u128, top: BlockHash) -> SyncPayload {
 }
 
 /// The claim a chain's own tip makes.
-pub(crate) fn claim_of(chain: &Chain) -> SyncPayload {
+pub(crate) fn claim_of(chain: &Chain) -> CoreSyncData {
     let (count, work, top) = chain.tip().expect("a chain");
     claim(count, work, top)
 }
