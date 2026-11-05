@@ -3093,7 +3093,7 @@ pub(crate) mod tests {
     #[test]
     fn an_unreadable_p2p_state_is_a_fault_not_an_empty_reply() {
         let broken = FakeP2p {
-            peers: Err(FactsFault::HubAbsent),
+            peers: Err(FactsFault::Internal),
             state: Err(FactsFault::NotReady),
             ..FakeP2p::default()
         };

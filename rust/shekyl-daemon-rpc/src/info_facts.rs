@@ -38,10 +38,10 @@
 //! - [`InfoFacts::store_size`] reports a size it could not read as
 //!   [`FactsFault::StoreUnreadable`], never as `0` (RK-D23). The size is
 //!   read on this side, by [`store_file_size`], for that reason.
-//! - [`InfoFacts::sessions`] reports a network that is not up as
-//!   [`FactsFault::HubAbsent`], never as zero sessions. The node reads it
-//!   from the session layer's board, and it is **one** snapshot:
-//!   `has_peers` and the two connection counts describe the same board.
+//! - [`InfoFacts::sessions`] is read from the session layer's board, and it
+//!   is **one** snapshot: `has_peers` and the two connection counts describe
+//!   the same board. It is not read for an offline node, whose
+//!   [`SessionCounts::NONE`] is configuration, not a count (RK-D23).
 
 use std::path::Path;
 
@@ -197,11 +197,11 @@ pub trait InfoFacts: Send + Sync {
     /// [`PeerFacts::Offline`] for a daemon started offline; an online
     /// daemon with no peer lists is a fault.
     fn peers(&self) -> Result<PeerFacts, FactsFault>;
-    /// The node's sessions, per direction, from one snapshot of the seam
+    /// The node's sessions, per direction, from one snapshot of the session
     /// board. Read for every caller of an online node: Health's `has_peers`
     /// is whether there is one, and Health is never withheld. Not read for
-    /// a node that [`InfoChainFacts::offline`] says is offline, which binds
-    /// no hub and has no sessions by configuration.
+    /// a node that [`InfoChainFacts::offline`] says is offline, which has
+    /// no sessions by configuration.
     ///
     /// The two counts are also Status members. They and `has_peers` are
     /// this one read and one definition of a session, so a reply cannot say
@@ -209,9 +209,8 @@ pub trait InfoFacts: Send + Sync {
     ///
     /// # Errors
     ///
-    /// [`FactsFault::HubAbsent`] when the p2p hub is not up. Zero sessions
-    /// is an answer — a node with nobody to talk to — and is never returned
-    /// for a hub that is not there.
+    /// A fault of the read. Zero sessions is an answer — a node with nobody
+    /// to talk to — and is never a fault's stand-in.
     fn sessions(&self) -> Result<SessionCounts, FactsFault>;
 }
 
@@ -278,8 +277,8 @@ mod tests {
     use super::*;
 
     /// **Zero sessions is an answer**, the one an offline node carries, and
-    /// it is not the missing-network fault ([`FactsFault::HubAbsent`]): the
-    /// two do not share a value.
+    /// a fault of the read is a [`FactsFault`], not a count: the two do not
+    /// share a value.
     #[test]
     fn zero_sessions_is_an_answer() {
         assert_eq!(

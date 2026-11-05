@@ -268,8 +268,7 @@ fn offline_reproduces_the_offline_vector() {
     facts.chain.core_target_height = None;
     facts.chain.offline = true;
     facts.peers = PeerFacts::Offline;
-    facts.sessions_fault = Some(FactsFault::HubAbsent);
-    facts.peers = PeerFacts::Offline;
+    facts.sessions_fault = Some(FactsFault::Internal);
     assert_eq!(
         ours(&facts, Disclosure::FULL),
         oracle(include_str!(
@@ -298,15 +297,15 @@ fn a_p2p_state_that_disagrees_with_offline_refuses() {
     ));
 }
 
-/// An online daemon with no peer lists is a fault, not a Peers part of
-/// zeros: the facts layer's `HubAbsent` refuses the reply.
+/// An online daemon whose peer facts cannot be read is a fault, not a
+/// Peers part of zeros: the facts layer's fault refuses the reply.
 #[test]
-fn an_online_daemon_with_no_peer_lists_refuses() {
+fn an_online_daemon_whose_peer_facts_fail_refuses() {
     let mut facts = synced_facts();
-    facts.peers_fault = Some(FactsFault::HubAbsent);
+    facts.peers_fault = Some(FactsFault::Internal);
     assert!(matches!(
         get_info(&facts, Disclosure::FULL, 0),
-        Err(RpcFault::Facts(FactsFault::HubAbsent))
+        Err(RpcFault::Facts(FactsFault::Internal))
     ));
 }
 

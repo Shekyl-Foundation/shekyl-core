@@ -57,8 +57,8 @@ is not. Its handler (`src/rpc/core_rpc_server.cpp`) holds policy:
   subtraction, no shared lock.
 - **Clearnet-only counts.** `get_public_connections_count` and
   `get_public_outgoing_connections_count` look up `connector_id::clearnet`
-  only (`src/p2p/net_node.inl:666-672`, `:2211-2217`). Tor sessions are not
-  counted.
+  only (lines 666 to 672 and 2211 to 2217 of `src/p2p/net_node.inl` at
+  `e8838b0095`). Tor sessions are not counted.
 - **Torn reads.** The tip is read at `:205`; the cumulative difficulty,
   coins generated and economics are read later at `res.height - 1` with no
   common lock (`:239`, `:266`, `:269`, `:274`). `synchronized` is read twice
@@ -118,7 +118,7 @@ its response base (`src/rpc/core_rpc_server_commands_defs.h`).
 | | `synchronized` | protocol `is_synchronized()`, read **once** | read twice `:208`, `:253` |
 | | `busy_syncing`, `offline`, `following_degraded` | node facts | `:257`, `:247`, `:256` |
 | | `has_peers` (**new**, RK-D14) | the seam board, every connector | — |
-| **Identity** → `health` (duplicates of `get_version`) | `nettype`, `mainnet`, `testnet`, `stagenet` — **retired at 3.54 (RK-Q6)**; the part now holds `protocol_version` alone | `shekyl_rpc_identity` (`src/rpc/rpc_facts_ffi.h:56-62`) — RK-Q6 | `:234-238` |
+| **Identity** → `health` (duplicates of `get_version`) | `nettype`, `mainnet`, `testnet`, `stagenet` — **retired at 3.54 (RK-Q6)**; the part now holds `protocol_version` alone | `shekyl_rpc_identity` (lines 56 to 62 of `src/rpc/rpc_facts_ffi.h` at `e8838b0095`; the POD left in PR #1272, `StoreFacts::identity` answers now) — RK-Q6 | `:234-238` |
 | | `protocol_version` | constant | `:252` |
 | **Chain** → `chain` | `difficulty` / `wide_difficulty` / `difficulty_top64` | one `u128`, three renderings (RK-Q1) | `:209` |
 | | `cumulative_difficulty` / `wide_…` / `…_top64` | one `u128`, three renderings (RK-Q1) | `:239-240` |
@@ -540,27 +540,29 @@ two JSON-patch sites (`handlers/json.rs:82-100`, `json_rpc.rs:136-146`) are
 deleted.
 
 `has_peers` is at least one handshaken session on any connector (RK-Q4).
-It is not stored. `rpc_peerlist_ffi::session_counts` returns the handshaken
-rows in each direction from one copy of the board
-(`rust/shekyl-ffi/src/rpc_peerlist_ffi.rs:536-541`), and
+It is not stored. The node reads the handshaken rows in each direction
+from one copy of the board (`Network::session_counts`,
+`rust/shekyl-p2p/src/network.rs:579`; until PR #1272 this was
+`rpc_peerlist_ffi::session_counts`, lines 536 to 541 of
+`rust/shekyl-ffi/src/rpc_peerlist_ffi.rs` at `e8838b0095`), and
 `SessionCounts::has_peers` is whether either count is non-zero. The
-any-row export `shekyl_seam_board_count` does not read the handshake flag
-(`seam_board_ffi.rs:71-74`). That count is a dial cap. It is not this
-reply.
+any-row count the dialer caps on does not read the handshake flag. That
+count is a dial cap. It is not this reply.
 
-**A missing hub is a fault, not zero peers.** The any-row exports still
-cannot say so. `shekyl_seam_board_count` returns `0` for a missing hub,
-`0` for an index that is not a connector or a direction, and `u64::MAX`
-when the count does not fit (`seam_board_ffi.rs:76-87`);
-`shekyl_seam_socket_count` returns `0` for a missing hub and for an
-index that is not a connector or a direction
-(`rust/shekyl-ffi/src/seam_ffi.rs:521-531`). Read through either, a daemon
-whose hub is not up would report `has_peers = false` — the false
-`DaemonPeerless` of §3.1, rebuilt one layer down (RK-D23: that `0` is not
-an answer). The Rust read
-(`rpc_peerlist_ffi::session_counts`,
-`rust/shekyl-ffi/src/rpc_peerlist_ffi.rs:536-541`) is `None` for that
-absence, and `InfoFacts::sessions` maps it to `FactsFault::HubAbsent`.
+**A missing hub is a fault, not zero peers** (*records-was*, at `e8838b0095`;
+the hub and these exports left in PR #1272, see the 2026-11-05 update
+below). The any-row exports could not say so. `shekyl_seam_board_count`
+returned `0` for a missing hub, `0` for an index that was not a connector
+or a direction, and `u64::MAX` when the count did not fit
+(`seam_board_ffi.rs` lines 76 to 87); `shekyl_seam_socket_count` returned
+`0` for a missing hub and for an index that was not a connector or a
+direction (lines 521 to 531 of `rust/shekyl-ffi/src/seam_ffi.rs`). Read
+through either, a daemon whose hub was not up would have reported
+`has_peers = false` — the false `DaemonPeerless` of §3.1, rebuilt one
+layer down (RK-D23: that `0` is not an answer). The Rust read
+(`rpc_peerlist_ffi::session_counts`, lines 536 to 541 of
+`rust/shekyl-ffi/src/rpc_peerlist_ffi.rs`) was `None` for that absence,
+and `InfoFacts::sessions` mapped it to `FactsFault::HubAbsent`.
 Zero sessions is `Ok`. `has_peers` is read from that result, never from an
 export that answers a missing hub with `0`.
 
@@ -604,10 +606,20 @@ two counts are that snapshot. The total is not stored. It is the two
 directions, and `has_peers` is whether either is non-zero.
 
 **Correction, 2026-11-03.** Nothing calls `shekyl_seam_session_counts`.
-The daemon reads `rpc_peerlist_ffi::session_counts`
-(`rust/shekyl-ffi/src/rpc_peerlist_ffi.rs:536-541`), which is `None` when
-no hub is bound. The export, its header struct, and the layout pair are
-deleted.
+The daemon reads `rpc_peerlist_ffi::session_counts` (lines 536 to 541 of
+`rust/shekyl-ffi/src/rpc_peerlist_ffi.rs` at `e8838b0095`), which is
+`None` when no hub is bound. The export, its header struct, and the
+layout pair are deleted.
+
+**Update, 2026-11-05 (the p2p remnant cutover, PR #1272).** The seam, its
+hub and every `shekyl-ffi` read of them are deleted. The node owns its
+`Network` for its whole life and reads the session board directly:
+`NodeFacts::sessions` (`rust/shekyl-node/src/facts.rs:272-278`) answers
+`SessionCounts::NONE` when the node is offline and otherwise
+`Network::session_counts` (`rust/shekyl-p2p/src/network.rs:579`), the
+board's established count in each direction. A missing hub is no longer
+a state the node can be in, so `FactsFault::HubAbsent` has no producer
+and is deleted with this update; the offline rule below is unchanged.
 
 **An offline node is not a missing hub (found in review of commit 7,
 2026-10-10).** A daemon started `--offline` returns from p2p
@@ -711,7 +723,7 @@ handler tests, one on each side of the behaviour change (§4.2):
 | Rust-only case | Commit | Asserts |
 | --- | --- | --- |
 | hub absent, parity | 4 | *Not built; see the correction in §4.2.* As planned: `PeerFacts` returns a `FactsFault`; the handler's parity arm answers the zero counts the C++ handler answers |
-| hub absent, refusal | 7 | `get_info` refuses every caller, and does not answer `has_peers = false` or zero counts. **Landed**: `a_missing_hub_refuses_every_caller` over the facts double, and at the export, `the_established_count_of_a_missing_hub_is_a_refusal_not_zero` |
+| hub absent, refusal | 7 | `get_info` refuses every caller, and does not answer `has_peers = false` or zero counts. **Landed**: `a_missing_hub_refuses_every_caller` over the facts double, and at the export, `the_established_count_of_a_missing_hub_is_a_refusal_not_zero`. *Since PR #1272 (2026-11-05):* the hub, the export and `FactsFault::HubAbsent` are gone (§4.2's update); the handler test survives as `an_unreadable_board_refuses_every_caller`, the same assertion with a read fault in place of the missing hub |
 
 ---
 

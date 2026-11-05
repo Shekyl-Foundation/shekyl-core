@@ -162,7 +162,7 @@ fn an_offline_node_reports_no_connection_count_and_the_board_is_not_read() {
     let mut facts = synced_facts();
     facts.chain.offline = true;
     facts.peers = PeerFacts::Offline;
-    facts.sessions_fault = Some(FactsFault::HubAbsent);
+    facts.sessions_fault = Some(FactsFault::Internal);
     let reply = ours(&facts, Disclosure::FULL);
     let members = reply.as_object().expect("a reply is an object");
     for key in [
@@ -199,18 +199,18 @@ fn a_restricted_reply_from_a_node_with_peers_says_it_has_peers() {
 }
 
 /// **An offline node says it is offline, and the board is not asked.**
-/// A node started `--offline` binds no hub at all, so the read would
-/// return the missing-hub fault and `get_info` would refuse on every
-/// offline node. Offline is known from configuration, so the read is
-/// not made: the count below is zero reads, with the fault armed to
-/// show that nothing consulted it. Health carries `offline: true` and no
+/// A node started `--offline` has no sessions by configuration, and that
+/// is the answer: a count read from the board would say "a running node
+/// with none". Offline is known from configuration, so the read is not
+/// made: the count below is zero reads, with a fault armed to show that
+/// nothing consulted it. Health carries `offline: true` and no
 /// `has_peers`, for every caller (Rick, 2026-10-14).
 ///
 /// The edits that turn this red: reading the board for an offline
 /// node, or writing `has_peers: false` for it.
 #[test]
 fn an_offline_node_says_so_and_the_board_is_not_read() {
-    for fault in [None, Some(FactsFault::HubAbsent)] {
+    for fault in [None, Some(FactsFault::Internal)] {
         for disclosure in [Disclosure::VIEW, Disclosure::FULL] {
             let mut facts = synced_facts();
             facts.chain.offline = true;
@@ -234,22 +234,22 @@ fn an_offline_node_says_so_and_the_board_is_not_read() {
     }
 }
 
-/// **A missing hub refuses; it does not answer `false`** (§4.2). For
-/// every caller: Health is everyone's, so there is no caller the fault
-/// is not for. Until 3.47 the reply carried zero counts here and status
-/// OK.
+/// **A board that cannot be read refuses; it does not answer `false`**
+/// (§4.2). For every caller: Health is everyone's, so there is no caller
+/// the fault is not for. Until 3.47 the reply carried zero counts here
+/// and status OK.
 ///
-/// The node here is online. That is the state in which a missing hub is
-/// a fact nobody has; an offline node is the test above.
+/// The node here is online. That is the state in which the sessions are
+/// a fact the reply needs; an offline node is the test above.
 #[test]
-fn a_missing_hub_refuses_every_caller() {
+fn an_unreadable_board_refuses_every_caller() {
     let mut facts = synced_facts();
     assert!(!facts.chain.offline, "the fixture is an online node");
-    facts.sessions_fault = Some(FactsFault::HubAbsent);
+    facts.sessions_fault = Some(FactsFault::Internal);
     for disclosure in [Disclosure::VIEW, Disclosure::FULL] {
         assert_eq!(
             get_info(&facts, disclosure, 0),
-            Err(RpcFault::Facts(FactsFault::HubAbsent)),
+            Err(RpcFault::Facts(FactsFault::Internal)),
             "{disclosure:?}"
         );
     }

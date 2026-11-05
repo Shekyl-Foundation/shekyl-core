@@ -211,13 +211,6 @@ pub enum FactsFault {
     /// reported as a size of `0` — an empty store is `0`, and a store that
     /// cannot be read is not that (RK-D23).
     StoreUnreadable,
-    /// The network is not up in this process: no board to count sessions
-    /// on, no lists to read. Never reported as zero sessions or an empty
-    /// list: a node whose network has not started is not a node with no
-    /// peers, and a reader told "no peers" raises an alarm an operator would
-    /// act on (RK-D23). An offline daemon is [`P2pRead::Offline`], an
-    /// answer, not this fault.
-    HubAbsent,
 }
 
 /// C5: a reported target of `0` is not a chain count. Inland never wraps
@@ -332,7 +325,9 @@ pub trait P2pFacts: Send + Sync {
     ///
     /// # Errors
     ///
-    /// [`FactsFault::HubAbsent`] when the network is not up.
+    /// [`FactsFault::NotReady`] before the node is up. A node owns its
+    /// network for its whole life, so once up the tallies are always there
+    /// to read; an offline node's are empty.
     fn stem_tallies(&self) -> Result<String, FactsFault>;
 }
 
