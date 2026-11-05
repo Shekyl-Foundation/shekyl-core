@@ -710,6 +710,40 @@ session_test!(
     }
 );
 
+// A peer's 1002s queue no faster than the sync owner takes their claims:
+// the claim carries the frame's permit, so a second 1002 is not read, and
+// not answered, until the owner has taken the first claim.
+session_test!(
+    a_peers_timed_syncs_wait_for_the_owner_to_take_each_claim,
+    async {
+        let mut rig = Rig::new(Settings::default());
+        let (mut wire, _gap) = rig.accept(inbound_clearnet(29));
+        let _session = rig.establish_inbound(&mut wire).await;
+        rig.recorder
+            .hold_claims
+            .store(true, std::sync::atomic::Ordering::SeqCst);
+        wire.inject(timed_sync_request()).await;
+        wire.inject(timed_sync_request()).await;
+        let Received::Response { command, .. } = wire.read().await else {
+            panic!("the first 1002 is answered");
+        };
+        assert_eq!(command, Command::TimedSync.wire_id());
+        assert!(
+            wire.is_quiet().await,
+            "the second 1002 was answered while the owner still held the first claim"
+        );
+        rig.recorder
+            .held_claims
+            .lock()
+            .expect("held claims")
+            .clear();
+        let Received::Response { command, .. } = wire.read().await else {
+            panic!("the second 1002, once the claim is taken");
+        };
+        assert_eq!(command, Command::TimedSync.wire_id());
+    }
+);
+
 session_test!(the_tip_read_at_each_timed_sync_is_the_current_one, async {
     let mut rig = Rig::new(quick_sync());
     let (mut wire, _gap) = rig.accept(inbound_clearnet(12));

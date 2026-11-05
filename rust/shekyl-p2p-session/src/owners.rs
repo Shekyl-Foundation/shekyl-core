@@ -148,8 +148,11 @@ impl SyncInbound {
 /// The sync owner: chain sync and block relay.
 pub trait SyncOwner: Send + Sync {
     /// A peer's sync payload, read as a claim and not judged here. From
-    /// both handshake directions and both timed-sync directions.
-    fn claim(&self, session: &Established, sync: CoreSyncData, carrier: ClaimCarrier);
+    /// both handshake directions and both timed-sync directions. `taken`
+    /// is the permit of the frame that carried it: the session reads its
+    /// next frame once the owner has taken the claim (§7.7), so a peer's
+    /// claims queue no faster than the owner takes them.
+    fn claim(&self, session: &Established, sync: CoreSyncData, carrier: ClaimCarrier, taken: Taken);
 
     /// One of the owner's six commands arrived.
     fn message(&self, session: &Established, message: SyncInbound, taken: Taken);

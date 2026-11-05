@@ -11,8 +11,8 @@
 #![allow(dead_code)]
 
 use std::net::{IpAddr, Ipv4Addr};
-use std::sync::atomic::{AtomicUsize, Ordering};
-use std::sync::Arc;
+use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
+use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
 use shekyl_draw_rng::SplitMix64;
@@ -110,6 +110,10 @@ pub struct Recorder {
     pub disclosure: Vec<PeerlistEntry>,
     pub established_told: AtomicUsize,
     pub closed_told: AtomicUsize,
+    /// When set, a claim's permit is kept in `held_claims` instead of
+    /// dropped as the claim is recorded: the owner has not taken it yet.
+    pub hold_claims: AtomicBool,
+    pub held_claims: Mutex<Vec<Taken>>,
 }
 
 impl PeerOwner for Recorder {
@@ -133,7 +137,16 @@ impl PeerOwner for Recorder {
 }
 
 impl SyncOwner for Recorder {
-    fn claim(&self, session: &Established, sync: CoreSyncData, carrier: ClaimCarrier) {
+    fn claim(
+        &self,
+        session: &Established,
+        sync: CoreSyncData,
+        carrier: ClaimCarrier,
+        taken: Taken,
+    ) {
+        if self.hold_claims.load(Ordering::SeqCst) {
+            self.held_claims.lock().expect("held claims").push(taken);
+        }
         self.send(Event::Claim(session.id(), sync.current_height, carrier));
     }
 
@@ -226,6 +239,8 @@ impl Rig {
             disclosure: settings.disclosure,
             established_told: AtomicUsize::new(0),
             closed_told: AtomicUsize::new(0),
+            hold_claims: AtomicBool::new(false),
+            held_claims: Mutex::new(Vec::new()),
         });
         let (loopback, dialed) = Loopback::new(sockets.clone(), CEILING, settings.send_cap);
         let engine = EngineService::start(MonotonicClock::new());

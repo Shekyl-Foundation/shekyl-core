@@ -374,7 +374,7 @@ impl<'a, C: Clock + Clone + Send + Sync + 'static> Task<'a, C> {
             return;
         };
         match std::mem::replace(&mut self.state, State::Closing) {
-            State::Handshaking(role) => self.handshaking(role, command, shape, &payload),
+            State::Handshaking(role) => self.handshaking(role, command, shape, &payload, permit),
             State::Established(session) => {
                 self.state = State::Established(session.clone());
                 self.established(&session, command, shape, payload, permit);
@@ -385,9 +385,18 @@ impl<'a, C: Clock + Clone + Send + Sync + 'static> Task<'a, C> {
 
     /// `Handshaking`: the only bucket accepted is the 1001 of this
     /// session's direction.
-    fn handshaking(&mut self, role: Role, command: Command, shape: Shape, payload: &[u8]) {
+    fn handshaking(
+        &mut self,
+        role: Role,
+        command: Command,
+        shape: Shape,
+        payload: &[u8],
+        permit: OwnedSemaphorePermit,
+    ) {
         match (role, command, shape) {
-            (Role::Inbound, Command::Handshake, Shape::Request) => self.inbound_request(payload),
+            (Role::Inbound, Command::Handshake, Shape::Request) => {
+                self.inbound_request(payload, permit);
+            }
             (
                 Role::Outbound {
                     nonce,
@@ -397,7 +406,7 @@ impl<'a, C: Clock + Clone + Send + Sync + 'static> Task<'a, C> {
                 },
                 Command::Handshake,
                 Shape::Response,
-            ) => self.outbound_response(nonce, aim, reply, payload),
+            ) => self.outbound_response(nonce, aim, reply, payload, permit),
             (role, _, _) => {
                 tracing::debug!(id = ?self.id, ?command, "a bucket before the handshake; refused");
                 if let Role::Outbound { reply, .. } = role {
@@ -411,7 +420,7 @@ impl<'a, C: Clock + Clone + Send + Sync + 'static> Task<'a, C> {
         }
     }
 
-    fn inbound_request(&mut self, payload: &[u8]) {
+    fn inbound_request(&mut self, payload: &[u8], permit: OwnedSemaphorePermit) {
         let network_id = self.shared.config.network_id;
         let (checked, nonce) = match handshake::check_request(payload, network_id, self.connector) {
             Ok(ok) => ok,
@@ -461,10 +470,12 @@ impl<'a, C: Clock + Clone + Send + Sync + 'static> Task<'a, C> {
         let Some(session) = self.establish() else {
             return;
         };
-        self.shared
-            .owners
-            .sync
-            .claim(&session, checked.sync, ClaimCarrier::Handshake);
+        self.shared.owners.sync.claim(
+            &session,
+            checked.sync,
+            ClaimCarrier::Handshake,
+            Taken::new(permit),
+        );
     }
 
     fn outbound_response(
@@ -473,6 +484,7 @@ impl<'a, C: Clock + Clone + Send + Sync + 'static> Task<'a, C> {
         aim: DialAim,
         reply: oneshot::Sender<Result<DialOutcome, DialEnd>>,
         payload: &[u8],
+        permit: OwnedSemaphorePermit,
     ) {
         // The response arrived: the nonce leaves the set.
         drop(nonce);
@@ -510,6 +522,7 @@ impl<'a, C: Clock + Clone + Send + Sync + 'static> Task<'a, C> {
                     &session,
                     checked.sync.clone(),
                     ClaimCarrier::Handshake,
+                    Taken::new(permit),
                 );
                 answer(reply.send(Ok(DialOutcome::Kept {
                     session,
@@ -551,8 +564,12 @@ impl<'a, C: Clock + Clone + Send + Sync + 'static> Task<'a, C> {
                 tracing::debug!(id = ?self.id, "a second handshake on an established session; refused");
                 self.close(handshake::form_failure());
             }
-            (Command::TimedSync, Shape::Request) => self.timed_sync_request(session, &payload),
-            (Command::TimedSync, Shape::Response) => self.timed_sync_response(session, &payload),
+            (Command::TimedSync, Shape::Request) => {
+                self.timed_sync_request(session, &payload, permit)
+            }
+            (Command::TimedSync, Shape::Response) => {
+                self.timed_sync_response(session, &payload, permit);
+            }
             (Command::TimedSync, Shape::Notification) => self.close(handshake::form_failure()),
             (Command::NewTransactions, Shape::Notification) => {
                 match NewTransactions::load(&payload) {
@@ -620,7 +637,28 @@ impl<'a, C: Clock + Clone + Send + Sync + 'static> Task<'a, C> {
 
     /// A peer's 1002: its claim to the sync owner, our tip and disclosure
     /// back.
-    fn timed_sync_request(&mut self, session: &Established, payload: &[u8]) {
+    ///
+    /// No rate bound on a peer's 1002s (Rick, 2026-11-05), because none is
+    /// needed:
+    /// - Repeat requests cannot scrape the lists. The disclosure is the
+    ///   connector's cached sample (D3), drawn once per window and served
+    ///   unchanged to every request in it.
+    /// - Each answer is about the size of its request: our tip and at most
+    ///   `DISCLOSE_COUNT` addresses.
+    /// - Per-session backpressure bounds our work. The claim carries this
+    ///   frame's permit, so the session reads the peer's next frame only
+    ///   once the sync owner has taken the claim (§7.7); a peer that sends
+    ///   1002s faster waits on its own session.
+    ///
+    /// `--p2p-disclose-early` draws afresh on every request while it runs.
+    /// That is the operator's local choice for a node bootstrapping its own
+    /// lists, not a peer's lever.
+    fn timed_sync_request(
+        &mut self,
+        session: &Established,
+        payload: &[u8],
+        permit: OwnedSemaphorePermit,
+    ) {
         let Ok(request) = TimedSyncRequest::load(payload) else {
             self.close(handshake::form_failure());
             return;
@@ -635,15 +673,22 @@ impl<'a, C: Clock + Clone + Send + Sync + 'static> Task<'a, C> {
             self.unsent(&refused);
             return;
         }
-        self.shared
-            .owners
-            .sync
-            .claim(session, request.payload_data, ClaimCarrier::TimedSync);
+        self.shared.owners.sync.claim(
+            session,
+            request.payload_data,
+            ClaimCarrier::TimedSync,
+            Taken::new(permit),
+        );
     }
 
     /// The response to this session's own 1002. With no request
     /// outstanding it is a form failure (PWD-B1).
-    fn timed_sync_response(&mut self, session: &Established, payload: &[u8]) {
+    fn timed_sync_response(
+        &mut self,
+        session: &Established,
+        payload: &[u8],
+        permit: OwnedSemaphorePermit,
+    ) {
         if !self.deadlines.invoke_pending() {
             tracing::debug!(id = ?self.id, "a timed-sync response with no request outstanding; refused");
             self.close(handshake::form_failure());
@@ -662,7 +707,7 @@ impl<'a, C: Clock + Clone + Send + Sync + 'static> Task<'a, C> {
         self.shared
             .owners
             .sync
-            .claim(session, sync, ClaimCarrier::TimedSync);
+            .claim(session, sync, ClaimCarrier::TimedSync, Taken::new(permit));
         self.shared
             .owners
             .peers

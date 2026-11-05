@@ -169,7 +169,13 @@ impl Recorder {
 }
 
 impl SyncOwner for Recorder {
-    fn claim(&self, session: &Established, sync: CoreSyncData, carrier: ClaimCarrier) {
+    fn claim(
+        &self,
+        session: &Established,
+        sync: CoreSyncData,
+        carrier: ClaimCarrier,
+        _taken: Taken,
+    ) {
         self.note(Told::Claim(session.id(), sync.current_height, carrier));
     }
 

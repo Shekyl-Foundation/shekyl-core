@@ -255,7 +255,14 @@ impl PeerOwner for Others {
 }
 
 impl SyncOwner for Others {
-    fn claim(&self, _session: &Established, _sync: CoreSyncData, _carrier: ClaimCarrier) {}
+    fn claim(
+        &self,
+        _session: &Established,
+        _sync: CoreSyncData,
+        _carrier: ClaimCarrier,
+        _taken: Taken,
+    ) {
+    }
     fn message(&self, session: &Established, message: SyncInbound, taken: Taken) {
         self.told
             .lock()

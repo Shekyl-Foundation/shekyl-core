@@ -28,7 +28,7 @@ use tokio::sync::watch;
 struct NoSync;
 
 impl SyncOwner for NoSync {
-    fn claim(&self, _: &Established, _: CoreSyncData, _: ClaimCarrier) {}
+    fn claim(&self, _: &Established, _: CoreSyncData, _: ClaimCarrier, _: Taken) {}
     fn message(&self, _: &Established, _: SyncInbound, _: Taken) {}
 }
 

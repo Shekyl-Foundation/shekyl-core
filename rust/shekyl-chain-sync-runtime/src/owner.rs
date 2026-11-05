@@ -820,9 +820,11 @@ where
                 session,
                 sync,
                 carrier,
+                taken,
             } => {
                 let session = self.opened(&session);
                 self.claim(session, &sync, carrier);
+                drop(taken);
             }
             Inbound::Message {
                 session,

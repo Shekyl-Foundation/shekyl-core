@@ -36,6 +36,9 @@ pub enum Inbound {
         sync: CoreSyncData,
         /// Which message carried it.
         carrier: ClaimCarrier,
+        /// The session's permit for the frame (module docs): its next frame
+        /// is read once the owner has taken the claim.
+        taken: Taken,
     },
     /// One of the owner's six commands, still encoded under its arm.
     Message {
@@ -75,11 +78,18 @@ impl Port {
 }
 
 impl SyncOwner for Port {
-    fn claim(&self, session: &Established, sync: CoreSyncData, carrier: ClaimCarrier) {
+    fn claim(
+        &self,
+        session: &Established,
+        sync: CoreSyncData,
+        carrier: ClaimCarrier,
+        taken: Taken,
+    ) {
         self.hand(Inbound::Claim {
             session: session.clone(),
             sync,
             carrier,
+            taken,
         });
     }
 
