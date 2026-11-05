@@ -74,7 +74,6 @@ namespace cryptonote
     void set_p2p_endpoint(nodetool::i_p2p_endpoint<connection_context>* p2p);
     t_core& get_core(){return m_core;}
     void log_connections();
-    void stop();
 
 #ifndef IN_UNIT_TESTS
   private:

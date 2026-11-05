@@ -91,14 +91,13 @@ namespace detail
     target->enqueue(id, kind, stored, have, std::move(copy));
   }
 
-  /// The hub is the binding. The relay harness clears it with a null
-  /// `shekyl_seam_bind` when that test finishes, and the next listen
-  /// installs this zone's hub again. A flag set on the first bind would
-  /// stay set across that clear: the listen would only refresh a ceiling
-  /// on a hub that is no longer there, and every later port would fail.
-  // Binds the seam once, with this file's post. The hub's inbound ceiling
-  // is Rust's own (DAEMON_CONFIG_CUTOVER.md §4.2, the zone host's values);
-  // nothing about it is computed here. Idempotent.
+  /// The hub is the binding. Binds the seam once, with this file's post;
+  /// the next zone finds it bound. The bind attaches chain sync's router
+  /// to the node's owner, and is refused when there is no owner to attach
+  /// to (none installed, or already taken): the init then fails and the
+  /// daemon does not start. The hub's inbound ceiling is Rust's own
+  /// (DAEMON_CONFIG_CUTOVER.md §4.2, the zone host's values); nothing about
+  /// it is computed here.
   inline bool bind_seam()
   {
     std::lock_guard<std::mutex> lock(slots().mu);

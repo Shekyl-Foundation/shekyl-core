@@ -224,8 +224,9 @@ impl Relay {
         }
     }
 
-    /// The node's sync state, as the handler reports it until CS-5. A turn
-    /// to synchronised makes every held origin due now.
+    /// The node's sync state, as chain sync publishes it (CS-5) and the
+    /// relay zone's poll passes on. A turn to synchronised makes every held
+    /// origin due now.
     pub fn set_node_sync(&mut self, sync: NodeSync, now: Millis) {
         if self.node_sync == NodeSync::Unsynchronised && sync == NodeSync::Synchronised {
             self.unsent_due_now(now);

@@ -44,7 +44,7 @@ fn the_engine_outlives_ensure() {
         held: 0,
     };
     let bound = unsafe {
-        shekyl_seam_bind(
+        crate::seam_ffi::bind_attached(
             std::ptr::addr_of_mut!(executor).cast::<c_void>(),
             Some(discard),
         )
@@ -118,7 +118,7 @@ fn the_engine_reads_the_process_clock() {
         held: 0,
     };
     let bound = unsafe {
-        shekyl_seam_bind(
+        crate::seam_ffi::bind_attached(
             std::ptr::addr_of_mut!(executor).cast::<c_void>(),
             Some(discard),
         )
@@ -167,7 +167,7 @@ fn a_second_start_of_a_connectors_loop_starts_nothing() {
         held: 0,
     };
     let bound = unsafe {
-        shekyl_seam_bind(
+        crate::seam_ffi::bind_attached(
             std::ptr::addr_of_mut!(executor).cast::<c_void>(),
             Some(discard),
         )
@@ -225,7 +225,7 @@ fn the_owner_loops_are_ledger_rows_joined_at_shutdown_and_lateness_is_no_thread(
         held: 0,
     };
     let bound = unsafe {
-        shekyl_seam_bind(
+        crate::seam_ffi::bind_attached(
             std::ptr::addr_of_mut!(executor).cast::<c_void>(),
             Some(discard),
         )
@@ -279,7 +279,7 @@ fn the_tor_window_is_the_managed_tors_and_an_operators_tor_has_none() {
         held: 0,
     };
     let bound = unsafe {
-        shekyl_seam_bind(
+        crate::seam_ffi::bind_attached(
             std::ptr::addr_of_mut!(executor).cast::<c_void>(),
             Some(discard),
         )
@@ -346,7 +346,7 @@ fn a_tor_only_start_admits_the_compiled_onion_seeds() {
         held: 0,
     };
     let bound = unsafe {
-        shekyl_seam_bind(
+        crate::seam_ffi::bind_attached(
             std::ptr::addr_of_mut!(executor).cast::<c_void>(),
             Some(discard),
         )
@@ -408,7 +408,7 @@ fn a_zone_host_built_after_shutdown_has_a_dialer() {
         shekyl_seam_bind(std::ptr::null_mut(), None);
     }
     let bound = unsafe {
-        shekyl_seam_bind(
+        crate::seam_ffi::bind_attached(
             std::ptr::addr_of_mut!(executor).cast::<c_void>(),
             Some(discard),
         )
@@ -469,7 +469,7 @@ fn a_clearnet_endpoint_already_bound_is_refused_with_its_address() {
         held: 0,
     };
     let bound = unsafe {
-        shekyl_seam_bind(
+        crate::seam_ffi::bind_attached(
             std::ptr::addr_of_mut!(executor).cast::<c_void>(),
             Some(discard),
         )
@@ -525,7 +525,7 @@ fn a_managed_tor_death_takes_its_own_incarnation_down_and_no_later_one() {
         held: 0,
     };
     let bound = unsafe {
-        shekyl_seam_bind(
+        crate::seam_ffi::bind_attached(
             std::ptr::addr_of_mut!(executor).cast::<c_void>(),
             Some(discard),
         )
@@ -587,7 +587,7 @@ fn the_managed_route_is_read_at_each_use_and_only_while_it_stands() {
         held: 0,
     };
     let bound = unsafe {
-        shekyl_seam_bind(
+        crate::seam_ffi::bind_attached(
             std::ptr::addr_of_mut!(executor).cast::<c_void>(),
             Some(discard),
         )
@@ -676,7 +676,7 @@ fn the_zone_dialer_stamps_each_stream_end_from_the_connectors_table() {
         held: 0,
     };
     let bound = unsafe {
-        shekyl_seam_bind(
+        crate::seam_ffi::bind_attached(
             std::ptr::addr_of_mut!(executor).cast::<c_void>(),
             Some(discard),
         )

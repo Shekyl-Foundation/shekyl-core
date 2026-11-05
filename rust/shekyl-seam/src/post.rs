@@ -8,6 +8,8 @@
 //! The hub posts these. It does not parse them: the handshake owner already
 //! decoded the response, and the strand reads the fields.
 
+use std::sync::Arc;
+
 use shekyl_transport_layer::{ConnectorId, DialEnd, SocketId};
 
 use crate::endpoint::Endpoint;
@@ -84,6 +86,67 @@ pub struct SyncPayload {
     pub cumulative_difficulty_top64: u64,
     /// Its top block id.
     pub top_id: [u8; 32],
+}
+
+/// What the hub does with the row after the sink has taken a post.
+///
+/// The sink runs under the table lock and must not call back into the
+/// hub. A delivery the strand or the owner will finish waits. A delivery
+/// nobody else will finish returns [`AfterPost::Finished`], and the hub
+/// opens the row before it drops the lock. A caller that does not hold
+/// that row names [`AfterPost::without_a_delivering_row`]: the deliver
+/// step is the only place a finished answer moves a phase.
+#[must_use = "a finished delivery must return the row to open"]
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum AfterPost {
+    /// The strand, or the owner, calls `delivery_finished`.
+    AwaitFinish,
+    /// This post finished the delivery. The row returns to open now.
+    Finished,
+}
+
+impl AfterPost {
+    /// The caller does not hold a delivering row.
+    ///
+    /// [`AfterPost::Finished`] opens that row, and only the hub's deliver
+    /// step holds one. Posts other than [`Post::Deliver`], and tests that
+    /// watch the owner channel instead of the table, call this. A new
+    /// variant does not compile here until it has a row decision of its own.
+    pub const fn without_a_delivering_row(self) {
+        let (Self::AwaitFinish | Self::Finished) = self;
+    }
+}
+
+/// The sink the hub stores.
+pub type PostSink = Arc<dyn Fn(Post) -> AfterPost + Send + Sync>;
+
+/// Builds the sink the hub stores.
+///
+/// A sink that returns nothing awaits the strand's finish. That is every
+/// sink but the chain-sync router, which answers [`AfterPost`] itself.
+/// The blanket covers a sized closure and the `dyn Fn(Post)` object the
+/// seam tests store; [`PostSink`] is already the stored type.
+pub trait IntoPostSink {
+    /// The sink, as the hub stores it.
+    fn into_post_sink(self) -> PostSink;
+}
+
+impl<F> IntoPostSink for Arc<F>
+where
+    F: Fn(Post) + Send + Sync + 'static + ?Sized,
+{
+    fn into_post_sink(self) -> PostSink {
+        Arc::new(move |post| {
+            self(post);
+            AfterPost::AwaitFinish
+        })
+    }
+}
+
+impl IntoPostSink for PostSink {
+    fn into_post_sink(self) -> PostSink {
+        self
+    }
 }
 
 impl Post {

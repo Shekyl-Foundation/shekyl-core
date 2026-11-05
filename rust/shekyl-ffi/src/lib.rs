@@ -144,7 +144,8 @@ pub mod remnant_prep;
 // The protocol handler's door into the node's pool (DRS-X flip, DX-Q5).
 pub mod pool_ffi;
 
-/// The handler's sync reads over one snapshot (DRS-X flip, DX-Q1).
+/// Chain sync's slot for the seam's bind and the state `is_synchronized`
+/// reads (CS-5).
 pub mod chain_sync_ffi;
 
 // The p2p seam. C++ posts onto the connection strand. Rust records the

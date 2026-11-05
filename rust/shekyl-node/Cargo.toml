@@ -57,6 +57,10 @@ tracing = "0.1"
 tokio = { version = "1", default-features = false, features = ["rt", "sync"] }
 
 [dev-dependencies]
+# The follower tests ask the sync owner to publish. Dev edge only;
+# check_test_only_features.py holds that the normal dependency above
+# leaves it off.
+shekyl-chain-sync-runtime = { path = "../shekyl-chain-sync-runtime", features = ["publish-for-test"] }
 # The flush-fault test refuses the pool file's next commit
 # (`pool-commit-fault`). Dev edge only; check_test_only_features.py holds
 # that the normal dependency above leaves it off.

@@ -536,3 +536,134 @@ async fn a_closed_node_whose_peer_is_down_mines_and_opens_when_it_arrives() {
         }
     }
 }
+
+/// **A block a node mines reaches its peer by relay, on the production
+/// path** (the CS-5 tune-up §2). Two regtest daemons, each the other's
+/// one closed peer, so each is synced at open. `B` requests nothing
+/// (`--dev-sync off`): a timed sync cannot fetch the block for it, so a
+/// tip it takes was announced. Once their session is open, `A` mines one
+/// block with `generateblocks`, then submits one built from its own
+/// template with `submit_block`. Each time `B` must take `A`'s new tip
+/// within `RELAYED_WITHIN`.
+///
+/// Red: with the relay of a tip no entry reply connected removed from the
+/// model, `B` does not move inside the window.
+#[tokio::test(flavor = "multi_thread")]
+#[ignore = "Track-2 regtest: requires SHEKYLD_BIN; two daemons"]
+async fn a_block_a_node_mines_reaches_its_peer_by_relay() {
+    const RELAYED_WITHIN: Duration = Duration::from_secs(20);
+
+    async fn peers_of(daemon: &RegtestDaemon) -> usize {
+        let reply: shekyl_rpc_types::P2pReply<shekyl_rpc_types::SyncInfoResponse> = daemon
+            .rpc
+            .json_rpc_call("sync_info", None)
+            .await
+            .expect("sync_info");
+        reply
+            .into_running()
+            .expect("a linked daemon's P2P runs")
+            .peers
+            .len()
+    }
+
+    async fn takes_tip(peer: &RegtestDaemon, tip: &str, how: &str) {
+        let by = Instant::now() + RELAYED_WITHIN;
+        while peer.last_block_hash().await != tip {
+            if Instant::now() >= by {
+                peer.panic_with_log(
+                    &format!("the peer did not take the block {how} within {RELAYED_WITHIN:?}"),
+                    format!("its tip is {}", peer.last_block_hash().await),
+                );
+            }
+            tokio::time::sleep(Duration::from_millis(100)).await;
+        }
+    }
+
+    let serial = serial_lock().lock_owned().await;
+    let a_p2p = RegtestDaemon::free_port();
+    let b_p2p = RegtestDaemon::free_port_excluding(&[a_p2p]);
+    let address = mine_address_from_seed(&[0x6b; 64], shekyl_address::Network::Mainnet);
+    let b = RegtestDaemon::spawn(RegtestSpawn::new(None).with_peering(Peering::Linked {
+        p2p_port: b_p2p,
+        peer_p2p_port: a_p2p,
+        // Requests off: a timed sync must not be able to fetch the block
+        // the assertion credits to the local-tip announcement.
+        sink: true,
+    }))
+    .await;
+    let a = RegtestDaemon::spawn(
+        RegtestSpawn::new(Some(serial))
+            .with_mine_address(address)
+            .with_peering(Peering::Linked {
+                p2p_port: a_p2p,
+                peer_p2p_port: b_p2p,
+                sink: false,
+            }),
+    )
+    .await;
+    let linked = Instant::now() + Duration::from_secs(90);
+    while peers_of(&a).await == 0 || peers_of(&b).await == 0 {
+        assert!(
+            Instant::now() < linked,
+            "the two daemons did not open a session within 90 s"
+        );
+        tokio::time::sleep(Duration::from_millis(250)).await;
+    }
+
+    // generateblocks. The follower posts its first job one pass after the
+    // state at open, so the first answers can be `starting`.
+    let posted = Instant::now() + Duration::from_secs(60);
+    loop {
+        match try_generate_blocks(&a.rpc, 1).await {
+            Ok(_) => break,
+            Err(e)
+                if ["mine.starting", "mine.not_synced"]
+                    .iter()
+                    .any(|code| format!("{e:?}").contains(code))
+                    && Instant::now() < posted =>
+            {
+                tokio::time::sleep(Duration::from_millis(250)).await;
+            }
+            Err(e) => a.panic_with_log("the miner did not mine", format!("{e:?}")),
+        }
+    }
+    let generated = a.last_block_hash().await;
+    takes_tip(&b, &generated, "generateblocks made").await;
+
+    // submit_block, from the template at the new tip. Regtest's fixed
+    // difficulty takes the template as it is posted.
+    let next = a.height().await;
+    let deadline = Instant::now() + Duration::from_secs(30);
+    let blob = loop {
+        if let Ok(template) = a
+            .rpc
+            .json_rpc_call::<serde_json::Value>("get_block_template", Some(json!({})))
+            .await
+        {
+            if template["height"].as_u64() == Some(next) {
+                if let Some(blob) = template["blocktemplate_blob"].as_str() {
+                    break blob.to_owned();
+                }
+            }
+        }
+        assert!(
+            Instant::now() < deadline,
+            "no template at the new tip within 30 s"
+        );
+        tokio::time::sleep(Duration::from_millis(100)).await;
+    };
+    let submitted = a
+        .rpc
+        .json_rpc_call::<serde_json::Value>("submit_block", Some(json!({ "body": blob })))
+        .await
+        .unwrap_or_else(|e| {
+            a.panic_with_log("submit_block refused the template", format!("{e:?}"))
+        });
+    let submitted = submitted["block_id"].as_str().expect("block_id").to_owned();
+    assert_eq!(
+        a.last_block_hash().await,
+        submitted,
+        "the block connected on A"
+    );
+    takes_tip(&b, &submitted, "submit_block took").await;
+}

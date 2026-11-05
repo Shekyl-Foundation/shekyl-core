@@ -165,11 +165,6 @@ namespace cryptonote
      std::time_t get_start_time() const;
 
      /**
-      * @brief the handler's stop hook; the one stop path is the entry's (DX-Q6)
-      */
-     void stop();
-
-     /**
       * @brief returns the set of transactions in the txpool which are not in the argument
       *
       * @param hashes hashes of transactions to exclude from the result

@@ -872,53 +872,6 @@ void fromJsonValue(const rapidjson::Value& val, cryptonote::tx_out& txout)
 }
 
 
-void toJsonValue(rapidjson::Writer<epee::byte_stream>& dest, const cryptonote::tx_blob_entry& tx)
-{
-  dest.StartObject();
-
-  INSERT_INTO_JSON_OBJECT(dest, blob, tx.blob);
-  INSERT_INTO_JSON_OBJECT(dest, prunable_hash, tx.prunable_hash);
-
-  dest.EndObject();
-}
-
-void fromJsonValue(const rapidjson::Value& val, cryptonote::tx_blob_entry& tx)
-{
-  if (!val.IsObject())
-  {
-    throw WRONG_TYPE("json object");
-  }
-
-  GET_FROM_JSON_OBJECT(val, tx.blob, blob);
-  GET_FROM_JSON_OBJECT(val, tx.prunable_hash, prunable_hash);
-}
-
-void toJsonValue(rapidjson::Writer<epee::byte_stream>& dest, const cryptonote::block_complete_entry& blk)
-{
-  dest.StartObject();
-
-  INSERT_INTO_JSON_OBJECT(dest, block, blk.block);
-  INSERT_INTO_JSON_OBJECT(dest, transactions, blk.txs);
-  // NB: the credit-wire attestation_witness field is intentionally NOT serialized here. This
-  // JSON codec is an introspection-only surface with no block-ingestion consumer, and it does
-  // not round-trip block_complete_entry today; the witness travels the consensus path over the
-  // epee KV codec (cryptonote_protocol_defs.h) instead. See credit-wire CW-2 / ARCHIVAL_CREDIT_WIRE.md §3.
-
-  dest.EndObject();
-}
-
-
-void fromJsonValue(const rapidjson::Value& val, cryptonote::block_complete_entry& blk)
-{
-  if (!val.IsObject())
-  {
-    throw WRONG_TYPE("json object");
-  }
-
-  GET_FROM_JSON_OBJECT(val, blk.block, block);
-  GET_FROM_JSON_OBJECT(val, blk.txs, transactions);
-}
-
 void toJsonValue(rapidjson::Writer<epee::byte_stream>& dest, const cryptonote::rpc::block_with_transactions& blk)
 {
   dest.StartObject();
