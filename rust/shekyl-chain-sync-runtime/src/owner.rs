@@ -137,9 +137,8 @@ pub struct OwnerParts<C: Clock + Clone, R> {
     /// RPC's facts, the miner's follower and the relay gate read. The owner
     /// is its only publisher: the node hands this sender over and keeps a
     /// receiver. [`spawn`] publishes the declaration's state at open
-    /// before it returns; [`Running`] keeps a clone that never sends, so
-    /// the watch does not close when the task ends, and the task publishes
-    /// [`SyncState::NoView`] on every exit.
+    /// before it returns. Every exit publishes [`SyncState::NoView`] and
+    /// drops the sender, so the watch closes on that state.
     pub state: watch::Sender<SyncState>,
 }
 
@@ -153,10 +152,12 @@ pub struct Running {
     alarm: watch::Receiver<bool>,
     view: watch::Receiver<SyncView<SocketId>>,
     ended: watch::Receiver<Option<Ended>>,
-    /// Holds the state watch open after the task ends, so a reader sees
-    /// the [`SyncState::NoView`] the task published, not a closed watch.
-    /// Never sends.
-    _state_open: watch::Sender<SyncState>,
+    /// A test asks the task to publish. Production has no sender: the
+    /// task publishes only what the model derives. `cfg(test)` does not
+    /// cross into `shekyl-node`'s tests, so that crate enables
+    /// `publish-for-test` from its dev-dependency edge.
+    #[cfg(any(test, feature = "publish-for-test"))]
+    publish_tx: mpsc::UnboundedSender<SyncState>,
 }
 
 impl Running {
@@ -187,11 +188,29 @@ impl Running {
         self.view.clone()
     }
 
+    /// Ask the task to stop, without joining it.
+    ///
+    /// The seam may close in the same breath. The task, and the guard
+    /// that reports its end, read this first, so that close is a stop.
+    pub fn request_stop(&self) {
+        self.stop_tx.send_replace(true);
+    }
+
+    /// Ask the task to publish `state`. The task is the only publisher.
+    ///
+    /// A test sets the state the follower reads while the seam is unbound,
+    /// which is before the task accepts any other input. A send after the
+    /// task has ended is ignored.
+    #[cfg(any(test, feature = "publish-for-test"))]
+    pub fn publish_for_test(&self, state: SyncState) {
+        let _gone = self.publish_tx.send(state);
+    }
+
     /// Stop the owner and wait at most `timeout` for its blocking work.
     /// Call it from outside the owner's pool.
     pub fn stop(self, timeout: Duration) {
         self.executor.stop();
-        self.stop_tx.send_replace(true);
+        self.request_stop();
         self.pool.shutdown(timeout);
     }
 }
@@ -226,15 +245,26 @@ where
     // before this returns, so a reader of the node just opened reads it.
     parts.state.send_replace(parts.declaration.state_at_open());
     let state = parts.state.subscribe();
-    let state_open = parts.state.clone();
     let (alarm_tx, alarm) = watch::channel(false);
     let (view_tx, view) = watch::channel(SyncView::empty());
     let (stop_tx, stop_rx) = watch::channel(false);
     let (ended_tx, ended) = watch::channel(None);
+    #[cfg(any(test, feature = "publish-for-test"))]
+    let (publish_tx, publish_rx) = mpsc::unbounded_channel();
     let executor = Arc::clone(&parts.executor);
     // The owner's log lines carry the span it was started in.
     let published = Published { alarm_tx, view_tx };
-    pool.spawn(run(parts, published, stop_rx, ended_tx).instrument(tracing::Span::current()));
+    pool.spawn(
+        run(
+            parts,
+            published,
+            stop_rx,
+            ended_tx,
+            #[cfg(any(test, feature = "publish-for-test"))]
+            publish_rx,
+        )
+        .instrument(tracing::Span::current()),
+    );
     Ok(Running {
         pool,
         executor,
@@ -243,58 +273,88 @@ where
         alarm,
         view,
         ended,
-        _state_open: state_open,
+        #[cfg(any(test, feature = "publish-for-test"))]
+        publish_tx,
     })
 }
 
 /// How the owner's task ended ([`Running::ended`]).
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Ended {
-    /// [`Running::stop`] asked it to.
+    /// [`Running::stop`] asked it to, or [`Running::request_stop`] did
+    /// before the seam closed under it.
     Stopped,
-    /// It ended on its own, and the cause names what closed under it. A
-    /// daemon whose owner ends this way never syncs again, so the daemon
-    /// stops with this cause.
-    Failed(&'static str),
+    /// It ended on its own. A daemon whose owner ends this way never
+    /// syncs again, so the daemon stops with [`EndCause::text`].
+    Failed(EndCause),
 }
 
-/// The cause a task end carries when no exit set one: only an unwind
-/// leaves the task without setting its cause.
-const PANICKED: &str = "the sync owner's task panicked";
-/// The router's sender went: the seam's hub was dropped.
-const ROUTER_CLOSED: &str = "the router closed";
-/// The process timing engine went.
-const ENGINE_CLOSED: &str = "the timing engine closed";
+/// Why the owner's task ended on its own.
+///
+/// The daemon's stop latch records [`Self::text`]. Callers match the
+/// variant; they do not match the prose.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum EndCause {
+    /// The task unwound before an exit set a cause.
+    Panicked,
+    /// The router's sender went: the seam's hub was dropped.
+    RouterClosed,
+    /// The process timing engine went.
+    EngineClosed,
+    /// The connector's tip watch closed.
+    TipWatchClosed,
+    /// The latch watch closed.
+    LatchWatchClosed,
+    /// The seed watch closed.
+    SeedWatchClosed,
+    /// The seam's hub never arrived.
+    SeamNeverBound,
+}
+
+impl EndCause {
+    /// The prose the daemon's stop latch records.
+    #[must_use]
+    pub const fn text(self) -> &'static str {
+        match self {
+            Self::Panicked => "the sync owner's task panicked",
+            Self::RouterClosed => "the router closed",
+            Self::EngineClosed => "the timing engine closed",
+            Self::TipWatchClosed => "the connector's tip watch closed",
+            Self::LatchWatchClosed => "the latch watch closed",
+            Self::SeedWatchClosed => "the seed watch closed",
+            Self::SeamNeverBound => "the seam never bound, so chain sync never started",
+        }
+    }
+}
+
+impl std::fmt::Display for EndCause {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        formatter.write_str(self.text())
+    }
+}
 
 /// Reports the owner task's end, however it ends: a stop, a closed input
 /// and a panic alike.
 ///
-/// Once the owner has its hub (`syncing`), it publishes
-/// [`SyncState::NoView`]. [`Running`] keeps the watch open, so the facts'
-/// and the follower's closed-watch reading never fires; without this
-/// publish they would keep the last state, including `Synced`, after the
-/// owner is gone. Before the hub, the state at open stands: an owner that
-/// never had a hub never changed it, and a node declared offline or closed
-/// is `Synced` with no seam at all. It always sends [`Ended`] on
+/// Every exit publishes [`SyncState::NoView`] and then drops this sender.
+/// Facts and the follower read a closed watch as `NoView`; a reader that
+/// only borrows sees the publish. The task holds the last sender, so the
+/// watch closes when the guard drops. It always sends [`Ended`] on
 /// [`Running::ended`]: each exit sets `how` first, and an unwind leaves
-/// [`PANICKED`]. Once a stop was asked, the end is
+/// [`EndCause::Panicked`]. Once a stop was asked, the end is
 /// [`Ended::Stopped`] whatever `how` says: [`Running::stop`] shuts the
 /// owner's runtime down, which can cancel the task before it reads the
-/// request.
+/// request, and the seam can close before the task polls.
 struct EndGuard {
     state: watch::Sender<SyncState>,
     ended: watch::Sender<Option<Ended>>,
     stop: watch::Receiver<bool>,
     how: Ended,
-    /// The owner has its hub and publishes the state.
-    syncing: bool,
 }
 
 impl Drop for EndGuard {
     fn drop(&mut self) {
-        if self.syncing {
-            self.state.send_replace(SyncState::NoView);
-        }
+        self.state.send_replace(SyncState::NoView);
         let how = if *self.stop.borrow() {
             Ended::Stopped
         } else {
@@ -443,11 +503,39 @@ struct Owner<C: Clock + Clone, R> {
     published: Published,
 }
 
+/// The owner's `select`. Tokio 1.51 does not take `#[cfg]` on an arm, and
+/// a closed receiver would be ready at once and spin. The test arm is
+/// therefore chosen here, outside `select`: production waits on the real
+/// inputs only. Stop stays first under `biased`.
+#[cfg(any(test, feature = "publish-for-test"))]
+macro_rules! owner_select {
+    ($publish_rx:ident, $state:ident, $on_state:block, $($rest:tt)*) => {
+        tokio::select! {
+            biased;
+            $($rest)*
+            Some($state) = $publish_rx.recv() => $on_state,
+        }
+    };
+}
+
+#[cfg(not(any(test, feature = "publish-for-test")))]
+macro_rules! owner_select {
+    ($publish_rx:ident, $state:ident, $on_state:block, $($rest:tt)*) => {
+        tokio::select! {
+            biased;
+            $($rest)*
+        }
+    };
+}
+
 async fn run<C, R>(
     parts: OwnerParts<C, R>,
     published: Published,
     mut stop: watch::Receiver<bool>,
     ended: watch::Sender<Option<Ended>>,
+    #[cfg(any(test, feature = "publish-for-test"))] mut publish_rx: mpsc::UnboundedReceiver<
+        SyncState,
+    >,
 ) where
     C: Clock + Clone + Send + Sync + 'static,
     R: RelayRng + Send + 'static,
@@ -474,24 +562,47 @@ async fn run<C, R>(
         state: state_tx.clone(),
         ended,
         stop: stop.clone(),
-        how: Ended::Failed(PANICKED),
-        syncing: false,
+        how: Ended::Failed(EndCause::Panicked),
     };
-    let hub = tokio::select! {
-        biased;
-        _ = stop.wait_for(|stop| *stop) => {
-            end.how = Ended::Stopped;
-            return;
-        }
-        hub = hub => match hub {
-            Ok(hub) => hub,
-            Err(_) => {
-                end.how = Ended::Failed("the seam never bound, so chain sync never started");
+    // The hub arrives once. Until it does, the only other event is a
+    // stop. A test may also ask for a publish; that arm continues the
+    // wait, so the test build loops. Production has no such arm, and a
+    // loop whose every arm leaves would be a lie. A closed test sender
+    // does not match `Some`, so the arm disables instead of spinning.
+    let hub = {
+        tokio::pin!(hub);
+        #[cfg(any(test, feature = "publish-for-test"))]
+        let arrived = loop {
+            owner_select!(
+                publish_rx,
+                state,
+                {
+                    state_tx.send_replace(state);
+                },
+                _ = stop.wait_for(|asked| *asked) => {
+                    end.how = Ended::Stopped;
+                    return;
+                }
+                result = &mut hub => break result,
+            );
+        };
+        #[cfg(not(any(test, feature = "publish-for-test")))]
+        let arrived = tokio::select! {
+            biased;
+            _ = stop.wait_for(|asked| *asked) => {
+                end.how = Ended::Stopped;
                 return;
             }
-        },
+            result = &mut hub => result,
+        };
+        match arrived {
+            Ok(hub) => hub,
+            Err(_) => {
+                end.how = Ended::Failed(EndCause::SeamNeverBound);
+                return;
+            }
+        }
     };
-    end.syncing = true;
     let (inputs, mut input_rx) = mpsc::unbounded_channel();
     let schedule: Box<dyn Fn(BlockHeight) -> shekyl_chain_rules::RuleSet + Send> =
         Box::new(move |height| rules.in_force(height));
@@ -535,9 +646,13 @@ async fn run<C, R>(
     owner.tip(&first);
     owner.room();
     loop {
-        tokio::select! {
-            biased;
-            _ = stop.wait_for(|stop| *stop) => {
+        owner_select!(
+            publish_rx,
+            state,
+            {
+                owner.state_tx.send_replace(state);
+            },
+            _ = stop.wait_for(|asked| *asked) => {
                 end.how = Ended::Stopped;
                 break;
             }
@@ -548,7 +663,7 @@ async fn run<C, R>(
             },
             changed = tips.changed() => {
                 if changed.is_err() {
-                    end.how = Ended::Failed("the connector's tip watch closed");
+                    end.how = Ended::Failed(EndCause::TipWatchClosed);
                     break;
                 }
                 let tip = *tips.borrow_and_update();
@@ -556,7 +671,7 @@ async fn run<C, R>(
             },
             changed = latch.changed() => {
                 if changed.is_err() {
-                    end.how = Ended::Failed("the latch watch closed");
+                    end.how = Ended::Failed(EndCause::LatchWatchClosed);
                     break;
                 }
                 let set = latch.borrow_and_update().is_some();
@@ -564,7 +679,7 @@ async fn run<C, R>(
             },
             changed = seeds.changed() => {
                 if changed.is_err() {
-                    end.how = Ended::Failed("the seed watch closed");
+                    end.how = Ended::Failed(EndCause::SeedWatchClosed);
                     break;
                 }
                 let pair = *seeds.borrow_and_update();
@@ -572,7 +687,7 @@ async fn run<C, R>(
             },
             routed_one = routed.recv() => {
                 let Some(routed_one) = routed_one else {
-                    end.how = Ended::Failed(ROUTER_CLOSED);
+                    end.how = Ended::Failed(EndCause::RouterClosed);
                     break;
                 };
                 owner.routed(routed_one);
@@ -596,13 +711,13 @@ async fn run<C, R>(
                             pump_local(&mut owner, &mut input_rx, &mut tips, &mut latch);
                         }
                         if closed {
-                            end.how = Ended::Failed(ROUTER_CLOSED);
+                            end.how = Ended::Failed(EndCause::RouterClosed);
                             break;
                         }
                         owner.deadlines_due();
                     }
                     None => {
-                        end.how = Ended::Failed(ENGINE_CLOSED);
+                        end.how = Ended::Failed(EndCause::EngineClosed);
                         break;
                     }
                 }
@@ -611,11 +726,11 @@ async fn run<C, R>(
                 Ok(_) => owner.deadlines_due(),
                 Err(err) => {
                     tracing::info!(?err, "the timing engine closed: chain sync stops");
-                    end.how = Ended::Failed(ENGINE_CLOSED);
+                    end.how = Ended::Failed(EndCause::EngineClosed);
                     break;
                 }
             },
-        }
+        );
     }
     let _gone = owner.timer.deregister();
 }
@@ -677,6 +792,22 @@ where
             tick.get()
                 .saturating_add(u64::try_from(since).unwrap_or(u64::MAX)),
         )
+    }
+
+    /// A refused latch write, without a store snapshot. See
+    /// [`Model::alarm_refused`].
+    fn alarm_refused(&mut self) {
+        let mut out = Vec::new();
+        self.sync.alarm_refused(self.now(), &mut out);
+        self.commands(out);
+    }
+
+    /// The retry of a refused latch write, without a store snapshot. See
+    /// [`Model::alarm_retry`].
+    fn alarm_retry(&mut self) {
+        let mut out = Vec::new();
+        self.sync.alarm_retry(&mut out);
+        self.commands(out);
     }
 
     /// Hand one event to the model and run what it asks for.
@@ -968,7 +1099,10 @@ where
                 });
                 self.room();
             }
-            Input::AlarmRefused => self.event(Event::AlarmRefused),
+            // The latch retry does not read the chain. Going through
+            // `event` would drop it when the store cannot be read, and
+            // `Idle` is the only state that accepts new evidence.
+            Input::AlarmRefused => self.alarm_refused(),
             Input::Served { session, served } => {
                 if let Some(serving) = self.serving.get_mut(&session) {
                     serving.busy = false;
@@ -1133,7 +1267,7 @@ where
                 Wake::Request(session, request) => {
                     self.event(Event::Deadline { session, request });
                 }
-                Wake::AlarmRetry => self.event(Event::AlarmRetry),
+                Wake::AlarmRetry => self.alarm_retry(),
             }
         }
         self.rearm();

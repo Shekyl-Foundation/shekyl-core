@@ -72,7 +72,7 @@ pub use facts::free_bytes;
 pub use mining::{MiningControl, MiningRefused, MiningStatus, PostedJob};
 pub use producer::descriptors as producer_descriptors;
 pub use shekyl_chain_sync::Declaration;
-pub use shekyl_chain_sync_runtime::owner::Ended as SyncEnded;
+pub use shekyl_chain_sync_runtime::owner::{EndCause, Ended as SyncEnded};
 
 use std::num::NonZeroUsize;
 use std::sync::{Arc, Mutex, PoisonError};
@@ -235,10 +235,6 @@ pub struct Node {
     /// Chain sync's state, as the follower reads it. The owner is its only
     /// publisher: the node hands it the one sender and keeps this receiver.
     sync: tokio::sync::watch::Receiver<SyncState>,
-    /// A sender for this crate's tests, which set the state by hand. Not in
-    /// the shipped build: there the owner holds the only sender.
-    #[cfg(test)]
-    sync_tx: tokio::sync::watch::Sender<SyncState>,
     /// What the board holds, as the follower last left it.
     posting: tokio::sync::watch::Receiver<Posting>,
     mining: Arc<MiningControl>,
@@ -249,7 +245,7 @@ pub struct Node {
     service: Mutex<Option<Service<ProductionSubstrate>>>,
     /// Chain sync's owner (CS-5 §2), the node's for its lifetime. It
     /// publishes into [`Self::sync`], and the seam's bind hands it the hub.
-    sync_owner: Mutex<Option<shekyl_chain_sync_runtime::owner::Running>>,
+    sync_owner: Mutex<Option<sync_owner::Held>>,
     /// How chain sync's owner ended, once it has ([`Self::sync_ended`]).
     sync_ended: tokio::sync::watch::Receiver<Option<shekyl_chain_sync_runtime::owner::Ended>>,
     runtime: Mutex<Option<shekyl_runtime::Pool>>,
@@ -311,8 +307,6 @@ impl Node {
         // a genesis of its own. The owner, started after genesis connects,
         // publishes the declaration's state at open and every state after.
         let (sync_tx, sync) = tokio::sync::watch::channel(SyncState::NoView);
-        #[cfg(test)]
-        let test_sync_tx = sync_tx.clone();
         let (found, found_inbox) = shekyl_miner::found_blocks();
         let (posting_tx, posting) =
             tokio::sync::watch::channel(Posting::Withdrawn(NoJob::Starting));
@@ -559,8 +553,6 @@ impl Node {
         let node = Self {
             slots,
             sync,
-            #[cfg(test)]
-            sync_tx: test_sync_tx,
             posting,
             mining,
             armed: args.config.dev.rpc,
@@ -603,9 +595,10 @@ impl Node {
     }
 
     /// How chain sync's owner ended, once it has: `None` while it runs.
-    /// An owner that ends on its own (`Ended::Failed`) leaves a daemon
-    /// that never syncs again, so the daemon stops on it. The watch
-    /// outlives the owner and the node's stop.
+    /// An owner that ends on its own ([`SyncEnded::Failed`]) leaves a
+    /// daemon that never syncs again, so the daemon stops on
+    /// [`EndCause::text`]. The watch outlives the owner and the node's
+    /// stop.
     #[must_use]
     pub fn sync_ended(
         &self,
@@ -623,6 +616,41 @@ impl Node {
             .lock()
             .unwrap_or_else(PoisonError::into_inner)
             .clone()
+    }
+
+    /// Ask chain sync to stop before the seam is torn down.
+    ///
+    /// [`Self::stop`] joins the owner afterwards. A second call, and a
+    /// call after the owner has been taken, do nothing. The daemon's
+    /// teardown calls this before it shuts the network down, which drops
+    /// the hub the owner is waiting on.
+    pub fn request_sync_stop(&self) {
+        if let Some(owner) = self
+            .sync_owner
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
+            .as_ref()
+        {
+            owner.request_stop();
+        }
+    }
+
+    /// Ask chain sync's owner to publish `state`.
+    ///
+    /// The owner is still the only publisher. The node's tests use this
+    /// while the seam is unbound, which is before the owner accepts any
+    /// other input. The runtime enables it from this crate's dev edge
+    /// (`publish-for-test`); a shipped build has no such ask.
+    #[cfg(test)]
+    pub fn publish_sync_for_test(&self, state: SyncState) {
+        if let Some(owner) = self
+            .sync_owner
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
+            .as_ref()
+        {
+            owner.publish_for_test(state);
+        }
     }
 
     /// The node's miner.
@@ -669,6 +697,10 @@ impl Node {
         // that gate and is the last thing this stop does, so a stop already
         // inside the gate finishes before it.
         self.mining.close();
+        // Before the doors. The seam, once bound, holds the hub, and so does
+        // this node's lease until [`sync_owner::Held::stop`]. Either close
+        // is a failure unless the stop is already asked.
+        self.request_sync_stop();
         // The process doors hold the store (`Door::admission`); leave them
         // up and `chain.db` stays exclusive after this node has stopped.
         uninstall_process_doors();
@@ -793,9 +825,9 @@ fn schedule_of(dev: &Dev) -> Result<FakechainSchedule, OpenError> {
 /// or the next open in this process meets `DatabaseAlreadyOpen`.
 fn uninstall_process_doors() {
     shekyl_ffi::pool_ffi::uninstall();
-    // A slot no bind took: its hub sender drops, and an owner still
-    // waiting for the hub ends.
-    shekyl_ffi::chain_sync_ffi::uninstall();
+    // Chain sync's hub sender is this node's lease, released in
+    // [`sync_owner::Held::stop`]. Clearing the process slot here would end
+    // an owner another node in this process still holds.
     shekyl_daemon_rpc::submit::clear_production();
 }
 

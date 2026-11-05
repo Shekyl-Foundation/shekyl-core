@@ -16,7 +16,7 @@ use std::sync::{Arc, Mutex};
 use shekyl_chain_ingest::follower::{NoJob, Posting};
 use shekyl_chain_rules::AtHeight;
 use shekyl_chain_sync::SyncState;
-use shekyl_chain_sync_runtime::owner::Ended;
+use shekyl_chain_sync_runtime::owner::{EndCause, Ended};
 use shekyl_levin::{
     notify, NewCompactBlock, PortableMap, RequestCompactMissingTx, NOTIFY_NEW_COMPACT_BLOCK,
     NOTIFY_REQUEST_COMPACT_MISSING_TX,
@@ -548,7 +548,7 @@ async fn an_owner_whose_engine_closes_reports_the_cause() {
         .await
         .expect("the owner ended in time")
         .expect("the end watch is held by the node");
-    assert_eq!(how, Some(Ended::Failed("the timing engine closed")));
+    assert_eq!(how, Some(Ended::Failed(EndCause::EngineClosed)));
     node.stop().await;
 }
 

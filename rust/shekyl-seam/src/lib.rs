@@ -36,7 +36,7 @@ pub use drive::{drive_inbound, drive_inbound_async};
 pub use endpoint::{admit, connector_from_index, direction_from_index, Endpoint, TOR_HOST_MAX};
 pub use hub::{Attached, Hub};
 pub use loopback::Loopback;
-pub use post::{Post, SyncPayload};
+pub use post::{AfterPost, IntoPostSink, Post, PostSink, SyncPayload};
 pub use registry::{Board, Row};
 pub use shekyl_transport_layer::{
     deadline_after, BanEvent, BanFeed, BanLeft, CloseCause, CloseKind, ConnectorId, Direction,

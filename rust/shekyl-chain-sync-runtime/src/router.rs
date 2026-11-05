@@ -37,8 +37,10 @@
 //! - **One chunk in, at most one post out.** The bytes a chunk carries for
 //!   the C++ handler are forwarded as one `Deliver`, so the handler calls
 //!   `delivery_finished` once for it. A chunk that carries nothing for the
-//!   handler is finished by the owner, from its own task, never from inside
-//!   this sink, once the requests it carried are answered. A chunk that
+//!   handler is finished by the owner, from its own task, while the owner
+//!   is there. When that send fails, this sink returns
+//!   [`AfterPost::Finished`] and the hub opens the row under the lock it
+//!   already holds: the sink does not call back into the hub. A chunk that
 //!   carries both is the handler's to finish, so its requests are bounded
 //!   by the owner's serving queue instead (owner module docs).
 //! - **A malformed bucket header is the transport's refusal, as today:**
@@ -47,8 +49,10 @@
 //! - **The owner leaving ends the daemon:** the node reports the owner's
 //!   end to the stop owner as a fatal cause. Until the stop closes the
 //!   sessions, the router keeps splitting, drops what was the owner's, and
-//!   forwards the handler's bytes as before. Nothing is handed back to the
-//!   C++ handler, which no longer reads chain sync's messages.
+//!   forwards the handler's bytes as before. An owner-only chunk is
+//!   finished here, so the row does not wait on a task that will not
+//!   answer. Nothing is handed back to the C++ handler, which no longer
+//!   reads chain sync's messages.
 //!
 //! [`Post::Closed`] goes to the owner as well as onward, and
 //! [`Post::HandshakeResult`] goes to the owner as a claim, and onward to
@@ -65,7 +69,7 @@ use shekyl_levin::{
     BucketHead, DefinedCommand, Flags, SyncCommand, COMMAND_HANDSHAKE, COMMAND_TIMED_SYNC,
     FLAGS_DEFINED, HEADER_SIZE, NOTIFY_NEW_COMPACT_BLOCK, NOTIFY_REQUEST_COMPACT_MISSING_TX,
 };
-use shekyl_seam::{ConnectorId, Post, SocketId, SyncPayload};
+use shekyl_seam::{AfterPost, ConnectorId, Post, SocketId, SyncPayload};
 use tokio::sync::mpsc;
 
 /// Where a post the router does not keep goes: the C++ handler's strand.
@@ -156,21 +160,23 @@ impl Router {
 
     /// This router as the hub's post sink.
     #[must_use]
-    pub fn into_sink(self) -> Arc<dyn Fn(Post) + Send + Sync> {
+    pub fn into_sink(self) -> shekyl_seam::PostSink {
         let router = Arc::new(self);
         Arc::new(move |post| router.post(post))
     }
 
     /// Handle one post (module docs). Never calls into the hub.
-    pub fn post(&self, post: Post) {
+    pub fn post(&self, post: Post) -> AfterPost {
         let owner = &self.owner;
         match post {
             Post::Established { id, endpoint } => {
                 self.splits().insert(id, Split::default());
                 (self.forward)(Post::Established { id, endpoint });
+                AfterPost::AwaitFinish
             }
             Post::Opened { id, connector } => {
                 let _gone = owner.send(Routed::Opened { id, connector });
+                AfterPost::AwaitFinish
             }
             Post::HandshakeResult {
                 id,
@@ -183,11 +189,13 @@ impl Router {
                     sync,
                 });
                 let _gone = owner.send(Routed::Claim { id, sync });
+                AfterPost::AwaitFinish
             }
             Post::Closed { id, connector, end } => {
                 self.splits().remove(&id);
                 (self.forward)(Post::Closed { id, connector, end });
                 let _gone = owner.send(Routed::Closed { id });
+                AfterPost::AwaitFinish
             }
             Post::Deliver {
                 id,
@@ -205,7 +213,7 @@ impl Router {
                                 connector,
                                 bytes,
                             });
-                            return;
+                            return AfterPost::AwaitFinish;
                         }
                     }
                 };
@@ -233,9 +241,14 @@ impl Router {
                 // A failed send means the owner is gone, which ends the
                 // daemon (the node reports it to the stop owner). What was
                 // the owner's is dropped; the handler's bytes still reach it
-                // until the stop closes the session.
+                // until the stop closes the session. An owner-only chunk
+                // has nobody left to finish it, so the sink says so and the
+                // hub opens the row.
+                let mut owner_gone = false;
                 for item in routed {
-                    let _gone = owner.send(item);
+                    if owner.send(item).is_err() {
+                        owner_gone = true;
+                    }
                 }
                 if let Some(split) = self.splits().get_mut(&id) {
                     split.commit();
@@ -246,6 +259,12 @@ impl Router {
                         connector,
                         bytes: fed.forward,
                     });
+                    return AfterPost::AwaitFinish;
+                }
+                if owner_gone {
+                    AfterPost::Finished
+                } else {
+                    AfterPost::AwaitFinish
                 }
             }
         }

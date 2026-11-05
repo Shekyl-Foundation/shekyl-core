@@ -17,12 +17,34 @@ use shekyl_types::{BlockCount, BlockHeight};
 use super::fork_depth;
 use crate::model::{draw_one, AlarmWrite, Command, Evidence, HashClass, Sync};
 use crate::peer::Run;
+use crate::ALARM_RETRY;
 
 impl<K, R> Sync<K, R>
 where
     K: Copy + Ord + std::hash::Hash + std::fmt::Debug,
     R: Fn(BlockHeight) -> RuleSet,
 {
+    /// A refused latch write. The evidence is already held, so this does
+    /// not read the chain: a store fault must not leave the retry unarmed.
+    /// `Idle` is the only state that accepts new evidence, and a retry
+    /// that never arms never leaves `Refused`.
+    pub fn alarm_refused(&mut self, now: Instant, out: &mut Vec<Command<K>>) {
+        if let AlarmWrite::InFlight(evidence) = self.alarm_write {
+            self.alarm_write = AlarmWrite::Refused(evidence);
+            out.push(Command::ArmAlarmRetry {
+                deadline: now + ALARM_RETRY,
+            });
+        }
+    }
+
+    /// The retry of a refused latch write. Raises the same evidence.
+    /// No chain read, for the same reason as [`Self::alarm_refused`].
+    pub fn alarm_retry(&mut self, out: &mut Vec<Command<K>>) {
+        if let AlarmWrite::Refused(evidence) = self.alarm_write {
+            self.raise_alarm(evidence, out);
+        }
+    }
+
     /// Ask for the latch write with `evidence`. It is in flight until the
     /// latch watch reports it set or the owner reports it refused.
     pub(crate) fn raise_alarm(&mut self, evidence: Evidence, out: &mut Vec<Command<K>>) {

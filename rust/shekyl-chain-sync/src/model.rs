@@ -557,19 +557,8 @@ where
                     self.alarm_write = AlarmWrite::Written;
                 }
             }
-            Event::AlarmRefused => {
-                if let AlarmWrite::InFlight(evidence) = self.alarm_write {
-                    self.alarm_write = AlarmWrite::Refused(evidence);
-                    out.push(Command::ArmAlarmRetry {
-                        deadline: now + ALARM_RETRY,
-                    });
-                }
-            }
-            Event::AlarmRetry => {
-                if let AlarmWrite::Refused(evidence) = self.alarm_write {
-                    self.raise_alarm(evidence, out);
-                }
-            }
+            Event::AlarmRefused => self.alarm_refused(now, out),
+            Event::AlarmRetry => self.alarm_retry(out),
             Event::Fill { frontier } => self.fill_frontier = frontier,
             Event::Deadline { session, request } => self.on_deadline(session, request),
             Event::Headers { session, bytes } => {

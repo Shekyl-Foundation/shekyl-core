@@ -584,9 +584,10 @@ Rust posts these onto the connection's strand, and the strand runs them:
 **The post sink is the chain-sync router** (`shekyl_chain_sync_runtime::router`,
 CS-3, `P2P_3_CHAIN_SYNC_BRIEF.md` CS-Q8). The hub hands every post to it
 under the table lock, and it never calls back into the hub. The daemon
-builds it **attached** to the node's sync owner; a process with no node
-(a test of the seam or the C++ handler) builds it **unattached**, and
-every post goes to the bound post above, unchanged. Attached, it reads
+builds it **attached** to the node's sync owner. Every successful bind
+requires that owner, including a Rust test, which installs a stand-in
+(`install_test_owner`) before it binds. A bind with no owner and a
+second bind are both refused. Attached, it reads
 each session's Levin bucket headers (command, flags, length) and never
 a payload:
 
@@ -598,8 +599,8 @@ a payload:
   announcements are chain sync's, and the owner serves 2009.
 - **To the C++ handler, byte for byte:** every other bucket. That is
   `DefinedCommand`'s set (1001 handshake, 1002 timed sync, 2002 new
-  transactions, 2010 pool complement, and 2008 and 2009 when the router
-  is unattached) and any bucket the router does not admit, which the C++
+  transactions, 2010 pool complement) except 2008 and 2009, which the
+  owner keeps, and any bucket the router does not admit, which the C++
   ingress refuses as it does today. `established`, `closed` and the
   handshake result go to the C++ handler as well, and the owner gets its
   own copy.
@@ -609,7 +610,10 @@ a payload:
 - **One delivery in, at most one out.** The C++ handler's bytes from one
   delivery are forwarded as one `deliver`, so each delivery still gets
   exactly one `delivery_finished`. A delivery that carried nothing for
-  the C++ handler is finished by the owner, from its own task.
+  the C++ handler is finished by the owner, from its own task, while the
+  owner is there. When the owner is gone, the sink finishes that
+  delivery itself, so the row returns to open without waiting for a task
+  that will not answer.
 - An owner that is gone ends the daemon: the node reports its end to the
   stop owner as a fatal cause. Until the stop, the router keeps
   splitting, drops what was the owner's and forwards the handler's

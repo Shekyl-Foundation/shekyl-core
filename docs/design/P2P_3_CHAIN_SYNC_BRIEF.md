@@ -1747,8 +1747,7 @@ increments?
   executor, serving and the wire are built (CS-3). The cutover does two
   things at once:
   - route the live sessions to the owner: the daemon builds the router
-    attached (`Router::attached`) rather than unattached, and starts
-    the owner;
+    attached (`Router::attached`) and starts the owner;
   - delete the **sync half** of the handler and `block_queue`.
   - What it needs from the owner is built (CS-4). **An inbound session's
     claim arrives by a Rust tap, not an FFI entry (Rick, 2026-10-24):**
@@ -1937,13 +1936,19 @@ it decided beyond the rows above:
 
 - **The node owns the owner.** `Node::open` spawns it on its
   `chain-sync` row with everything but the hub, and leaves the router's
-  sender and a hub one-shot in one process slot. The seam's bind takes
-  the slot once, builds `Router::attached`, mints the hub and sends it.
-  The owner handles nothing until the hub arrives; the router precedes
-  every session. `Node::stop` stops it after the doors and before the
-  service. A bind in a process with no node builds `Router::unattached`;
-  a bind after the daemon's bind took the owner is refused, and the
-  owner's end is a fatal stop of the daemon.
+  sender and a hub one-shot in one process slot, and holds the lease for
+  that sender. A later install does not drop an earlier owner's sender:
+  that owner keeps publishing on its own watch until its own node stops.
+  The seam's bind takes the latest owner still waiting, once, builds
+  `Router::attached`, mints the hub and sends it. The owner handles
+  nothing until the hub arrives; the router precedes every session.
+  `Node::stop` asks it to stop before its lease drops the hub it is
+  waiting on, then joins it before the service. The daemon's
+  teardown asks the same stop before it shuts the seam down, so a stop
+  is recorded as a stop. A bind with no owner and a second bind are both
+  refused (`Refused::NoOwner`, `Refused::SecondBind`); the daemon does
+  not start without its owner. The owner's end on its own is a fatal
+  stop of the daemon.
 - **A stall is a fact, not a state.** `Sync::stalled()` is `Behind` with
   nothing moving toward `H*`: no header or body request in flight, no
   proof running, nothing with the entry. The entry's own refusals (an

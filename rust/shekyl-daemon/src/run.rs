@@ -308,7 +308,7 @@ enum RunWait {
     StopRequested,
     /// The node's sync owner ended on its own, with this cause: the
     /// daemon would stay up and never sync, so it stops and exits failed.
-    SyncFailed(&'static str),
+    SyncFailed(shekyl_node::EndCause),
 }
 
 /// The remnant's RPC start completed, it was refused, or `run` ended or a
@@ -464,6 +464,9 @@ fn finish(
     preserve_status: bool,
     node: shekyl_node::Node,
 ) -> i32 {
+    // Before the seam closes. The owner's end reads a stop that is
+    // already asked as a stop; a hub dropped first would be a failure.
+    node.request_sync_stop();
     network::stop();
     shekyl_daemon_rpc::ffi_exports::stop();
     // Before the remnant join, not at the end of this function: Tor's
@@ -519,12 +522,13 @@ async fn await_built(
 /// `run`'s return, a stop request, or chain sync's owner ending on its own.
 /// One wait, used after the RPC start and again after step 8.
 ///
-/// Only this wait reads the owner's end. The teardown that follows stops
-/// the owner, so an end it causes is never read as a failure. An end
-/// between the two waits (the managed Tor's start sits between them) is
-/// kept by the watch and read by the next one. A failed end is read
-/// before a stop request: the owner is stopped only in the teardown, so a
-/// stop cannot cause it.
+/// Only this wait reads the owner's end. Teardown asks the owner to stop
+/// before the seam closes, so that end is [`shekyl_node::SyncEnded::Stopped`],
+/// and this wait is not polled while the node is dropped. An end between
+/// the two waits (the managed Tor's start sits between them) is kept by
+/// the watch and read by the next one. A failed end is read before a stop
+/// request: the owner is stopped only in the teardown, so a stop cannot
+/// cause it.
 async fn run_or_stop(
     done_rx: &mut Receiver<i32>,
     sync_ended: &mut watch::Receiver<Option<shekyl_node::SyncEnded>>,
@@ -544,18 +548,16 @@ async fn run_or_stop(
 /// A stop, and a watch whose owner went without a failure, never resolve.
 async fn sync_failed(
     sync_ended: &mut watch::Receiver<Option<shekyl_node::SyncEnded>>,
-) -> &'static str {
-    let failed = sync_ended
-        .wait_for(|ended| matches!(ended, Some(shekyl_node::SyncEnded::Failed(_))))
-        .await
-        .ok()
-        .and_then(|ended| match *ended {
-            Some(shekyl_node::SyncEnded::Failed(cause)) => Some(cause),
-            _ => None,
-        });
-    match failed {
-        Some(cause) => cause,
-        None => std::future::pending().await,
+) -> shekyl_node::EndCause {
+    loop {
+        if let Some(shekyl_node::SyncEnded::Failed(cause)) = *sync_ended.borrow_and_update() {
+            return cause;
+        }
+        // A stop, and a watch that closed without a failure, never resolve.
+        // The biased select then stays on `run` and the stop request.
+        if sync_ended.changed().await.is_err() {
+            std::future::pending().await
+        }
     }
 }
 
@@ -568,7 +570,7 @@ fn note_run(run_status: &mut Option<i32>, preserve_status: &mut bool, wait: RunW
         RunWait::StopRequested => {}
         RunWait::SyncFailed(cause) => {
             tracing::error!(target: "daemon", "chain sync stopped: {cause}; the daemon stops");
-            signals::fatal(cause);
+            signals::fatal(cause.text());
             *preserve_status = false;
         }
     }
@@ -937,9 +939,14 @@ mod tests {
             .await
         });
         assert!(waited.is_err(), "a stopped owner ended the wait");
-        ended_tx.send_replace(Some(shekyl_node::SyncEnded::Failed("the router closed")));
+        ended_tx.send_replace(Some(shekyl_node::SyncEnded::Failed(
+            shekyl_node::EndCause::RouterClosed,
+        )));
         let wait = rt.block_on(run_or_stop(&mut done_rx, &mut ended));
-        assert_eq!(wait, RunWait::SyncFailed("the router closed"));
+        assert_eq!(
+            wait,
+            RunWait::SyncFailed(shekyl_node::EndCause::RouterClosed)
+        );
         let mut run_status = None;
         let mut preserve_status = true;
         note_run(&mut run_status, &mut preserve_status, wait);

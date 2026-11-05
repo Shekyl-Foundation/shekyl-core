@@ -3,15 +3,17 @@
 // All rights reserved.
 // BSD-3-Clause
 
-//! Chain sync's two process-wide entries (CS-5): the slot the node leaves
-//! its chain-sync owner in for the seam's bind (§2), and the state the
-//! shell's `core::is_synchronized` reads (§3).
+//! Chain sync's two process-wide entries (CS-5): the owners the node leaves
+//! for the seam's bind (§2), and the state the shell's `core::is_synchronized`
+//! reads (§3). The bind takes the latest owner still waiting. Each node
+//! keeps the lease for its own hub sender.
 //!
 //! The handler's sync reads that lived here went with the handler's sync
 //! half: chain sync is the Rust owner's, and nothing in C++ reads the chain
 //! for sync. The one handshake tip is the dialer's
 //! (`crate::dialer_ffi::shekyl_p2p_handshake_tip`).
 
+use std::collections::BTreeMap;
 use std::sync::{Arc, Mutex, PoisonError};
 
 use shekyl_chain_sync::SyncState;
@@ -19,27 +21,69 @@ use shekyl_chain_sync_runtime::router::Routed;
 use shekyl_seam::Hub;
 use tokio::sync::{mpsc, oneshot, watch};
 
-/// What the node leaves for the seam's bind (CS-5 §2): the sender its
-/// chain-sync owner reads routed messages from, and the one-shot the owner
-/// waits on for the hub.
-struct Attach {
+/// One installed owner's router sender and hub sender.
+struct Live {
     router: mpsc::UnboundedSender<Routed>,
     hub: oneshot::Sender<Arc<Hub>>,
 }
 
-/// The slot the node leaves its owner in.
-enum Slot {
-    /// No owner installed: a bind would run the seam without chain sync,
-    /// so it is refused ([`Refused::NoOwner`]).
-    Empty,
-    /// The node's owner, waiting for the seam's bind.
-    Left(Attach),
-    /// The daemon's bind took the owner. A later bind would run the seam
-    /// without chain sync, so it is refused ([`Refused::SecondBind`]).
-    Taken,
+/// Which owner. The counter is the process's; an id is not reused while a
+/// [`OwnerLease`] for it can still drop.
+#[derive(Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
+struct OwnerId(u64);
+
+/// The owners this process has installed, and which of them the bind takes.
+///
+/// A node's tests open more than one node in this process. Each owner
+/// publishes only on its own watch, and releasing one does not end another.
+struct Owners {
+    next: OwnerId,
+    live: BTreeMap<OwnerId, Live>,
+    /// The owner [`take`] hands the seam. Absent when none is waiting.
+    waiting: Option<OwnerId>,
+    /// The owner the seam's bind took. A later bind is [`Refused::SecondBind`].
+    taken: Option<OwnerId>,
+    /// Whose state [`shekyl_node_is_synchronized`] reads. The latest install.
+    published: Option<OwnerId>,
 }
 
-static ATTACH: Mutex<Slot> = Mutex::new(Slot::Empty);
+impl Owners {
+    const EMPTY: Self = Self {
+        next: OwnerId(0),
+        live: BTreeMap::new(),
+        waiting: None,
+        taken: None,
+        published: None,
+    };
+
+    fn alloc(&mut self) -> OwnerId {
+        let id = self.next;
+        self.next = OwnerId(
+            id.0.checked_add(1)
+                .expect("a process installs fewer owners than u64::MAX"),
+        );
+        id
+    }
+}
+
+static OWNERS: Mutex<Owners> = Mutex::new(Owners::EMPTY);
+
+/// The node's hold on the owner it installed.
+///
+/// Dropping it releases that owner alone: its hub sender goes, if the seam
+/// has not already taken it, and a node still waiting on the hub ends. A
+/// later install does not drop this. The bind takes the latest owner still
+/// waiting; it does not take one whose lease has gone.
+#[must_use = "dropping the lease ends this chain-sync owner"]
+pub struct OwnerLease {
+    id: OwnerId,
+}
+
+impl Drop for OwnerLease {
+    fn drop(&mut self) {
+        release(self.id);
+    }
+}
 
 /// Why a bind found no owner to attach the router to. Either way the seam
 /// would run without chain sync, so the bind is refused and the daemon
@@ -71,8 +115,13 @@ static STATE: Mutex<Option<watch::Receiver<SyncState>>> = Mutex::new(None);
 /// Leave the node's chain-sync owner for the seam's bind
 /// ([`crate::seam_ffi::shekyl_seam_bind`]), which attaches the Levin router
 /// to `router` and sends the hub it mints down `hub`, and install the
-/// node's sync state for [`shekyl_node_is_synchronized`]. A second install
-/// replaces the first, whose owner then sees its hub sender dropped.
+/// node's sync state for [`shekyl_node_is_synchronized`].
+///
+/// The returned lease is that owner's. A later install does not drop this
+/// hub sender: the earlier owner keeps publishing on its own watch until
+/// its lease drops. The bind takes the latest owner still waiting. After a
+/// bind has taken one, a later install stays out of the bind; the seam is
+/// bound once.
 ///
 /// # Deleter
 ///
@@ -83,17 +132,50 @@ pub fn install(
     router: mpsc::UnboundedSender<Routed>,
     hub: oneshot::Sender<Arc<Hub>>,
     state: watch::Receiver<SyncState>,
-) {
-    *ATTACH.lock().unwrap_or_else(PoisonError::into_inner) = Slot::Left(Attach { router, hub });
+) -> OwnerLease {
+    let mut owners = OWNERS.lock().unwrap_or_else(PoisonError::into_inner);
+    let id = owners.alloc();
+    owners.live.insert(id, Live { router, hub });
+    // A bind already taken stays taken. The new owner waits on its own hub
+    // until its node releases it; it is not a second owner for this seam.
+    if owners.taken.is_none() {
+        owners.waiting = Some(id);
+    }
+    owners.published = Some(id);
+    drop(owners);
     *STATE.lock().unwrap_or_else(PoisonError::into_inner) = Some(state);
+    OwnerLease { id }
 }
 
-/// Clear what [`install`] left, taken or not. A slot no bind took drops
-/// the owner's hub sender, so an owner still waiting for its hub ends, and
-/// the state reads as not synchronized. The next node's install starts
-/// the slot again.
+/// Release one owner. The seam's bind, if it already took this owner, is
+/// not given another: the slot goes empty, and the next bind is
+/// [`Refused::NoOwner`] until a node installs again.
+fn release(id: OwnerId) {
+    let mut owners = OWNERS.lock().unwrap_or_else(PoisonError::into_inner);
+    owners.live.remove(&id);
+    if owners.waiting == Some(id) {
+        owners.waiting = None;
+    }
+    if owners.taken == Some(id) {
+        owners.taken = None;
+    }
+    if owners.published == Some(id) {
+        owners.published = None;
+        drop(owners);
+        STATE.lock().unwrap_or_else(PoisonError::into_inner).take();
+    }
+}
+
+/// Clear every owner [`install`] left, taken or not. Each hub sender still
+/// held drops, so an owner still waiting for its hub ends, and the state
+/// reads as not synchronized. A lease that drops afterwards finds nothing
+/// of its own. The next id is not reused.
 pub fn uninstall() {
-    *ATTACH.lock().unwrap_or_else(PoisonError::into_inner) = Slot::Empty;
+    let mut owners = OWNERS.lock().unwrap_or_else(PoisonError::into_inner);
+    let next = owners.next;
+    *owners = Owners::EMPTY;
+    owners.next = next;
+    drop(owners);
     STATE.lock().unwrap_or_else(PoisonError::into_inner).take();
 }
 
@@ -123,6 +205,7 @@ pub extern "C" fn shekyl_node_is_synchronized() -> u8 {
 pub(crate) struct TestOwner {
     _routed: mpsc::UnboundedReceiver<Routed>,
     _hub: oneshot::Receiver<Arc<Hub>>,
+    _lease: OwnerLease,
 }
 
 /// For this crate's tests that bind the seam: install a stand-in for the
@@ -135,10 +218,11 @@ pub(crate) fn install_test_owner() -> TestOwner {
     uninstall();
     let (router, routed) = mpsc::unbounded_channel();
     let (hub_tx, hub) = oneshot::channel();
-    install(router, hub_tx, watch::channel(SyncState::NoView).1);
+    let lease = install(router, hub_tx, watch::channel(SyncState::NoView).1);
     TestOwner {
         _routed: routed,
         _hub: hub,
+        _lease: lease,
     }
 }
 
@@ -151,15 +235,19 @@ pub(crate) type Taken = (mpsc::UnboundedSender<Routed>, oneshot::Sender<Arc<Hub>
 /// owner. With no owner, or with the owner already taken, the seam would
 /// run without chain sync: [`Refused`].
 pub(crate) fn take() -> Result<Taken, Refused> {
-    let mut slot = ATTACH.lock().unwrap_or_else(PoisonError::into_inner);
-    match std::mem::replace(&mut *slot, Slot::Taken) {
-        Slot::Empty => {
-            *slot = Slot::Empty;
-            Err(Refused::NoOwner)
-        }
-        Slot::Left(attach) => Ok((attach.router, attach.hub)),
-        Slot::Taken => Err(Refused::SecondBind),
+    let mut owners = OWNERS.lock().unwrap_or_else(PoisonError::into_inner);
+    if owners.taken.is_some() {
+        return Err(Refused::SecondBind);
     }
+    let Some(id) = owners.waiting.take() else {
+        return Err(Refused::NoOwner);
+    };
+    let live = owners
+        .live
+        .remove(&id)
+        .expect("the waiting owner is installed");
+    owners.taken = Some(id);
+    Ok((live.router, live.hub))
 }
 
 #[cfg(test)]
@@ -179,7 +267,7 @@ mod state_tests {
         let (state_tx, state) = watch::channel(SyncState::NoView);
         let (router, _routed) = mpsc::unbounded_channel();
         let (hub, _hub) = oneshot::channel();
-        install(router, hub, state);
+        let _owner = install(router, hub, state);
         let cases = [
             (SyncState::NoView, 0),
             (
@@ -204,5 +292,46 @@ mod state_tests {
         }
         uninstall();
         assert_eq!(shekyl_node_is_synchronized(), 0, "uninstalled");
+    }
+
+    /// A second install used to drop the first owner's hub sender, and that
+    /// owner then published `NoView` and stopped. The first node is still
+    /// open: its hub stays until its own lease drops, and the bind takes
+    /// the later owner.
+    #[test]
+    fn a_later_install_keeps_an_earlier_owners_hub() {
+        use tokio::sync::oneshot::error::TryRecvError;
+
+        let _seam = crate::seam_ffi::seam_bind_lock().lock();
+        uninstall();
+        let (router_a, _routed_a) = mpsc::unbounded_channel();
+        let (hub_a, mut wait_a) = oneshot::channel();
+        let first = install(router_a, hub_a, watch::channel(SyncState::NoView).1);
+        let (router_b, _routed_b) = mpsc::unbounded_channel();
+        let (hub_b, mut wait_b) = oneshot::channel();
+        let second = install(router_b, hub_b, watch::channel(SyncState::NoView).1);
+
+        assert_eq!(wait_a.try_recv().err(), Some(TryRecvError::Empty));
+        assert_eq!(wait_b.try_recv().err(), Some(TryRecvError::Empty));
+
+        drop(first);
+        assert_eq!(
+            wait_a.try_recv().err(),
+            Some(TryRecvError::Closed),
+            "the first owner's hub ends with its lease"
+        );
+        assert_eq!(
+            wait_b.try_recv().err(),
+            Some(TryRecvError::Empty),
+            "the later owner is still waiting"
+        );
+
+        let (_router, hub) = take().expect("the later owner is the one waiting");
+        assert_eq!(take().err(), Some(Refused::SecondBind));
+        drop(hub);
+        assert_eq!(wait_b.try_recv().err(), Some(TryRecvError::Closed));
+
+        drop(second);
+        assert_eq!(take().err(), Some(Refused::NoOwner));
     }
 }

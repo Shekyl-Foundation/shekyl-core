@@ -597,6 +597,27 @@ fn a_refused_latch_write_is_retried_until_the_latch_is_set() {
         )),
         "{written:?}"
     );
+    // The same two steps with no chain view. The owner applies them this
+    // way when the store cannot be read.
+    let mut direct = Sync::<u8, _>::new(Trust::UNPINNED, issued);
+    direct.raise_alarm(evidence, &mut Vec::new());
+    let mut bare_refused = Vec::new();
+    direct.alarm_refused(now, &mut bare_refused);
+    assert!(
+        matches!(bare_refused.as_slice(), [Command::ArmAlarmRetry { deadline }] if *deadline == now + ALARM_RETRY),
+        "a refusal without a view did not arm the retry: {bare_refused:?}"
+    );
+    let mut bare_retried = Vec::new();
+    direct.alarm_retry(&mut bare_retried);
+    assert!(
+        matches!(
+            bare_retried.as_slice(),
+            [Command::RaiseAlarm { fork_at, tip, work }]
+                if *fork_at == evidence.fork_at && *tip == evidence.tip && *work == evidence.work
+        ),
+        "the retry without a view did not raise the same evidence: {bare_retried:?}"
+    );
+
     for event in [Event::AlarmRefused, Event::AlarmRetry] {
         let after = step(&mut sync, event);
         assert!(

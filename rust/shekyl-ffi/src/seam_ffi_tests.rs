@@ -64,7 +64,7 @@ fn a_bind_attaches_the_router_to_the_nodes_owner_and_any_other_is_refused() {
 
     let (router_tx, routed) = tokio::sync::mpsc::unbounded_channel();
     let (hub_tx, mut hub_rx) = tokio::sync::oneshot::channel();
-    crate::chain_sync_ffi::install(
+    let _owner = crate::chain_sync_ffi::install(
         router_tx,
         hub_tx,
         tokio::sync::watch::channel(shekyl_chain_sync::SyncState::NoView).1,
