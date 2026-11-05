@@ -539,12 +539,12 @@ async fn a_closed_node_whose_peer_is_down_mines_and_opens_when_it_arrives() {
 
 /// **A block a node mines reaches its peer by relay, on the production
 /// path** (the CS-5 tune-up §2). Two regtest daemons, each the other's
-/// one closed peer, so each is synced at open. Once their session is open,
-/// `A` mines one block with `generateblocks`, then submits one built from
-/// its own template with `submit_block`. Each time `B` must take `A`'s new
-/// tip within `RELAYED_WITHIN`, well under a timed sync: a block that
-/// arrives inside it came by the owner's relay of the local tip (F1), not
-/// by `B` learning `A`'s height later and asking for it.
+/// one closed peer, so each is synced at open. `B` requests nothing
+/// (`--dev-sync off`): a timed sync cannot fetch the block for it, so a
+/// tip it takes was announced. Once their session is open, `A` mines one
+/// block with `generateblocks`, then submits one built from its own
+/// template with `submit_block`. Each time `B` must take `A`'s new tip
+/// within `RELAYED_WITHIN`.
 ///
 /// Red: with the relay of a tip no entry reply connected removed from the
 /// model, `B` does not move inside the window.
@@ -586,7 +586,9 @@ async fn a_block_a_node_mines_reaches_its_peer_by_relay() {
     let b = RegtestDaemon::spawn(RegtestSpawn::new(None).with_peering(Peering::Linked {
         p2p_port: b_p2p,
         peer_p2p_port: a_p2p,
-        sink: false,
+        // Requests off: a timed sync must not be able to fetch the block
+        // the assertion credits to the local-tip announcement.
+        sink: true,
     }))
     .await;
     let a = RegtestDaemon::spawn(
