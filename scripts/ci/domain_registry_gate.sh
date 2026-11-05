@@ -424,7 +424,13 @@ count_pattern() {
 # rust/shekyl-archival-retention/src/emission_wire.rs called cshake256_64
 # three times under the -v3 customizations; they frame the eight fields
 # under shekyl/archival-emission-auth-{backing,claim}-v4 at 64 bytes.
-MECH1_EXPECTED=82
+# No retired rows before genesis (2026-11-05, Rick; the signing envelope
+# §2.4): 82 -> 79. serve_credit_batch_commitment (secret_draw.rs, one
+# production site) is deleted with shekyl/archival-serve-credit-batch-v1,
+# and challenge.rs loses the retired -v1 leaf label's negative control (two
+# #[cfg(test)] sites). shekyl/archival-witness-carrier-scheme-v1 goes too; a
+# scheme domain, it had no call site of its own.
+MECH1_EXPECTED=79
 mech1=$(count_pattern 'cshake256_(?:32|64)\(|CShake256Core::new\(')
 if [[ "$mech1" != "$MECH1_EXPECTED" ]]; then
   echo "COUNT DRIFT mech 1 (cSHAKE call sites): found $mech1, pinned $MECH1_EXPECTED." >&2

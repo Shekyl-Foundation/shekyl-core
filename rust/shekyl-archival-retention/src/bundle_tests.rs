@@ -571,15 +571,9 @@ fn the_commitment_moves_with_every_field() {
     assert_ne!(base, bundle_commitment(&kept, &swapped));
 }
 
-/// The bundle commitment is not the carrier's set commitment over the same
-/// seed and height: a new message under a new label (§7.3). Red edit: give
-/// `BUNDLE_COMMITMENT_CUSTOMIZATION` the carrier's bytes.
+/// The bundle's three labels are distinct (§7.3).
 #[test]
-fn the_bundle_label_is_not_the_carriers() {
-    assert_ne!(
-        BUNDLE_COMMITMENT_CUSTOMIZATION,
-        crate::secret_draw::SERVE_CREDIT_BATCH_CUSTOMIZATION
-    );
+fn the_bundle_labels_are_distinct() {
     assert_ne!(
         BUNDLE_COMMITMENT_CUSTOMIZATION,
         BUNDLE_PRUNABLE_CUSTOMIZATION
