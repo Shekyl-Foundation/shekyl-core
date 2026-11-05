@@ -91,7 +91,7 @@
 #   local:<why>          never relied on as evidence of authorship or
 #                        authenticity; why in wallet-file-key, p-store-key,
 #                        store-codec, per-output-secret, display-only,
-#                        process-local, key-intermediate, verifier-randomness,
+#                        host-tor-client, key-intermediate, verifier-randomness,
 #                        checksum. Refused on role signed or auth.
 #   enclosed-by:<row>    only third-party internals and fixed public parameters
 #                        (frozen-inherited rows) and the membership-only SAL's
@@ -167,7 +167,7 @@
 1	shekyl/p-store-slot-v1	rust/shekyl-p-store/src/store.rs	STORE_SLOT_CUSTOMIZATION	shekyl-live	local:p-store-key	32	plain		2026-10-10 (WSS-Q1): P's per-shard table slot — cSHAKE256(label, store_key ‖ shard_id_le8)[..32]
 1	shekyl/archival-emission-auth-backing-v4	rust/shekyl-archival-retention/src/emission_auth.rs	EMISSION_AUTH_BACKING	shekyl-live	id	64	signed		the backing-side emission auth message: frame(this domain, network_id, [fields 1-9]) read to 64 bytes, field 8 the transaction's tx_signable and field 9 the backing's wire bytes, so the two auths sign every byte of the emission input but their own signatures (the signing envelope §2.2, §2.7)
 1	shekyl/archival-emission-auth-claim-v4	rust/shekyl-archival-retention/src/emission_auth.rs	EMISSION_AUTH_CLAIM	shekyl-live	id	64	signed		the claim-side emission auth message: frame(this domain, network_id, [fields 1-9]) read to 64 bytes, field 8 the transaction's tx_signable and field 9 the backing's wire bytes, so the two auths sign every byte of the emission input but their own signatures (the signing envelope §2.2, §2.7)
-1	shekyl/p-socks-user-v1	rust/shekyl-p-transport/src/lib.rs	SOCKS_USER_CUSTOMIZATION	shekyl-live	local:process-local	32	plain		
+1	shekyl/p-socks-user-v1	rust/shekyl-p-transport/src/lib.rs	SOCKS_USER_CUSTOMIZATION	shekyl-live	local:host-tor-client	32	plain		the SOCKS5 username sent to the host's tor client — hex(cSHAKE256(p_canonical_id, customization = "shekyl/p-socks-user-v1")); Tor IsolateSOCKSAuth isolates on (username, password), and the password is the constant shekyl-p, not the identity
 1	shekyl/output-handle-v1	rust/shekyl-crypto-pq/src/handle.rs	OUTPUT_HANDLE_CUSTOMIZATION	shekyl-live	input:TxId	16	plain		
 1	shekyl/receive-label-hash-v1	rust/shekyl-crypto-pq/src/label.rs	RECEIVE_LABEL_DISPLAY_HASH_CUSTOMIZATION	shekyl-live	local:display-only	32	plain		
 1	shekyl/msg-sign-v2	rust/shekyl-crypto-pq/src/message_signing.rs	MSG_SIGN	shekyl-live	id	64	signed		the message-signing preimage: frame(this domain, network_id, [u64_le(mode), classical_segment, message]) (WALLET_MESSAGE_SIGNING.md SM-R-3; the signing envelope §2.1; NETWORK_IDENTITY.md NI-F2); replaces -v1, whose input was version ‖ id ‖ mode ‖ segment ‖ the message pre-hashed under shekyl/msg-hash-v1 (retired with it)

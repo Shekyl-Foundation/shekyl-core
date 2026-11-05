@@ -39,6 +39,9 @@ use std::path::PathBuf;
 use quote::ToTokens;
 use syn::visit::Visit;
 
+#[path = "support/registry_parse.rs"]
+mod registry_parse;
+
 const REGISTRY: &str = include_str!("../../../docs/design/CRYPTO_DOMAIN_REGISTRY.tsv");
 const RATCHET: &str = include_str!("../../../docs/design/DOMAIN_BINDING_RATCHET.tsv");
 const CENSUS: &str = include_str!("../../../docs/design/CONSENSUS_RULE_CENSUS.md");
@@ -84,7 +87,7 @@ const LOCAL_WHY: [&str; 9] = [
     "store-codec",
     "per-output-secret",
     "display-only",
-    "process-local",
+    "host-tor-client",
     "key-intermediate",
     "verifier-randomness",
     "checksum",
@@ -143,27 +146,20 @@ fn parse_binding(s: &str) -> Result<Binding<'_>, String> {
     }
 }
 
+/// Column shape is the shared parser's. What a binding means stays here.
 fn parse_registry(text: &str) -> Result<Vec<Row<'_>>, String> {
     let mut rows = Vec::new();
-    for (i, line) in text.lines().enumerate() {
-        if line.trim().is_empty() || line.starts_with('#') {
-            continue;
-        }
-        let f: Vec<&str> = line.split('\t').collect();
-        // mech literal file const status binding width role key notes
-        if f.len() != 10 {
-            return Err(format!("line {}: {} columns, expected 10", i + 1, f.len()));
-        }
+    for r in registry_parse::parse_rows(text)? {
         rows.push(Row {
-            line: i + 1,
-            mech: f[0],
-            literal: f[1],
-            file: f[2],
-            konst: f[3],
-            status: f[4],
-            binding: parse_binding(f[5]).map_err(|e| format!("line {}: {e}", i + 1))?,
-            width: f[6],
-            role: f[7],
+            line: r.line,
+            mech: r.mech,
+            literal: r.literal,
+            file: r.file,
+            konst: r.konst,
+            status: r.status,
+            binding: parse_binding(r.binding).map_err(|e| format!("line {}: {e}", r.line))?,
+            width: r.width,
+            role: r.role,
         });
     }
     Ok(rows)

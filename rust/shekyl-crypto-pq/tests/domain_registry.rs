@@ -55,6 +55,11 @@
 
 use std::collections::{HashMap, HashSet};
 
+#[path = "support/registry_parse.rs"]
+mod registry_parse;
+
+use registry_parse::{parse_rows, Row};
+
 const REGISTRY: &str = include_str!("../../../docs/design/CRYPTO_DOMAIN_REGISTRY.tsv");
 
 /// Pinned census: (mech, shekyl-live rows, frozen-inherited rows). Update when
@@ -80,94 +85,12 @@ const TEST_ONLY_EXPECTED: usize = 11;
 /// 2026-11-05). The binding gate refuses their reuse in code.
 const RETIRED_EXPECTED: usize = 0;
 
-/// Well-formed mechanism ids: `1`..=`7` (live mechanisms) or `x` (excluded).
-fn is_valid_mech(mech: &str) -> bool {
-    matches!(mech, "1" | "2" | "3" | "4" | "5" | "6" | "7" | "x")
+/// A row that participates in production distinctness (live or frozen).
+fn is_production(row: &Row<'_>) -> bool {
+    matches!(row.status, "shekyl-live" | "frozen-inherited")
 }
 
-fn is_valid_status(status: &str) -> bool {
-    matches!(
-        status,
-        "shekyl-live" | "frozen-inherited" | "excluded" | "test-only" | "retired"
-    )
-}
-
-struct Row<'a> {
-    mech: &'a str,
-    literal: &'a str,
-    file: &'a str,
-    status: &'a str,
-    key: &'a str,
-}
-
-impl Row<'_> {
-    /// A row that participates in production distinctness (live or frozen).
-    fn is_production(&self) -> bool {
-        matches!(self.status, "shekyl-live" | "frozen-inherited")
-    }
-}
-
-fn parse_rows(text: &str) -> Result<Vec<Row<'_>>, String> {
-    let mut rows = Vec::new();
-    for (lineno, line) in text.lines().enumerate() {
-        let line_no = lineno + 1;
-        if line.is_empty() || line.starts_with('#') {
-            continue;
-        }
-        let f: Vec<&str> = line.split('\t').collect();
-        // mech  literal  file  const  status  binding  width  role  key  notes
-        // (the binding columns are tests/domain_binding.rs's)
-        let mech = f.first().copied().unwrap_or("").trim();
-        if mech.is_empty() || mech.starts_with('#') {
-            continue;
-        }
-        if !is_valid_mech(mech) {
-            return Err(format!(
-                "line {line_no}: bad mechanism id {mech:?} — expected 1..7 or x"
-            ));
-        }
-        if f.len() < 5 {
-            return Err(format!(
-                "line {line_no}: expected at least 5 columns (mech, literal, file, const, status), got {}",
-                f.len()
-            ));
-        }
-        let literal = f[1];
-        let file = f[2];
-        if literal.is_empty() || file.is_empty() {
-            return Err(format!(
-                "line {line_no}: literal and file columns must be non-empty"
-            ));
-        }
-        let status = f[4].trim();
-        if !is_valid_status(status) {
-            return Err(format!(
-                "line {line_no}: bad status {status:?} — expected shekyl-live | \
-                 frozen-inherited | excluded | test-only | retired"
-            ));
-        }
-        // The excluded bucket and the excluded status must agree — a typo'd
-        // mech id cannot smuggle a row out of (or into) distinctness scope.
-        if (mech == "x") != (status == "excluded") {
-            return Err(format!(
-                "line {line_no}: mech {mech:?} / status {status:?} mismatch — \
-                 mech x rows must be status excluded, and vice versa"
-            ));
-        }
-        let key = f.get(8).copied().unwrap_or("").trim();
-        rows.push(Row {
-            mech,
-            literal,
-            file,
-            status,
-            key,
-        });
-    }
-    Ok(rows)
-}
-
-/// Parse the registry or fail the calling test with the parser's diagnostic.
-/// Single owner of the parse-and-validate step for every test below.
+/// Parse the registry or fail the calling test with the shared parser's diagnostic.
 fn parsed_registry() -> Vec<Row<'static>> {
     parse_rows(REGISTRY).expect("registry must parse with valid mech ids, columns, and statuses")
 }
@@ -257,7 +180,7 @@ fn registry_census_matches_pins() {
             "excluded" => excluded += 1,
             "test-only" => test_only += 1,
             "retired" => retired += 1,
-            other => unreachable!("parse_rows validated status, got {other:?}"),
+            other => unreachable!("registry parser validated status, got {other:?}"),
         }
     }
 
@@ -301,7 +224,7 @@ fn intra_mechanism_domains_are_distinct() {
     // (test-vs-test collisions are legitimate).
     let mut by_mech: HashMap<&str, Vec<(Vec<u8>, &str)>> = HashMap::new();
     for row in &rows {
-        if !row.is_production() {
+        if !is_production(row) {
             continue;
         }
         by_mech
@@ -352,7 +275,7 @@ fn test_domains_are_segregated_from_production() {
 
     let production: HashSet<(&str, Vec<u8>)> = rows
         .iter()
-        .filter(|r| r.is_production())
+        .filter(|r| is_production(r))
         .map(|r| (r.mech, identity(r)))
         .collect();
 

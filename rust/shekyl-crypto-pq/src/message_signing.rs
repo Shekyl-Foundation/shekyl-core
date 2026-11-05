@@ -134,10 +134,11 @@ pub const MSG_SIG_CHECKSUM_DOMAIN: &[u8] = b"shekyl/msg-sig-ck-v1";
 /// the other domains; distinct from every proof domain).
 pub const MSG_SIGN_OUTER_DOMAIN: &[u8] = b"shekyl/msg-sign-outer-v1";
 
-/// Payload layout version — the same single value appears as the leading
-/// canonical byte and inside the preimage as `sig_format_version`
-/// (SM-R-5 R5-c: one value, two appearances; the armored prefix's `1` is
-/// the separate envelope version).
+/// Wire layout version of a decoded message signature. Written as the
+/// leading canonical byte and read at decode; it is not an input to
+/// [`message_preimage`]. The domain string `shekyl/msg-sign-v2` is the
+/// hashed version. The armored prefix's trailing `1` is a separate
+/// envelope version.
 pub const MSG_SIG_LAYOUT_VERSION: u8 = 2;
 
 /// Scheme byte: SLH-DSA-SHA2-192s inner + spend-scalar Schnorr outer,
