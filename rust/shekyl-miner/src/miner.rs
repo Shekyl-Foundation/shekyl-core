@@ -53,20 +53,42 @@ impl std::error::Error for MinerStartRefused {}
 /// The OS thread name and ledger label of every worker.
 const WORKER_NAME: &str = "sk-miner";
 
+/// How far a miner's workers search. Fixed for that miner's life: the
+/// loop does not change, and a later posting is judged against the same
+/// bound.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum SearchBound {
+    /// Every posted job.
+    Unbounded,
+    /// No job above this height. The height itself is searched. A later
+    /// posting at or under it — a rebuilt template, a reorg back — is
+    /// searched too. A posting above it is left unhashed, and the worker
+    /// waits for a newer one instead of spinning or stopping.
+    Until(BlockHeight),
+}
+
+impl SearchBound {
+    /// Whether a job at `height` is searched.
+    #[must_use]
+    pub fn allows(self, height: BlockHeight) -> bool {
+        match self {
+            Self::Unbounded => true,
+            Self::Until(until) => height <= until,
+        }
+    }
+}
+
 /// What the miner is started with: where it pays, how many threads it
-/// searches with, and the highest block it mines.
+/// searches with, and how far it searches.
 #[derive(Debug, Clone)]
 pub struct MinerConfig {
     /// The address the template producer pays.
     pub address: MiningAddress,
     /// Worker threads.
     pub threads: NonZeroUsize,
-    /// The highest block this miner mines: a posted job above it is not
-    /// searched, and every worker waits for the next posting instead. A
-    /// worker that never hashes a job above the ceiling finds no block
-    /// above it, so a miner started to add `n` blocks adds exactly `n`
-    /// (`generateblocks`). `None` mines whatever is posted.
-    pub ceiling: Option<BlockHeight>,
+    /// How far the workers search. A [`SearchBound::Until`] miner finds
+    /// no block above that height, because it never hashes a job above it.
+    pub bound: SearchBound,
 }
 
 /// The miner's state as `mining_status` reports it.
@@ -90,8 +112,8 @@ pub struct MinerStatus {
 
 struct Shared {
     board: Arc<JobBoard>,
-    /// [`MinerConfig::ceiling`], fixed for this miner's life.
-    ceiling: Option<BlockHeight>,
+    /// [`MinerConfig::bound`], fixed for this miner's life.
+    bound: SearchBound,
     caches: Arc<CacheStore>,
     /// The daemon's one hasher budget: a permit per hash (PR2-Q3).
     budget: Budget,
@@ -166,7 +188,7 @@ impl PreparedMiner {
         Ok(Self {
             shared: Arc::new(Shared {
                 board,
-                ceiling: config.ceiling,
+                bound: config.bound,
                 caches,
                 budget,
                 found,
@@ -254,14 +276,13 @@ fn work(shared: &Shared, index: usize, range: RangeInclusive<u32>) {
     let mut seen = NONE_SEEN;
     while let Some(posted) = shared.board.next_after(seen, &shared.stop) {
         seen = posted.generation;
-        // Above the ceiling: not searched. The next `next_after` waits for
+        // Above the bound: not searched. The next `next_after` waits for
         // a newer posting, so the worker parks rather than spins. A job's
-        // height is fixed when it is posted, so nothing found from here
-        // on is above the ceiling.
-        if shared
-            .ceiling
-            .is_some_and(|ceiling| posted.job.height > ceiling)
-        {
+        // height is fixed when it is posted, so nothing found from this
+        // job is above the bound. The worker does not stop: a sibling may
+        // still be delivering the block at the bound, and a reorg can
+        // post a later generation back under it.
+        if !shared.bound.allows(posted.job.height) {
             continue;
         }
         let seed = Seedhash::from_bytes(*posted.job.seed.as_bytes());
@@ -430,5 +451,16 @@ mod tests {
                 );
             }
         }
+    }
+
+    /// `Until` searches its height and refuses the next one. `Unbounded`
+    /// searches every height. Red edit: compare with `<`.
+    #[test]
+    fn until_searches_its_height_and_nothing_above() {
+        let until = SearchBound::Until(BlockHeight::from_raw(1));
+        assert!(until.allows(BlockHeight::ZERO));
+        assert!(until.allows(BlockHeight::from_raw(1)));
+        assert!(!until.allows(BlockHeight::from_raw(2)));
+        assert!(SearchBound::Unbounded.allows(BlockHeight::from_raw(u64::MAX)));
     }
 }

@@ -29,7 +29,9 @@ use shekyl_block_template::MinerKeys;
 use shekyl_chain_rules::{CappedEpoch, CenRow, Substrate};
 use shekyl_difficulty::{check_hash, Difficulty};
 use shekyl_harness_wallet::MinerWallet;
-use shekyl_miner::{found_blocks, Job, JobBoard, Miner, MinerConfig, MiningAddress, RATE_WINDOW};
+use shekyl_miner::{
+    found_blocks, Job, JobBoard, Miner, MinerConfig, MiningAddress, SearchBound, RATE_WINDOW,
+};
 use shekyl_pow_randomx::{compute_hash, CacheStore, Seedhash};
 use shekyl_thread_ledger::RowKind;
 
@@ -173,7 +175,7 @@ async fn the_miner_mines_through_the_connector_and_leaves_a_superseded_job() {
         &MinerConfig {
             address: address.clone(),
             threads: NonZeroUsize::new(2).expect("two"),
-            ceiling: None,
+            bound: SearchBound::Unbounded,
         },
         Arc::clone(&board),
         Arc::clone(&caches),
@@ -279,21 +281,21 @@ async fn the_miner_mines_through_the_connector_and_leaves_a_superseded_job() {
     s.close().await;
 }
 
-/// A miner started with a ceiling mines no block above it
-/// (`MinerConfig::ceiling`; `generateblocks`' exact count). Its ceiling is
-/// height one: posted that height's job, it finds the block, which
-/// connects. Posted the next template's, at height two, every worker
-/// parks: after a full rate window the miner has hashed nothing and found
-/// nothing. Red edit: drop the ceiling check in the worker loop; the job
-/// at height two is searched and its block found.
+/// A miner started [`SearchBound::Until`] a height mines no block above
+/// it (`generateblocks`' exact count). The bound is height one: posted
+/// that height's job, it finds the block, which connects. Posted the next
+/// template's, at height two, every worker parks: after a full rate
+/// window the miner has hashed nothing and found nothing. Red edit: drop
+/// the bound check in the worker loop; the job at height two is searched
+/// and its block found.
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
-async fn a_miner_with_a_ceiling_mines_no_block_above_it() {
+async fn a_miner_searching_until_a_height_mines_no_block_above_it() {
     let _lane = MINER_LANE.lock().await;
     let caches = Arc::new(CacheStore::new());
     let pow = ProductionSubstrate::new(Arc::clone(&caches), Arc::new(Metrics::new()));
     let substrate = pow.clone();
-    let mut s = Scenario::open_under("miner-ceiling", pow, RULES);
-    let ceiling = shekyl_types::BlockHeight::from_raw(1);
+    let mut s = Scenario::open_under("miner-until", pow, RULES);
+    let until = shekyl_types::BlockHeight::from_raw(1);
 
     let board = Arc::new(JobBoard::new());
     let (sink, found) = found_blocks();
@@ -302,7 +304,7 @@ async fn a_miner_with_a_ceiling_mines_no_block_above_it() {
             address: MiningAddress::decode(&harness_address(), Network::Mainnet)
                 .expect("the harness address"),
             threads: NonZeroUsize::new(2).expect("two"),
-            ceiling: Some(ceiling),
+            bound: SearchBound::Until(until),
         },
         Arc::clone(&board),
         Arc::clone(&caches),
@@ -311,21 +313,21 @@ async fn a_miner_with_a_ceiling_mines_no_block_above_it() {
     )
     .expect("the workers start");
 
-    // Genesis is the driver's; height one, the ceiling, is the miner's.
+    // Genesis is the driver's; height one, the bound, is the miner's.
     s.mine(1).await;
     let mut next = s.next_template(Vec::new()).await.expect("a template");
-    assert_eq!(next.height, ceiling);
+    assert_eq!(next.height, until);
     pin_job_seed(&substrate, &caches, &next);
     let posted = board.publish(job_for(&next));
     let block = found
         .recv_timeout(FIND_WITHIN)
-        .expect("the block at the ceiling is found");
+        .expect("the block at the bound is found");
     assert_eq!(block.generation, posted);
-    assert_eq!(block.height, ceiling);
+    assert_eq!(block.height, until);
     next.template.block = block.block.clone();
     s.connect_template(next)
         .await
-        .unwrap_or_else(|outcome| panic!("the block at the ceiling connects: {outcome}"));
+        .unwrap_or_else(|outcome| panic!("the block at the bound connects: {outcome}"));
 
     // Height two is above it: posted, not searched.
     let above = s.next_template(Vec::new()).await.expect("a template");
@@ -336,12 +338,12 @@ async fn a_miner_with_a_ceiling_mines_no_block_above_it() {
         found
             .recv_timeout(RATE_WINDOW + Duration::from_secs(1))
             .is_err(),
-        "no block above the ceiling"
+        "no block above the bound"
     );
     assert_eq!(
         miner.status().rate.hashes,
         0,
-        "the workers parked on the job above the ceiling: not one hash in a full window"
+        "the workers parked on the job above the bound: not one hash in a full window"
     );
 
     miner.stop().join();
@@ -365,7 +367,7 @@ async fn the_miner_extends_the_chain_block_after_block() {
             address: MiningAddress::decode(&harness_address(), Network::Mainnet)
                 .expect("the harness address"),
             threads: NonZeroUsize::new(2).expect("two"),
-            ceiling: None,
+            bound: SearchBound::Unbounded,
         },
         Arc::clone(&board),
         Arc::clone(&caches),
@@ -417,7 +419,7 @@ fn a_form_takes_the_permit_the_miner_left_free() {
             address: MiningAddress::decode(&harness_address(), Network::Mainnet)
                 .expect("the harness address"),
             threads: NonZeroUsize::MIN,
-            ceiling: None,
+            bound: SearchBound::Unbounded,
         },
         Arc::clone(&board),
         Arc::clone(&caches),
@@ -493,7 +495,7 @@ fn the_miners_rate_per_worker() {
                 address: MiningAddress::decode(&harness_address(), Network::Mainnet)
                     .expect("the harness address"),
                 threads: NonZeroUsize::new(threads).expect("non-zero"),
-                ceiling: None,
+                bound: SearchBound::Unbounded,
             },
             Arc::clone(&board),
             Arc::clone(&caches),
@@ -583,7 +585,7 @@ async fn the_follower_pins_the_new_epochs_seed_and_the_miner_mines_its_first_blo
             address: MiningAddress::decode(&harness_address(), Network::Mainnet)
                 .expect("the harness address"),
             threads: NonZeroUsize::new(2).expect("two"),
-            ceiling: None,
+            bound: SearchBound::Unbounded,
         },
         Arc::clone(&board),
         Arc::clone(&caches),
@@ -647,7 +649,7 @@ fn a_miner_on_a_one_permit_budget_is_refused() {
             address: MiningAddress::decode(&harness_address(), Network::Mainnet)
                 .expect("the harness address"),
             threads: NonZeroUsize::new(1).expect("one"),
-            ceiling: None,
+            bound: SearchBound::Unbounded,
         },
         Arc::new(JobBoard::new()),
         Arc::new(CacheStore::new()),

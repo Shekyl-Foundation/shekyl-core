@@ -28,7 +28,7 @@ use shekyl_daemon_rpc::mining_methods::codes;
 use shekyl_hash_budget::Budget;
 use shekyl_miner::{
     DrainGate, FoundBlocks, Job, JobBoard, Miner, MinerConfig, MinerStartRefused, MinerStatus,
-    MinerStop, MiningAddress, PreparedMiner,
+    MinerStop, MiningAddress, PreparedMiner, SearchBound,
 };
 use shekyl_pow_randomx::CacheStore;
 use shekyl_rpc_types::errors::Diagnostic;
@@ -258,8 +258,8 @@ impl MiningControl {
 
     /// Start the miner with `threads` workers; `None` is the `mine-threads`
     /// row's count, and that row's `auto` is the host's parallelism, which
-    /// is also the most a count may ask for. `ceiling` is the highest block
-    /// it mines ([`MinerConfig::ceiling`]); `None` mines whatever is posted.
+    /// is also the most a count may ask for. The miner searches every
+    /// posted job ([`SearchBound::Unbounded`]).
     ///
     /// Joins the one stopped set still hashing, then spawns, holding the
     /// join gate across both. A restart waits out that one hash, and a
@@ -270,10 +270,27 @@ impl MiningControl {
     /// # Errors
     ///
     /// [`MiningRefused`].
-    pub fn start(
+    pub fn start(&self, threads: Option<NonZeroUsize>) -> Result<(), MiningRefused> {
+        self.start_with(threads, SearchBound::Unbounded)
+    }
+
+    /// Start the miner searching no job above `height`
+    /// ([`SearchBound::Until`]). The thread count is [`Self::start`] with
+    /// `None`. A miner already running is [`MiningRefused::Running`]: this
+    /// does not bound it.
+    ///
+    /// # Errors
+    ///
+    /// [`MiningRefused`].
+    pub fn start_until(&self, height: BlockHeight) -> Result<(), MiningRefused> {
+        self.start_with(None, SearchBound::Until(height))
+    }
+
+    /// The body of [`Self::start`] and [`Self::start_until`].
+    fn start_with(
         &self,
         threads: Option<NonZeroUsize>,
-        ceiling: Option<BlockHeight>,
+        bound: SearchBound,
     ) -> Result<(), MiningRefused> {
         let Some(address) = self.address.clone() else {
             return Err(MiningRefused::NoAddress);
@@ -312,7 +329,7 @@ impl MiningControl {
                     &MinerConfig {
                         address,
                         threads,
-                        ceiling,
+                        bound,
                     },
                     board,
                     caches,
@@ -426,6 +443,25 @@ impl MiningControl {
     }
 }
 
+/// A refused start, as the RPC's typed diagnostic.
+fn refusal_diagnostic(refused: &MiningRefused) -> Diagnostic {
+    let code = match refused {
+        MiningRefused::NoAddress => codes::NO_ADDRESS,
+        MiningRefused::Running => codes::RUNNING,
+        MiningRefused::TooManyThreads { .. } => codes::TOO_MANY_THREADS,
+        MiningRefused::NodeStopped => codes::STOPPING,
+        MiningRefused::Start(MinerStartRefused::OnePermit) => codes::ONE_PERMIT,
+        MiningRefused::Start(MinerStartRefused::Thread(_)) => codes::THREAD,
+    };
+    let diagnostic = Diagnostic::new(code, refused.to_string());
+    match refused {
+        MiningRefused::TooManyThreads { asked, host } => diagnostic
+            .param("threads", asked.to_string())
+            .param("parallelism", host.to_string()),
+        _ => diagnostic,
+    }
+}
+
 /// Why no job is posted, as the RPC's typed diagnostic.
 fn no_job_diagnostic(why: &NoJob) -> Diagnostic {
     let code = match why {
@@ -505,28 +541,12 @@ impl MiningFacts for MiningControl {
         Ok(Err(no_job_diagnostic(&why)))
     }
 
-    fn start(
-        &self,
-        threads: Option<NonZeroUsize>,
-        ceiling: Option<BlockHeight>,
-    ) -> Result<Result<(), Diagnostic>, FactsFault> {
-        Ok(Self::start(self, threads, ceiling).map_err(|refused| {
-            let code = match &refused {
-                MiningRefused::NoAddress => codes::NO_ADDRESS,
-                MiningRefused::Running => codes::RUNNING,
-                MiningRefused::TooManyThreads { .. } => codes::TOO_MANY_THREADS,
-                MiningRefused::NodeStopped => codes::STOPPING,
-                MiningRefused::Start(MinerStartRefused::OnePermit) => codes::ONE_PERMIT,
-                MiningRefused::Start(MinerStartRefused::Thread(_)) => codes::THREAD,
-            };
-            let diagnostic = Diagnostic::new(code, refused.to_string());
-            match refused {
-                MiningRefused::TooManyThreads { asked, host } => diagnostic
-                    .param("threads", asked.to_string())
-                    .param("parallelism", host.to_string()),
-                _ => diagnostic,
-            }
-        }))
+    fn start(&self, threads: Option<NonZeroUsize>) -> Result<Result<(), Diagnostic>, FactsFault> {
+        Ok(Self::start(self, threads).map_err(|refused| refusal_diagnostic(&refused)))
+    }
+
+    fn start_until(&self, height: BlockHeight) -> Result<Result<(), Diagnostic>, FactsFault> {
+        Ok(Self::start_until(self, height).map_err(|refused| refusal_diagnostic(&refused)))
     }
 
     fn stop(&self) -> Result<bool, FactsFault> {
