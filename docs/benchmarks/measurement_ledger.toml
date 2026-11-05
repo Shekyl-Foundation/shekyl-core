@@ -129,6 +129,7 @@ stale_through = [
   { through = "72168f6f2e", note = "DEL-008's Rust half (#1212): one doc comment in shekyl-fcmp's tree.rs, the segment-partition note, re-tensed because the frozen-segment count it described is deleted. No function, constant or code path changed; nothing the capture prices moved." },
   { through = "26ea801d18", note = "DEL-008's Rust half finished (#1212): in this path set, one doc comment in shekyl-ffi's legacy_fcmp.rs (the membership-only verify's note on step 8) re-tensed because the coarse emission verify export it named is deleted. No function, constant or code path changed; nothing the capture prices moved." },
   { through = "3e75b28d9a", note = "Doc comments only in shekyl-pow-randomx's lib.rs and CacheStore::pin_canonical: the deleted FFI pin is no longer named as a second caller. No function body, cache derivation, or hash path changed. Not re-measured; the rows stay stale from PL-D3." },
+  { through = "e3e573d19d", note = "The signing envelope's tx_signable (#1266): in this path set, frost_sal.rs renames the FROST session's message field to tx_signable, and legacy_fcmp.rs deletes shekyl_derive_pqc_public_key, an export with no reader. The SAL still proves over one 32-byte message, now the framed tx_signable instead of the prefix hash, and the verify, the batch weights and the Ed25519 + ML-DSA-65 sign and verify that block verification prices do the same work. Not re-measured; the rows stay stale from PL-D3." },
 ]
 
 [[constant]]
@@ -941,6 +942,7 @@ stale_through = [
   { through = "cbc978bfd5", note = "ServingReader and WriterRecovery are deleted, and with them the frozen-segment body read and the external resume handle. The client's fact forwards remain. Path assembly, tree build and the prover do the same work. Not measured; the rows stay stale." },
   { through = "981fc8af04", note = "is_already_open is deleted from ClientError and StoreError, and the LockedElsewhere doc says the lock is not transient. No spend-path function changed. Not measured." },
   { through = "7938c51f16", note = "R8 (#1259): one test in shekyl-curve-tree's client.rs is renamed (rollback_to_the_fork_at_the_tip_changes_nothing); the rest of the commit deletes the daemon's console, outside these paths. No production code in these paths changed; nothing the capture prices moved. Not measured." },
+  { through = "e3e573d19d", note = "The signing envelope's tx_signable (#1266): in this path set, frost_sal.rs renames the FROST session's message field to tx_signable. The spend's prover takes one 32-byte message as before (the builder now frames it from the prefix and base hashes, one cSHAKE256 outside these paths); tree build, path assembly and the prover do the same work. Not measured; the rows stay stale." },
 ]
 
 [[constant]]
