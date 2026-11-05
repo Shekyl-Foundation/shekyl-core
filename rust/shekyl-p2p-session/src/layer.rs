@@ -543,6 +543,18 @@ impl<C: Clock + Clone + Send + Sync + 'static> Shared<C> {
         };
         {
             let mut table = self.table.lock().expect("session table");
+            // A ban that lands while the channel waits for its row (the
+            // pump's queue, or a dial between its connect and its
+            // handshake) releases the admission and finds no session to
+            // close. Admission is read here under the table's lock: a ban
+            // either released it before this read, or finds the row once
+            // it is placed and closes it (§7.9). An unplaced channel drops,
+            // closing its socket; a dial's caller hears this node's close.
+            if !self.sockets.is_live(id) {
+                drop(table);
+                tracing::debug!(?id, "admission was released before adoption; no session");
+                return;
+            }
             let replaced = table.slots.insert(id, slot);
             debug_assert!(replaced.is_none(), "one row per admission id");
             table.republish();

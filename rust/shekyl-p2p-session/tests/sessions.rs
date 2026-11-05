@@ -15,7 +15,8 @@ use std::time::Duration;
 use common::{
     handshake_request, handshake_response, inbound_clearnet, kind, new_transactions,
     outbound_clearnet, request_headers, timed_sync_request, timed_sync_response, txpool_complement,
-    within, Answer, Event, Rig, Settings, NETWORK, OTHER_NETWORK, OUR_HEIGHT, PEER_HEIGHT, SETTLE,
+    within, Answer, Event, Rig, Settings, NETWORK, OTHER_NETWORK, OUR_HEIGHT, PEER_HEIGHT,
+    SEND_CAP, SETTLE,
 };
 use shekyl_levin::{
     invoke, notify, HandshakeResponse, NewTransactions, PortableMap, Received, RequestHeaders,
@@ -930,6 +931,26 @@ session_test!(a_ban_drops_the_hosts_sessions_and_refuses_the_next, async {
     );
     assert!(rig.layer.sockets().lift_host(common::ip(25)));
 });
+
+session_test!(
+    a_host_banned_before_its_channel_is_adopted_gets_no_session,
+    async {
+        let mut rig = Rig::new(Settings::default());
+        // The connector admitted the host and the channel waits for its row
+        // when the ban lands: there is no session yet for the ban to close.
+        let (mut wire, channel) = rig.loopback.accept(inbound_clearnet(26), SEND_CAP, true);
+        let far = Tick::new(rig.timing.clock().now().get() + 60_000_000_000);
+        rig.layer.ban_host(common::ip(26), far);
+        rig.layer.adopt(channel);
+        assert!(
+            rig.layer.is_empty(),
+            "the banned host's channel was adopted"
+        );
+        assert!(wire.drained().await, "the banned host's socket stayed open");
+        assert!(rig.no_event().await, "an owner heard of the banned host");
+        assert!(rig.layer.sockets().lift_host(common::ip(26)));
+    }
+);
 
 session_test!(a_second_close_does_not_replace_the_first_end, async {
     let mut rig = Rig::new(Settings::default());
