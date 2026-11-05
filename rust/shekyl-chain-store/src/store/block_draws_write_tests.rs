@@ -53,7 +53,7 @@ fn support_of(
 #[test]
 fn a_windowless_schedule_writes_a_zero_row_that_the_boundary_retires() {
     let path = tmp("windowless_draws");
-    let rules = RuleSet::fakechain(None, pair(2, 1));
+    let rules = RuleSet::GENESIS.with_levers(None, pair(2, 1));
     let store = ChainStore::with_horizons(
         &path,
         ApplyPolicy::Full,
@@ -205,7 +205,7 @@ fn plant_draws(path: &std::path::Path, height: BlockHeight, row: BlockDraws) {
 #[test]
 fn the_count_reads_the_prior_row_and_resets_at_the_opening_block() {
     let path = tmp("draw_count_order");
-    let rules = RuleSet::fakechain(None, pair(20, 1));
+    let rules = RuleSet::GENESIS.with_levers(None, pair(20, 1));
     let horizons = Horizons::new(
         rules.settlement_schedule().blocks(),
         BlockCount::from_raw(4),
@@ -283,7 +283,7 @@ fn the_count_reads_the_prior_row_and_resets_at_the_opening_block() {
 /// row as a zero.
 #[test]
 fn a_count_fault_halts_the_writer_through_refuse_corrupt() {
-    let rules = RuleSet::fakechain(None, pair(20, 1));
+    let rules = RuleSet::GENESIS.with_levers(None, pair(20, 1));
     let horizons = Horizons::new(
         rules.settlement_schedule().blocks(),
         BlockCount::from_raw(4),

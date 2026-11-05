@@ -88,7 +88,7 @@ pub(crate) struct Manifest {
     fixed_difficulty: u128,
     /// The `(SEB, cap)` pair the daemon mined this chain under — the
     /// regtest schedule levers when the generator pulled them, the genesis
-    /// pair otherwise. The replay judges the chain under a Fakechain rule
+    /// pair otherwise. The replay judges the chain under a levered rule
     /// set naming exactly this pair and opens its store under the same
     /// (`DRS_E4_ARCHIVAL_WRITER.md` `ARW-15`): a 512-block epoch judged
     /// under the production one refuses the first block past height 511.

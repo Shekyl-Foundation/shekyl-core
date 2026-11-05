@@ -108,8 +108,7 @@ fn stop_closes_the_store_withdraws_the_board_and_a_second_stop_is_a_no_op() {
         "stop withdraws the board"
     );
     node.stop();
-    let rules =
-        ChainRules::new(Network::Regtest, None, FakechainSchedule::PRODUCTION).expect("rules");
+    let rules = ChainRules::new(Network::Regtest, None, CappedEpoch::PRODUCTION).expect("rules");
     let horizons = Horizons::under(&rules.in_force(BlockHeight::ZERO)).expect("horizons");
     let (store, _cut) = ChainStore::with_genesis(
         dir.path().join("chain.db"),

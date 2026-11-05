@@ -10,7 +10,7 @@
 //! the genesis rules, which an exemption keyed on the test networks would
 //! not reach. This test applies the same mutation to the captured
 //! `spend-1in-2out` chain — a regtest chain, replayed under its own
-//! `FakechainSchedule` — so an exemption restored for the test networks
+//! `CappedEpoch` — so an exemption restored for the test networks
 //! refuses on a later row here and fails.
 
 use std::path::Path;

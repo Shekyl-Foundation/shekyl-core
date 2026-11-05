@@ -752,7 +752,7 @@ fn h10_a_repeated_key_image_within_one_transaction_is_refused() {
 // ---- CEN-H15 (the Null half) --------------------------------------------
 
 /// A non-coinbase transaction with a `Null` CT is refused on H15 at both
-/// sites — including on what would be a Fakechain node (Q9: unconditional,
+/// sites — including on what would be a regtest node (Q9: unconditional,
 /// where the C++ gates the check on `m_nettype != FAKECHAIN`). At the miner
 /// slot `Null` is the coinbase's CT (F3) and the row is vacuous.
 #[test]

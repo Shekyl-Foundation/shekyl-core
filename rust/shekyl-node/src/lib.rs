@@ -84,7 +84,7 @@ use shekyl_chain_ingest::service::{
     ArrivalTag, Follow, PoolWiring, Reply, Service, ServiceConfig, ServiceFault,
 };
 use shekyl_chain_ingest::{ChainRules, Metrics, ProductionSubstrate, SubstrateFault};
-use shekyl_chain_rules::{AdmissionPolicy, FakechainSchedule, GenesisPin, RuleSet};
+use shekyl_chain_rules::{AdmissionPolicy, CappedEpoch, GenesisPin, RuleSet};
 use shekyl_chain_store::apply_policy::ApplyPolicy;
 use shekyl_chain_store::pool::PoolOpen;
 use shekyl_chain_store::store::{ChainStore, CutShort, Horizons, SnapshotView};
@@ -799,11 +799,11 @@ fn rules_of(config: &DaemonConfig) -> Result<ChainRules, OpenError> {
         .map_err(|error| OpenError::Rules(error.to_string()))
 }
 
-fn schedule_of(dev: &Dev) -> Result<FakechainSchedule, OpenError> {
-    // Each omitted lever is the production value. `FakechainSchedule::new`
+fn schedule_of(dev: &Dev) -> Result<CappedEpoch, OpenError> {
+    // Each omitted lever is the production value. `CappedEpoch::new`
     // is the one check, including a single lever against the other side's
     // production value. `new` of the production pair equals `PRODUCTION`.
-    let production = FakechainSchedule::PRODUCTION;
+    let production = CappedEpoch::PRODUCTION;
     let blocks = dev
         .settlement_epoch_blocks
         .unwrap_or_else(|| production.settlement().blocks().get());
@@ -812,7 +812,7 @@ fn schedule_of(dev: &Dev) -> Result<FakechainSchedule, OpenError> {
         .unwrap_or_else(|| production.reorg_cap().to_raw());
     let epoch = shekyl_chain_rules::SettlementEpochBlocks::new(blocks)
         .ok_or_else(|| OpenError::Rules("the settlement epoch length is zero".to_owned()))?;
-    FakechainSchedule::new(epoch, shekyl_types::BlockCount::from_raw(cap))
+    CappedEpoch::new(epoch, shekyl_types::BlockCount::from_raw(cap))
         .map_err(|error| OpenError::Rules(error.to_string()))
 }
 

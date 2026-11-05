@@ -40,7 +40,7 @@ use crate::test_support::{
 
 /// Regtest without a fixed target: the genesis rules at every height.
 const GENESIS_RULES: ChainRules =
-    ChainRules::harness_regtest(None, shekyl_chain_rules::FakechainSchedule::PRODUCTION);
+    ChainRules::harness_regtest(None, shekyl_chain_rules::CappedEpoch::PRODUCTION);
 
 fn nz(n: usize) -> NonZeroUsize {
     NonZeroUsize::new(n).expect("non-zero")
@@ -275,7 +275,7 @@ async fn an_inject_off_regtest_is_refused_before_the_store_is_asked() {
     let rules = ChainRules::new(
         shekyl_network::Network::Testnet,
         None,
-        shekyl_chain_rules::FakechainSchedule::PRODUCTION,
+        shekyl_chain_rules::CappedEpoch::PRODUCTION,
     )
     .expect("no lever");
     let joined = JoinedConnector::spawn(ConnectorArgs {
@@ -318,7 +318,7 @@ async fn an_issue_of_draws_off_regtest_is_refused_before_the_store_is_asked() {
     let rules = ChainRules::new(
         shekyl_network::Network::Testnet,
         None,
-        shekyl_chain_rules::FakechainSchedule::PRODUCTION,
+        shekyl_chain_rules::CappedEpoch::PRODUCTION,
     )
     .expect("no lever");
     let joined = JoinedConnector::spawn(ConnectorArgs {
@@ -1185,7 +1185,8 @@ async fn a_rewind_retracts_the_abandoned_branchs_root_comparisons() {
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn a_regtest_corpus_replays_under_a_fixed_difficulty_and_connects() {
-    // RD-Q7 through the pipeline: `--fixed-difficulty 7` → RuleSet::fakechain(7)
+    // RD-Q7 through the pipeline: `--fixed-difficulty 7` →
+    // `RuleSet::GENESIS.with_levers(Some(7), CappedEpoch::PRODUCTION)`
     // in force at every height, formed and validated under the same set,
     // and connect accepts it (RD-F13's repair) while the CEN-B3 belt lands
     // GENESIS's id. Cumulative work climbs by the fixed target per block.
@@ -1196,7 +1197,7 @@ async fn a_regtest_corpus_replays_under_a_fixed_difficulty_and_connects() {
     let mut source = CorpusReader::open(std::io::Cursor::new(&bytes)).expect("open");
     let rules = ChainRules::harness_regtest(
         std::num::NonZeroU128::new(7),
-        shekyl_chain_rules::FakechainSchedule::PRODUCTION,
+        shekyl_chain_rules::CappedEpoch::PRODUCTION,
     );
     let report = run(
         &mut source,

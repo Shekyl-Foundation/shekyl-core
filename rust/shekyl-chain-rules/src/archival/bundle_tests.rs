@@ -39,7 +39,7 @@ use super::*;
 use crate::harness::bundle::{
     fixture_block_hash, with_hash, BundleRead, BundleReadFaulted, BundleWorld,
 };
-use crate::rule_set::{FakechainSchedule, SettlementEpochBlocks};
+use crate::rule_set::{CappedEpoch, SettlementEpochBlocks};
 
 type Judged = Result<Admitted, BundleRefused<BundleReadFaulted>>;
 
@@ -483,9 +483,9 @@ fn the_window_is_above_h_and_within_w2() {
 #[test]
 fn the_window_is_read_off_the_rule_set() {
     let short_epoch = |blocks: u64, cap: u64| {
-        RuleSet::fakechain(
+        RuleSet::GENESIS.with_levers(
             None,
-            FakechainSchedule::new(
+            CappedEpoch::new(
                 SettlementEpochBlocks::new(blocks).expect("non-zero"),
                 BlockCount::from_raw(cap),
             )

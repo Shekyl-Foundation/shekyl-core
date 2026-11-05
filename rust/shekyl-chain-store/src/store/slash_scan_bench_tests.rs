@@ -13,7 +13,7 @@
 //! — one more epoch of grace. The cost of a slash is `M + 1` epochs, plus
 //! one, whatever the epoch is.
 //!
-//! The chain, under `RuleSet::fakechain(fixed 7, SEB 100 / cap 50)`:
+//! The chain, under `RuleSet::GENESIS.with_levers(fixed 7, SEB 100 / cap 50)`:
 //! `P` complete-tree personas join in epoch 0 — one **real** bond post
 //! per block from [`FIRST_SPEND_HEIGHT`], each spending the coinbase that
 //! matured for its height (CEN-J27, since slice 6's 4.J row: a bond post
@@ -124,7 +124,7 @@ use std::time::{Duration, Instant};
 use shekyl_archival_retention::settlement_select::issued_draw_term;
 use shekyl_archival_retention::{ARCHIVAL_BOND_FLOOR_ATOMIC, FAILURE_WINDOW_M, FAILURE_WINDOW_N};
 use shekyl_chain_rules::harness::fixture;
-use shekyl_chain_rules::{Corrupt, FakechainSchedule, RuleSet, SettlementCheck, SlashLogFloor};
+use shekyl_chain_rules::{CappedEpoch, Corrupt, RuleSet, SettlementCheck, SlashLogFloor};
 use shekyl_crypto_hash::keccak256;
 use shekyl_harness_spender::Persona;
 use shekyl_types::archival::{
@@ -147,16 +147,16 @@ const RETENTION: u64 = 50;
 /// Fixed difficulty: over a thousand blocks at the fixture's constant
 /// spacing LWMA would floor the difficulty, and the fixture's zero longhash
 /// passes any fixed target.
-const RULES: RuleSet = RuleSet::fakechain(NonZeroU128::new(7), pair(SEB, RETENTION));
+const RULES: RuleSet = RuleSet::GENESIS.with_levers(NonZeroU128::new(7), pair(SEB, RETENTION));
 /// The witness's persona count: enough that the per-persona loop is a loop,
 /// few enough that the chain builds in the unit lane in debug.
 const WITNESS_PERSONAS: u64 = 4;
 
-const fn pair(seb: u64, cap: u64) -> FakechainSchedule {
+const fn pair(seb: u64, cap: u64) -> CappedEpoch {
     let Some(epoch) = SettlementEpochBlocks::new(seb) else {
         panic!("a zero epoch");
     };
-    match FakechainSchedule::new(epoch, BlockCount::from_raw(cap)) {
+    match CappedEpoch::new(epoch, BlockCount::from_raw(cap)) {
         Ok(pair) => pair,
         Err(_) => panic!("the cap is not inside the epoch"),
     }

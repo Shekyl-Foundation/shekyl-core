@@ -4,7 +4,7 @@
 // BSD-3-Clause
 
 //! `connect` takes the in-force [`RuleSet`](shekyl_chain_rules::RuleSet) by
-//! value (DRS-E2 RD-Q10). Fakechain `Fixed` reuses `RuleSetId::GENESIS`, so
+//! value (DRS-E2 RD-Q10). levered `Fixed` reuses `RuleSetId::GENESIS`, so
 //! these two tests pin that the belt compares sets, not ids.
 
 use shekyl_chain_rules::{form, validate, FormAttempt, RuleSet, RuleSetId, Trust};
@@ -19,11 +19,11 @@ use crate::schema::RULE_SET_IN_FORCE;
 #[test]
 fn a_fakechain_verdict_connects_when_the_fakechain_set_is_in_force() {
     // RD-F13: with `in_force: RuleSetId`, no id resolved to a `Fixed` set and
-    // a Fakechain verdict could never connect. The caller now hands the set
+    // a levered verdict could never connect. The caller now hands the set
     // itself (RD-Q10), and the path exists.
-    let seven = RuleSet::fakechain(
+    let seven = RuleSet::GENESIS.with_levers(
         core::num::NonZeroU128::new(7),
-        shekyl_chain_rules::FakechainSchedule::PRODUCTION,
+        shekyl_chain_rules::CappedEpoch::PRODUCTION,
     );
     let path = tmp("connect-fakechain-in-force");
     let store = ChainStore::create(&path, EPOCH).expect("create");
@@ -49,7 +49,7 @@ fn a_fakechain_verdict_connects_when_the_fakechain_set_is_in_force() {
         };
         Ok(batch.connect(valid, seven)?)
     });
-    out.expect("a Fakechain verdict connects under the Fakechain set");
+    out.expect("a levered verdict connects under the levered set");
     // The CEN-B3 belt recorded the id — which is GENESIS's, and is not the
     // set (the caveat at the belt).
     let snap = store.begin_read().expect("read");
@@ -69,12 +69,12 @@ fn a_fakechain_verdict_connects_when_the_fakechain_set_is_in_force() {
 
 #[test]
 fn a_fakechain_verdict_is_refused_under_genesis_in_force() {
-    // Same id, different set: `fakechain(7)` reuses `RuleSetId::GENESIS`.
+    // Same id, different set: `with_levers(Some(7), …)` reuses `RuleSetId::GENESIS`.
     // An id-only check would accept the fixed-target work as public-network
     // GENESIS work; compared by value, `connect` refuses.
-    let seven = RuleSet::fakechain(
+    let seven = RuleSet::GENESIS.with_levers(
         core::num::NonZeroU128::new(7),
-        shekyl_chain_rules::FakechainSchedule::PRODUCTION,
+        shekyl_chain_rules::CappedEpoch::PRODUCTION,
     );
     let path = tmp("connect-fakechain");
     let store = ChainStore::create(&path, EPOCH).expect("create");

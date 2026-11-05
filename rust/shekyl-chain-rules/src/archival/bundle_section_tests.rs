@@ -24,7 +24,7 @@ use shekyl_types::{BlockHeight, PCanonicalId, SettlementEpoch, ShardId};
 
 use super::*;
 use crate::harness::bundle::{with_hash, BundleRead, BundleReadFaulted, FixtureBundleView};
-use crate::rule_set::{FakechainSchedule, SettlementEpochBlocks};
+use crate::rule_set::{CappedEpoch, SettlementEpochBlocks};
 use shekyl_types::BlockCount;
 
 /// A reference at `h` to a bundle of `count` draws, none passed.
@@ -63,12 +63,12 @@ fn h_incl_of(refs: &[BundleRef]) -> BlockHeight {
     BlockHeight::from_raw(refs.last().map_or(101, |r| r.h().to_raw() + 1))
 }
 
-/// A Fakechain rule set whose epoch is `blocks` long, so `W₂` is
+/// A levered rule set whose epoch is `blocks` long, so `W₂` is
 /// `blocks / 20`, with a reorg cap of 10.
 pub(in crate::archival::bundle) fn rules_of(blocks: u64) -> RuleSet {
-    RuleSet::fakechain(
+    RuleSet::GENESIS.with_levers(
         None,
-        FakechainSchedule::new(
+        CappedEpoch::new(
             SettlementEpochBlocks::new(blocks).expect("non-zero"),
             BlockCount::from_raw(10),
         )

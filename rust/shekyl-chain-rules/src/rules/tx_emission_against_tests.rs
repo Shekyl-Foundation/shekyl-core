@@ -15,7 +15,7 @@ use crate::harness::fixture::{
     anchored_on, balanced_emission, chain_of, emission_vin, listed_on, point, spendable_chain,
 };
 use crate::harness::{assert_refused, defined, MockChain};
-use crate::rule_set::{FakechainSchedule, RuleSet, SettlementEpochBlocks};
+use crate::rule_set::{CappedEpoch, RuleSet, SettlementEpochBlocks};
 use crate::rules::tx_against::{ReferenceContext, I15};
 use crate::rules::tx_emission_against::{
     emission_epoch_facts, judge_emission_claim, EmissionEpochStanding,
@@ -50,9 +50,9 @@ const REFERENCE: ReferenceContext = ReferenceContext {
 /// A short epoch, so a mock chain of a few dozen blocks has closed one:
 /// twenty blocks, a cap of five inside it.
 fn short_epochs() -> RuleSet {
-    RuleSet::fakechain(
+    RuleSet::GENESIS.with_levers(
         None,
-        FakechainSchedule::new(
+        CappedEpoch::new(
             SettlementEpochBlocks::new(20).expect("non-zero"),
             BlockCount::from_raw(5),
         )

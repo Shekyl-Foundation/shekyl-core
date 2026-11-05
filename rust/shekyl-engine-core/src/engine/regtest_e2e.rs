@@ -571,7 +571,7 @@ impl RegtestDaemon {
     /// add). The pair moves together: the daemon refuses
     /// an epoch that is not strictly above the reorg cap (`SEB > D_max` is
     /// an invariant of every valid configuration; a shortened epoch runs a
-    /// Fakechain rule set whose cap fits inside it). The emission e2e
+    /// levered rule set whose cap fits inside it). The emission e2e
     /// passes `Some(schedule)` so epoch closes land in minutes; the wallet
     /// process arms the same pair in-process (it does its own epoch
     /// arithmetic when it assembles a claim, and gates on the lever —
@@ -6256,7 +6256,7 @@ async fn maybe_capture_chain_vector(
     // harness pulled them, the genesis pair otherwise. The replay opens
     // its store and judges every block under a rule set naming exactly
     // this pair (`ARW-15`); recorded, not remembered, like the difficulty.
-    let production = shekyl_chain_rules::FakechainSchedule::PRODUCTION;
+    let production = shekyl_chain_rules::CappedEpoch::PRODUCTION;
     let (settlement_epoch_blocks, reorg_cap_blocks) = match daemon.schedule {
         Some(levers) => (levers.seb, levers.reorg_cap),
         None => (

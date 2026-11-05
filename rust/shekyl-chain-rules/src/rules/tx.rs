@@ -438,13 +438,13 @@ impl TxRule for H10 {
 /// ruled 2026-09-23; grading corrected the same day). The C++ carries a
 /// `m_nettype != FAKECHAIN` gate near this rule (`blockchain.cpp:3396`),
 /// and for eight hours this comment and the CSR-3a row read it as H15's —
-/// *"a Fakechain node admits `Null`-CT spends"*. It is CEN-I2's earlier
+/// *"a regtest node admits `Null`-CT spends"*. It is CEN-I2's earlier
 /// refusal; H15's own sites — `ver_non_input_consensus`'s `case
 /// CTTypeNull` (`tx_verification_utils.cpp:223`) and `check_tx_inputs`'s
 /// `switch` (`blockchain.cpp:3550`) — refuse on every nettype, and the
-/// `else` at `:3539` refuses a `Null` spend on Fakechain before either. The
+/// `else` at `:3539` refuses a `Null` spend on `FAKECHAIN` before either. The
 /// gate was read, the belt below it was not (rule 16's corollary). The
-/// ruling stands on its own ground: arm (d), data on the Fakechain rule
+/// ruling stands on its own ground: arm (d), data on a levered rule
 /// set, would have made this the first 4.H rule to read one, for a
 /// consumer (the proof-less C++ test builder) TXE-Q1 deletes.
 pub(crate) struct H15;

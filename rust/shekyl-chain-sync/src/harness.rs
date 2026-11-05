@@ -13,8 +13,7 @@ use std::time::{Duration, Instant};
 
 use shekyl_chain_rules::harness::fixture::{candidate_on, chain_of};
 use shekyl_chain_rules::{
-    AtHeight, FakechainSchedule, HeaderRecord, HeaderView, RuleSet, SettlementEpochBlocks, Tip,
-    Trust,
+    AtHeight, CappedEpoch, HeaderRecord, HeaderView, RuleSet, SettlementEpochBlocks, Tip, Trust,
 };
 use shekyl_difficulty::CumulativeDifficulty;
 use shekyl_draw_rng::RelayRng;
@@ -28,9 +27,9 @@ use crate::{Command, PeerClaim};
 fn cap(blocks: u64) -> RuleSet {
     let epoch = SettlementEpochBlocks::new(512).expect("512");
     let schedule =
-        FakechainSchedule::new(epoch, BlockCount::from_raw(blocks)).expect("cap inside the epoch");
+        CappedEpoch::new(epoch, BlockCount::from_raw(blocks)).expect("cap inside the epoch");
     // Target 1: every RandomX output satisfies, so a nonce of 0 is a proof.
-    RuleSet::fakechain(core::num::NonZeroU128::new(1), schedule)
+    RuleSet::GENESIS.with_levers(core::num::NonZeroU128::new(1), schedule)
 }
 
 struct NoDraw;

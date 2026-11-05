@@ -10,7 +10,7 @@
 # session does not.
 #
 # Replay schedule flags are omitted. When both are absent,
-# shekyl-chain-replay uses FakechainSchedule::PRODUCTION, the pair the
+# shekyl-chain-replay uses CappedEpoch::PRODUCTION, the pair the
 # regtest daemon mines under. Restating that pair here would be a second
 # copy of it.
 #

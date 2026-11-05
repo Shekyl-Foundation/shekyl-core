@@ -19,7 +19,7 @@ use crate::harness::{
     assert_refused, expected_seed, expected_target, formed_on, formed_under, judged, MockChain,
     MockSubstrate,
 };
-use crate::rule_set::{FakechainSchedule, RuleSet, SettlementEpochBlocks};
+use crate::rule_set::{CappedEpoch, RuleSet, SettlementEpochBlocks};
 use crate::trust::Trust;
 use crate::validate::{form, validate};
 use crate::verdict::Locus;
@@ -318,14 +318,14 @@ fn a_fork_past_the_reorg_cap_is_not_a_consensus_refusal() {
     // The reorg cap (`D_max`) is the switch's local limit, from the pruning
     // horizon (`PopBeyondReorgCap`): a node cannot switch that deep, and
     // the block is not invalid for it (S1, design review 2026-11-03). A
-    // Fakechain set capping at 3; a fork rooted at 7 on a chain whose tip
+    // levered set capping at 3; a fork rooted at 7 on a chain whose tip
     // is 11 pops 4, and the tier admits it.
-    let schedule = FakechainSchedule::new(
+    let schedule = CappedEpoch::new(
         SettlementEpochBlocks::new(512).expect("non-zero"),
         BlockCount::from_raw(3),
     )
     .expect("3 is inside 512");
-    let capped = RuleSet::fakechain(None, schedule);
+    let capped = RuleSet::GENESIS.with_levers(None, schedule);
     assert_eq!(capped.reorg_cap(), BlockCount::from_raw(3));
     let chain = chain_of(12);
     let formed = formed_under(
@@ -354,10 +354,8 @@ fn a_fork_past_the_reorg_cap_is_not_a_consensus_refusal() {
 #[test]
 fn a_target_claim_the_alt_chain_does_not_derive_is_stale_not_a_verdict() {
     let chain = chain_of(12);
-    let seven = RuleSet::fakechain(
-        core::num::NonZeroU128::new(7),
-        FakechainSchedule::PRODUCTION,
-    );
+    let seven =
+        RuleSet::GENESIS.with_levers(core::num::NonZeroU128::new(7), CappedEpoch::PRODUCTION);
     let wrong = expected_target(&chain, &seven);
     let right = expected_target(&chain, &RuleSet::GENESIS);
     assert_ne!(wrong, right, "the fixture's claim must be wrong");
@@ -397,7 +395,7 @@ fn a_rule_set_the_token_was_not_formed_under_is_stale_not_a_verdict() {
     // As `validate`: the claim check is the same, and a mismatch names
     // both sets and the retry.
     let chain = chain_of(12);
-    let other = RuleSet::fakechain(None, FakechainSchedule::PRODUCTION);
+    let other = RuleSet::GENESIS.with_levers(None, CappedEpoch::PRODUCTION);
     let formed_under_other = chain.with_view(|_| {
         match form(
             candidate_on(&chain, Vec::new()),
@@ -413,9 +411,9 @@ fn a_rule_set_the_token_was_not_formed_under_is_stale_not_a_verdict() {
             other => panic!("the fixture forms: {other:?}"),
         }
     });
-    let distinct = RuleSet::fakechain(
+    let distinct = RuleSet::GENESIS.with_levers(
         None,
-        FakechainSchedule::new(
+        CappedEpoch::new(
             SettlementEpochBlocks::new(512).expect("non-zero"),
             BlockCount::from_raw(3),
         )

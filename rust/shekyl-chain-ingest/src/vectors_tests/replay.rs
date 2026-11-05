@@ -15,7 +15,7 @@ use std::num::NonZeroU128;
 use std::path::PathBuf;
 use std::sync::Arc;
 
-use shekyl_chain_rules::{FakechainSchedule, SettlementEpochBlocks, Substrate};
+use shekyl_chain_rules::{CappedEpoch, SettlementEpochBlocks, Substrate};
 use shekyl_chain_store::apply_policy::ApplyPolicy;
 use shekyl_types::{BlockCount, BlockHeight};
 
@@ -41,7 +41,7 @@ pub(crate) const CAPTURED_REPLAY_HASHERS: std::num::NonZeroUsize =
 /// The rule set the daemon mined `manifest` under: fixed difficulty and
 /// the `(SEB, cap)` pair the manifest records.
 pub(crate) fn rules_for(manifest: &Manifest) -> ChainRules {
-    let schedule = FakechainSchedule::new(
+    let schedule = CappedEpoch::new(
         SettlementEpochBlocks::new(manifest.settlement_epoch_blocks)
             .expect("a captured chain's epoch is non-zero"),
         BlockCount::from_raw(manifest.reorg_cap_blocks),

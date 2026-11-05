@@ -262,7 +262,7 @@ pub enum Mutation {
     /// one input more than [`MAX_FCMP_INPUTS`], each copy under its own key
     /// image so CEN-H10 (no repeated image) holds and the count is the one
     /// violation; the header re-lists. CEN-I4, at the transaction, on every
-    /// network: the cap the C++ exempted on Fakechain binds the test
+    /// network: the cap the C++ exempted on `FAKECHAIN` binds the test
     /// networks too (rule 71; `CHAIN_RULES_SLICE_6.md` §5.4).
     TooManyInputs,
 }

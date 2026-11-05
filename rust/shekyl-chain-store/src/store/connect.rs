@@ -153,7 +153,7 @@ impl<'id> WriteBatch<'_, 'id> {
     /// view type, so a verdict minted anywhere else does not unify.
     /// `in_force` is the rule set the driver's schedule names for the
     /// height — **the set itself, by value** (DRS-E2 RD-Q10), not its id:
-    /// Fakechain `Fixed` sets reuse `RuleSetId::GENESIS` by design, so no id
+    /// levered `Fixed` sets reuse `RuleSetId::GENESIS` by design, so no id
     /// resolves to one and an id parameter could never name the set a
     /// regtest driver has in force. The store compares the value with the
     /// verdict's and refuses a mismatch, holding no schedule and no `Network`
@@ -233,10 +233,10 @@ impl<'id> WriteBatch<'_, 'id> {
             }
             (height, parent_tx_count, parent_archival_len)
         };
-        // Compared by **value** (d6ba4d98f; RD-Q10): Fakechain `Fixed`
+        // Compared by **value** (d6ba4d98f; RD-Q10): levered `Fixed`
         // reuses `RuleSetId::GENESIS`, so an id-only check would accept
         // fixed-target work as public-network GENESIS work — and an id
-        // *parameter* could never name a Fakechain set as in force at all,
+        // *parameter* could never name a levered set as in force at all,
         // which is why the caller hands the set (RD-F13). No resolution
         // happens here: an id no schedule issued is the schedule's refusal.
         if valid.rule_set() != in_force {
@@ -379,11 +379,11 @@ impl<'id> WriteBatch<'_, 'id> {
 
         // ---- 7. rule set (CEN-B3's belt) --------------------------------
         // The belt stores the **id**, and the id is not the set: under
-        // `DifficultyRule::Fixed` two different Fakechain sets both carry
-        // `RuleSetId::GENESIS` (`RuleSet::fakechain`'s doc — id equality is
+        // `DifficultyRule::Fixed` two different levered sets both carry
+        // `RuleSetId::GENESIS` (`RuleSet::with_levers`'s doc — id equality is
         // not a proxy for set equality). This row records which *issued*
         // schedule position the height was judged at; a reader that needs
-        // the set (a Fakechain target) does not have it here and must not
+        // the set (a levered target) does not have it here and must not
         // pretend to (RD-Q10, ruled 2026-09-19).
         self.open_insert_table(RULE_SET_IN_FORCE, StoreInvariant::TipMismatch)?
             .insert(height, RuleSetInForce(in_force.id()).encoded().as_encoded())?;

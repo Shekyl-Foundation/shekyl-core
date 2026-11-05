@@ -757,7 +757,7 @@ mod tests {
         assert_ne!(a, b);
         assert_ne!(
             a, c,
-            "regtest and mainnet are two networks, so two transcripts"
+            "regtest binds its own preimage, distinct from mainnet"
         );
     }
 

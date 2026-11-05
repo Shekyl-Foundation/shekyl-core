@@ -22,10 +22,11 @@
 //! Genesis commits to the name in its coinbase, so the id commits to it.
 //!
 //! Regtest's armed levers are [`Lever`]s in its row ([`Network::permits`],
-//! NI-R6); every other row permits none. Staging flags ([`Staging`], NI-R9)
-//! are a separate class: candidate mainnet behaviour staged on the test
-//! networks, each with an owner and an exit, none surviving mainnet
-//! genesis.
+//! NI-R6); every other row permits none. Staging flags ([`Staging`], NI-R9,
+//! amended 2026-11-04) are a separate class: candidate mainnet behaviour
+//! staged on the test networks, each with an owner, an exit and a deadline
+//! release ([`Staging::deadline`]). Mainnet stages nothing. A cut at or
+//! past a flag's deadline is refused while the flag still exists.
 
 #![deny(unsafe_code)]
 
@@ -112,7 +113,8 @@ impl Network {
 
     /// The name's 16-byte binding, `name_id`: what anything derived from
     /// keys or addresses binds, since those exist before any genesis
-    /// (NI-R10, NI-R15). Key derivation's HKDF salt starts with it.
+    /// (NI-R10, NI-R16). Key derivation's HKDF salt is this, then
+    /// `shekyl-master-derive-v3`.
     #[must_use]
     pub const fn name_id(self) -> NameId {
         self.row().name_id

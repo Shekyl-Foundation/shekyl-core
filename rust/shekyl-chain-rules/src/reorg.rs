@@ -51,7 +51,7 @@
 //! horizon's `h_scarce + 1`, and that ordering is exactly
 //! `SETTLEMENT_EPOCH_BLOCKS > D_max`. `ArchivalParams::validate` holds it,
 //! and the shipped set is asserted to pass it at compile time. The cap is rule-set data (`RuleSet::reorg_cap`;
-//! `GENESIS` carries this constant, a Fakechain set names its own), and
+//! `GENESIS` carries this constant, a levered set names its own), and
 //! the store's undo retention is boxed between them — at least the
 //! in-force set's cap, strictly inside the session's epoch — at open and at
 //! every connect, so a regtest that shortens the epoch runs a rule set
