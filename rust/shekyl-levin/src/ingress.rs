@@ -52,11 +52,11 @@ use shekyl_peer_bounds::DISCLOSE_COUNT;
 
 use crate::header::{Flags, DEFAULT_MAX_PACKET_SIZE};
 use crate::{
-    Error, SyncCommand, CAP_REQUEST_BODIES, CAP_REQUEST_HEADERS, CAP_RESPONSE_BODIES,
-    CAP_RESPONSE_HEADERS, COMMAND_HANDSHAKE, COMMAND_TIMED_SYNC, HASH_SIZE,
-    NOTIFY_GET_TXPOOL_COMPLEMENT, NOTIFY_NEW_COMPACT_BLOCK, NOTIFY_NEW_TRANSACTIONS,
-    NOTIFY_REQUEST_BODIES, NOTIFY_REQUEST_COMPACT_MISSING_TX, NOTIFY_REQUEST_HEADERS,
-    NOTIFY_RESPONSE_BODIES, NOTIFY_RESPONSE_HEADERS,
+    Error, CAP_REQUEST_BODIES, CAP_REQUEST_HEADERS, CAP_RESPONSE_BODIES, CAP_RESPONSE_HEADERS,
+    COMMAND_HANDSHAKE, COMMAND_TIMED_SYNC, HASH_SIZE, NOTIFY_GET_TXPOOL_COMPLEMENT,
+    NOTIFY_NEW_COMPACT_BLOCK, NOTIFY_NEW_TRANSACTIONS, NOTIFY_REQUEST_BODIES,
+    NOTIFY_REQUEST_COMPACT_MISSING_TX, NOTIFY_REQUEST_HEADERS, NOTIFY_RESPONSE_BODIES,
+    NOTIFY_RESPONSE_HEADERS,
 };
 
 /// The four defined Levin flag bits. Bits outside this mask are unknown at
@@ -232,25 +232,6 @@ impl Command {
             Self::ResponseBodies => CAP_RESPONSE_BODIES,
         }
     }
-
-    /// Whether this command is an invoke (a request that expects a response
-    /// under the same id). Only the two session-layer commands are; every
-    /// `NOTIFY_*` is one-way, so a response flag on one is a form failure.
-    #[must_use]
-    pub const fn is_invoke(self) -> bool {
-        matches!(self, Self::Handshake | Self::TimedSync)
-    }
-}
-
-impl From<SyncCommand> for Command {
-    fn from(command: SyncCommand) -> Self {
-        match command {
-            SyncCommand::RequestHeaders => Self::RequestHeaders,
-            SyncCommand::ResponseHeaders => Self::ResponseHeaders,
-            SyncCommand::RequestBodies => Self::RequestBodies,
-            SyncCommand::ResponseBodies => Self::ResponseBodies,
-        }
-    }
 }
 
 /// Admit one parsed bucket header at ingress (PWD-B3a / PWD-B4).
@@ -300,15 +281,6 @@ mod tests {
             Command::from_wire(NOTIFY_REQUEST_COMPACT_MISSING_TX),
             Some(Command::RequestCompactMissingTx)
         );
-        for sync in SyncCommand::ALL {
-            let command = Command::from(sync);
-            assert_eq!(command.wire_id(), sync.wire_id());
-            assert_eq!(command.payload_cap(), sync.payload_cap());
-            assert_eq!(Command::from_wire(sync.wire_id()), Some(command));
-            assert!(!command.is_invoke());
-        }
-        assert!(Command::Handshake.is_invoke());
-        assert!(Command::TimedSync.is_invoke());
     }
 
     #[test]

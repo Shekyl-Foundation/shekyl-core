@@ -22,7 +22,7 @@ use shekyl_chain_rules::{form_header, target_claim, FormAttempt, Substrate};
 use shekyl_chain_store::codec::FollowingDegradedCell;
 use shekyl_chain_store::store::SnapshotView;
 use shekyl_chain_sync::SyncState;
-use shekyl_levin::{RequestBodies, ResponseBodies, ResponseHeaders, SyncCommand};
+use shekyl_levin::{Command, RequestBodies, ResponseBodies, ResponseHeaders};
 use shekyl_p2p_harness::sync::{
     announcement, fork_headers, frame, request_headers, substrate, Bodies, HeaderChainPeer, Node,
     ServingPeer, Silent, Step, SyncPeer,
@@ -664,11 +664,11 @@ struct Asker(Arc<Mutex<Answers>>);
 impl SyncPeer for Asker {
     fn on_message(&mut self, command: u32, payload: &[u8]) -> Vec<Vec<u8>> {
         let mut answers = self.0.lock().expect("answers");
-        match SyncCommand::from_wire(command) {
-            Some(SyncCommand::ResponseHeaders) => answers
+        match Command::from_wire(command) {
+            Some(Command::ResponseHeaders) => answers
                 .headers
                 .push(ResponseHeaders::decode(payload).expect("the node's response decodes")),
-            Some(SyncCommand::ResponseBodies) => answers
+            Some(Command::ResponseBodies) => answers
                 .bodies
                 .push(ResponseBodies::decode(payload).expect("the node's response decodes")),
             _ => {}
@@ -720,7 +720,7 @@ async fn the_node_serves_requests_its_own_form_checks_accept() {
         hashes: hashes[1..].to_vec(),
     };
     assert!(
-        node.inject(id, frame(SyncCommand::RequestBodies, &request))
+        node.inject(id, frame(Command::RequestBodies, &request))
             .await
     );
     assert!(

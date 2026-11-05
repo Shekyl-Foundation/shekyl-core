@@ -231,69 +231,6 @@ const _: () = assert!(NOTIFY_RESPONSE_HEADERS == 2012);
 const _: () = assert!(NOTIFY_REQUEST_BODIES == 2013);
 const _: () = assert!(NOTIFY_RESPONSE_BODIES == 2014);
 
-/// The chain-sync commands, as chain sync's router admits them
-/// (`P2P_3_CHAIN_SYNC_BRIEF.md` CS-3 §4.2).
-///
-/// The four sync arms of [`crate::Command`], which carries the same ids and
-/// caps (`Command::from(SyncCommand)`). This subset exists for the attached
-/// router, which admits these four itself and hands every other command on
-/// to the C++ handler; it goes with the router (RC-Q1).
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub enum SyncCommand {
-    /// `NOTIFY_REQUEST_HEADERS` (2011).
-    RequestHeaders,
-    /// `NOTIFY_RESPONSE_HEADERS` (2012).
-    ResponseHeaders,
-    /// `NOTIFY_REQUEST_BODIES` (2013).
-    RequestBodies,
-    /// `NOTIFY_RESPONSE_BODIES` (2014).
-    ResponseBodies,
-}
-
-impl SyncCommand {
-    /// Every arm.
-    pub const ALL: [Self; 4] = [
-        Self::RequestHeaders,
-        Self::ResponseHeaders,
-        Self::RequestBodies,
-        Self::ResponseBodies,
-    ];
-
-    /// The wire id this arm speaks.
-    #[must_use]
-    pub const fn wire_id(self) -> u32 {
-        match self {
-            Self::RequestHeaders => NOTIFY_REQUEST_HEADERS,
-            Self::ResponseHeaders => NOTIFY_RESPONSE_HEADERS,
-            Self::RequestBodies => NOTIFY_REQUEST_BODIES,
-            Self::ResponseBodies => NOTIFY_RESPONSE_BODIES,
-        }
-    }
-
-    /// A wire command id as a chain-sync command, or `None`.
-    #[must_use]
-    pub const fn from_wire(command: u32) -> Option<Self> {
-        match command {
-            NOTIFY_REQUEST_HEADERS => Some(Self::RequestHeaders),
-            NOTIFY_RESPONSE_HEADERS => Some(Self::ResponseHeaders),
-            NOTIFY_REQUEST_BODIES => Some(Self::RequestBodies),
-            NOTIFY_RESPONSE_BODIES => Some(Self::ResponseBodies),
-            _ => None,
-        }
-    }
-
-    /// The payload cap the router applies before it buffers a message.
-    #[must_use]
-    pub const fn payload_cap(self) -> u64 {
-        match self {
-            Self::RequestHeaders => CAP_REQUEST_HEADERS,
-            Self::ResponseHeaders => CAP_RESPONSE_HEADERS,
-            Self::RequestBodies => CAP_REQUEST_BODIES,
-            Self::ResponseBodies => CAP_RESPONSE_BODIES,
-        }
-    }
-}
-
 fn capped<T: PortableMap>(bytes: &[u8], cap: u64, limits: Limits) -> Result<T, Error> {
     let max = usize::try_from(cap).expect("an encoded cap fits usize");
     if bytes.len() > max {

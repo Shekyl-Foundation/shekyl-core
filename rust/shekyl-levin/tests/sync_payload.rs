@@ -904,32 +904,22 @@ fn a_budget_of_minimum_skeletons_decodes() {
     assert_eq!(ResponseBodies::decode(&bytes).expect("and decodes"), msg);
 }
 
-/// The router's admission of 2011–2014 is its own set, beside the C++
-/// ingress's: every id round-trips, each cap is the one its decoder uses,
-/// and no other id is a chain-sync command.
+/// The four chain-sync commands are arms of the one set: each id
+/// round-trips and each cap is the one its decoder uses.
 #[test]
-fn the_router_admits_exactly_the_four_sync_commands_with_their_caps() {
+fn the_four_sync_commands_carry_their_decoders_caps() {
     use shekyl_levin::{
-        SyncCommand, CAP_REQUEST_BODIES, CAP_REQUEST_HEADERS, CAP_RESPONSE_BODIES,
-        CAP_RESPONSE_HEADERS,
+        CAP_REQUEST_BODIES, CAP_REQUEST_HEADERS, CAP_RESPONSE_BODIES, CAP_RESPONSE_HEADERS,
     };
-    for command in SyncCommand::ALL {
-        assert_eq!(SyncCommand::from_wire(command.wire_id()), Some(command));
-        assert_eq!(
-            Command::from_wire(command.wire_id()),
-            Some(Command::from(command))
-        );
-    }
-    assert_eq!(
-        SyncCommand::ALL.map(SyncCommand::payload_cap),
-        [
-            CAP_REQUEST_HEADERS,
-            CAP_RESPONSE_HEADERS,
-            CAP_REQUEST_BODIES,
-            CAP_RESPONSE_BODIES
-        ]
-    );
-    for id in [0, 1001, 1002, 2002, 2003, 2004, 2008, 2010, 2015] {
-        assert_eq!(SyncCommand::from_wire(id), None, "{id}");
+    let sync = [
+        (2011, Command::RequestHeaders, CAP_REQUEST_HEADERS),
+        (2012, Command::ResponseHeaders, CAP_RESPONSE_HEADERS),
+        (2013, Command::RequestBodies, CAP_REQUEST_BODIES),
+        (2014, Command::ResponseBodies, CAP_RESPONSE_BODIES),
+    ];
+    for (id, command, cap) in sync {
+        assert_eq!(Command::from_wire(id), Some(command), "{id}");
+        assert_eq!(command.wire_id(), id);
+        assert_eq!(command.payload_cap(), cap, "{id}");
     }
 }
