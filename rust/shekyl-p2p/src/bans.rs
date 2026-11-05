@@ -237,6 +237,42 @@ mod tests {
         assert!(!bans.is_banned(host));
     }
 
+    /// The expiry owner is the only thing that ends a timed ban: past its
+    /// deadline the ban holds until the owner runs, then the owner ends it.
+    #[test]
+    fn the_expiry_owner_ends_a_timed_ban_and_nothing_else_does() {
+        let sockets = Sockets::new();
+        let clock = MonotonicClock::new();
+        let bans = Bans::new(sockets.clone(), clock.clone());
+        let host = IpAddr::V4(Ipv4Addr::new(203, 0, 113, 11));
+        assert!(bans.ban(
+            BanTarget::Host(host),
+            BanSpan::For(Duration::from_millis(1))
+        ));
+        std::thread::sleep(Duration::from_millis(20));
+        assert!(
+            bans.is_banned(host),
+            "past its deadline, and no owner has run"
+        );
+
+        let runtime = tokio::runtime::Builder::new_multi_thread()
+            .worker_threads(1)
+            .build()
+            .expect("runtime");
+        let engine = shekyl_timing_engine::EngineService::start(clock);
+        spawn_expiry(runtime.handle(), &engine.handle(), sockets, 1);
+        let give_up = std::time::Instant::now() + Duration::from_secs(10);
+        while bans.is_banned(host) {
+            assert!(
+                std::time::Instant::now() < give_up,
+                "the expiry owner never ended the ban"
+            );
+            std::thread::sleep(Duration::from_millis(5));
+        }
+        drop(engine);
+        drop(runtime);
+    }
+
     #[test]
     fn a_timed_ban_reports_what_is_left() {
         let bans = bans();
