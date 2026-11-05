@@ -27,8 +27,8 @@
 # What is not read here, and why: the compile-time mitigations (stack
 # protector, FORTIFY, CET, `/GS`) leave no uniform header mark. Their presence
 # is the compiler flag lists in CMakeLists.txt, and a pure-Rust binary has no
-# `__stack_chk_fail` to find. The single-tracing-dispatcher nm gate is
-# src/daemon/CMakeLists.txt's and stays there.
+# `__stack_chk_fail` to find. Nor is the tracing dispatcher: `shekyld` is one
+# cargo link, so its graph holds the one `tracing-core` Cargo.lock resolves.
 #
 # Tools. Cross builds produce a format the host's default tool may not parse
 # (the depends Cross-Mac leg links Mach-O on Linux), so ELF and Mach-O each

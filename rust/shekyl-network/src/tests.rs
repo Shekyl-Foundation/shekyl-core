@@ -117,9 +117,7 @@ fn the_id_is_a_function_of_the_genesis_hash() {
 /// network's table genesis (re-recorded 2026-11-03 with the round's
 /// regenesis, `NETWORK_IDENTITY.md` NI-R4). A regenesis that moves a hash
 /// fails this until the bytes are re-recorded with it. These are not a
-/// second definition of the id. The pin lived in `shekyl-ffi`'s
-/// `network_id_ffi` tests until the C++ reader of that export went
-/// (`P2P_3_REMNANT_CUTOVER_BRIEF.md` §3); it is held where the derivation is.
+/// second definition of the id; the pin is held where the derivation is.
 const RECORDED: [(Network, [u8; 16], [u8; 8]); 4] = [
     (
         Network::Mainnet,

@@ -19,7 +19,7 @@ with a customization against NIST SP 800-185's published samples #3 and #4
 (`cSHAKE_samples.pdf`, written out below), which exercise the bytepad and
 encode_string prefix and the 0x04 suffix that SHAKE256 does not (Rick's
 ruling 3 on the signing envelope, 2026-11-04). `anchor()` adds the four
-derived network ids against the values PR 1 recorded (`network_id_ffi.rs`),
+derived network ids against the recorded values (`shekyl-network`'s `RECORDED`),
 and `name_id` is pinned for all four networks (the envelope §2.6).
 
 An oracle loads this file by its path (`importlib`), as `python3 -I` puts
@@ -38,7 +38,7 @@ GENESIS_DIR = ROOT / "rust/shekyl-network/genesis"
 NETWORKS = ("mainnet", "testnet", "stagenet", "regtest")
 NETWORK_ID_DST = b"shekyl/p2p-network-id-v1"
 
-# The ids PR 1 recorded (rust/shekyl-ffi/src/network_id_ffi.rs), written out:
+# The ids rust/shekyl-network/src/tests.rs records (`RECORDED`), written out:
 # the derivation below must reproduce them before it is trusted.
 RECORDED_IDS = {
     "mainnet": "cf9f4283032b6ca19545f2696a228d80",

@@ -438,10 +438,10 @@ impl std::error::Error for ForwarderError {}
 /// call-ordering invariant (init first) and gives the caller a typed
 /// success/already/not-initialized signal. The link-time half — "exactly
 /// one `tracing-core` dispatcher in the binary" — cannot be observed from
-/// inside any single Rust image and is enforced by the post-link `nm` gate
-/// on the staged `shekyld` (one `GLOBAL_DISPATCH` symbol; see
-/// `src/daemon/CMakeLists.txt`). There is no C export of it: no C++ calls
-/// it (deleted 2026-11-02, DC-F19).
+/// inside any single Rust image. It holds by the link: `shekyld` is one
+/// cargo build whose graph has the one `tracing-core` `Cargo.lock`
+/// resolves, and each C++ binary links the one `libshekyl_ffi.a`. There is
+/// no C export of this function: no C++ calls it.
 ///
 /// # Errors
 ///

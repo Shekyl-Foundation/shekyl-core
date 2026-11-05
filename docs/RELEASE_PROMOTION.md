@@ -249,7 +249,7 @@ what follows from it, in one change:
       `rust/shekyl-chain-rules/src/genesis_pin.rs` (`GenesisPin::TESTNET`, a
       byte array, so a search for the hex string does not find it),
       `tests/unit_tests/mining_parity.cpp` and `docs/GENESIS_ALLOCATIONS.md`;
-- [ ] the id and prefix in `rust/shekyl-ffi/src/network_id_ffi.rs`'s KAT, which
+- [ ] the id and prefix in `rust/shekyl-network/src/tests.rs`'s `RECORDED`, which
       fails and prints the new bytes until they are recorded, and the same
       two values in the table in `docs/design/SHEKYL_P2P_PROTOCOL.md`.
 

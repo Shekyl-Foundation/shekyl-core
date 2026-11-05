@@ -451,7 +451,7 @@ impl RegtestDaemon {
         match std::env::var_os("SHEKYLD_BIN") {
             Some(p) => PathBuf::from(p),
             None => panic!(
-                "SHEKYLD_BIN not set. Build the daemon (cmake --build build --target cargo-build_shekyld) \
+                "SHEKYLD_BIN not set. Build the daemon (cmake --build build --target shekyl_rust_bins) \
                  and run e.g. SHEKYLD_BIN=/abs/path/build/bin/shekyld cargo test ... -- --ignored"
             ),
         }
