@@ -33,7 +33,7 @@ use std::time::{Duration, Instant};
 
 use log_capture::log_text;
 use rig::{peer, reply, reply_at, wait_until, Answer, Rig, Told, NETWORK};
-use shekyl_dialer::{DialAim, TorLinkTally};
+use shekyl_dialer::{session_of, DialAim, TorLinkTally};
 use shekyl_draw_rng::SplitMix64;
 use shekyl_onion_v3::v3_onion_hostname;
 use shekyl_p2p_session::harness::new_transactions;
@@ -213,6 +213,39 @@ fn a_session_refused_close_drops_the_kept_row_and_leaves_white() {
     drop(shared);
     assert_eq!(rig.dialer.kept_sessions(CLEARNET), 0);
     assert_eq!(rig.dialer.in_flight(CLEARNET), 0);
+}
+
+/// A closed session's intake ledger goes with it. Every confirm and keep
+/// dial, and every timed sync, admits a list under its session id, and ids
+/// never repeat: a ledger the close leaves behind stays for the life of the
+/// process.
+#[test]
+fn a_closed_sessions_intake_ledger_is_forgotten() {
+    let rig = Rig::new();
+    admit(&rig, &peer(1), 6);
+    let (id, _wire) = rig.dial_with(
+        CLEARNET,
+        &peer(1),
+        DialAim::Keep,
+        vec![reply(NETWORK, vec![peer(2), peer(3)])],
+    );
+    let id = id.expect("adopted");
+    let charged = |rig: &Rig| {
+        let now = rig.dialer.now();
+        rig.dialer
+            .shared()
+            .lists
+            .intake_count(CLEARNET, session_of(id), now)
+    };
+    assert_eq!(charged(&rig), 2, "the reply's two addresses were charged");
+
+    let layer = rig.layer.clone();
+    let closer = thread::spawn(move || layer.close(id, tables::session_refused()));
+    wait_until("the owners were told of the close", || {
+        rig.recorder.was_told_closed(id)
+    });
+    closer.join().expect("closer");
+    assert_eq!(charged(&rig), 0, "the closed session's ledger was kept");
 }
 
 #[test]

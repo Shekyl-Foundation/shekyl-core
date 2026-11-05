@@ -1012,8 +1012,13 @@ impl<C: Clock + Clone + Send + Sync + 'static> PeerOwner for Dialer<C> {
     }
 
     /// A session closed. The board no longer holds its row; the inbound
-    /// rows are re-read before the close is applied.
+    /// rows are re-read before the close is applied. The lists forget the
+    /// session's intake ledger: socket ids never repeat, so a ledger left
+    /// behind is a row for the life of the process.
     fn on_closed(&self, facts: &SessionFacts, end: DialEnd) {
+        self.shared()
+            .lists
+            .forget_session(facts.connector(), session_of(facts.id));
         if facts.endpoint == Endpoint::TorInbound {
             self.note_inbound_tor();
         }
