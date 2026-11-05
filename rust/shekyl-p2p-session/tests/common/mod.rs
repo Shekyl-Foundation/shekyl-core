@@ -10,30 +10,23 @@
 
 #![allow(dead_code)]
 
-use std::collections::VecDeque;
 use std::net::{IpAddr, Ipv4Addr};
 use std::sync::atomic::{AtomicUsize, Ordering};
-use std::sync::{Arc, Mutex};
-use std::thread::{self, JoinHandle};
+use std::sync::Arc;
 use std::time::Duration;
 
-use shekyl_capped_stream::{ByteQueue, InboundEnd, QueueHold, Session, StreamEnds};
 use shekyl_draw_rng::SplitMix64;
-use shekyl_levin::{
-    invoke, notify, response, BasicNodeData, BucketReader, GetTxpoolComplement, HandshakeRequest,
-    HandshakeResponse, NewTransactions, PeerlistEntry, PortableMap, Received, TimedSyncRequest,
-    TimedSyncResponse, DEFAULT_MAX_PACKET_SIZE,
-};
+use shekyl_levin::{GetTxpoolComplement, NewTransactions, PeerlistEntry, Received};
 use shekyl_net_address::NetworkAddress;
+use shekyl_p2p_session::harness;
 use shekyl_p2p_session::{
-    admit, Channel, ClaimCarrier, CloseKind, Command, ConnectFuture, ConnectorId, CoreSyncData,
-    Dial, DialEnd, Direction, Endpoint, Established, Intervals, Owners, Parts, PeerOwner,
-    PerConnector, ProbeArrival, ProbeSink, RelayOwner, SessionConfig, SessionFacts, SessionLayer,
-    SocketId, SyncInbound, SyncOwner, Taken,
+    ClaimCarrier, CloseKind, Command, ConnectorId, CoreSyncData, DialEnd, Direction, Endpoint,
+    Established, Intervals, Owners, Parts, PeerOwner, PerConnector, ProbeArrival, ProbeSink,
+    RelayOwner, SessionConfig, SessionFacts, SessionLayer, SocketId, SyncInbound, SyncOwner, Taken,
 };
 use shekyl_peer_policy::InboundCeiling;
-use shekyl_timing_engine::{EngineService, MonotonicClock, Tick};
-use shekyl_transport_layer::{DialFailure, Reached, Retry, Sockets, StreamEnd};
+use shekyl_timing_engine::{EngineService, MonotonicClock};
+use shekyl_transport_layer::Sockets;
 use tokio::sync::{mpsc, oneshot, watch};
 
 pub const NETWORK: [u8; 16] = *b"shekyl-test-net!";
@@ -41,15 +34,8 @@ pub const OTHER_NETWORK: [u8; 16] = *b"another-network!";
 pub const PEER_HEIGHT: u64 = 41;
 pub const OUR_HEIGHT: u64 = 7;
 pub const SEND_CAP: usize = 1 << 20;
-pub const WAIT: Duration = Duration::from_secs(5);
-pub const SETTLE: Duration = Duration::from_millis(300);
 
-/// Block until `fut` resolves, or fail the test after [`WAIT`].
-pub async fn within<F: std::future::Future>(what: &str, fut: F) -> F::Output {
-    tokio::time::timeout(WAIT, fut)
-        .await
-        .unwrap_or_else(|_| panic!("{what}: nothing within {WAIT:?}"))
-}
+pub use harness::{within, Answer, Loopback, Wire, SETTLE};
 
 /// Our tip as the tests publish it.
 pub fn our_tip() -> CoreSyncData {
@@ -194,166 +180,6 @@ impl Recorder {
     }
 }
 
-/// The far side of one channel: inject bytes toward the session, read
-/// what the session wrote.
-pub struct Wire {
-    pub id: SocketId,
-    inject: Option<InboundEnd>,
-    out: mpsc::UnboundedReceiver<Vec<u8>>,
-    hold: Option<QueueHold>,
-    writer: Option<JoinHandle<()>>,
-    reader: BucketReader,
-}
-
-impl Wire {
-    /// Build both ends. The writer thread drains the session's queue to
-    /// `out`, one push per bucket.
-    fn open(id: SocketId, send_cap: usize, drain: bool) -> (Self, Session) {
-        let ends = StreamEnds::open(send_cap);
-        let (tx, out) = mpsc::unbounded_channel();
-        let writer = drain.then(|| {
-            let queue: ByteQueue = ends.writer_queue.clone();
-            thread::spawn(move || {
-                while let Ok(bytes) = queue.pop_blocking() {
-                    queue.release(bytes.len());
-                    if let Err(_test_gone) = tx.send(bytes) {}
-                }
-            })
-        });
-        let mut reader = BucketReader::new();
-        reader.complete_handshake(DEFAULT_MAX_PACKET_SIZE);
-        (
-            Self {
-                id,
-                inject: Some(ends.inbound),
-                out,
-                hold: Some(ends.hold),
-                writer,
-                reader,
-            },
-            ends.session,
-        )
-    }
-
-    /// Push raw bytes toward the session, as a connector's reader would.
-    pub async fn inject(&self, bytes: Vec<u8>) {
-        let end = self.inject.as_ref().expect("the inbound end is still open");
-        end.send(bytes).await.expect("the session still reads");
-    }
-
-    /// Close the inbound end without storing an end: the peer closed.
-    pub fn peer_closes(&mut self) {
-        drop(self.inject.take());
-    }
-
-    /// Close the inbound end with `end` stored: the connector saw it.
-    pub fn connector_ends(&mut self, end: DialEnd) {
-        if let Some(inbound) = self.inject.take() {
-            inbound.close(end);
-            drop(inbound);
-        }
-    }
-
-    /// The next bucket the session wrote.
-    pub async fn read(&mut self) -> Received {
-        loop {
-            match self.reader.next_message() {
-                Ok(Some(received)) => return received,
-                Ok(None) => {}
-                Err(error) => panic!("the session wrote a malformed bucket: {error:?}"),
-            }
-            let bytes = within("a bucket from the session", self.out.recv())
-                .await
-                .expect("the session's queue closed before the bucket");
-            self.reader.feed(&bytes).expect("the session's bytes frame");
-        }
-    }
-
-    /// `true` once the session's queue closed with nothing more to read.
-    pub async fn drained(&mut self) -> bool {
-        within("the session's queue to close", self.out.recv())
-            .await
-            .is_none()
-    }
-
-    /// Whether anything is waiting to be read, after [`SETTLE`].
-    pub async fn is_quiet(&mut self) -> bool {
-        tokio::time::sleep(SETTLE).await;
-        self.out.try_recv().is_err()
-    }
-}
-
-impl Drop for Wire {
-    fn drop(&mut self) {
-        drop(self.inject.take());
-        drop(self.hold.take());
-        if let Some(writer) = self.writer.take() {
-            writer.join().expect("harness writer");
-        }
-    }
-}
-
-/// How the loopback answers the next dial.
-pub enum Answer {
-    /// Admit and build a channel; the wire goes to the test.
-    Connect,
-    /// Refuse with this end before any I/O.
-    Refuse(DialEnd),
-}
-
-/// The connectors: admission through the shared table, channels built
-/// in memory.
-pub struct Loopback {
-    sockets: Sockets,
-    answers: Mutex<VecDeque<Answer>>,
-    dialed: mpsc::UnboundedSender<Wire>,
-    send_cap: usize,
-}
-
-impl Dial for Loopback {
-    fn connect_async(&self, endpoint: &Endpoint) -> ConnectFuture {
-        let endpoint = *endpoint;
-        let answer = self
-            .answers
-            .lock()
-            .expect("answers")
-            .pop_front()
-            .unwrap_or(Answer::Connect);
-        let result = match answer {
-            Answer::Refuse(end) => Err(end),
-            Answer::Connect => {
-                let now = Tick::new(0);
-                match admit(&self.sockets, &endpoint, now, CEILING) {
-                    Err(cause) => Err(DialEnd::new(
-                        DialFailure::local(Retry::Again, Reached::NoStream),
-                        cause,
-                    )),
-                    Ok(open) => {
-                        let (wire, session) = Wire::open(open.id(), self.send_cap, true);
-                        if let Err(_test_gone) = self.dialed.send(wire) {}
-                        Ok(Channel {
-                            open,
-                            session,
-                            endpoint,
-                            gap: None,
-                        })
-                    }
-                }
-            }
-        };
-        Box::pin(async move { result })
-    }
-
-    fn stamp_stream_end(&self, _connector: ConnectorId, end: StreamEnd) -> DialFailure {
-        match end {
-            StreamEnd::PeerClosed => DialFailure::uncertain(Retry::Again, Reached::StreamOpened),
-            StreamEnd::IoError | StreamEnd::SendQueueFull => {
-                DialFailure::local(Retry::Again, Reached::StreamOpened)
-            }
-        }
-    }
-}
-
 /// Everything one test holds.
 pub struct Rig {
     pub layer: SessionLayer<MonotonicClock>,
@@ -400,13 +226,7 @@ impl Rig {
             established_told: AtomicUsize::new(0),
             closed_told: AtomicUsize::new(0),
         });
-        let (dialed_tx, dialed) = mpsc::unbounded_channel();
-        let loopback = Arc::new(Loopback {
-            sockets: sockets.clone(),
-            answers: Mutex::new(VecDeque::new()),
-            dialed: dialed_tx,
-            send_cap: settings.send_cap,
-        });
+        let (loopback, dialed) = Loopback::new(sockets.clone(), CEILING, settings.send_cap);
         let engine = EngineService::start(MonotonicClock::new());
         let timing = engine.handle();
         let (tip, tip_rx) = watch::channel(our_tip());
@@ -445,11 +265,7 @@ impl Rig {
 
     /// Queue how the loopback answers the next dial.
     pub fn next_dial(&self, answer: Answer) {
-        self.loopback
-            .answers
-            .lock()
-            .expect("answers")
-            .push_back(answer);
+        self.loopback.answer_next(answer);
     }
 
     /// Admit an inbound connection from `endpoint` and adopt it. Returns
@@ -466,15 +282,10 @@ impl Rig {
         send_cap: usize,
         drain: bool,
     ) -> (Wire, oneshot::Receiver<()>) {
-        let open = admit(&self.sockets, &endpoint, Tick::new(0), CEILING).expect("admitted");
-        let (wire, session) = Wire::open(open.id(), send_cap, drain);
+        let (wire, mut channel) = self.loopback.accept(endpoint, send_cap, drain);
         let (gap, gap_rx) = oneshot::channel();
-        self.layer.adopt(Channel {
-            open,
-            session,
-            endpoint,
-            gap: Some(gap),
-        });
+        channel.gap = Some(gap);
+        self.layer.adopt(channel);
         (wire, gap_rx)
     }
 
@@ -574,74 +385,22 @@ impl Rig {
 }
 
 pub fn handshake_request(network_id: [u8; 16], nonce: [u8; 32]) -> Vec<u8> {
-    let payload = HandshakeRequest {
-        node_data: BasicNodeData { network_id },
-        payload_data: peer_tip(),
-        nonce,
-    }
-    .store()
-    .expect("request stores");
-    invoke(Command::Handshake.wire_id(), &payload)
+    harness::handshake_request(network_id, nonce, peer_tip())
 }
 
 pub fn handshake_response(network_id: [u8; 16], list: Vec<PeerlistEntry>) -> Vec<u8> {
-    let payload = HandshakeResponse {
-        node_data: BasicNodeData { network_id },
-        payload_data: peer_tip(),
-        local_peerlist_new: list,
-    }
-    .store()
-    .expect("response stores");
-    response(Command::Handshake.wire_id(), &payload)
+    harness::handshake_response(network_id, list, peer_tip())
 }
 
 pub fn timed_sync_request() -> Vec<u8> {
-    let payload = TimedSyncRequest {
-        payload_data: peer_tip(),
-    }
-    .store()
-    .expect("request stores");
-    invoke(Command::TimedSync.wire_id(), &payload)
+    harness::timed_sync_request(peer_tip())
 }
 
 pub fn timed_sync_response(list: Vec<PeerlistEntry>) -> Vec<u8> {
-    let payload = TimedSyncResponse {
-        payload_data: peer_tip(),
-        local_peerlist_new: list,
-    }
-    .store()
-    .expect("response stores");
-    response(Command::TimedSync.wire_id(), &payload)
+    harness::timed_sync_response(list, peer_tip())
 }
 
-pub fn new_transactions(count: u8) -> Vec<u8> {
-    let payload = NewTransactions {
-        txs: (0..count).map(|i| vec![i; 8]).collect(),
-        padding: Vec::new(),
-        dandelionpp_fluff: true,
-    }
-    .store()
-    .expect("batch stores");
-    notify(Command::NewTransactions.wire_id(), &payload)
-}
-
-pub fn txpool_complement(count: u8) -> Vec<u8> {
-    let payload = GetTxpoolComplement {
-        hashes: (0..count).map(|i| [i; 32]).collect(),
-    }
-    .store()
-    .expect("request stores");
-    notify(Command::GetTxpoolComplement.wire_id(), &payload)
-}
-
-pub fn request_headers() -> Vec<u8> {
-    let payload = shekyl_levin::RequestHeaders {
-        block_ids: vec![[3; 32]],
-    }
-    .store()
-    .expect("request stores");
-    notify(Command::RequestHeaders.wire_id(), &payload)
-}
+pub use harness::{new_transactions, request_headers, txpool_complement};
 
 pub fn kind(end: DialEnd) -> CloseKind {
     end.cause().kind()

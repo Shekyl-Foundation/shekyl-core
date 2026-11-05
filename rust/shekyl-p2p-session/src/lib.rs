@@ -36,6 +36,8 @@ mod dial;
 mod endpoint;
 mod handle;
 mod handshake;
+#[cfg(feature = "harness")]
+pub mod harness;
 mod layer;
 mod nonce;
 mod owners;
@@ -47,7 +49,8 @@ pub use dial::{Channel, ConnectFuture, Dial};
 pub use endpoint::{admit, Endpoint, TOR_HOST_MAX};
 pub use handle::{Encoded, Established, Message, SendRefused, SessionHandle};
 pub use layer::{
-    DialAim, DialOutcome, Parts, PerConnector, SessionConfig, SessionLayer, SESSION_QUEUE_DEPTH,
+    DialAim, DialOutcome, Dialed, Parts, PerConnector, ProbeHandshake, SessionConfig, SessionLayer,
+    SESSION_QUEUE_DEPTH,
 };
 pub use nonce::{HandshakeNonce, HandshakeNonceSet, InFlightNonce, NonceTake};
 pub use owners::{

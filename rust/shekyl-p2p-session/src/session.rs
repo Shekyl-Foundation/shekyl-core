@@ -197,7 +197,7 @@ impl<'a, C: Clock + Clone + Send + Sync + 'static> Task<'a, C> {
                     Ok(None) => {}
                     Err(error) => {
                         tracing::debug!(id = ?self.id, ?error, "levin framing error");
-                        self.close(handshake::form_failure());
+                        self.close(self.form_end());
                         return Stop::Told;
                     }
                 }
@@ -227,13 +227,29 @@ impl<'a, C: Clock + Clone + Send + Sync + 'static> Task<'a, C> {
                         };
                         if let Err(error) = self.reader.feed(&frame) {
                             tracing::debug!(id = ?self.id, ?error, "levin framing error");
-                            self.close(handshake::form_failure());
+                            self.close(self.form_end());
                             return Stop::Told;
                         }
                     }
                 }
             };
             self.dispatch(received, permit);
+        }
+    }
+
+    /// The end a bucket the session's form does not admit carries: while
+    /// this node's own dial waits for its handshake response, the dialed
+    /// peer's refusal (`handshake::handshake_refused`, judged against the
+    /// address); on an inbound handshake or an established session, a form
+    /// failure (`handshake::form_failure`, local).
+    fn form_end(&self) -> DialEnd {
+        match self.state {
+            State::Handshaking(Role::Outbound { .. }) => {
+                handshake::handshake_refused(self.connector)
+            }
+            State::Handshaking(Role::Inbound) | State::Established(_) | State::Closing => {
+                handshake::form_failure()
+            }
         }
     }
 
@@ -312,7 +328,7 @@ impl<'a, C: Clock + Clone + Send + Sync + 'static> Task<'a, C> {
         let Some(command) = Command::from_wire(command) else {
             // Ingress admits only the ten; a reader that let another through
             // is a defect, and the session is refused all the same.
-            self.close(handshake::form_failure());
+            self.close(self.form_end());
             return;
         };
         match std::mem::replace(&mut self.state, State::Closing) {
@@ -342,10 +358,15 @@ impl<'a, C: Clock + Clone + Send + Sync + 'static> Task<'a, C> {
             ) => self.outbound_response(nonce, aim, reply, payload),
             (role, _, _) => {
                 tracing::debug!(id = ?self.id, ?command, "a bucket before the handshake; refused");
-                let end = handshake::form_failure();
-                if let Role::Outbound { reply, .. } = role {
+                let end = if let Role::Outbound { reply, .. } = role {
+                    // The dialed peer answered with something else: its
+                    // refusal, judged.
+                    let end = handshake::handshake_refused(self.connector);
                     answer(reply.send(Err(end)));
-                }
+                    end
+                } else {
+                    handshake::form_failure()
+                };
                 self.close(end);
             }
         }
@@ -431,6 +452,7 @@ impl<'a, C: Clock + Clone + Send + Sync + 'static> Task<'a, C> {
                 let end = DialEnd::local_close_after_channel();
                 self.close(end);
                 answer(reply.send(Ok(DialOutcome::Confirmed {
+                    id: self.id,
                     node_data: checked.node_data,
                     list,
                     sync: checked.sync,

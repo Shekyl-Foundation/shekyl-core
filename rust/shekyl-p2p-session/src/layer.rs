@@ -32,7 +32,7 @@ use crate::dial::{Channel, Dial};
 use crate::endpoint::Endpoint;
 use crate::handle::{Control, Established, SendRefused, SessionHandle};
 use crate::handshake;
-use crate::nonce::HandshakeNonceSet;
+use crate::nonce::{HandshakeNonceSet, InFlightNonce};
 use crate::owners::{Owners, SessionFacts};
 use crate::session::{self, Role};
 use crate::timing::Intervals;
@@ -104,12 +104,130 @@ pub enum DialOutcome {
         sync: CoreSyncData,
     },
     /// [`DialAim::Confirm`]: the response passed and the session is
-    /// closed as this node's own close after the channel.
+    /// closed as this node's own close after the channel. `id` is the
+    /// admission the response came on, so the list can be admitted under
+    /// the session that carried it.
     Confirmed {
+        id: SocketId,
         node_data: BasicNodeData,
         list: Vec<PeerlistEntry>,
         sync: CoreSyncData,
     },
+}
+
+/// The managed Tor's probe of this node's own onion (`TOR_SUPERVISOR.md`
+/// §4.5), ready to write ([`SessionLayer::mint_probe`]).
+///
+/// Holding it keeps the nonce in the set: dropping it erases the nonce, so
+/// a probe the supervisor gave up on cannot arrive as evidence afterwards.
+/// The supervisor holds it, not the dial task. The dial can end before the
+/// inbound handshake takes the nonce, and aborting the task drops whatever
+/// it owns later, on that task.
+#[derive(Debug)]
+pub struct ProbeHandshake {
+    /// The probe nonce. Keep it until the probe ends.
+    pub nonce: InFlightNonce,
+    /// The 1001 request frame carrying the nonce.
+    pub request: Vec<u8>,
+    /// When the nonce was minted; the arrival names the probe by it.
+    pub minted_at: Tick,
+}
+
+/// A channel the layer opened for an outbound dial, before its handshake
+/// ([`SessionLayer::connect`]). The caller dates the stream's open here,
+/// then runs [`Self::handshake`]. Dropped unhandshaken, the channel is
+/// closed as this node's own close and no row is ever placed.
+pub struct Dialed<C: Clock + Clone + Send + Sync + 'static> {
+    shared: Arc<Shared<C>>,
+    channel: Option<Channel>,
+    nonce: Option<InFlightNonce>,
+    request: Vec<u8>,
+}
+
+impl<C: Clock + Clone + Send + Sync + 'static> Dialed<C> {
+    /// The admission id the handshake will run under.
+    #[must_use]
+    pub fn id(&self) -> SocketId {
+        self.channel
+            .as_ref()
+            .expect("a dialed channel is held until its handshake")
+            .open
+            .id()
+    }
+
+    /// Run the outbound handshake and return what it said. [`DialAim::Keep`]
+    /// leaves the session established; the owners have been told before
+    /// this returns. A failure is the row's end. A caller that stops
+    /// waiting (drops this future after the row is placed) ends the
+    /// session as this node's own close after the channel: a session
+    /// nobody is waiting to keep is not kept.
+    ///
+    /// # Errors
+    /// The handshake's end.
+    pub async fn handshake(mut self, aim: DialAim) -> Result<DialOutcome, DialEnd> {
+        let channel = self
+            .channel
+            .take()
+            .expect("a dialed channel is held until its handshake");
+        let nonce = self
+            .nonce
+            .take()
+            .expect("a dialed channel holds its nonce until its handshake");
+        let request = std::mem::take(&mut self.request);
+        let id = channel.open.id();
+        let (reply, outcome) = oneshot::channel();
+        self.shared.place(
+            channel,
+            Role::Outbound {
+                request,
+                nonce,
+                aim,
+                reply,
+            },
+        );
+        tracing::debug!(?id, ?aim, "session adopted (outbound)");
+        let mut abandon = Abandon {
+            shared: Arc::clone(&self.shared),
+            id,
+            armed: true,
+        };
+        let result = outcome
+            .await
+            .unwrap_or_else(|_| Err(DialEnd::local_close_after_channel()));
+        abandon.armed = false;
+        result
+    }
+}
+
+impl<C: Clock + Clone + Send + Sync + 'static> Drop for Dialed<C> {
+    fn drop(&mut self) {
+        let Some(Channel {
+            open, session, gap, ..
+        }) = self.channel.take()
+        else {
+            return;
+        };
+        drop(session);
+        drop(gap);
+        let _ = open.close(CloseCause::new(CloseKind::LocalClose));
+    }
+}
+
+/// Ends a placed outbound session when the dial's caller stops waiting
+/// for it. Disarmed once the outcome has been read.
+struct Abandon<C: Clock + Clone + Send + Sync + 'static> {
+    shared: Arc<Shared<C>>,
+    id: SocketId,
+    armed: bool,
+}
+
+impl<C: Clock + Clone + Send + Sync + 'static> Drop for Abandon<C> {
+    fn drop(&mut self) {
+        if self.armed {
+            self.shared
+                .close(self.id, DialEnd::local_close_after_channel());
+        }
+    }
 }
 
 /// What the composition hands the layer.
@@ -249,13 +367,26 @@ impl<C: Clock + Clone + Send + Sync + 'static> SessionLayer<C> {
         tracing::debug!(?id, "session adopted (inbound)");
     }
 
-    /// Dial `endpoint`, run the outbound handshake, and return what it
-    /// said. [`DialAim::Keep`] leaves the session established; the owners
-    /// have been told before this returns. A failure is the row's end.
+    /// The engine clock's now: the one clock every owner dates by.
+    #[must_use]
+    pub fn now(&self) -> Tick {
+        self.shared.timing.clock().now()
+    }
+
+    /// The runtime session tasks run on, for an owner's own tasks.
+    #[must_use]
+    pub fn runtime(&self) -> &tokio::runtime::Handle {
+        &self.shared.runtime
+    }
+
+    /// Open a channel to `endpoint` with a 1001 request minted for it: the
+    /// nonce is in the set from here. The caller dates the open and runs
+    /// [`Dialed::handshake`].
     ///
     /// # Errors
-    /// The connector's end, or the handshake's.
-    pub async fn dial(&self, endpoint: Endpoint, aim: DialAim) -> Result<DialOutcome, DialEnd> {
+    /// The connector's end: the dial never reached a stream, or the
+    /// request could not be built.
+    pub async fn connect(&self, endpoint: Endpoint) -> Result<Dialed<C>, DialEnd> {
         let shared = &self.shared;
         let connector = endpoint.connector();
         let nonce = {
@@ -269,21 +400,43 @@ impl<C: Clock + Clone + Send + Sync + 'static> SessionLayer<C> {
             return Err(DialEnd::local_close());
         };
         let channel = shared.connectors.connect_async(&endpoint).await?;
-        let id = channel.open.id();
-        let (reply, outcome) = oneshot::channel();
-        shared.place(
-            channel,
-            Role::Outbound {
-                request,
-                nonce,
-                aim,
-                reply,
-            },
-        );
-        tracing::debug!(?id, ?aim, "session adopted (outbound)");
-        outcome
-            .await
-            .unwrap_or_else(|_| Err(DialEnd::local_close_after_channel()))
+        Ok(Dialed {
+            shared: Arc::clone(shared),
+            channel: Some(channel),
+            nonce: Some(nonce),
+            request,
+        })
+    }
+
+    /// [`Self::connect`] then [`Dialed::handshake`].
+    ///
+    /// # Errors
+    /// The connector's end, or the handshake's.
+    pub async fn dial(&self, endpoint: Endpoint, aim: DialAim) -> Result<DialOutcome, DialEnd> {
+        self.connect(endpoint).await?.handshake(aim).await
+    }
+
+    /// Mint the managed Tor's probe of this node's own onion
+    /// (`TOR_SUPERVISOR.md` §4.5): a probe nonce on the Tor connector and
+    /// the 1001 request carrying it. `None` when the request could not be
+    /// built.
+    #[must_use]
+    pub fn mint_probe(&self) -> Option<ProbeHandshake> {
+        let shared = &self.shared;
+        let minted_at = self.now();
+        let nonce = {
+            let mut rng = shared.rng.lock().expect("session rng");
+            shared
+                .nonces
+                .mint_probe(ConnectorId::Tor, minted_at, &mut **rng)
+        };
+        let tip = shared.tip.borrow().clone();
+        let request = handshake::request_bucket(shared.config.network_id, tip, *nonce.bytes())?;
+        Some(ProbeHandshake {
+            nonce,
+            request,
+            minted_at,
+        })
     }
 
     /// Record `end` as the session's first end and close it: the socket is

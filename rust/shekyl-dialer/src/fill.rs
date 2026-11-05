@@ -12,18 +12,9 @@
 //! The rule decides the list and the aim. It does not pick the address:
 //! the draw is the peer lists', uniform over the candidates.
 
-/// What a dial is for. The aim is input; the outcome is what the dial
-/// became. The handshake owner does not infer one from the other.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum DialAim {
-    /// Keep the session. The handshake checks have already passed; the
-    /// strand is notified afterwards and does not answer.
-    Keep,
-    /// Confirm the address and close in Rust. No adopt, no post, no row.
-    /// The dial does not count toward the outbound target and the relay
-    /// is not flipped.
-    Confirm,
-}
+/// What a dial is for: the session layer's own aim. The aim is input; the
+/// outcome is what the dial became, and neither is inferred from the other.
+pub use shekyl_p2p_session::DialAim;
 
 /// Which list the draw is from.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]

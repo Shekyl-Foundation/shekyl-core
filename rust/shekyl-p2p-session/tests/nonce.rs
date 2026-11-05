@@ -3,21 +3,13 @@
 // All rights reserved.
 // BSD-3-Clause
 
-//! The self-connection nonces and the wake spacing.
+//! The self-connection and probe nonces (brief §7.4). The set was the
+//! dialer's until the remnant cutover moved it into the session layer,
+//! which mints at each dial and queries at each inbound handshake.
 
-use shekyl_dialer::{next_wake_nanos, HandshakeNonceSet, NonceTake};
 use shekyl_draw_rng::SplitMix64;
-use shekyl_peerlist::dial_profile;
-use shekyl_peerlist::ConnectorId;
-use shekyl_peerlist::Tick;
-
-/// The wake spacing this file's connector dials at: its dial profile's.
-const WAKE_BASE_NANOS: u64 = shekyl_peerlist::dial_profile(ConnectorId::Clearnet)
-    .wake
-    .base_nanos;
-const WAKE_JITTER_NANOS: u64 = shekyl_peerlist::dial_profile(ConnectorId::Clearnet)
-    .wake
-    .jitter_nanos;
+use shekyl_p2p_session::{ConnectorId, HandshakeNonceSet, NonceTake};
+use shekyl_timing_engine::Tick;
 
 /// A dial to our own listener: the listener reads the request while the
 /// attempt is still in flight, and finds the nonce in the set.
@@ -154,25 +146,4 @@ fn a_probe_nonce_is_the_probe_on_tor_and_a_defect_elsewhere() {
     drop(probe);
     drop(second);
     assert_eq!(set.in_flight(ConnectorId::Tor), 1);
-}
-
-#[test]
-fn the_wake_gap_is_half_a_second_plus_up_to_one_second() {
-    let mut rng = SplitMix64::new(6);
-    let mut low = u64::MAX;
-    let mut high = 0;
-    let mut sum = 0u128;
-    let draws = 20_000u64;
-    for _ in 0..draws {
-        let gap = next_wake_nanos(dial_profile(ConnectorId::Clearnet).wake, &mut rng);
-        assert!((WAKE_BASE_NANOS..=WAKE_BASE_NANOS + WAKE_JITTER_NANOS).contains(&gap));
-        low = low.min(gap);
-        high = high.max(gap);
-        sum += u128::from(gap);
-    }
-    let mean = u64::try_from(sum / u128::from(draws)).expect("fits");
-    // Mean 1 s; both ends of the range are reached to within 1 %.
-    assert!((990_000_000..=1_010_000_000).contains(&mean), "mean {mean}");
-    assert!(low < WAKE_BASE_NANOS + WAKE_JITTER_NANOS / 100);
-    assert!(high > WAKE_BASE_NANOS + WAKE_JITTER_NANOS * 99 / 100);
 }

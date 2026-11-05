@@ -35,14 +35,27 @@ pub(crate) const fn network_mismatch(connector: ConnectorId) -> DialEnd {
     )
 }
 
-/// The peer did not follow the session's form: a bucket the state does
-/// not accept, a payload that did not decode, a response with no request
-/// (PWD-B1). This node's own close of a stream that opened; the judge
-/// reads it as the connector's table says.
+/// The peer did not follow the session's form on an established session
+/// or an inbound handshake: a bucket the state does not accept, a payload
+/// that did not decode, a response with no request (PWD-B1). This node's
+/// own close of a stream that opened; no dial is judged by it.
 pub(crate) const fn form_failure() -> DialEnd {
     DialEnd::new(
         DialFailure::local(Retry::Again, Reached::StreamOpened),
         CloseCause::new(CloseKind::SessionRefused),
+    )
+}
+
+/// The peer this node dialed did not answer its handshake with a
+/// well-formed 1001 response: a bucket that broke framing, that is not the
+/// response, or whose payload did not decode. The Levin layer's refusal
+/// (`DIALER_OUTAGE_EVIDENCE.md` §2.2): the far end answered about this
+/// destination, final, and proof of misbehaviour where the connector
+/// authenticates the destination (the gray lifecycle, test 6c).
+pub(crate) const fn handshake_refused(connector: ConnectorId) -> DialEnd {
+    DialEnd::new(
+        DialFailure::refused_by_peer(connector, Reached::StreamOpened),
+        CloseCause::new(CloseKind::LevinHandshakeRejected),
     )
 }
 
@@ -97,7 +110,7 @@ pub(crate) fn check_response(
     network_id: [u8; 16],
     connector: ConnectorId,
 ) -> Result<(Checked, Vec<PeerlistEntry>), DialEnd> {
-    let response = HandshakeResponse::load(payload).map_err(|_| form_failure())?;
+    let response = HandshakeResponse::load(payload).map_err(|_| handshake_refused(connector))?;
     check_network(&response.node_data, network_id, connector)?;
     Ok((
         Checked {
@@ -201,12 +214,22 @@ mod tests {
         assert_eq!(nonce, [9; 32]);
     }
 
+    /// An inbound request that does not decode is a form failure, local.
+    /// A response that does not decode is the dialed peer's refusal: the
+    /// Levin layer's, and proof of misbehaviour only where the connector
+    /// authenticates the destination.
     #[test]
-    fn bytes_that_do_not_decode_are_a_form_failure() {
+    fn bytes_that_do_not_decode_are_a_form_failure_or_the_peers_refusal() {
         let end = check_request(b"not a section", OURS, ConnectorId::Clearnet).expect_err("form");
         assert_eq!(end.cause().kind(), CloseKind::SessionRefused);
-        let end = check_response(b"not a section", OURS, ConnectorId::Tor).expect_err("form");
-        assert_eq!(end.cause().kind(), CloseKind::SessionRefused);
+        assert_eq!(end.failure().evidence(), Evidence::Local);
+        for (connector, proves) in [(ConnectorId::Tor, true), (ConnectorId::Clearnet, false)] {
+            let end = check_response(b"not a section", OURS, connector).expect_err("refused");
+            assert_eq!(end.cause().kind(), CloseKind::LevinHandshakeRejected);
+            assert!(matches!(end.failure().evidence(), Evidence::Destination(_)));
+            assert_eq!(end.failure().proves_misbehaviour(), proves, "{connector:?}");
+            assert_eq!(end.failure().retry(), Retry::Final);
+        }
     }
 
     #[test]
