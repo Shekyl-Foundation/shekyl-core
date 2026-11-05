@@ -175,7 +175,7 @@ session_test!(the_peer_closing_before_the_handshake_is_its_end, async {
 // inbound end with its stamped end. A send the session makes in between is
 // refused, and the session's end is still the connector's, not this
 // node's own close.
-session_test!(a_send_on_a_failed_writer_ends_with_the_connectors_end, async {
+session_test!(a_failed_writer_ends_with_the_connectors_end, async {
     let mut rig = Rig::new(Settings::default());
     let (mut wire, _gap) = rig.accept(inbound_clearnet(9));
     let _session = rig.establish_inbound(&mut wire).await;
