@@ -76,6 +76,9 @@ const PRODUCTION_PINS: [(&str, usize, usize); 7] = [
 const EXCLUDED_EXPECTED: usize = 10;
 // One derivation (NI-R7): +4 (the harness fixture wallet's fixed salt and its three infos).
 const TEST_ONLY_EXPECTED: usize = 11;
+/// Labels mainnet used and then retired: none before genesis (Rick,
+/// 2026-11-05). The binding gate refuses their reuse in code.
+const RETIRED_EXPECTED: usize = 0;
 
 /// Well-formed mechanism ids: `1`..=`7` (live mechanisms) or `x` (excluded).
 fn is_valid_mech(mech: &str) -> bool {
@@ -85,7 +88,7 @@ fn is_valid_mech(mech: &str) -> bool {
 fn is_valid_status(status: &str) -> bool {
     matches!(
         status,
-        "shekyl-live" | "frozen-inherited" | "excluded" | "test-only"
+        "shekyl-live" | "frozen-inherited" | "excluded" | "test-only" | "retired"
     )
 }
 
@@ -112,7 +115,8 @@ fn parse_rows(text: &str) -> Result<Vec<Row<'_>>, String> {
             continue;
         }
         let f: Vec<&str> = line.split('\t').collect();
-        // mech  literal  file  const  status  key  notes
+        // mech  literal  file  const  status  binding  width  role  key  notes
+        // (the binding columns are tests/domain_binding.rs's)
         let mech = f.first().copied().unwrap_or("").trim();
         if mech.is_empty() || mech.starts_with('#') {
             continue;
@@ -139,7 +143,7 @@ fn parse_rows(text: &str) -> Result<Vec<Row<'_>>, String> {
         if !is_valid_status(status) {
             return Err(format!(
                 "line {line_no}: bad status {status:?} — expected shekyl-live | \
-                 frozen-inherited | excluded | test-only"
+                 frozen-inherited | excluded | test-only | retired"
             ));
         }
         // The excluded bucket and the excluded status must agree — a typo'd
@@ -150,7 +154,7 @@ fn parse_rows(text: &str) -> Result<Vec<Row<'_>>, String> {
                  mech x rows must be status excluded, and vice versa"
             ));
         }
-        let key = f.get(5).copied().unwrap_or("").trim();
+        let key = f.get(8).copied().unwrap_or("").trim();
         rows.push(Row {
             mech,
             literal,
@@ -245,12 +249,14 @@ fn registry_census_matches_pins() {
     let mut frozen: HashMap<&str, usize> = HashMap::new();
     let mut excluded = 0usize;
     let mut test_only = 0usize;
+    let mut retired = 0usize;
     for row in &rows {
         match row.status {
             "shekyl-live" => *live.entry(row.mech).or_default() += 1,
             "frozen-inherited" => *frozen.entry(row.mech).or_default() += 1,
             "excluded" => excluded += 1,
             "test-only" => test_only += 1,
+            "retired" => retired += 1,
             other => unreachable!("parse_rows validated status, got {other:?}"),
         }
     }
@@ -274,6 +280,10 @@ fn registry_census_matches_pins() {
     assert_eq!(
         excluded, EXCLUDED_EXPECTED,
         "excluded (mech x) row count drifted from the pin"
+    );
+    assert_eq!(
+        retired, RETIRED_EXPECTED,
+        "retired-after-genesis row count drifted from the pin"
     );
     assert_eq!(
         test_only, TEST_ONLY_EXPECTED,
