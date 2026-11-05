@@ -65,6 +65,8 @@
 mod facts;
 mod genesis;
 mod mining;
+mod p2p_facts;
+mod pool_door;
 mod producer;
 mod sync_owner;
 
@@ -73,9 +75,12 @@ pub use mining::{MiningControl, MiningRefused, MiningStatus, PostedJob};
 pub use producer::descriptors as producer_descriptors;
 pub use shekyl_chain_sync::Declaration;
 pub use shekyl_chain_sync_runtime::owner::{EndCause, Ended as SyncEnded};
+pub use shekyl_p2p::{
+    BanTarget, ClearnetPlan, LinkLimits, Network, NetworkPlan, PeerPlan, SeedNetwork, TorPlan,
+};
 
 use std::num::NonZeroUsize;
-use std::sync::{Arc, Mutex, PoisonError};
+use std::sync::{Arc, Mutex, OnceLock, PoisonError};
 use std::time::Duration;
 
 use shekyl_block_template::MinerKeys;
@@ -96,17 +101,19 @@ use shekyl_daemon_rpc::store_facts::{NodeIdentity, RulesAt, StoreFacts};
 use shekyl_hash_budget::Budget;
 use shekyl_mempool::Pool;
 use shekyl_miner::{JobBoard, MiningAddress};
+use shekyl_p2p::{CoreSyncData, NetworkParts, NodeSync};
 use shekyl_pow_randomx::CacheStore;
+use shekyl_relay::TxId;
 use shekyl_runtime::{RuntimeBudget, ThreadName};
 use shekyl_transport_layer::Sockets;
-use shekyl_types::{BlockHeight, UnixSeconds};
+use shekyl_types::{BlockHeight, TxHash, UnixSeconds};
 use tokio::sync::Notify;
 
 use crate::facts::{
     BansBridge, ChainBridge, DoorBridge, DoorEntry, PoolBridge, StopBridge, Surroundings,
 };
 use crate::genesis::{daemon_network, pinned_genesis};
-use shekyl_ffi::seam_ffi::bans::BanPath;
+use crate::pool_door::{Departures, NodePoolDoor};
 
 /// The runtime's blocking threads for `permits` hasher permits and an
 /// arrival window of `window` (module docs, "Blocking threads").
@@ -183,6 +190,9 @@ pub enum OpenError {
     /// Chain sync's owner did not start.
     #[error("chain sync did not start: {0}")]
     Sync(String),
+    /// The network did not start.
+    #[error("the network did not start: {0}")]
+    Network(String),
 }
 
 /// What [`Node::open`] needs from the composition root, which holds `main`.
@@ -199,23 +209,11 @@ pub struct OpenArgs<'a> {
     /// The stop latch. `shekyl-daemon` passes `signals::request_stop`,
     /// because this crate cannot depend on the binary.
     pub request_stop: Arc<dyn Fn() + Send + Sync>,
-    /// The shell's relay entry, handed in the same way (DC-F43): `true`
-    /// when the relay took the committed transaction's blob; `false` is no
-    /// route (no notifier bound, whatever the reason), and the node shows
-    /// the transaction at the origin. The binary passes the C++
-    /// `shekyl_shell_relay_local`; a test passes [`no_relay`]. RD deletes
-    /// it with `levin_notify`.
-    pub relay_local: RelayLocal,
-}
-
-/// The shell's relay entry, as [`OpenArgs::relay_local`] takes it.
-pub type RelayLocal = Arc<dyn Fn(&[u8]) -> bool + Send + Sync>;
-
-/// A [`RelayLocal`] with no route: an offline node's, and a test's. Every
-/// transaction it is handed is shown at the origin.
-#[must_use]
-pub fn no_relay() -> RelayLocal {
-    Arc::new(|_| false)
+    /// The network as the configuration resolves it: which connectors
+    /// listen and dial, the peer lists, the link limits, the operator's
+    /// bans. The node builds the [`Network`] from it after the chain is
+    /// open, so the handshake's tip is the chain's.
+    pub plan: NetworkPlan,
 }
 
 struct Slots {
@@ -227,6 +225,8 @@ struct Slots {
     facts: Arc<Mutex<Option<Arc<StoreFacts>>>>,
     pool: Arc<Mutex<Option<Arc<Mutex<Pool>>>>>,
     door: Arc<Mutex<Option<DoorEntry>>>,
+    /// The relay door's store handle (`pool_door`).
+    store: pool_door::StoreSlot,
 }
 
 /// The daemon's one node (module docs).
@@ -241,10 +241,14 @@ pub struct Node {
     /// The `dev-rpc` row: whether the armed test levers are served.
     armed: bool,
     sockets: Sockets,
+    /// The network (`P2P_3_REMNANT_CUTOVER_BRIEF.md` §2): the connectors,
+    /// the session layer and its owners. Stopped by [`Self::stop`], after
+    /// chain sync is asked to stop and before it is joined.
+    network: Network,
     handles: Handles,
     service: Mutex<Option<Service<ProductionSubstrate>>>,
     /// Chain sync's owner (CS-5 §2), the node's for its lifetime. It
-    /// publishes into [`Self::sync`], and the seam's bind hands it the hub.
+    /// publishes into [`Self::sync`] and reads the session layer's port.
     sync_owner: Mutex<Option<sync_owner::Held>>,
     /// How chain sync's owner ended, once it has ([`Self::sync_ended`]).
     sync_ended: tokio::sync::watch::Receiver<Option<shekyl_chain_sync_runtime::owner::Ended>>,
@@ -282,26 +286,34 @@ impl Node {
         let submit_pool = Arc::clone(&pool);
         let complement_pool = Arc::clone(&pool);
         let sync_substrate = ProductionSubstrate::clone(&substrate);
-        let departed = pool_departed();
+        // Every id that leaves the pool releases its relay state in the
+        // relay owner (`DRS_X_STORE_FLIP.md` §2), once the network is up.
+        let departures = Arc::new(Departures::default());
+        let departed: shekyl_chain_ingest::service::Departed = Arc::new({
+            let departures = Arc::clone(&departures);
+            move |ids| departures.departed(ids)
+        });
         // Q9: fluff at this tip rebuilds the posted job. Same Notify the
         // follower waits on for parked bodies.
         let shown = Arc::new(Notify::new());
-        let shown_hook: shekyl_ffi::pool_ffi::Shown = {
-            let shown = Arc::clone(&shown);
-            Arc::new(move || shown.notify_one())
-        };
-        shekyl_ffi::pool_ffi::install(
-            Arc::clone(&store),
-            Arc::clone(&pool),
+        let pool_slot = Arc::new(Mutex::new(Some(Arc::clone(&pool))));
+        let store_slot: pool_door::StoreSlot = Arc::new(Mutex::new(Some(Arc::clone(&store))));
+        let pool_door = Arc::new(NodePoolDoor::new(
+            Arc::clone(&store_slot),
+            Arc::clone(&pool_slot),
             rules,
             AdmissionPolicy::GENESIS,
-            Arc::clone(&departed),
-            shown_hook,
-        );
-        let pool_slot = Arc::new(Mutex::new(Some(Arc::clone(&pool))));
+            Arc::clone(&departures),
+            Arc::clone(&shown),
+        ));
+        let pool_door_for_nudge = Arc::clone(&pool_door);
         let sockets = Sockets::new();
+        // The network, once it starts: the bundle producer's managed route
+        // reads it at use, and the producer is seated before the chain
+        // service the network's tip watch comes from.
+        let network_slot: Arc<OnceLock<Network>> = Arc::new(OnceLock::new());
         let board = Arc::new(JobBoard::new());
-        let network = args.config.network;
+        let nettype = args.config.network;
         let declared = declaration(args.config);
         // No view until genesis has connected, so the follower never builds
         // a genesis of its own. The owner, started after genesis connects,
@@ -317,13 +329,13 @@ impl Node {
             ml_kem_ek: address.ml_kem.clone(),
         });
         let miner_address = mine_address
-            .map(|address| MiningAddress::decode(&address.text, network.address_network()))
+            .map(|address| MiningAddress::decode(&address.text, nettype.address_network()))
             .transpose()
             .map_err(|refused| OpenError::Rules(format!("the mine-address row: {refused}")))?;
         // Every template draws its `0x0C` commitment from this ring, and the
         // bundle producer files from it (`SO-D12` increment 4c).
         let witness = Arc::new(shekyl_bundle_producer::WitnessRing::new());
-        let producer = producer::seat(args.config, &store, &witness);
+        let producer = producer::seat(args.config, &store, &witness, Arc::clone(&network_slot));
         let follow = Follow {
             job: Some(JobSeat {
                 board: Arc::clone(&board),
@@ -365,7 +377,7 @@ impl Node {
                 budget.clone(),
                 follow,
             );
-            if let Err(error) = connect_genesis(&service, network).await {
+            if let Err(error) = connect_genesis(&service, nettype).await {
                 if let Err(stop) = service.stop().await {
                     tracing::error!("genesis did not connect, and the service stopped on {stop}");
                 }
@@ -398,6 +410,58 @@ impl Node {
                 return Err(OpenError::Service(error.to_string()));
             }
         };
+        // The handshake's tip (DX-Q2 item 5): the one tip source, published
+        // before the network starts so no handshake, inbound or outbound,
+        // finds none (CS-5 F4), then on every change until the connector
+        // drops its sender.
+        let mut handshake_tips = tips.clone();
+        let (tip_tx, tip_rx) =
+            tokio::sync::watch::channel(core_sync_data(handshake_tips.borrow_and_update().tip));
+        runtime.spawn(async move {
+            while handshake_tips.changed().await.is_ok() {
+                let tip = handshake_tips.borrow_and_update().tip;
+                tip_tx.send_replace(core_sync_data(tip));
+            }
+        });
+        // The relay owner's `Synced` watch, derived from chain sync's state.
+        let mut sync_states = sync.clone();
+        let (node_sync_tx, node_sync) =
+            tokio::sync::watch::channel(node_sync_of(*sync_states.borrow_and_update()));
+        runtime.spawn(async move {
+            while sync_states.changed().await.is_ok() {
+                let state = node_sync_of(*sync_states.borrow_and_update());
+                node_sync_tx.send_if_modified(|current| {
+                    let changed = *current != state;
+                    *current = state;
+                    changed
+                });
+            }
+        });
+        let (sync_port, sync_inbound) = shekyl_chain_sync_runtime::port::port();
+        let network = match Network::start(NetworkParts {
+            plan: args.plan,
+            sockets: sockets.clone(),
+            sync: Arc::new(sync_port),
+            pool: pool_door,
+            node_sync,
+            tip: tip_rx,
+        }) {
+            Ok(network) => network,
+            Err(error) => {
+                abandon_open(
+                    runtime,
+                    OpenUnwind::StillRunning {
+                        service,
+                        why: "the network did not start",
+                    },
+                );
+                return Err(OpenError::Network(error.to_string()));
+            }
+        };
+        departures.attach(network.relay().clone());
+        network_slot
+            .set(network.clone())
+            .unwrap_or_else(|_| unreachable!("the network slot is set once, here"));
         let sync_owner = match sync_owner::spawn(sync_owner::Parts {
             store: Arc::clone(&store),
             door: service.door(),
@@ -405,6 +469,7 @@ impl Node {
             tips: tips.clone(),
             latch: latch.clone(),
             executor: Arc::new(Executor::new(budget.clone(), sync_substrate)),
+            engine: network.engine(),
             rules,
             requesting: if args.config.dev.sync {
                 Requesting::On
@@ -413,10 +478,12 @@ impl Node {
             },
             declaration: declared,
             pool: complement_pool,
+            inbound: sync_inbound,
             state: sync_tx,
         }) {
             Ok(owner) => owner,
             Err(error) => {
+                network.stop();
                 abandon_open(
                     runtime,
                     OpenUnwind::StillRunning {
@@ -427,27 +494,6 @@ impl Node {
                 return Err(error);
             }
         };
-        // DX-Q2 item 5: the dialer's outbound handshake is a consumer of the
-        // one tip source. Publish the tip the watch holds now, then every
-        // change; the task ends when the connector drops its sender.
-        // The first tip is published here, before open returns: the seam
-        // binds after, so no handshake, inbound or outbound, finds none
-        // (CS-5 F4, `shekyl_p2p_handshake_tip`).
-        let mut handshake_tips = tips.clone();
-        if let Some(tip) = handshake_tips.borrow_and_update().tip {
-            shekyl_ffi::dialer_ffi::publish_chain_tip(&tip);
-        }
-        // The ban timer is the table's, not the zone host's. An offline
-        // node never starts a zone, and a finite ban would otherwise stay
-        // in force after its deadline (OE-D9: a lookup does not end one).
-        shekyl_ffi::seam_ffi::bans::start(runtime.handle(), sockets.clone());
-        runtime.spawn(async move {
-            while handshake_tips.changed().await.is_ok() {
-                if let Some(tip) = handshake_tips.borrow_and_update().tip {
-                    shekyl_ffi::dialer_ffi::publish_chain_tip(&tip);
-                }
-            }
-        });
         let pool_health = service.pool_health();
         shekyl_daemon_rpc::submit::install_production(
             shekyl_daemon_rpc::submit::RustPoolShim::new(
@@ -464,18 +510,22 @@ impl Node {
                 move |fault| health.retire(fault)
             }))
             .nudging(Arc::new({
-                // The shell answers `false` only when no relay exists: an
-                // offline node never constructs one, so there is no network
-                // to hide from and the transaction is shown at once (RX-2,
-                // Rick 2026-10-29). With a relay, the answer is `true`
-                // before the zone plans on its strand, so `NoOwnEdge` and
-                // `AwaitSync` never reach this branch: the zone holds those
-                // (`hold_origin`), neither fluffed nor shown. An empty blob
-                // is nothing to relay.
-                let relay_local = args.relay_local;
-                move |txid, blob| {
-                    if blob.is_empty() || !relay_local(blob) {
-                        shekyl_ffi::pool_ffi::note_shown(*txid);
+                // An offline node has no network to hide from, so the
+                // transaction is shown at once (RX-2, Rick 2026-10-29).
+                // With one, the relay owner takes it before the zone plans
+                // on its strand, so `NoOwnEdge` and `AwaitSync` never reach
+                // this branch: the zone holds those (`hold_origin`),
+                // neither fluffed nor shown. The owner refuses only once it
+                // has stopped. An empty blob is nothing to relay.
+                let offline = args.config.offline();
+                let relay = network.relay().clone();
+                let door = Arc::clone(&pool_door_for_nudge);
+                move |txid: &TxHash, blob: &[u8]| {
+                    let taken = !offline
+                        && !blob.is_empty()
+                        && relay.relay_local(TxId::from_bytes(txid.to_bytes()), blob.to_vec());
+                    if !taken {
+                        door.note_shown(*txid);
                     }
                 }
             }))
@@ -495,6 +545,7 @@ impl Node {
             latch,
             view: sync_owner.view(),
             health: pool_health.clone(),
+            network: Arc::new(network.clone()),
         });
         let mining =
             Arc::new(MiningControl::new(
@@ -526,7 +577,7 @@ impl Node {
             Arc::new(RulesOf(rules)),
             surroundings,
             NodeIdentity {
-                nettype: daemon_network(network),
+                nettype: daemon_network(nettype),
                 release_build: args.release_build,
                 version: args.version,
                 start_time: started_at,
@@ -539,16 +590,26 @@ impl Node {
         let door_slot = Arc::new(Mutex::new(Some(DoorEntry { door, rewinder })));
         let handles = Handles {
             chain: Arc::new(ChainBridge::new(Arc::clone(&facts_slot))),
-            pool: Arc::new(PoolBridge::new(Arc::clone(&pool_slot), pool_health.clone())),
+            pool: Arc::new(PoolBridge::new(
+                Arc::clone(&pool_slot),
+                pool_health.clone(),
+                Arc::clone(&departed),
+            )),
             door: Arc::new(DoorBridge::new(Arc::clone(&door_slot), tips)),
             mining: Arc::clone(&mining) as _,
-            bans: Arc::new(BansBridge::new(BanPath::over(sockets.clone()))),
+            bans: Arc::new(BansBridge::new(network.bans().clone())),
             stop: Arc::new(StopBridge::new(Arc::clone(&args.request_stop))),
+            p2p: Arc::new(p2p_facts::NodeP2pFacts::new(
+                network.clone(),
+                args.config.offline(),
+                started_at,
+            )),
         };
         let slots = Arc::new(Slots {
             facts: facts_slot,
             pool: pool_slot,
             door: door_slot,
+            store: store_slot,
         });
         let node = Self {
             slots,
@@ -557,6 +618,7 @@ impl Node {
             mining,
             armed: args.config.dev.rpc,
             sockets,
+            network,
             handles,
             service: Mutex::new(Some(service)),
             sync_ended: sync_owner.ended(),
@@ -574,11 +636,16 @@ impl Node {
         self.handles.clone()
     }
 
-    /// The socket table. `main` installs it as `process_sockets`'s table
-    /// before anything else reads that function.
+    /// The socket table: the one admission every connector goes through.
     #[must_use]
     pub fn sockets(&self) -> Sockets {
         self.sockets.clone()
+    }
+
+    /// The network: what the daemon's Tor supervisor and its stop read.
+    #[must_use]
+    pub fn network(&self) -> &Network {
+        &self.network
     }
 
     /// What the board holds, and why not when it holds nothing.
@@ -618,12 +685,11 @@ impl Node {
             .clone()
     }
 
-    /// Ask chain sync to stop before the seam is torn down.
+    /// Ask chain sync to stop before the network is.
     ///
     /// [`Self::stop`] joins the owner afterwards. A second call, and a
-    /// call after the owner has been taken, do nothing. The daemon's
-    /// teardown calls this before it shuts the network down, which drops
-    /// the hub the owner is waiting on.
+    /// call after the owner has been taken, do nothing. The network's stop
+    /// drops the port the owner reads, so the ask comes first.
     pub fn request_sync_stop(&self) {
         if let Some(owner) = self
             .sync_owner
@@ -638,8 +704,8 @@ impl Node {
     /// Ask chain sync's owner to publish `state`.
     ///
     /// The owner is still the only publisher. The node's tests use this
-    /// while the seam is unbound, which is before the owner accepts any
-    /// other input. The runtime enables it from this crate's dev edge
+    /// on a network with no connectors, which is before the owner accepts
+    /// any other input. The runtime enables it from this crate's dev edge
     /// (`publish-for-test`); a shipped build has no such ask.
     #[cfg(test)]
     pub fn publish_sync_for_test(&self, state: SyncState) {
@@ -697,11 +763,14 @@ impl Node {
         // that gate and is the last thing this stop does, so a stop already
         // inside the gate finishes before it.
         self.mining.close();
-        // Before the doors. The seam, once bound, holds the hub, and so does
-        // this node's lease until [`sync_owner::Held::stop`]. Either close
-        // is a failure unless the stop is already asked.
+        // Before the network: its stop drops the port chain sync reads,
+        // and that close is a failure unless the stop is already asked.
         self.request_sync_stop();
-        // The process doors hold the store (`Door::admission`); leave them
+        // The network: sessions closed, owners stopped, the engine and the
+        // transport runtime down. The relay owner's last pool reads end
+        // here, before the store closes with the service.
+        self.network.stop();
+        // The submit door holds the store (`Door::admission`); leave it
         // up and `chain.db` stays exclusive after this node has stopped.
         uninstall_process_doors();
         // Chain sync after the RPC's last read (the composition root stops
@@ -747,6 +816,11 @@ impl Node {
             .door
             .lock()
             .unwrap_or_else(PoisonError::into_inner) = None;
+        *self
+            .slots
+            .store
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner) = None;
         runtime.shutdown(RUNTIME_SHUTDOWN);
         // The store has closed with the service and the slots: only now
         // wait for the stopped miner's last hashes.
@@ -780,12 +854,39 @@ fn wall_now() -> UnixSeconds {
     UnixSeconds::from_raw(facts::unix_now())
 }
 
-/// Every id that leaves the pool releases its relay state in the zone
-/// (`DRS_X_STORE_FLIP.md` §2): the zone's per-transaction state stays
-/// bounded by the pool. The hook does not read the pool: a concurrent flush
-/// can empty it between the release and any later count.
-fn pool_departed() -> shekyl_chain_ingest::service::Departed {
-    Arc::new(shekyl_ffi::relay_zone_ffi::note_departed)
+/// The chain tip as the handshake and timed sync carry it
+/// (`CORE_SYNC_DATA`). No tip is the empty claim: height zero, no work.
+fn core_sync_data(tip: Option<shekyl_chain_ingest::ChainTip>) -> CoreSyncData {
+    tip.map_or(
+        CoreSyncData {
+            current_height: 0,
+            cumulative_difficulty: 0,
+            cumulative_difficulty_top64: 0,
+            top_id: [0; 32],
+        },
+        |tip| {
+            let wide = tip.cumulative_difficulty.to_raw();
+            CoreSyncData {
+                current_height: tip.count.to_raw(),
+                cumulative_difficulty: u64::try_from(wide & u128::from(u64::MAX))
+                    .expect("masked to the low 64 bits"),
+                cumulative_difficulty_top64: u64::try_from(wide >> 64)
+                    .expect("a u128 shifted by 64 fits"),
+                top_id: tip.top_id.to_bytes(),
+            }
+        },
+    )
+}
+
+/// The relay owner's reading of chain sync's state: it relays what it
+/// receives only while the node is `Synced`.
+const fn node_sync_of(state: SyncState) -> NodeSync {
+    match state {
+        SyncState::Synced => NodeSync::Synchronised,
+        SyncState::NoView | SyncState::Behind { .. } | SyncState::Following { .. } => {
+            NodeSync::Unsynchronised
+        }
+    }
 }
 
 fn rules_of(config: &DaemonConfig) -> Result<ChainRules, OpenError> {
@@ -820,14 +921,11 @@ fn schedule_of(dev: &Dev) -> Result<FakechainSchedule, OpenError> {
         .map_err(|error| OpenError::Rules(error.to_string()))
 }
 
-/// Drop the process-wide doors that hold the chain store. `install` pairs
-/// with this; a stop or a failed open that already installed must call it,
-/// or the next open in this process meets `DatabaseAlreadyOpen`.
+/// Drop the process-wide door that holds the chain store: the submit
+/// engine's. `install_production` pairs with this; a stop or a failed open
+/// that already installed must call it, or the next open in this process
+/// meets `DatabaseAlreadyOpen`.
 fn uninstall_process_doors() {
-    shekyl_ffi::pool_ffi::uninstall();
-    // Chain sync's hub sender is this node's lease, released in
-    // [`sync_owner::Held::stop`]. Clearing the process slot here would end
-    // an owner another node in this process still holds.
     shekyl_daemon_rpc::submit::clear_production();
 }
 

@@ -31,6 +31,7 @@ pub(crate) fn seat(
     config: &DaemonConfig,
     store: &Arc<shekyl_chain_store::store::ChainStore>,
     witness: &Arc<shekyl_bundle_producer::WitnessRing>,
+    network: Arc<std::sync::OnceLock<shekyl_p2p::Network>>,
 ) -> Option<shekyl_chain_ingest::bundle_producer::ProducerSeat> {
     use shekyl_archival_fetch_sched::{FetchScheduler, PFetchClient};
     use shekyl_chain_ingest::shard_facts::{StoreHolderSource, StoreShardFacts};
@@ -45,9 +46,13 @@ pub(crate) fn seat(
     let timeouts = shekyl_bundle_producer::read::CHALLENGE_TIMEOUTS;
     let client = match tor {
         ProducerTor::Operator(endpoint) => PFetchClient::with_timeouts(endpoint, timeouts),
-        ProducerTor::Managed => {
-            PFetchClient::with_route(Arc::new(shekyl_ffi::zone_ffi::managed_socks), timeouts)
-        }
+        ProducerTor::Managed => PFetchClient::with_route(
+            // The managed route is read at use: the network starts after
+            // the producer is seated, and the route moves with the
+            // supervisor's incarnation.
+            Arc::new(move || network.get().and_then(shekyl_p2p::Network::managed_socks)),
+            timeouts,
+        ),
     };
     let scheduler = Arc::new(FetchScheduler::new(
         Arc::new(StoreShardFacts::new(Arc::clone(store))),

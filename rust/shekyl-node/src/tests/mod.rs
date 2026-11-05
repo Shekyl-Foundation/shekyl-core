@@ -29,6 +29,28 @@ mod producer;
 fn config_at(dir: &Path) -> DaemonConfig {
     dev_config(dir, &[])
 }
+/// A network plan with no connectors: an in-process node binds nothing and
+/// dials nothing, whatever the configuration declares. The address file
+/// sits under the data directory, as the daemon's plan puts it.
+fn test_plan(config: &DaemonConfig) -> NetworkPlan {
+    NetworkPlan {
+        network_id: [0; 16],
+        seeds: SeedNetwork::None,
+        allow_local: true,
+        reserved_descriptors: 0,
+        limits: LinkLimits::default(),
+        relay_noise: false,
+        clearnet: None,
+        tor: TorPlan::None,
+        peers: PeerPlan {
+            address_file: config.data_dir.join("p2pstate.bin"),
+            operator: Vec::new(),
+            exclusive: Vec::new(),
+            disclose_early: false,
+        },
+        bans: Vec::new(),
+    }
+}
 /// Wait until the follower's posting reads `want`.
 fn wait_for_posting(posting: &mut tokio::sync::watch::Receiver<Posting>, want: &Posting) {
     let started = std::time::Instant::now();
@@ -50,7 +72,7 @@ fn open_at(dir: &Path, stop: Arc<dyn Fn() + Send + Sync>) -> Node {
         protocol_version: 1,
         release_build: false,
         request_stop: stop,
-        relay_local: crate::no_relay(),
+        plan: test_plan(&config),
     })
     .expect("node")
 }
@@ -68,7 +90,7 @@ fn open_posted(dir: &Path, extra: &[&str]) -> Node {
         protocol_version: 1,
         release_build: false,
         request_stop: Arc::new(|| {}),
-        relay_local: crate::no_relay(),
+        plan: test_plan(&config),
     })
     .expect("node");
     let mut posting = node.posting();
@@ -158,7 +180,7 @@ fn open_mining_with(
         protocol_version: 1,
         release_build: false,
         request_stop: Arc::new(|| {}),
-        relay_local: crate::no_relay(),
+        plan: test_plan(&config),
     })
     .expect("node")
 }
