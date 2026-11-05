@@ -4,15 +4,35 @@
 // BSD-3-Clause
 
 //! The network's periodic log lines: the engine's lateness per owner class,
-//! and the connections admission refused before any handshake. Both run as
-//! tasks on the transport runtime and end when it stops.
+//! and the connections admission refused before any handshake. Each is a
+//! housekeeping owner on the timing engine (brief §2, rule 7: every wake is
+//! an engine owner), served by a task on the transport runtime; it ends when
+//! the engine closes or the runtime stops.
 
-use std::time::Duration;
-
-use shekyl_timing_engine::{Handle, MonotonicClock, OwnerClass};
+use shekyl_timing_engine::{Clock, Handle, MonotonicClock, OwnerClass, OwnerHandle, Tick};
 use shekyl_transport_layer::Sockets;
 
-const EVERY: Duration = Duration::from_secs(60);
+/// A minute, in the engine's nanosecond ticks.
+const EVERY_NANOS: u64 = 60_000_000_000;
+
+/// A housekeeping owner for the report `what`, or `None` (logged) when the
+/// engine refuses one.
+fn owner(engine: &Handle<MonotonicClock>, what: &str) -> Option<OwnerHandle<MonotonicClock>> {
+    match engine.register(OwnerClass::Housekeeping) {
+        Ok(owner) => Some(owner),
+        Err(err) => {
+            tracing::error!("the {what} report could not start ({err:?}); it is not logged");
+            None
+        }
+    }
+}
+
+/// Arm `owner` a minute from now and wait for the wake. `false` when the
+/// engine has closed.
+async fn next_minute(owner: &OwnerHandle<MonotonicClock>) -> bool {
+    let at = Tick::new(owner.clock().now().get().saturating_add(EVERY_NANOS));
+    owner.arm(at).is_ok() && owner.wait_wake_async().await.is_ok()
+}
 
 /// Report each owner class's lateness once a minute, at debug. The
 /// engine's answer is a blocking receive, so each report runs on the
@@ -22,11 +42,11 @@ pub(crate) fn spawn_lateness_report(
     runtime: &tokio::runtime::Handle,
     engine: Handle<MonotonicClock>,
 ) {
+    let Some(owner) = owner(&engine, "lateness") else {
+        return;
+    };
     drop(runtime.spawn(async move {
-        let mut every = tokio::time::interval_at(tokio::time::Instant::now() + EVERY, EVERY);
-        every.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
-        loop {
-            every.tick().await;
+        while next_minute(&owner).await {
             let engine = engine.clone();
             match tokio::task::spawn_blocking(move || report_lateness(&engine)).await {
                 Ok(true) => {}
@@ -45,12 +65,16 @@ pub(crate) fn spawn_lateness_report(
 /// connections in ordinary service, so that minute is reported at info. A
 /// minute in which the accept rate (D10.3) refused anything is a warning:
 /// connections arrived faster than the protocol serves.
-pub(crate) fn spawn_refusal_report(runtime: &tokio::runtime::Handle, sockets: Sockets) {
+pub(crate) fn spawn_refusal_report(
+    runtime: &tokio::runtime::Handle,
+    engine: &Handle<MonotonicClock>,
+    sockets: Sockets,
+) {
+    let Some(owner) = owner(engine, "refusal") else {
+        return;
+    };
     drop(runtime.spawn(async move {
-        let mut every = tokio::time::interval_at(tokio::time::Instant::now() + EVERY, EVERY);
-        every.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
-        loop {
-            every.tick().await;
+        while next_minute(&owner).await {
             let refusals = sockets.take_accept_refusals();
             if !refusals.any() {
                 continue;

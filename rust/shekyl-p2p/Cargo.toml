@@ -27,7 +27,7 @@ shekyl-timing-engine = { path = "../shekyl-timing-engine" }
 shekyl-tor = { path = "../shekyl-tor" }
 shekyl-tor-control-client = { path = "../shekyl-tor-control-client" }
 shekyl-transport-layer = { path = "../shekyl-transport-layer" }
-tokio = { version = "1", default-features = false, features = ["macros", "net", "rt", "sync", "time"] }
+tokio = { version = "1", default-features = false, features = ["macros", "net", "rt", "sync"] }
 tracing = "0.1"
 
 [target.'cfg(unix)'.dependencies]

@@ -283,7 +283,7 @@ impl Network {
         }
         bans::spawn_expiry(&handle, &timing, sockets.clone(), generation);
         crate::reports::spawn_lateness_report(&handle, timing.clone());
-        crate::reports::spawn_refusal_report(&handle, sockets.clone());
+        crate::reports::spawn_refusal_report(&handle, &timing, sockets.clone());
 
         let (clearnet_tx, clearnet_rx) = mpsc::unbounded_channel();
         let (tor_tx, tor_rx) = mpsc::unbounded_channel();
