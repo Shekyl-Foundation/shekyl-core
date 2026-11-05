@@ -496,19 +496,18 @@ Recorded as they are found; each names the anchor it corrects.
   `archival_ffi`, `ct_balance_ffi`, `economics_ffi`, and the `legacy_*`
   crypto, FCMP, KEM, proof, transaction and FROST modules. Its C++
   callers are `src/cryptonote_basic` and `src/fcmp` (libraries),
-  `contrib/epee/src` (`mlog`, `mlocker`, `memwipe`, `net_ssl`), the two
-  debug utilities, and
-  the C++ tests (`unit_tests`, `difficulty`, `randomx_v2_parity`, a fuzz
+  `contrib/epee/src` (`mlog`, `mlocker`, `memwipe`), `cn_deserialize`,
+  and the C++ tests (`unit_tests`, `difficulty`, `randomx_v2_parity`, a fuzz
   target). `cargo tree -e normal,build -i shekyl-ffi` finds no edge from
   `shekyld`, `shekyl-node`, `shekyl-daemon`, `shekyl-p2p` or
   `shekyl-daemon-rpc`.
 - **F8 (2026-11-05), §5's C++ that remains and what builds it:** under
   `src/`, `common`, `crypto`, `fcmp`, `cryptonote_basic`,
   `serialization`, `device`, `platform` and `shekyl` (the FFI headers),
-  about 40,000 lines with `contrib/epee`'s 11,600. The default CMake build
-  compiles them for the C++ tests and for two executables,
-  `shekyl-gen-ssl-cert` and `shekyl-utils-deserialize`, which are staged
-  into `bin/` beside the three Rust binaries; `bin/` is what the release
-  archives carry, so those two still ship, linking `libshekyl_ffi.a`.
-  `shekyld`, `shekyl-cli` and `shekyl-wallet-rpc` are cargo builds with
-  no C++ in their links.
+  about 40,000 lines with `contrib/epee`'s 11,000. CMake compiles them for
+  the C++ tests and, with `BUILD_DEBUG_UTILITIES` (on by default only in a
+  Debug build), for `shekyl-utils-deserialize`, until `shekyl-cli`'s
+  `tx decode` replaces it (IG-Q26). A release build stages only the three
+  Rust binaries into `bin/`, which is what the release archives carry:
+  `shekyld`, `shekyl-cli` and `shekyl-wallet-rpc` are cargo builds with no
+  C++ in their links.
