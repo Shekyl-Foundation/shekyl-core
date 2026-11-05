@@ -153,12 +153,20 @@ impl TxRule for J20 {
 /// copy of the prefix and hashes it). The vin cannot be covered by the hash
 /// its own auths and backing proof sign — the circularity — and every
 /// property the exclusion loses is re-bound by the Q1 auth message (the
-/// vin's fields) and the reward commit set (CEN-J24); the tx-level hybrid
-/// auth (CEN-I17/I18) still covers the complete prefix. The hash itself is
-/// the wire's one derivation, [`shekyl_wire::TxPrefix::hash`], over the
-/// edited prefix — the same function the engine's claim assembler reaches
-/// through `tx_prefix_hash_from_parts_with_extra` and the row-7 differential
-/// pins (`the_drivers_assembly_and_the_handler_emit_identical_bytes`).
+/// vin's fields) and the reward commit set (CEN-J24). The hash itself is
+/// the wire's one derivation, [`shekyl_wire::Transaction::signable_prefix_hash`]
+/// (the prefix hash over the edited prefix) — the same bytes the engine's
+/// claim assembler reaches through `tx_prefix_hash_from_parts_with_extra`
+/// and the row-7 differential pins
+/// (`the_drivers_assembly_and_the_handler_emit_identical_bytes`).
+///
+/// It is the prefix field of the transaction's one network-bound message,
+/// `tx_signable` (the signing envelope §2.2), which every SAL, both auths
+/// and the per-input hybrid auths (CEN-I17/I18, through the spend hash)
+/// prove over. So the hybrid auths cover the emission vin only through the
+/// auths' fields 1–6, not byte for byte: the vin's backing proof and the
+/// two auth signatures are under no signature of their own. Raised to Rick
+/// with #1266 (2026-11-05).
 ///
 /// Nothing fails a definition. The row runs in `tx_form` so the derivation
 /// is exercised at both sites on every emission, and is recorded there;
