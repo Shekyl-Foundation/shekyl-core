@@ -103,7 +103,14 @@ signed_hash(i) = frame64("shekyl/fcmp-spend-signing-v2", id,
 
 **Wire size.** Unchanged everywhere: every binding is hashed, never carried.
 
-**The registry's bindings and the gate (NI-Q9).** Appendix A's classes become a `binding` column on every registry row (`id`, `name`, `input:<type>`, `local:<why>`, `enclosed-by:<row>`, closed lists for `<type>` and `<why>`) and a `width`, kept true by a CI gate that type-checks the cSHAKE rows' domain constants. Appendix A is the audit at its ground, which the column replaces when the gate lands.
+**The registry's bindings and the gate (NI-Q9; ruled 2026-11-04 and 2026-11-05).** Every production row of [`CRYPTO_DOMAIN_REGISTRY.tsv`](CRYPTO_DOMAIN_REGISTRY.tsv) carries a `binding`, a `width` and a `role`:
+
+- **Binding,** one of six, each from a closed list: `id`; `name`; `input:<type>` (its input holds a value already network-bound: `TxSignableHash`, `SigningPayloadHash`, a `frame` output, `BlockHash`, `TxId`, the FCMP++ tree root or anchor, a key derived under `salt_for`, or a `NoiseMessage`; `BlockHeader` is refused); `derived:<CEN rule>` (every verifier recomputes it from its own chain under the named census rule); `local:<why>` (`wallet-file-key`, `p-store-key`, `store-codec`, `per-output-secret`, `display-only`, `process-local`, `key-intermediate`, `verifier-randomness`, `checksum`); `enclosed-by:<row>` (third-party internals, fixed public parameters and the six SAL hedged nonces only). `shekyl/network-name-v1` and `shekyl/p2p-network-id-v1` are the two binding derivations.
+- **Width,** the bytes the row's consumers read; **role,** `signed` (a post-quantum or hybrid signature's content), `auth` (its verification is evidence of authorship or authenticity) or `plain`.
+
+The gate (`rust/shekyl-crypto-pq/tests/domain_binding.rs`) parses the code with `syn` and refuses: a value off the closed lists; a cSHAKE `id` or `name` row that is not an `IdDomain` or `NameDomain` constant of that kind and width, or such a constant whose row says otherwise; an HKDF `name` row defined away from `salt_for`; a Noise handshake whose prologue is not built from a `&NetworkId`; an `input:<type>` row whose site takes no such type; `local` on a `signed` or `auth` row; `derived:` naming no census row; `enclosed-by` on a Shekyl-owned row; `signed` content narrower than 64 bytes; and any Rust source holding a label from the registry's retired-after-genesis section, which is empty before genesis. Each check has a control that feeds it a bad row or source and asserts the refusal.
+
+Rows the code cannot meet yet are listed in [`DOMAIN_BINDING_RATCHET.tsv`](DOMAIN_BINDING_RATCHET.tsv), which only shrinks (its counts are pinned in the gate, and a listed row the gate can already prove is refused until removed) and must be empty at v3.1.0 (`scripts/release/check_binding_ratchet.py`, run at the cut and on every pull request): 35 `input:` rows whose site takes raw bytes or a value with no type yet (owner: the archival lane), 3 `id`/`name` rows not declared as domain constants, and 7 rows with no ruled binding.
 
 ### 2.5 Regtest is a network, not an exception (NI-Q8)
 
@@ -169,7 +176,7 @@ Regtest is a row in the table: its own genesis, address prefixes, ports, difficu
 | NI-Q6 | The pool seal. | OPEN (PR 4): records the network id; the chain store needs no field. |
 | NI-Q7 | The marker file. | OPEN (PR 4): daemon-config's call (DC-Q15, IG-Q17); recommendation: a label, trusted for nothing. |
 | NI-Q8 | Regtest as an ordinary network. | BUILDING (PR 1): §2.5; corpus re-captured through #1244's path. The address byte is persisted in wallet files and multisig addresses (NI-F5), so the wallet-file codec takes rule 42's version bump; an older file is refused with a reason, never reinterpreted. |
-| NI-Q9 | The domain-registry audit. | BUILT (PR 2, #1266): Appendix A classed 131 rows at its ground; NI-F11…F13 RULED and built (NI-R14, NI-R15, NI-R17). The classes become the registry's `binding` column and a CI gate (§2.4.1, NI-R17). NI-F2: message signing binds the id at position 0 of its frame. |
+| NI-Q9 | The domain-registry audit. | BUILT (PR 2, #1266): Appendix A classed 131 rows at its ground; NI-F11…F13 RULED and built (NI-R14, NI-R15, NI-R17). The registry's `binding`, `width` and `role` columns carry the classification, held by the binding gate and its ratchet (§2.4.1). NI-F2: message signing binds the id at position 0 of its frame. |
 | NI-Q10 | Compatibility at the handshake, replacing genesis rotation. | SHAPE RULED 2026-11-03 (§3); OPEN (PR 3): what the rules digest covers per step, and the frozen-tuple gate shrinks or goes. |
 | NI-Q11 | Regtest's levers. | RULED 2026-11-03 (NI-R6, NI-R8); BUILDING (PR 1). |
 | NI-Q12 | Seed format. | RULED 2026-11-03 (NI-R7, NI-R10); BUILDING (PR 1): BIP39, 24 words, on every network; one derivation from the 32 entropy bytes (NI-F8), salted by the network's name. |
@@ -234,6 +241,8 @@ Guards that compare a configured network with a recorded one (the marker, the mi
 **Costs:** one regenesis of every network, in PR 1 (mainnet's genesis isn't final; testnet and stagenet restart once); a signing-preimage change with a KAT re-record, wallet and daemon in one PR, which is a pre-genesis-only change; a handshake change that every node of a network takes at one cut; one new crate, and the deletion of four network enums and the C++ genesis constants.
 
 ## Appendix A. The domain-registry audit (NI-Q9)
+
+**Superseded as the live classification by the registry's `binding` column and its gate (§2.4.1).** What follows is the audit at its ground, kept as the record the column was built from; for any row's binding now, read [`CRYPTO_DOMAIN_REGISTRY.tsv`](CRYPTO_DOMAIN_REGISTRY.tsv).
 
 **Ground:** `feat/ni-signing-domain`, with NI-Q4, NI-F2, NI-F11 and NI-F13 built. Every production row of [`CRYPTO_DOMAIN_REGISTRY.tsv`](CRYPTO_DOMAIN_REGISTRY.tsv) (status `shekyl-live` or `frozen-inherited`, 131 rows) is classed:
 

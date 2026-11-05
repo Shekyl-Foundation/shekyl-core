@@ -303,6 +303,15 @@ exclusions and the sub-label rule are stated in the TSV header.
   `shekyl-fcmp-proofs`); and a frozen-doc cross-check (every frozen-inherited row has
   its entry in `FROZEN_DOMAIN_SEPARATORS.md`). Anchored on the mechanism call site /
   registered literal, never the `shekyl/` prefix.
+- **Binding gate** — `rust/shekyl-crypto-pq/tests/domain_binding.rs`: every production
+  row's `binding`, `width` and `role` columns (`NETWORK_IDENTITY.md` §2.4.1), held to
+  the code by parsing it: `id`/`name` cSHAKE rows are `IdDomain`/`NameDomain` constants
+  of that kind and width, HKDF `name` rows sit beside `salt_for`, both Noise prologues
+  come from a `&NetworkId`, `input:<type>` sites take the type, `local` is refused on
+  authenticity evidence, `derived:` names a census rule, `enclosed-by` stays off
+  Shekyl-owned rows, signed content is 64 bytes, and no retired label is reused. Rows
+  it cannot hold yet are in `docs/design/DOMAIN_BINDING_RATCHET.tsv`, which only
+  shrinks and must be empty at v3.1.0.
 
 **Honest scope — completeness for mech 2/4/5/6 is a review duty.** The gate catches
 drift and deletion of *registered* domains, and additions on always-domain entry

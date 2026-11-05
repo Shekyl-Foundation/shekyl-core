@@ -126,7 +126,7 @@ fi
 # Re-delimit with unit separator (\x1f, not IFS whitespace) to keep empty
 # fields in place.
 rows=0
-while IFS=$'\x1f' read -r mech literal file const status _key _notes || [[ -n "${mech:-}" ]]; do
+while IFS=$'\x1f' read -r mech literal file const status _binding _width _role _key _notes || [[ -n "${mech:-}" ]]; do
   [[ -z "${mech:-}" || "${mech:0:1}" == "#" ]] && continue
   rows=$((rows + 1))
 
@@ -140,6 +140,11 @@ while IFS=$'\x1f' read -r mech literal file const status _key _notes || [[ -n "$
       continue
       ;;
   esac
+
+  # A retired label must NOT be in the code (the binding gate refuses its
+  # reuse, rust/shekyl-crypto-pq/tests/domain_binding.rs); none of the
+  # presence checks below applies to it.
+  [[ "$status" == "retired" ]] && continue
 
   if [[ -z "$literal" || -z "$file" ]]; then
     echo "MALFORMED ROW: mech=$mech literal='$literal' file='$file' (need both)" >&2

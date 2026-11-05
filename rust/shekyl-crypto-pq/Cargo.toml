@@ -255,6 +255,14 @@ hmac = "0.12"
 # Already a dev-dependency of `shekyl-logging` and so already in `Cargo.lock` —
 # this adds no package to the supply chain (`17-dependency-discipline`).
 trybuild = "1"
+# The registry's binding gate (`tests/domain_binding.rs`) parses the Rust it
+# holds the registry to: a constant's declared type, a site's parameter and
+# field types, the handshakes' prologue arguments. A parse, not a grep
+# (the signing envelope §2.5). Both are already in `Cargo.lock` (every proc
+# macro in the workspace builds on them), at these versions, so this adds no
+# package to the supply chain (`17-dependency-discipline`).
+syn = { version = "2.0.117", features = ["full", "visit"] }
+quote = "1.0.45"
 
 [[bench]]
 name = "pqc_rederivation"
