@@ -57,9 +57,7 @@ use std::sync::{Arc, Condvar, Mutex, MutexGuard, OnceLock};
 
 use shekyl_draw_rng::RelayRng;
 use shekyl_levin::PeerlistEntry;
-use shekyl_p2p_session::{
-    Board, Endpoint, Established, PeerOwner, SessionFacts, SessionLayer,
-};
+use shekyl_p2p_session::{Board, Endpoint, Established, PeerOwner, SessionFacts, SessionLayer};
 use shekyl_peerlist::{
     dial_profile, white_diversity_floor, ConnectionId, ConnectorId, DialOutcome, ListName,
     NetworkAddress, Peerlist, Refusal, RefusedSet, Source, Tick, Verdict,
