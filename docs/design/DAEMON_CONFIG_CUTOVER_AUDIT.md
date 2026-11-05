@@ -103,8 +103,9 @@ data directory
 `src/blockchain_db/lmdb/db_lmdb.cpp`),
 and `p2pstate.bin`
 ([`src/cryptonote_config.h:217`](../../src/cryptonote_config.h)), which PR-3
-made the Rust dialer's address file under the same name
-([`src/p2p/net_node.inl:123`](../../src/p2p/net_node.inl)). The marker
+made the Rust dialer's address file under the same name (then line 123 of
+`src/p2p/net_node.inl`, at `e8838b0095`; now `ADDRESS_FILE`,
+`rust/shekyl-daemon/src/network.rs:30`). The marker
 treats either as a store.
 
 ## 4. Dependencies (§9 item 4, rule 17)

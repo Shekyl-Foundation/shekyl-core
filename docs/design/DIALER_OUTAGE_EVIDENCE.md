@@ -38,7 +38,7 @@ The intent (Rick, 2026-10-31): each connector declares how its connections are t
 - **The failure count resets only on promotion** (`partition.rs:359-390`), and recovery never shortens a cooldown (`owner/recovery.rs:149`, `re_admit`: an address already seated keeps its cooldown).
 - **Clearnet's stamping has catch-alls** (`shekyl-clearnet/src/drive.rs:292-309`, `handshake.rs:141-275`): a refused connect is `DialFailed`, every other connect error is `LocalClose`; `TransportHandshakeFailed` holds a peer's bad message 2, a mid-handshake EOF or reset, and our own engine, crypto or join failure.
 - **`CloseCause::proxy_refused` masks marks** to `RETRY | NAMES_DESTINATION | WINDOW_TIMEOUT` (`cause.rs` lines 216–222 at `7559d9f81a`), and the C header mirrored the marks (`SHEKYL_CLOSE_MARK_*`, checked by a test; *records-was:* #1235 deleted the marks and the header's projection of them).
-- **Healthy sessions talk every minute.** Each established connection gets a timed sync every `P2P_DEFAULT_HANDSHAKE_INTERVAL`, 60 s (`src/cryptonote_config.h:193`, `peer_sync_idle_maker`, `src/p2p/net_node.inl:686`), from both ends: about two received messages a minute per session.
+- **Healthy sessions talk every minute.** Each established connection gets a timed sync with a 60 s mean (`TIMED_SYNC_MIN` 45 s plus a uniform 30 s jitter, `rust/shekyl-p2p-session/src/timing.rs:32-38`, PWD-B2; the C++ it replaced ran `peer_sync_idle_maker` on `P2P_DEFAULT_HANDSHAKE_INTERVAL`, line 686 of `src/p2p/net_node.inl` at `e8838b0095`), from both ends: about two received messages a minute per session.
 
 ## 2. The vocabulary (`OE-D1`, `OE-D2`)
 

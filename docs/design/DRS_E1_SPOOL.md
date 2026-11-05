@@ -335,8 +335,9 @@ commit's `Result` (SPL-11).
   runs to the cutover and is then gone with its file. The re-specification
   is free to choose its encoding and drops the dead fields.
 - **`relay_method`'s byte values** — **inherited as the wire contract they
-  already are** (`src/cryptonote_protocol/enums.h:39`,
-  `shekyl-relay/src/graph/mod.rs:122–128`): the enum keeps `None = 0 …
+  already are** (`rust/shekyl-types/src/relay.rs:53`; the C++ twin was
+  line 39 of `src/cryptonote_protocol/enums.h` at `e8838b0095`, gone
+  with the host in PR #1272): the enum keeps `None = 0 …
   Block = 4` because the FFI seam is pinned to them. What the *store*
   does with `None` is `SPL-Q6`.
 - **Persistence across restart** — **inherited as the default, its policy

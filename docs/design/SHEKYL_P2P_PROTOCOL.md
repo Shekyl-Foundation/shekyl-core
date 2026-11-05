@@ -144,7 +144,7 @@ mechanism-versus-number split on B9 is his, not the sweep's.*
 | **T6** packet limits derived | NOT IMPLEMENTED | still the inherited `LEVIN_INITIAL/DEFAULT_MAX_PACKET_SIZE` | No — transport cluster |
 | **T7** no compression | **IMPLEMENTED** (2026-10-19) | the protocol has no compressor; `FLAGS_DEFINED` (`rust/shekyl-levin/src/ingress.rs`) leaves `0x10` undefined, so a bucket carrying it is refused at ingress on both stacks | n/a |
 | **T8** Shekyl mints its own KATs | **IMPLEMENTED** (as of 2026-09-24) | `noise.rs` `pinned_messages_mix_steps_and_rekey` pins both messages and the record after one rekey in each direction. The transport keys and their rekey (`ck'`, `k'`) are pinned from that transcript's chaining key in `shekyl-noise` (`split_of_the_pinned_chaining_key_rekeys_to_the_pinned_keys`); the initial chaining key is the hash of the protocol name, pinned beside `SymmetricState`. `wrong_prologue_and_wrong_suite_fail_like_garbage` is one `Decrypt` for a wrong prologue, random message 2, and a different protocol name. `pipe.rs` `wrong_prefix_fails_before_the_noise_message` drops eight wrong prefix bytes before Noise. The prefix KAT is `prefix_for` of the id derived from each genesis, recorded in `rust/shekyl-node/src/genesis.rs` (`each_genesis_derives_its_recorded_id_and_prefix`; in `shekyl-ffi`'s `network_id_ffi.rs` until 2026-11-05) | No — follows T1 |
-| **B1** rate limiting adopted | **PARTIAL** (as of 2026-11-05): the pre-handshake guard, the invoke correlation and the per-session read permit are held by the session layer; the per-connection token bucket is NOT IMPLEMENTED | **UPDATE 2026-11-05 (the p2p remnant cutover, `P2P_3_REMNANT_CUTOVER_BRIEF.md` §2 rule 2, rule 6).** The four C++ invoke routes and the nine `HANDLE_NOTIFY_T2` entries are deleted with their files; every command now enters through `shekyl-p2p-session`'s one exhaustive `match` over `shekyl-levin`'s `Command`. What that layer holds **by type**: nothing but a 1001 request reaches a session before its handshake (`Established` has no constructor an owner can reach, and every owner handler takes `&Established`); one 1002 outstanding per session, a response with no request a form failure; one unread frame per session (`SESSION_QUEUE_DEPTH = 1`), the owner's `Taken` being the permit to read the next, so a slow owner holds the peer's reads rather than growing memory. What it does **not** hold: a per-connection rate on known commands after the handshake — a peer may still send admitted 2002 batches as fast as the per-session permit cycles. That token bucket is this row's remaining work, and its surface is now one place (the dispatch table), not thirteen. *Records-was:* **the surface is *every* dispatch, invoke and notify** — not the four p2p invokes; all four invoke routes and all nine `HANDLE_NOTIFY_T2` entries (`src/cryptonote_protocol/cryptonote_protocol_handler.h:94-102`) are still unguarded, so transaction floods spend no tokens and PWD-B12's memory bound rests on a charge that is not happening. *Records-was: this cell read “the decision names four unguarded invoke handlers” until 2026-10-07 — the same scope error §PWD-B1 records making twice, restated in the status table where a grep reader meets it first.* **MEASURED ON A LIVE DAEMON 2026-10-06 — on Windows this is the ONLY inbound bound available, and it is an ADDITION to the p2p Rust migration rather than a transfer.** `InboundCeiling` resolves `NoPerProcessLimit` there (no per-process descriptor quantity exists to read), PWD-I7's per-host cap is deleted, and an unset `--in-peers` is `UINT32_MAX` — so a Windows node has no inbound bound of any kind until this lands, by count, by source address or by rate. **There is no C++ mechanism to port**, so a slice that moves the p2p stack faithfully still lands Windows unbounded; the bound has to be engineered in. See the Windows inbound-bound row in [`FOLLOWUPS.md`](../FOLLOWUPS.md) | No — hardening; does not change the wire |
+| **B1** rate limiting adopted | **PARTIAL** (as of 2026-11-05): the pre-handshake guard, the invoke correlation and the per-session read permit are held by the session layer; the per-connection token bucket is NOT IMPLEMENTED | **UPDATE 2026-11-05 (the p2p remnant cutover, `P2P_3_REMNANT_CUTOVER_BRIEF.md` §2 rule 2, rule 6).** The four C++ invoke routes and the nine `HANDLE_NOTIFY_T2` entries are deleted with their files; every command now enters through `shekyl-p2p-session`'s one exhaustive `match` over `shekyl-levin`'s `Command`. What that layer holds **by type**: nothing but a 1001 request reaches a session before its handshake (`Established` has no constructor an owner can reach, and every owner handler takes `&Established`); one 1002 outstanding per session, a response with no request a form failure; one unread frame per session (`SESSION_QUEUE_DEPTH = 1`), the owner's `Taken` being the permit to read the next, so a slow owner holds the peer's reads rather than growing memory. What it does **not** hold: a per-connection rate on known commands after the handshake — a peer may still send admitted 2002 batches as fast as the per-session permit cycles. That token bucket is this row's remaining work, and its surface is now one place (the dispatch table), not thirteen. *Records-was:* **the surface is *every* dispatch, invoke and notify** — not the four p2p invokes; all four invoke routes and all nine `HANDLE_NOTIFY_T2` entries (lines 94 to 102 of `src/cryptonote_protocol/cryptonote_protocol_handler.h` at `e8838b0095`) are still unguarded, so transaction floods spend no tokens and PWD-B12's memory bound rests on a charge that is not happening. *Records-was: this cell read “the decision names four unguarded invoke handlers” until 2026-10-07 — the same scope error §PWD-B1 records making twice, restated in the status table where a grep reader meets it first.* **MEASURED ON A LIVE DAEMON 2026-10-06 — on Windows this is the ONLY inbound bound available, and it is an ADDITION to the p2p Rust migration rather than a transfer.** `InboundCeiling` resolves `NoPerProcessLimit` there (no per-process descriptor quantity exists to read), PWD-I7's per-host cap is deleted, and an unset `--in-peers` is `UINT32_MAX` — so a Windows node has no inbound bound of any kind until this lands, by count, by source address or by rate. **There is no C++ mechanism to port**, so a slice that moves the p2p stack faithfully still lands Windows unbounded; the bound has to be engineered in. See the Windows inbound-bound row in [`FOLLOWUPS.md`](../FOLLOWUPS.md) | No — hardening; does not change the wire |
 | **B2** jitter, scoped by observability | **IMPLEMENTED** (as of 2026-11-05; the `min`/`jitter` split is an `Assumption` awaiting Rick's ruling) | **UPDATE 2026-11-05 (the p2p remnant cutover).** Timed sync is per session: `shekyl-p2p-session` `timing.rs` draws `TIMED_SYNC_MIN + U(0, TIMED_SYNC_JITTER)` = `45 s + U(0, 30 s)` (mean 60 s, the ruled constraint), re-drawn only when that session's own 1002 fires, `0` a valid draw (`the_timed_sync_draw_is_min_plus_a_bounded_jitter_with_the_pwd_b2_mean`, `a_zero_min_and_zero_jitter_draw_zero`). The split's basis is `P2P_3_REMNANT_CUTOVER_BRIEF.md` §7.6 (F2): posed as an `Assumption` under Ruling B, not a derivation. The purely local timers this row left fixed (the idle-peer kick, the standby check, the protocol handler's three) are deleted with the C++ host; the Rust owners' wakes are each a timing-engine owner with its own cadence. *Records-was:* all seven timers still fixed-interval (`net_node.h:628-632`, `cryptonote_protocol_handler.h:210,212`); no per-connection deadline anywhere in p2p | No — hardening |
 | **B3** per-command caps | **IMPLEMENTED** | 6-arm `DefinedCommand` table in `rust/shekyl-levin/src/ingress.rs` (2001, 1003, 1007 and, since chain sync's cutover (CS-5), 2003, 2004, 2006 and 2007 are unknown dispatch; sole block-announce path is 2008 `NOTIFY_NEW_COMPACT_BLOCK`; sync is 2011–2014, which the attached router keeps for chain sync's owner); handshake derived from `DISCLOSE_COUNT`; 2008/2009/2010 keep inherited envelopes (4/1/4 MiB); 2002 takes the packet limit until PWD-B12; C++ `connection_context.cpp` is the FFI shim | **YES** — with B3a and B4, as one unit |
 | **B3a** unknown input rejected at ingress | **IMPLEMENTED** | `ingress_payload_cap` flag-class discriminator; unknown bits rejected on every bucket; noise/fragment with command 0 admitted; a Q/S-flagged 2001 is unknown input, same class as ping 1003 | **YES** — with B3 and B4, as one unit |
@@ -814,7 +814,7 @@ the mechanism, then check the state each consumer writes.
 > **Ruled: the back-ping is deleted. `COMMAND_PING` (1003) is deleted with it.**
 
 **The command falls because the back-ping was its only user** — `try_ping` is
-the sole invoker outside `tests/unit_tests/levin.cpp:2690`, and
+the sole invoker outside line 2690 of `tests/unit_tests/levin.cpp` at `e8838b0095`, and
 `connection_context.cpp:46` merely carries its size limit. **Four p2p commands
 become three** (PWC-B1).
 
@@ -957,7 +957,7 @@ review.
   that states it becomes false.
 - **There is a *third* disclosure surface, and it is the one the enumeration
   nearly missed.** `shekyl_rpc_connection_facts.peer_id`
-  (`src/rpc/rpc_facts_ffi.h:315`, populated at `rpc_facts_ffi.cpp:1050-1056`)
+  (line 315 of `src/rpc/rpc_facts_ffi.h` at `e8838b0095`, populated at `rpc_facts_ffi.cpp` lines 1050 to 1056)
   exposes the **peer's announced id** through `get_connections`. Gossip,
   handshake and RPC are three surfaces, and Rick's finding is precisely that an
   internal need licensed external exposure — so **the retained internal
@@ -2191,11 +2191,11 @@ PR's own edits shift `net_node.h` and `net_node.inl` below these points.
 | --- | --- |
 | `src/p2p/net_node.cpp` line 191 (at the pin) | `arg_max_connections_per_ip`, default `1` |
 | `src/p2p/net_node.h` line 449 (at the pin) | `max_connections(1)` in the constructor — the **second** copy of the number |
-| `src/p2p/net_node.inl:678` | assignment from the argument |
+| `src/p2p/net_node.inl` line 678 (at `e8838b0095`; deleted since) | assignment from the argument |
 | `net_node.inl:3236` (at this round's pin; deleted since) | `has_too_many_connections` |
 | `net_node.inl:3238` (as above) | early `return false` for non-public zones |
 | `net_node.inl:3245` (as above) | counts `cntxt.m_is_income && is_same_host` |
-| `src/p2p/net_node.inl:241` | called from `is_host_limit` |
+| `src/p2p/net_node.inl` line 241 (at `e8838b0095`; deleted since) | called from `is_host_limit` |
 | `contrib/epee/include/net/abstract_tcp_server2.inl:950` | the refusal point, `is_income`-gated |
 | `contrib/epee/include/net/net_utils_base.h:83-84` | ipv4 `is_same_host` is `ip() == other.ip()` only |
 
@@ -3120,12 +3120,13 @@ response carries `basic_node_data`, the chain-sync payload, and
 - **Channel established** — transport state. On clearnet the responder reaches
   it at `Split()` and the initiator on processing message 2; on an overlay it is
   the overlay's stream opening. Only the transport reads it.
-- **Session established** — the Levin handshake has completed. It is
-  `session_established()` on the connection context
-  (`src/p2p/net_node.h:92`, which reads the seam's handshake flag; the previous name was
-  `handshake_complete()`). Every p2p and cryptonote consumer reads this one:
-  sync-search, block relay, timed sync, and the relay lane's
-  `on_session_established`.
+- **Session established** — the Levin handshake has completed. It is the
+  `Established` handle (`rust/shekyl-p2p-session/src/handle.rs:256`), the
+  only form in which an owner is handed a session (it was
+  `session_established()` on the connection context, line 92 of
+  `src/p2p/net_node.h` at `e8838b0095`, before the host left in PR #1272;
+  the name before that was `handshake_complete()`). Every owner reads this
+  one: sync-search, block relay, timed sync, and the relay's session set.
 
 A connection between the two states has a channel and no session, and may carry
 exactly one thing: the Levin handshake (PWD-T6).
@@ -3962,7 +3963,7 @@ on two surfaces and today gets two different answers:
 | Surface | Unrecognised input | Inherited behaviour |
 | --- | --- | --- |
 | Levin **flag bits** | bits outside the five defined | **preserved verbatim** through the codec (PWC-A6) |
-| Levin **command ids** | any id not in the 13-arm switch | **`std::numeric_limits<size_t>::max()`** — **no *per-command* cap** (`src/cryptonote_basic/connection_context.cpp:49-50`). The global packet limit still binds: the reader takes `min(packet limit, hook(command))` (`rust/shekyl-levin/src/reader.rs:182-185`), so an unknown command is bounded by `DEFAULT_MAX_PACKET_SIZE`, not unbounded. *An earlier version of this row said "no cap at all", which overstates the hazard — the same flattering-error direction §1 warns about, pointed at a defect instead of a defence.* |
+| Levin **command ids** | any id not in the 13-arm switch | **`std::numeric_limits<size_t>::max()`** — **no *per-command* cap** (lines 49 to 50 of `src/cryptonote_basic/connection_context.cpp` at `e8838b0095`). The global packet limit still binds: the reader takes `min(packet limit, hook(command))` (`rust/shekyl-levin/src/reader.rs:182-185`), so an unknown command is bounded by `DEFAULT_MAX_PACKET_SIZE`, not unbounded. *An earlier version of this row said "no cap at all", which overstates the hazard — the same flattering-error direction §1 warns about, pointed at a defect instead of a defence.* |
 
 *Landed 2026-09-09:* a Q/S-flagged command that is not a `DefinedCommand` is
 `Error::UnknownCommand` at ingress; unknown flag bits are `Error::UnknownFlags`
@@ -4576,7 +4577,7 @@ and calling it resource exhaustion protection.*
 
 **Scoping the bucket to the four invoke routes would have left the entire
 cryptonote command family unmetered** — all nine `HANDLE_NOTIFY_T2` entries
-(`src/cryptonote_protocol/cryptonote_protocol_handler.h:94-102`), which carry
+(lines 94 to 102 of `src/cryptonote_protocol/cryptonote_protocol_handler.h` at `e8838b0095`), which carry
 the blocks and the transaction batches, i.e. **the large payloads and the
 flood vector PWD-B12 exists to bound.** *A second earlier version made that
 mistake, and it is the same one twice: naming the surface I had been reading
@@ -5087,7 +5088,7 @@ Checkable against the requirement, not against a benchmark.
 
 **Two lineage-dead structs go with it, and they are outside the round's gate.**
 `network_address_old` (PWC-F1) and `connection_entry_base`/`connection_entry`
-(PWC-F2, `src/p2p/p2p_protocol_defs.h:115`) have no callers — F1's only references are two lines in
+(PWC-F2, line 115 of `src/p2p/p2p_protocol_defs.h` at `e8838b0095`) have no callers — F1's only references are two lines in
 `debug_utilities/object_sizes.cpp:91-92`, **which must be deleted with it or the
 debug build breaks**. Both are **bucket 3**, not bucket 4, so they do not move
 the 46-row counter; they are ruled here because this is the sub-round that owns

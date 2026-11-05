@@ -369,8 +369,9 @@ contract. The lists are gray and white. Incoming addresses and `--add-peer`
 are gray only. White is written by `apply` of `SessionAccepted` or `Confirmed` on a
 uniform gray draw, and in one other case (*records-was, withdrawn
 2026-10-11*): `HarvestDone` for the
-hardcoded Foundation seed fleet (`get_ip_seed_nodes`,
-`src/p2p/net_node.inl:771`, the array at `:781`). A white address
+hardcoded Foundation seed fleet (`get_ip_seed_nodes`, line 771 of
+`src/p2p/net_node.inl` at `e8838b0095`, the array at 781; now the network
+row's `seeds`, `rust/shekyl-network/src/lib.rs:427`). A white address
 with no contact this node opened for `EXPIRATION_PERIOD` (24 hours) returns
 to gray. The C++ stamps `last_seen` and never expires on it; Rust keeps that
 one clock as `last_observed` and does not sort by it. Draws are uniform, and

@@ -11306,15 +11306,15 @@ sections have been reasoning about **does not exist and never did.**
 `zone_->nzone == public_`.** On i2p/tor, `stem`, `forward` and `local` fall
 through the `case` labels into the **`fluff`** arm:
 
-- `src/cryptonote_protocol/levin_notify.cpp:1222` — the `nzone == public_`
-  gate around the D++ dispatch; `:1231` — the `/* fallthrough */` into
-  `relay_fluff`.
-- `tests/unit_tests/levin.cpp:1536-1582`
-  (`levin_notify.private_stem_without_padding`) asserts it: a `stem` send on a
+- line 1222 of `src/cryptonote_protocol/levin_notify.cpp` at `e8838b0095` — the
+  `nzone == public_` gate around the D++ dispatch; 1231 — the
+  `/* fallthrough */` into `relay_fluff`.
+- lines 1536 to 1582 of `tests/unit_tests/levin.cpp` at `e8838b0095`
+  (`levin_notify.private_stem_without_padding`) asserted it: a `stem` send on a
   private zone reaches **every** outbound peer (5 of 10 connections), each
   notification carries `dandelionpp_fluff == true`, and the local txpool is
   told `relay_method::stem` — so the embargo arms.
-- `tests/unit_tests/levin.cpp:1588` names it in an inherited comment:
+- line 1588 of `tests/unit_tests/levin.cpp` at `e8838b0095` named it in an inherited comment:
   *"private mode always uses fluff but marked as stem."*
 
 `relay_fluff` → `shekyl_relay_zone_queue_fluff` is a **scheduled per-peer
