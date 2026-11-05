@@ -61,7 +61,7 @@ use shekyl_chain_ingest::schedule::ChainRules;
 use shekyl_chain_ingest::source::Injection;
 use shekyl_chain_ingest::substrate::ProductionSubstrate;
 use shekyl_chain_ingest::trace::Trace;
-use shekyl_chain_rules::{FakechainSchedule, SettlementEpochBlocks};
+use shekyl_chain_rules::{CappedEpoch, SettlementEpochBlocks};
 use shekyl_chain_store::apply_policy::ApplyPolicy;
 use shekyl_chain_store::store::{ChainStore, Horizons};
 use shekyl_network::Network;
@@ -417,20 +417,17 @@ async fn baseline(
 /// the production pair when neither. A cap not strictly inside the epoch
 /// is refused here, as the daemon refuses it at arm, and so is an epoch
 /// long enough that its response window outruns the pass anchor: both are
-/// `FakechainSchedule::new`'s typed refusals, printed as the tool's error.
+/// `CappedEpoch::new`'s typed refusals, printed as the tool's error.
 fn schedule_flags(
     settlement_epoch_blocks: Option<NonZeroU64>,
     reorg_cap: Option<NonZeroU64>,
-) -> Result<FakechainSchedule, Failure> {
+) -> Result<CappedEpoch, Failure> {
     match (settlement_epoch_blocks, reorg_cap) {
         (Some(epoch), Some(cap)) => {
             let epoch = SettlementEpochBlocks::new(epoch.get()).expect("NonZeroU64 is non-zero");
-            Ok(FakechainSchedule::new(
-                epoch,
-                BlockCount::from_raw(cap.get()),
-            )?)
+            Ok(CappedEpoch::new(epoch, BlockCount::from_raw(cap.get()))?)
         }
-        (None, None) => Ok(FakechainSchedule::PRODUCTION),
+        (None, None) => Ok(CappedEpoch::PRODUCTION),
         // `requires` on both flags makes this unreachable from the command
         // line; a programmatic caller that pairs them apart is a bug.
         (Some(_), None) | (None, Some(_)) => Err(
@@ -647,14 +644,14 @@ mod tests {
 
     #[test]
     fn the_levers_off_regtest_are_refused_where_the_rules_are_built() {
-        let production = FakechainSchedule::PRODUCTION;
+        let production = CappedEpoch::PRODUCTION;
         let refused = ChainRules::new(Network::Testnet, NonZeroU128::new(7), production);
         assert!(refused.is_err());
         let ok =
             ChainRules::new(Network::Regtest, NonZeroU128::new(7), production).expect("regtest");
         assert_eq!(
             ok.in_force(BlockHeight::from_raw(3)),
-            shekyl_chain_rules::RuleSet::fakechain(NonZeroU128::new(7), production)
+            shekyl_chain_rules::RuleSet::GENESIS.with_levers(NonZeroU128::new(7), production)
         );
     }
 
@@ -722,7 +719,7 @@ mod tests {
         // Neither flag: the production pair, and the production horizons.
         assert_eq!(
             schedule_flags(None, None).expect("production"),
-            FakechainSchedule::PRODUCTION
+            CappedEpoch::PRODUCTION
         );
         // One without the other is refused by clap, and by the builder.
         assert!(parse(&[&base[..], &["--settlement-epoch-blocks", "512"]].concat()).is_err());

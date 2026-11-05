@@ -34,7 +34,7 @@
 //! first spend's own archival length rather than a number written down.
 
 use shekyl_archival_retention::{draw_count, draw_horizon};
-use shekyl_chain_rules::{FakechainSchedule, SettlementEpochBlocks, SettlementSchedule};
+use shekyl_chain_rules::{CappedEpoch, SettlementEpochBlocks, SettlementSchedule};
 use shekyl_types::archival::COUNTED_DRAWS;
 use shekyl_types::archival::SHARD_LENGTH;
 use shekyl_types::{BlockCount, BlockHeight, ChainCount, ShardId};
@@ -60,7 +60,7 @@ pub const REORG_CAP_BLOCKS: u64 = 10;
 pub fn levered_rules() -> ChainRules {
     ChainRules::harness_regtest(
         Some(std::num::NonZeroU128::MIN),
-        FakechainSchedule::new(
+        CappedEpoch::new(
             SettlementEpochBlocks::new(EPOCH_BLOCKS).expect("non-zero"),
             BlockCount::from_raw(REORG_CAP_BLOCKS),
         )
@@ -251,7 +251,7 @@ fn issues_every_pair(blocks: u64, pairs: u64) -> bool {
 pub fn settled_rules() -> ChainRules {
     ChainRules::harness_regtest(
         Some(std::num::NonZeroU128::MIN),
-        FakechainSchedule::new(
+        CappedEpoch::new(
             SettlementEpochBlocks::new(settled_epoch_blocks()).expect("non-zero"),
             BlockCount::from_raw(REORG_CAP_BLOCKS),
         )

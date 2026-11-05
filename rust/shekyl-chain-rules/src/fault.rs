@@ -90,10 +90,10 @@ pub enum Stale {
         retry: Retry,
     },
     /// The rule set `form` judged under is not the one in force at the
-    /// connecting height. Compared by **value** — a Fakechain `Fixed`
+    /// connecting height. Compared by **value** — a levered `Fixed`
     /// target reuses [`RuleSetId::GENESIS`](crate::RuleSetId::GENESIS), so
-    /// the id alone cannot tell `GENESIS` from `fakechain(n)`, or two
-    /// different `n`.
+    /// the id alone cannot tell `GENESIS` from `with_levers(Some(n), …)`,
+    /// or two different `n`.
     ///
     /// **This arm is what sized [`Fault`]** (112 bytes at slice 5 with
     /// `RuleSet` at 48): it carries two rule sets by value, so every byte
@@ -106,7 +106,7 @@ pub enum Stale {
     /// joined the set (PR #861: `RuleSet` 56, `Fault` past clippy's 128;
     /// `tx_spendable_age` took it to 64 at DRS-E3 commit 2, absorbed) and
     /// the fix is the one written here in advance — **the payload is
-    /// boxed**, which keeps the by-value comparison the Fakechain caveat
+    /// boxed**, which keeps the by-value comparison the lever caveat
     /// requires — not shrinking `RuleSet`, and not keeping limits off it
     /// that a schedule step could vary (slice 5 Q5, corrected). `Fault` and
     /// `Stale` are `Clone`, not `Copy`, for this box.

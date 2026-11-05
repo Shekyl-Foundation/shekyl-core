@@ -46,7 +46,7 @@ use std::time::Duration;
 
 use shekyl_archival_fetch_sched::{FetchScheduler, ReadFailure, ShardFacts, ShardStanding};
 use shekyl_bundle_producer::WitnessRing;
-use shekyl_chain_rules::{Claimable, EpochFloor, FakechainSchedule, Settling};
+use shekyl_chain_rules::{CappedEpoch, Claimable, EpochFloor, Settling};
 use shekyl_p_host::DaemonTipCache;
 use shekyl_p_loopback::{endpoint_and_client, PFetchClient, PServeEndpoint, Timeouts};
 use shekyl_types::archival::{SettlementEpochBlocks, SettlementOutcome};
@@ -82,7 +82,7 @@ const SETTLE: Duration = Duration::from_secs(120);
 fn rules() -> ChainRules {
     ChainRules::harness_regtest(
         Some(std::num::NonZeroU128::MIN),
-        FakechainSchedule::new(
+        CappedEpoch::new(
             SettlementEpochBlocks::new(EPOCH_BLOCKS).expect("non-zero"),
             BlockCount::from_raw(REORG_CAP_BLOCKS),
         )

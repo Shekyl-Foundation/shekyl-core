@@ -7,7 +7,7 @@
 //! block's [`ArchivalDelta`] leaves in the store, read back through the
 //! production snapshot API and compared with the **verdict** that produced
 //! it — never with a figure the test planted. The join and its credit
-//! (phase 2), the accrual (9a), the epoch close (9c) on a short Fakechain
+//! (phase 2), the accrual (9a), the epoch close (9c) on a short levered epoch
 //! schedule, the attestation witness (5), the regtest injector door
 //! (`ChainStore::regtest_inject_serve_credit`), ARW-9's skip-and-widen
 //! under a stubbed family, and CEN-L7's `NotSettled` arm over a
@@ -34,9 +34,8 @@ use std::collections::BTreeSet;
 
 use shekyl_chain_rules::harness::{assert_refused, fixture};
 use shekyl_chain_rules::{
-    form, validate, ArchivalDelta, AtHeight, Candidate, CenRow, FakechainSchedule, Fault,
-    FormAttempt, HeaderView, Locus, RecordWriteKind, ReferenceClaims, RuleSet, Trust, TxSlot,
-    Verdict,
+    form, validate, ArchivalDelta, AtHeight, Candidate, CappedEpoch, CenRow, Fault, FormAttempt,
+    HeaderView, Locus, RecordWriteKind, ReferenceClaims, RuleSet, Trust, TxSlot, Verdict,
 };
 use shekyl_types::archival::{AttestationWitness, IndexedDraw, IssuedDigest, IssuedDraw};
 use shekyl_types::{BlockCount, BlockHeight, PCanonicalId, SettlementEpoch, ShardId};
@@ -77,11 +76,11 @@ fn shard(n: u64) -> ShardId {
 
 /// A `(SEB, cap)` pair at compile time; a bad one is a compile error
 /// (`prune_tests.rs`'s shape).
-const fn pair(seb: u64, cap: u64) -> FakechainSchedule {
+const fn pair(seb: u64, cap: u64) -> CappedEpoch {
     let Some(epoch) = SettlementEpochBlocks::new(seb) else {
         panic!("a zero epoch");
     };
-    match FakechainSchedule::new(epoch, BlockCount::from_raw(cap)) {
+    match CappedEpoch::new(epoch, BlockCount::from_raw(cap)) {
         Ok(pair) => pair,
         Err(_) => panic!("the cap is not inside the epoch"),
     }
@@ -111,7 +110,7 @@ const CREDIT_HEIGHT: u64 = CREDIT_EPOCH * SHORT_SEB + 2;
 const CLOSING_HEIGHT: u64 = (CREDIT_EPOCH + 1) * SHORT_SEB - 1;
 const _: () = assert!(FIRST_SPEND_HEIGHT < CREDIT_HEIGHT && CREDIT_HEIGHT < CLOSING_HEIGHT);
 const SHORT_RETENTION: u64 = 8;
-const SHORT: RuleSet = RuleSet::fakechain(None, pair(SHORT_SEB, 4));
+const SHORT: RuleSet = RuleSet::GENESIS.with_levers(None, pair(SHORT_SEB, 4));
 
 fn short_store(path: &std::path::Path) -> ChainStore {
     let horizons = Horizons::new(

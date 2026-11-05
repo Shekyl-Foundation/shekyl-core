@@ -316,17 +316,17 @@ impl RuleSetId {
 pub struct RuleSet { id: RuleSetId, enforced: &'static [CenRow], header_major_version: u8, difficulty: DifficultyRule,
                      mined_money_unlock_window: BlockCount, reorg_cap: BlockCount, tx_spendable_age: BlockCount,
                      settlement_schedule: SettlementSchedule }   // the archival epoch geometry is rule-set data (DRS-E4 ARW-15, 2026-09-30)
-pub enum DifficultyRule { Lwma1, Fixed(Target) } // `Fixed` only via `RuleSet::fakechain(..)` — CEN-D7 as data (slice 2 §4.5); `RuleSetId` is then NOT a proxy for rule-set equality
-/// Fakechain's two schedule levers as one validated pair, `0 < reorg_cap < settlement` (SPR-9); `PRODUCTION` is the genesis pins.
-pub struct FakechainSchedule { settlement: SettlementEpochBlocks, reorg_cap: BlockCount }
+pub enum DifficultyRule { Lwma1, Fixed(Target) } // `Fixed` only via `RuleSet::with_levers(..)` — CEN-D7 as data (slice 2 §4.5); `RuleSetId` is then NOT a proxy for rule-set equality
+/// The settlement epoch and the reorg cap as one validated pair, `0 < reorg_cap < settlement` (SPR-9); `PRODUCTION` is the genesis pins. Every network carries it; a levered pair is `with_levers`.
+pub struct CappedEpoch { settlement: SettlementSchedule, reorg_cap: BlockCount }
 impl RuleSet {
     pub const GENESIS: Self;                           // enforced: CenRow::ALL
     const ISSUED: &'static [Self];                     // every rule set a schedule may name
     /// The rule set an id names; `None` for an id no schedule has issued.
     pub fn for_id(id: RuleSetId) -> Option<Self>;
-    /// Fakechain only: GENESIS with `Fixed(d)` for `Some(d)` and the pair's epoch and cap;
-    /// `fakechain(None, FakechainSchedule::PRODUCTION) == GENESIS`.
-    pub const fn fakechain(fixed: Option<NonZeroU128>, schedule: FakechainSchedule) -> Self;
+    /// `GENESIS` under the levers: `Fixed(d)` for `Some(d)`, and the pair's epoch and cap.
+    /// `GENESIS.with_levers(None, CappedEpoch::PRODUCTION) == GENESIS`. Which network may pull a lever is `ChainRules::new` (NI-R6), not this function.
+    pub const fn with_levers(self, fixed: Option<NonZeroU128>, schedule: CappedEpoch) -> Self;
     pub const fn id(&self) -> RuleSetId;
     /// The consensus rows this rule set enforces, in census order.
     pub fn enforced(&self) -> impl Iterator<Item = CenRow> + '_;
@@ -334,8 +334,8 @@ impl RuleSet {
     pub const fn settlement_schedule(&self) -> SettlementSchedule;    // what `archival::transition` and the store's connect belt read
 }
 
-/// Height → rule set, per network. Nettype selects **data** (rule 71): three
-/// schedule values, one `rules_at`, no `match network` anywhere a rule runs.
+/// Height → rule set, per network. Nettype selects **data** (rule 71): one
+/// schedule per network, one `rules_at`, no `match network` anywhere a rule runs.
 /// The schedule is the identity: every network, every height → `GENESIS`.
 /// There is no fork table. A later activation is a design document before a
 /// step is added ([`CXX_VERSION_GATES.md`](CXX_VERSION_GATES.md) §5).

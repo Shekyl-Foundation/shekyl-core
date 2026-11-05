@@ -609,7 +609,7 @@ impl BadInterval {
 /// instance of the module's placement argument): the daemon store **pins**
 /// it in its header at create and refuses a session under another value
 /// (S-CHAIN-W SCW-2); the rule set **carries** it — the genesis constant on
-/// every issued set, the regtest lever's value on a Fakechain set — so the
+/// every issued set, the regtest lever's value on a levered set — so the
 /// validator derives epochs, closes and slash deadlines from the rules in
 /// force and never from a process's environment (rule 71: nettype selects
 /// data, never control flow); and `shekyl-archival-retention` **computes**

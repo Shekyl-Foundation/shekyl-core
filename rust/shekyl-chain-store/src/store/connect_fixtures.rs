@@ -217,7 +217,7 @@ pub(super) fn formed<'id, V: HeaderView<'id>>(
     formed_under(view, candidate, &RuleSet::GENESIS)
 }
 
-/// [`formed`] under an explicit rule set (a Fakechain set for tests that
+/// [`formed`] under an explicit rule set (a levered set for tests that
 /// run a shortened schedule).
 pub(super) fn formed_under<'id, V: HeaderView<'id>>(
     view: &V,

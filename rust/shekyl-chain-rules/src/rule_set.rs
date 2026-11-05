@@ -16,8 +16,8 @@
 //!
 //! [`RuleSchedule`] is the identity: every network, every height names
 //! [`RuleSet::GENESIS`]. A later activation is a design document before a
-//! step is added. Nettype selects **data** (rule 71): three schedule values,
-//! one `rules_at`, no `match network` anywhere a rule runs.
+//! step is added. Nettype selects **data** (rule 71): one schedule per
+//! network, one `rules_at`, no `match network` anywhere a rule runs.
 //!
 //! [`AdmissionPolicy`] is relay/pool policy — a separate input with a
 //! separate id, never merged into [`RuleSet`] (ruling §8). Its consumer is
@@ -88,8 +88,8 @@ impl RuleSetId {
 /// `BlockHeader.major_version` this rule set admits (CEN-B1), landed with
 /// slice 1. It is not CEN-B2's operand: the header's minor version is
 /// reserved at one value under every rule set. The third is `difficulty` — how
-/// CEN-D4 derives the target — landed with slice 2 and the reason one
-/// non-issued constructor exists ([`RuleSet::fakechain`]). The fourth —
+/// CEN-D4 derives the target — landed with slice 2 and the reason
+/// [`RuleSet::with_levers`] exists beside the issued sets. The fourth —
 /// `mined_money_unlock_window` (CEN-F6) — landed with slice 4
 /// (`CHAIN_RULES_SLICE_4.md` Q5): the C++ `#define`
 /// `CRYPTONOTE_MINED_MONEY_UNLOCK_WINDOW`, stated here because F6 reads it.
@@ -100,10 +100,10 @@ impl RuleSetId {
 /// Consensus data, so it lives here and not in any store's configuration
 /// (PR #861 review: the store's undo retention is *constrained by* the
 /// in-force set's cap, never the other way round). `GENESIS` carries
-/// [`D_MAX`]; a Fakechain set names its own through [`RuleSet::fakechain`],
-/// the same witness `Fixed` uses, so a shortened regtest schedule runs a
-/// rule set whose cap fits inside its epoch rather than a store field the
-/// validator would have to defer to. The sixth — `tx_spendable_age` — is
+/// [`D_MAX`]; a set under [`RuleSet::with_levers`] names its own, the same
+/// witness `Fixed` uses, so a shortened regtest schedule runs a rule set
+/// whose cap fits inside its epoch rather than a store field the validator
+/// would have to defer to. The sixth — `tx_spendable_age` — is
 /// the miner window's sibling (DRS-E3 `CTW-Q5`): how many blocks after its
 /// height a *listed* transaction's outputs stay out of the curve tree, the
 /// C++ `CRYPTONOTE_DEFAULT_TX_SPENDABLE_AGE`. Both decide when an output
@@ -115,7 +115,7 @@ impl RuleSetId {
 /// which epoch a height sits in, where a challenge opens and closes, when
 /// an epoch's claims settle. It is the reorg cap's other half — SPR-9's
 /// `SEB > D_max` is an invariant *between two fields of this struct*, held
-/// by [`FakechainSchedule`] — and it joined the set for the cap's reason:
+/// by [`CappedEpoch`] — and it joined the set for the cap's reason:
 /// the validator reads its parameters off the rule set in force, never
 /// off the process's environment. Before it did, the daemon armed the
 /// `SHEKYL_SETTLEMENT_EPOCH_BLOCKS` lever into a process latch and the
@@ -135,28 +135,33 @@ pub struct RuleSet {
     settlement_schedule: SettlementSchedule,
 }
 
-/// The two schedule parameters a Fakechain rule set may name — blocks per
-/// settlement epoch and the reorg cap — **as a validated pair**: the cap
-/// strictly inside the epoch (`0 < cap < SEB`, SPR-9 / `reorg.rs`'s
-/// `SEB > D_max`), refused at construction rather than discovered when the
-/// undo floor crosses the body horizon.
+/// A settlement epoch and the reorg cap that must sit inside it, as one
+/// validated pair. Every network's issued rule set carries
+/// [`Self::PRODUCTION`]. A network whose row permits the levers may name
+/// another pair; the pair itself has no network (rule 71).
 ///
-/// Why a pair and not two levers: the invariant is between them, so a
-/// constructor that took them separately would have to be fallible on the
-/// second, or leave the check to a store that does not own either number.
-/// [`RuleSet::fakechain`] takes one of these and stays infallible;
-/// [`Self::PRODUCTION`] is the genesis pair, and `fakechain(None,
-/// PRODUCTION)` is `GENESIS` by value. The daemon's
-/// `SHEKYL_SETTLEMENT_EPOCH_BLOCKS` / `SHEKYL_ARCHIVAL_REORG_DEPTH_BLOCKS`
-/// levers and the replay tool's flags both resolve to one of these before
-/// a rule set exists.
+/// The cap is strictly inside the epoch (`0 < cap < SEB`, SPR-9 /
+/// `reorg.rs`'s `SEB > D_max`), two caps fit inside one RandomX seed
+/// epoch, and the epoch's response window still leaves the anchor lag
+/// inside the anchor depth (`W₂ + L ≤` anchor depth, `SCS-P32`). A pair
+/// that breaks one of those is refused here, not discovered when an undo
+/// floor crosses a horizon.
+///
+/// Why a pair and not two independent fields: the invariants are between
+/// them, so a constructor that took them separately would be fallible on
+/// the second, or would leave the check to a store that owns neither
+/// number. [`RuleSet::with_levers`] takes one of these and stays
+/// infallible. [`Self::PRODUCTION`] is the genesis pair, and
+/// `GENESIS.with_levers(None, PRODUCTION)` is `GENESIS` by value. The
+/// node's `schedule_of` and the replay tool's flags both resolve to one
+/// of these before a rule set exists.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
-pub struct FakechainSchedule {
+pub struct CappedEpoch {
     settlement: SettlementSchedule,
     reorg_cap: BlockCount,
 }
 
-/// A [`FakechainSchedule`] whose reorg cap is not strictly inside its epoch
+/// A [`CappedEpoch`] whose reorg cap is not strictly inside its epoch
 /// (`0 < cap < SEB` fails). The store's `RetentionNotInsideEpoch` is the
 /// same inequality on the session's retention; this is it on the rule
 /// set's own parameters.
@@ -181,7 +186,7 @@ impl fmt::Display for ReorgCapNotInsideEpoch {
 
 impl std::error::Error for ReorgCapNotInsideEpoch {}
 
-/// A [`FakechainSchedule`] whose reorg cap is wider than half a RandomX
+/// A [`CappedEpoch`] whose reorg cap is wider than half a RandomX
 /// seed epoch: two caps no longer fit inside one, and an alternative
 /// inside the cap could name a seed neither of the node's two cache slots
 /// holds (`shekyl-chain-ingest`'s `cache_window`). The production cap,
@@ -215,32 +220,28 @@ impl fmt::Display for ReorgCapOutrunsSeedEpoch {
 
 impl std::error::Error for ReorgCapOutrunsSeedEpoch {}
 
-/// A [`FakechainSchedule`] whose epoch is long enough that an honest
+/// A [`CappedEpoch`] whose epoch is long enough that an honest
 /// challenge read could be anchored at or above the block it answers for:
 /// `W₂ + L >` anchor depth (`ARCHIVAL_SERVE_CREDIT_SPEC.md` §9.1,
 /// `SCS-P32`). `W₂` is a fraction of the epoch, so this is a ceiling on
 /// the epoch: [`Self::LONGEST_EPOCH_BLOCKS`].
 ///
-/// # Which inputs reach this refusal today
+/// # Which inputs reach this refusal
 ///
-/// One: the replay tool's `--settlement-epoch-blocks`
-/// (`shekyl-chain-replay`, `schedule_flags`), which builds its pair with
-/// [`FakechainSchedule::new`] and prints this error.
+/// [`CappedEpoch::new`] is the only constructor, and this error is its
+/// `Display`. Two callers build a pair from operator input and surface it:
 ///
-/// **The daemon's regtest epoch lever does not.**
-/// `SHEKYL_SETTLEMENT_EPOCH_BLOCKS` is read by the retention crate's
-/// process latch — armed by
-/// `shekyl_archival_retention::arm_settlement_epoch_override_for_regtest`,
-/// read through `effective_settlement_epoch_blocks` and
-/// `SettlementSchedule::effective` — and by the C++ daemon. Nothing in
-/// Rust builds a [`FakechainSchedule`] from it. That latch's own parser
-/// (`parse_settlement_epoch_override`) admits no epoch above the genesis
-/// `SETTLEMENT_EPOCH_BLOCKS`, which is below the ceiling here, so the
-/// lever cannot name an epoch this relation refuses; but that is a
-/// consequence of two constants, not a check of this relation. **When the
-/// Rust daemon wires the lever to a rule set, the pair must be built by
-/// [`FakechainSchedule::new`] and this error surfaced to the operator as
-/// it is written** — not a second constructor, and not a panic.
+/// - the node's `schedule_of` (`shekyl-node`), from the daemon's
+///   `dev-settlement-epoch-blocks` and `dev-archival-reorg-depth` rows,
+///   as `OpenError::Rules`;
+/// - `shekyl-chain-replay`'s `--settlement-epoch-blocks`.
+///
+/// The retention crate's process latch
+/// (`arm_settlement_epoch_override_for_regtest`,
+/// `effective_settlement_epoch_blocks`) is a separate door for callers
+/// that hold no rule set. It does not build a [`CappedEpoch`]. A path
+/// that wants this relation checked builds the pair here and surfaces
+/// this error. It does not grow a second constructor.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub struct ResponseWindowOutrunsAnchor {
     /// Blocks per epoch the pair named.
@@ -283,11 +284,11 @@ impl fmt::Display for ResponseWindowOutrunsAnchor {
 
 impl std::error::Error for ResponseWindowOutrunsAnchor {}
 
-/// Why a `(settlement_epoch, reorg_cap)` pair is not a
-/// [`FakechainSchedule`]. One arm per invariant the pair is held to, each
-/// carrying what the caller needs to say which value to change.
+/// Why a `(settlement_epoch, reorg_cap)` pair is not a [`CappedEpoch`].
+/// One arm per invariant the pair is held to, each carrying what the
+/// caller needs to say which value to change.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
-pub enum FakechainScheduleRefused {
+pub enum CappedEpochRefused {
     /// `0 < reorg_cap < SEB` fails.
     ReorgCapNotInsideEpoch(ReorgCapNotInsideEpoch),
     /// `2 · reorg_cap < SEEDHASH_EPOCH_BLOCKS` fails.
@@ -296,7 +297,7 @@ pub enum FakechainScheduleRefused {
     ResponseWindowOutrunsAnchor(ResponseWindowOutrunsAnchor),
 }
 
-impl fmt::Display for FakechainScheduleRefused {
+impl fmt::Display for CappedEpochRefused {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
             Self::ReorgCapNotInsideEpoch(refused) => refused.fmt(f),
@@ -306,9 +307,9 @@ impl fmt::Display for FakechainScheduleRefused {
     }
 }
 
-impl std::error::Error for FakechainScheduleRefused {}
+impl std::error::Error for CappedEpochRefused {}
 
-impl FakechainSchedule {
+impl CappedEpoch {
     /// The genesis pair: `SETTLEMENT_EPOCH_BLOCKS` per epoch, `D_MAX` cap
     /// — the invariant on it is `reorg.rs`'s compile-time assertion.
     pub const PRODUCTION: Self = Self {
@@ -324,21 +325,20 @@ impl FakechainSchedule {
     /// that order.
     ///
     /// A value of this type therefore satisfies all three, and
-    /// [`RuleSet::fakechain`] checks neither.
+    /// [`RuleSet::with_levers`] checks none of them again.
     ///
     /// # Errors
     ///
-    /// [`FakechainScheduleRefused`], naming the invariant that failed.
-    /// [`ResponseWindowOutrunsAnchor`] says which inputs reach that arm
-    /// today, and what the daemon's regtest lever owes when it is wired
-    /// to a rule set.
+    /// [`CappedEpochRefused`], naming the invariant that failed.
+    /// [`ResponseWindowOutrunsAnchor`] names the callers that surface that
+    /// arm.
     pub const fn new(
         settlement_epoch: SettlementEpochBlocks,
         reorg_cap: BlockCount,
-    ) -> Result<Self, FakechainScheduleRefused> {
+    ) -> Result<Self, CappedEpochRefused> {
         let cap = reorg_cap.to_raw();
         if cap == 0 || cap >= settlement_epoch.get() {
-            return Err(FakechainScheduleRefused::ReorgCapNotInsideEpoch(
+            return Err(CappedEpochRefused::ReorgCapNotInsideEpoch(
                 ReorgCapNotInsideEpoch {
                     settlement_epoch,
                     reorg_cap,
@@ -346,7 +346,7 @@ impl FakechainSchedule {
             ));
         }
         if cap > ReorgCapOutrunsSeedEpoch::LARGEST_CAP_BLOCKS {
-            return Err(FakechainScheduleRefused::ReorgCapOutrunsSeedEpoch(
+            return Err(CappedEpochRefused::ReorgCapOutrunsSeedEpoch(
                 ReorgCapOutrunsSeedEpoch { reorg_cap },
             ));
         }
@@ -355,7 +355,7 @@ impl FakechainSchedule {
         // short to have one satisfies the relation vacuously and has no
         // window to name, so the refusal's window is always the real one.
         if let Some(window) = response_window_outrunning_anchor(settlement) {
-            return Err(FakechainScheduleRefused::ResponseWindowOutrunsAnchor(
+            return Err(CappedEpochRefused::ResponseWindowOutrunsAnchor(
                 ResponseWindowOutrunsAnchor {
                     settlement_epoch,
                     response_window: BlockCount::from_raw(window.get()),
@@ -391,39 +391,52 @@ impl FakechainSchedule {
         anchor_depth_covers_response_window(self.settlement)
     }
 
-    /// Whether this is [`PRODUCTION`](Self::PRODUCTION) — the pair no lever
-    /// was pulled to reach, so a public network may carry it (`const`,
-    /// where `==` cannot yet be).
+    /// Whether the epoch length is the production pin. A settlement-epoch
+    /// lever is pulled exactly when this is false.
+    #[must_use]
+    pub const fn settlement_is_production(self) -> bool {
+        self.settlement.blocks().get() == Self::PRODUCTION.settlement.blocks().get()
+    }
+
+    /// Whether the reorg cap is the production pin. A reorg-depth lever is
+    /// pulled exactly when this is false.
+    #[must_use]
+    pub const fn reorg_cap_is_production(self) -> bool {
+        self.reorg_cap.to_raw() == Self::PRODUCTION.reorg_cap.to_raw()
+    }
+
+    /// Whether this is [`PRODUCTION`](Self::PRODUCTION) — neither half was
+    /// levered, so a public network may carry it (`const`, where `==`
+    /// cannot yet be). The two halves above are the question; this is both.
     #[must_use]
     pub const fn is_production(self) -> bool {
-        self.settlement.blocks().get() == Self::PRODUCTION.settlement.blocks().get()
-            && self.reorg_cap.to_raw() == Self::PRODUCTION.reorg_cap.to_raw()
+        self.settlement_is_production() && self.reorg_cap_is_production()
     }
 }
 
 // The production pair is a literal, not a call to `new`, so the second
 // invariant `new` holds a pair to is asserted on it here.
 const _: () = assert!(
-    FakechainSchedule::PRODUCTION.anchor_covers_response_window(),
+    CappedEpoch::PRODUCTION.anchor_covers_response_window(),
     "the production schedule's W2 + L exceeds the pass-anchor depth (SCS-P32)"
 );
 
 // The genesis pair satisfies its own invariant — the same fact `reorg.rs`
 // asserts, restated on the type that carries it.
 const _: () = assert!(
-    FakechainSchedule::PRODUCTION.reorg_cap.to_raw()
-        < FakechainSchedule::PRODUCTION.settlement.blocks().get()
+    CappedEpoch::PRODUCTION.reorg_cap.to_raw() < CappedEpoch::PRODUCTION.settlement.blocks().get()
 );
 
 /// How a rule set derives the next-block target (CEN-D4 reads this).
 ///
 /// Every issued rule set is [`Lwma1`](Self::Lwma1). [`Fixed`](Self::Fixed)
-/// is the `--fixed-difficulty` regtest lever as **data on a Fakechain rule
-/// set** (CEN-D7; `CHAIN_RULES_SLICE_2.md` §4.5, arm (d)): the DAA is not
-/// bypassed by a flag the validator consults, the rule set in force simply
-/// says what the target is. No override path exists on any nettype other
-/// than Fakechain, enforced by the type system rather than by a runtime
-/// check — the API the public nettypes select cannot express `Fixed`.
+/// is the `dev-difficulty` lever as **data on the rule set**
+/// ([`RuleSet::with_levers`], CEN-D7; `CHAIN_RULES_SLICE_2.md` §4.5, arm
+/// (d)): the DAA is not bypassed by a flag the validator consults. The
+/// issued-set path (`RuleSchedule::for_network` → `rules_at` → `for_id`)
+/// cannot name `Fixed`. Which network may pull the lever is its row's
+/// `permits`, checked once by `ChainRules::new` (NI-R6). `with_levers`
+/// does not know the network (rule 71).
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub enum DifficultyRule {
     /// LWMA-1 over the recorded window; the genesis constant below `N`.
@@ -431,14 +444,11 @@ pub enum DifficultyRule {
     /// A fixed target at every height above genesis (height `0` is `1`, as
     /// `blockchain.cpp:975` has it).
     ///
-    /// **`RuleSetId` no longer uniquely determines the rule set once this
-    /// variant exists.** A Fakechain set carries `RuleSetId::GENESIS` with a
-    /// parameter no issued set has, so two Fakechain nodes at the same id
-    /// may hold different rule sets. Tolerable — Fakechain is
-    /// single-operator and cross-node identity does not matter there — but
-    /// `RuleSetId` equality is **not** a proxy for rule-set equality, and
-    /// code that compares ids to decide whether two nodes run the same rules
-    /// is wrong on Fakechain by exactly this variant.
+    /// **`RuleSetId` does not determine the rule set once levers exist.**
+    /// A set under [`RuleSet::with_levers`] carries `RuleSetId::GENESIS`
+    /// with a parameter no issued set has, so two nodes at the same id may
+    /// hold different rule sets. `RuleSetId` equality is **not** a proxy
+    /// for rule-set equality wherever a lever is pulled.
     Fixed(Target),
 }
 
@@ -461,46 +471,27 @@ impl RuleSet {
     /// names an id absent from here does not compile (`well_formed`).
     const ISSUED: &'static [Self] = &[Self::GENESIS];
 
-    /// The genesis rules as a **Fakechain** set: the target fixed when
-    /// `shekyld --regtest --fixed-difficulty=<n>` names one (CEN-D7, arm
-    /// (d)), and the settlement schedule the regtest runs —
-    /// [`FakechainSchedule::PRODUCTION`] for a regtest on the genesis
-    /// schedule, a shortened epoch with a cap inside it for a regtest under
-    /// the `SHEKYL_SETTLEMENT_EPOCH_BLOCKS` / `SHEKYL_ARCHIVAL_REORG_DEPTH_BLOCKS`
-    /// levers (the pair's constructor refuses `cap ≥ SEB`; the store
-    /// refuses a retention below the cap, and a pinned epoch other than
-    /// the set's, at open and at every connect).
-    ///
-    /// [`GENESIS`](Self::GENESIS) under the levers: `GENESIS.with_levers(fixed,
-    /// schedule)`. Which network may pull a lever is its row's
-    /// (`NETWORK_IDENTITY.md` NI-R6); the ingest's `ChainRules` asks the row
-    /// and resolves the network's own schedule under them. `fixed` is non-zero by
-    /// its type, so the target it fixes is a [`Target`] by construction
-    /// (CEN-D6); `schedule` is a valid pair by its type, so the invariant
-    /// between the two fields it sets holds by construction — and so does
-    /// `W₂ + L ≤` anchor depth (`SCS-P32`), which
-    /// [`FakechainSchedule::new`] refuses a pair for. This function checks
-    /// nothing and cannot fail.
-    /// `fakechain(None, FakechainSchedule::PRODUCTION)` **is** `GENESIS`
-    /// by value.
-    #[must_use]
-    pub const fn fakechain(
-        fixed: Option<core::num::NonZeroU128>,
-        schedule: FakechainSchedule,
-    ) -> Self {
-        Self::GENESIS.with_levers(fixed, schedule)
-    }
-
     /// This set under the levers: the target fixed when `fixed` is given,
-    /// and the settlement schedule and reorg cap `schedule` names. A set
-    /// with no lever pulled is itself:
-    /// `set.with_levers(None, FakechainSchedule::PRODUCTION)` keeps its
-    /// difficulty rule and takes the production pair.
+    /// and the settlement epoch and reorg cap `schedule` names.
+    ///
+    /// [`GENESIS`](Self::GENESIS) under no lever is itself:
+    /// `GENESIS.with_levers(None, CappedEpoch::PRODUCTION)` **is**
+    /// `GENESIS` by value. `fixed` is non-zero by its type, so the target
+    /// it fixes is a [`Target`] by construction (CEN-D6). `schedule` is a
+    /// valid pair by its type, so `0 < cap < SEB`, the seed-epoch bound
+    /// and `W₂ + L ≤` anchor depth (`SCS-P32`) hold by construction.
+    /// This function checks nothing and cannot fail.
+    ///
+    /// Which network may pull a lever is not this function's question.
+    /// `ChainRules::new` asks the row (`NETWORK_IDENTITY.md` NI-R6) and is
+    /// the door a daemon and a replay use. The store refuses a retention
+    /// below the cap, and a pinned epoch other than the set's, at open
+    /// and at every connect.
     #[must_use]
     pub const fn with_levers(
         self,
         fixed: Option<core::num::NonZeroU128>,
-        schedule: FakechainSchedule,
+        schedule: CappedEpoch,
     ) -> Self {
         let difficulty = match fixed {
             Some(fixed) => DifficultyRule::Fixed(Target::fixed(fixed)),
@@ -538,7 +529,7 @@ impl RuleSet {
     /// (`PopBeyondReorgCap`); the block is not invalid for it. The store's
     /// undo retention is at least this (S-CHAIN-W SCW-7), so a reorg the
     /// node does follow never meets `PopBelowFloor`. Readers take this,
-    /// never [`D_MAX`](crate::D_MAX) directly, so a Fakechain set and its
+    /// never [`D_MAX`](crate::D_MAX) directly, so a levered set and its
     /// store agree.
     #[must_use]
     pub const fn reorg_cap(&self) -> BlockCount {
@@ -551,8 +542,8 @@ impl RuleSet {
     ///
     /// **True of every rule set this crate can build**: of each issued set
     /// by the compile-time assertion beside [`Self::for_id`]'s table, and
-    /// of a Fakechain set because [`FakechainSchedule::new`] refuses a pair
-    /// that breaks it. It is
+    /// of a levered set because [`CappedEpoch::new`] refuses a pair that
+    /// breaks it. It is
     /// the precondition under which the bundle rule's `anchor_height < h`
     /// (CEN-J36) refuses no honest record; the rule itself does not read
     /// it.
@@ -700,24 +691,15 @@ impl RuleSchedule {
         steps: &[],
     };
 
-    /// Mainnet's schedule.
-    const MAINNET: Self = Self::IDENTITY;
-    /// Testnet's schedule.
-    const TESTNET: Self = Self::IDENTITY;
-    /// Stagenet's schedule.
-    const STAGENET: Self = Self::IDENTITY;
-    /// Regtest's schedule.
-    const REGTEST: Self = Self::IDENTITY;
-
-    /// The schedule for `network`. One value per network, one lookup:
-    /// nettype selects data, never control flow (rule 71).
+    /// The schedule for `network`. One value per network, selected as
+    /// data (rule 71). Today every network is the identity. Adding a
+    /// network is a compile error until this match names its schedule.
     #[must_use]
     pub const fn for_network(network: Network) -> Self {
         match network {
-            Network::Mainnet => Self::MAINNET,
-            Network::Testnet => Self::TESTNET,
-            Network::Stagenet => Self::STAGENET,
-            Network::Regtest => Self::REGTEST,
+            Network::Mainnet | Network::Testnet | Network::Stagenet | Network::Regtest => {
+                Self::IDENTITY
+            }
         }
     }
 
@@ -785,10 +767,15 @@ const _: () = {
 };
 
 // Every schedule `for_network` can return is well formed, at compile time.
+// Walking `Network::ALL` is the pin: a network the match names cannot skip
+// it, including regtest.
 const _: () = {
-    assert!(well_formed(&RuleSchedule::MAINNET));
-    assert!(well_formed(&RuleSchedule::TESTNET));
-    assert!(well_formed(&RuleSchedule::STAGENET));
+    let mut i = 0;
+    while i < Network::ALL.len() {
+        let schedule = RuleSchedule::for_network(Network::ALL[i]);
+        assert!(well_formed(&schedule));
+        i += 1;
+    }
 };
 
 /// Identifies a relay/pool admission policy.

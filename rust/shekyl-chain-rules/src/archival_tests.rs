@@ -643,10 +643,10 @@ fn run_at(
 /// is zero), so the count phase draws nothing and rebuilds no drawable set
 /// this harness could not answer.
 fn ten_block_epochs() -> RuleSet {
-    use crate::rule_set::{FakechainSchedule, SettlementEpochBlocks};
-    RuleSet::fakechain(
+    use crate::rule_set::{CappedEpoch, SettlementEpochBlocks};
+    RuleSet::GENESIS.with_levers(
         None,
-        FakechainSchedule::new(
+        CappedEpoch::new(
             SettlementEpochBlocks::new(10).expect("non-zero"),
             BlockCount::from_raw(5),
         )

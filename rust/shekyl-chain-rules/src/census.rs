@@ -379,7 +379,7 @@ census_rows! {
         D3 implemented(crate::rules::pow::D3),
         // D4 the target definition, recorded at `D4::target`; D6 held by the
         // `Target` type (`NonZeroU128`), recorded at every production path
-        // (`D6::record` / `D6::mint`) so Fakechain `Fixed` and genesis-block
+        // (`D6::record` / `D6::mint`) so levered `Fixed` and genesis-block
         // `1` cover the row as well as LWMA-1 (slice 2 Q4). D5 is D4's
         // algorithm over the stitched view — `D5::target` wraps `D4::target`
         // and records the row at the one site that feeds D4 an alt view,
@@ -387,7 +387,7 @@ census_rows! {
         D4 implemented(crate::rules::difficulty::D4),
         D5 enforced_at(crate::rules::alt::D5, "the_alt_target_follows_the_window_it_is_fed"),
         D6 implemented(crate::rules::difficulty::D6),
-        // D7 as data on a Fakechain rule set (`DifficultyRule::Fixed`), the
+        // D7 as data on a levered rule set (`DifficultyRule::Fixed`), the
         // override arm D4 consults on every block (slice 2 Q10, arm (d)).
         D7 implemented(crate::rules::difficulty::D7),
         // 4.E The genesis pin (`genesis_pin.rs`); no coded checkpoints (S1,

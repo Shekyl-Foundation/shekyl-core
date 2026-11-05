@@ -170,7 +170,7 @@ impl Candidate {
 /// * `rule_set` — the rules the caller **claimed** were in force, as the
 ///   set itself (not only its id). `validate` compares with `PartialEq`
 ///   and returns [`Stale::RuleSet`](crate::Stale::RuleSet) on a mismatch.
-///   The id alone is not the set: a Fakechain `Fixed` target reuses
+///   The id alone is not the set: a levered `Fixed` target reuses
 ///   `RuleSetId::GENESIS` (Q10), so two sets at the same id can differ.
 /// * `seed` — the block id the caller **claimed** sits at the seed height
 ///   (CEN-D3). `validate` verifies it against the committing view and
@@ -279,7 +279,7 @@ impl StructurallyValid {
     }
 
     /// The id of the set `form` judged under. What the store persists;
-    /// not a proxy for set equality (a Fakechain `Fixed` target reuses
+    /// not a proxy for set equality (a levered `Fixed` target reuses
     /// [`RuleSetId::GENESIS`](crate::RuleSetId::GENESIS)).
     #[must_use]
     pub const fn rule_set_id(&self) -> RuleSetId {

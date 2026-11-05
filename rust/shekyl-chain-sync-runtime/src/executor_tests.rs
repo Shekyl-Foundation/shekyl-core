@@ -11,7 +11,7 @@ use std::sync::Arc;
 use shekyl_chain_ingest::{Metrics, ProductionSubstrate};
 use shekyl_chain_rules::harness::fixture::{candidate_on, chain_of};
 use shekyl_chain_rules::{
-    target_claim, FakechainSchedule, FormAttempt, HeaderView, RuleSet, SettlementEpochBlocks,
+    target_claim, CappedEpoch, FormAttempt, HeaderView, RuleSet, SettlementEpochBlocks,
 };
 use shekyl_hash_budget::{Budget, Class};
 use shekyl_pow_randomx::{CacheStore, Seedhash};
@@ -24,8 +24,8 @@ use shekyl_chain_sync::{CachePlan, HashClass, ProveItem, Proved};
 fn fixed(target: u128, blocks: u64) -> RuleSet {
     let epoch = SettlementEpochBlocks::new(512).expect("512");
     let schedule =
-        FakechainSchedule::new(epoch, BlockCount::from_raw(blocks)).expect("cap inside the epoch");
-    RuleSet::fakechain(core::num::NonZeroU128::new(target), schedule)
+        CappedEpoch::new(epoch, BlockCount::from_raw(blocks)).expect("cap inside the epoch");
+    RuleSet::GENESIS.with_levers(core::num::NonZeroU128::new(target), schedule)
 }
 
 /// One header at a fixed target of 1, so any hash passes, claimed under

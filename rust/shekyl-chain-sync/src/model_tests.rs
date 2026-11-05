@@ -12,7 +12,7 @@ use std::time::{Duration, Instant};
 use core::num::NonZeroU128;
 
 use shekyl_chain_rules::{
-    AtHeight, DifficultyRule, FakechainSchedule, HeaderRecord, HeaderView, RuleSet, Tip, Trust,
+    AtHeight, CappedEpoch, DifficultyRule, HeaderRecord, HeaderView, RuleSet, Tip, Trust,
 };
 use shekyl_difficulty::{CumulativeDifficulty, GENESIS_DIFFICULTY};
 use shekyl_draw_rng::RelayRng;
@@ -161,7 +161,7 @@ fn work_below_the_block_count_is_refused() {
 #[test]
 fn a_regtest_fixed_target_admits_an_honest_claim() {
     let fixed = NonZeroU128::new(7).expect("7");
-    let rules = RuleSet::fakechain(Some(fixed), FakechainSchedule::PRODUCTION);
+    let rules = RuleSet::GENESIS.with_levers(Some(fixed), CappedEpoch::PRODUCTION);
     let DifficultyRule::Fixed(target) = rules.difficulty() else {
         panic!("the regtest set names a fixed target");
     };

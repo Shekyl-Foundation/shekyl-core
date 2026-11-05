@@ -25,7 +25,7 @@
 /// What this replaces: `CHALLENGE_RESOLUTION_BLOCKS = 10_000`, a
 /// block-denominated pin equal to `SETTLEMENT_EPOCH_BLOCKS` by coincidence
 /// (two independent numbers, one of which a re-pin could move alone) and —
-/// the live defect — **not** carried by the Fakechain schedule lever: under
+/// the live defect — **not** carried by the settlement-epoch lever: under
 /// `SEB = 100` the grace stayed ten thousand blocks, a hundred epochs, so
 /// every slash the regtest regime reached was reached under a relationship
 /// production never has. Written as the multiple, the relationship is
@@ -275,8 +275,9 @@ pub enum SettlementEpochOverrideError {
 /// cap's: `SEB > D_max` is an invariant of every valid configuration on
 /// every nettype (`ARCHIVAL_PRUNED_DAEMON_MODE.md` Q2, rule 71), so a
 /// regtest that shortens the epoch below the production cap lowers the
-/// cap lever with it — the Fakechain rule set the daemon runs names that
-/// cap (`shekyl_chain_rules::RuleSet::fakechain`).
+/// cap lever with it. The node's rule set names that cap through
+/// `CappedEpoch` (`RuleSet::with_levers`); this parser is the latch's
+/// own check for callers that hold no rule set.
 pub fn parse_settlement_epoch_override(
     raw: Option<&str>,
     reorg_cap: u64,
@@ -359,9 +360,10 @@ fn latch_unarmed() -> &'static EffectiveSchedule {
 /// schedule no matter what the environment says, so a leaked
 /// `SHEKYL_SETTLEMENT_EPOCH_BLOCKS` (shared systemd template, container
 /// base layer) cannot silently mis-epoch wallet state or fork a public
-/// node. The daemon arms only on FAKECHAIN, behind its own fail-closed
-/// startup gate (`Blockchain::init`, next to the seed-epoch gate);
-/// unarmed consumers surface the ignored lever via
+/// node. The Rust daemon arms this latch from its dev rows at startup
+/// (`arm_settlement_schedule`), before any epoch arithmetic. The node's
+/// rule set does not read the latch: `schedule_of` builds a `CappedEpoch`
+/// from those same rows. Unarmed consumers surface an ignored lever via
 /// [`settlement_epoch_override_ignored`].
 #[must_use]
 pub fn effective_settlement_epoch_blocks() -> u64 {
@@ -371,14 +373,13 @@ pub fn effective_settlement_epoch_blocks() -> u64 {
 /// The effective reorg cap: the genesis-pinned
 /// [`ARCHIVAL_REORG_DEPTH_BLOCKS`] (`D_max`, `PDM-Q11`), or — only in a
 /// process that armed — the validated `SHEKYL_ARCHIVAL_REORG_DEPTH_BLOCKS`
-/// override. **This is the cap the daemon's Fakechain rule set names**
-/// (`shekyl_chain_rules::RuleSet::fakechain(fixed, schedule)`, the
-/// schedule a `FakechainSchedule` pair of this and
-/// [`effective_settlement_epoch_blocks`], DRS-E4 `ARW-15`): the rule set
-/// is the consensus home of the cap and the store's undo retention is
-/// constrained by it (S-CHAIN-W SCW-7); this accessor is where a levered
-/// daemon reads the value it hands that constructor. Same read-once,
-/// armed-only semantics as [`effective_settlement_epoch_blocks`].
+/// override. The consensus home of the cap is the rule set
+/// (`CappedEpoch`, `RuleSet::with_levers`, DRS-E4 `ARW-15`): the node's
+/// `schedule_of` builds that pair from the daemon's dev rows, and the
+/// store's undo retention is constrained by the set (S-CHAIN-W SCW-7).
+/// This accessor is the same number for a caller that holds no rule set.
+/// Same read-once, armed-only semantics as
+/// [`effective_settlement_epoch_blocks`].
 #[must_use]
 pub fn effective_archival_reorg_depth_blocks() -> u64 {
     latch_unarmed().reorg_cap
@@ -386,8 +387,8 @@ pub fn effective_archival_reorg_depth_blocks() -> u64 {
 
 /// Arm the regtest schedule levers — `SHEKYL_SETTLEMENT_EPOCH_BLOCKS` and
 /// `SHEKYL_ARCHIVAL_REORG_DEPTH_BLOCKS` — for a **regtest context**: the
-/// daemon's FAKECHAIN startup path, or a wallet-side regtest harness whose
-/// epoch arithmetic must match a short-epoch regtest daemon. Must run at
+/// daemon's startup arm, or a wallet-side regtest harness whose epoch
+/// arithmetic must match a short-epoch regtest daemon. Must run at
 /// process startup, before any epoch arithmetic: arming after the schedule
 /// latched is a typed refusal ([`SettlementEpochOverrideError::ArmedTooLate`]),
 /// as is an invalid value ([`SettlementEpochOverrideError::Invalid`],

@@ -141,7 +141,7 @@ pub struct Scenario<P> {
 pub const RULES: ChainRules = match ChainRules::new(
     shekyl_network::Network::Regtest,
     Some(std::num::NonZeroU128::MIN),
-    shekyl_chain_rules::FakechainSchedule::PRODUCTION,
+    shekyl_chain_rules::CappedEpoch::PRODUCTION,
 ) {
     // The driver mines its own block 0, so its chain is held to none.
     Ok(rules) => rules.unpinned(),

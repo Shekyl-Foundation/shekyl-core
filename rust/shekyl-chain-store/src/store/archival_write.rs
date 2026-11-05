@@ -96,7 +96,7 @@
 //! is the writer's own test hook — the door the C++'s
 //! `regtest_inject_archival_serve_credit` (`blockchain.cpp:4708`) opened,
 //! writing a serve-credit bit the rules did not admit, attributed to the
-//! tip's height, refused off Fakechain. It lives beside the phase bodies
+//! tip's height, refused off regtest. It lives beside the phase bodies
 //! because it writes their table and nothing else may. It is **not
 //! journaled**: it runs in its own transaction outside any block's
 //! recording, so no `undo_log` row names it, and a pop below its height

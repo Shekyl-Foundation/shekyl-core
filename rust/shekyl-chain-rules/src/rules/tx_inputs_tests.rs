@@ -108,7 +108,7 @@ fn i1_fewer_than_two_outputs_is_refused_except_on_a_serve_credit() {
 
 /// CEN-I4: eight inputs are admitted (the cap is `MAX_FCMP_INPUTS`, the
 /// wire's mirror of `FCMP_MAX_INPUTS_PER_TX`), nine refused — at both
-/// sites, and on what would be a Fakechain node: the C++ gates this on
+/// sites, and on what would be a regtest node: the C++ gates this on
 /// `m_nettype != FAKECHAIN`; the rule does not read the nettype (rule 71).
 #[test]
 fn i4_the_ninth_input_is_refused_and_the_eighth_admitted() {

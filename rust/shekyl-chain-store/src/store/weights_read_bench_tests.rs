@@ -62,9 +62,9 @@ const SPACING: u64 = 120;
 /// constant 120 s spacing the live LWMA floors a small difficulty to zero
 /// over enough blocks (D6 refused at height ~8 000), and off-target spacing
 /// drifts it without bound. The bench measures a read, not the DAA.
-const RULES: RuleSet = RuleSet::fakechain(
+const RULES: RuleSet = RuleSet::GENESIS.with_levers(
     core::num::NonZeroU128::new(7),
-    shekyl_chain_rules::FakechainSchedule::PRODUCTION,
+    shekyl_chain_rules::CappedEpoch::PRODUCTION,
 );
 
 struct BenchSubstrate {

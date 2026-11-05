@@ -14,8 +14,7 @@ use super::*;
 /// figure and the producer's claimed target, never the main chain's.
 #[tokio::test]
 async fn an_alt_blocks_work_is_its_own_chains_not_the_main_chains_at_its_height() {
-    let rules =
-        ChainRules::harness_regtest(None, shekyl_chain_rules::FakechainSchedule::PRODUCTION);
+    let rules = ChainRules::harness_regtest(None, shekyl_chain_rules::CappedEpoch::PRODUCTION);
     // Past LWMA-1's window: before it fills every block carries the
     // genesis difficulty, and the two works would coincide.
     let prefix = shekyl_difficulty::N + 2;

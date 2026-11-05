@@ -340,7 +340,7 @@ pub enum StoreCannot {
     /// set it runs under (S-CHAIN-W SCW-7: retention `≥ D_max`, or a legal
     /// reorg returns [`PopBelowFloor`](Self::PopBelowFloor)). Refused at
     /// open against the cap the caller names, and by `connect` against the
-    /// set in force at every height — a Fakechain regtest runs a rule set
+    /// set in force at every height — a levered regtest runs a rule set
     /// whose cap fits its retention, never a store field the validator
     /// defers to (PR #861 review).
     RetentionBelowReorgCap {
@@ -360,7 +360,7 @@ pub enum StoreCannot {
         /// The height the block would have been recorded at.
         height: u64,
         /// The rule set the verdict was minted under — the set, not its id:
-        /// two Fakechain sets share `RuleSetId::GENESIS`, and the refusal
+        /// two levered sets share `RuleSetId::GENESIS`, and the refusal
         /// must be able to say which differed (RD-Q10). Boxed, as
         /// `shekyl_chain_rules::Stale::RuleSet`'s are: two sets by value
         /// sized every `Result` in the store past clippy's 128 bytes once
@@ -638,8 +638,8 @@ impl core::fmt::Display for StoreCannot {
             } => write!(
                 f,
                 "undo-log retention {} is below the in-force rule set's reorg cap of {}: a legal \
-                 reorg would meet PopBelowFloor (S-CHAIN-W SCW-7); raise the retention, or run a \
-                 Fakechain rule set whose cap fits it",
+                 reorg would meet PopBelowFloor (S-CHAIN-W SCW-7); raise the retention, or shorten \
+                 the reorg cap so it fits inside the retention",
                 retention.to_raw(),
                 reorg_cap.to_raw()
             ),

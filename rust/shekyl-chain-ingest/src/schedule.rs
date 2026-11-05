@@ -16,7 +16,7 @@
 //! Two of a network's levers reach the rules: a **fixed** target
 //! (`dev-difficulty`) and a **settlement schedule** other than the
 //! production pair (`dev-settlement-epoch-blocks`,
-//! `dev-archival-reorg-depth`, a [`FakechainSchedule`]). They apply onto the
+//! `dev-archival-reorg-depth`, a [`CappedEpoch`]). They apply onto the
 //! network's own set (`RuleSet::with_levers`; DRS-E4 `ARW-15`: the schedule
 //! is rule-set data, so a chain mined under a 512-block epoch is judged
 //! under one). Which network may pull them is its row's `permits` (NI-R6),
@@ -37,7 +37,7 @@
 
 use core::num::NonZeroU128;
 
-use shekyl_chain_rules::{FakechainSchedule, GenesisPin, RuleSchedule, RuleSet, Trust};
+use shekyl_chain_rules::{CappedEpoch, GenesisPin, RuleSchedule, RuleSet, Trust};
 use shekyl_network::{Lever, Network, Permit};
 use shekyl_types::BlockHeight;
 
@@ -59,7 +59,7 @@ pub struct ChainRules {
     /// `dev-difficulty`, if given.
     fixed_difficulty: Option<NonZeroU128>,
     /// The `(SEB, cap)` pair the chain runs under.
-    schedule: FakechainSchedule,
+    schedule: CappedEpoch,
     /// The genesis `validate` holds block 0 to: the table's for the
     /// network. Only a harness constructor empties it.
     genesis: GenesisPin,
@@ -76,17 +76,16 @@ impl ChainRules {
     pub const fn new(
         network: Network,
         fixed_difficulty: Option<NonZeroU128>,
-        schedule: FakechainSchedule,
+        schedule: CappedEpoch,
     ) -> Result<Self, LeverRefused> {
-        let production = FakechainSchedule::PRODUCTION;
         let pulled = [
             (fixed_difficulty.is_some(), Lever::Difficulty),
             (
-                schedule.settlement().blocks().get() != production.settlement().blocks().get(),
+                !schedule.settlement_is_production(),
                 Lever::SettlementEpochBlocks,
             ),
             (
-                schedule.reorg_cap().to_raw() != production.reorg_cap().to_raw(),
+                !schedule.reorg_cap_is_production(),
                 Lever::ArchivalReorgDepth,
             ),
         ];
@@ -128,7 +127,7 @@ impl ChainRules {
     #[must_use]
     pub const fn harness_regtest(
         fixed_difficulty: Option<NonZeroU128>,
-        schedule: FakechainSchedule,
+        schedule: CappedEpoch,
     ) -> Self {
         match Self::new(Network::Regtest, fixed_difficulty, schedule) {
             Ok(rules) => rules.unpinned(),
@@ -150,7 +149,7 @@ impl ChainRules {
 
     /// The `(SEB, cap)` pair the chain runs under.
     #[must_use]
-    pub const fn schedule(&self) -> FakechainSchedule {
+    pub const fn schedule(&self) -> CappedEpoch {
         self.schedule
     }
 
@@ -194,22 +193,22 @@ mod tests {
     use shekyl_chain_rules::SettlementEpochBlocks;
     use shekyl_types::BlockCount;
 
-    const PRODUCTION: FakechainSchedule = FakechainSchedule::PRODUCTION;
+    const PRODUCTION: CappedEpoch = CappedEpoch::PRODUCTION;
 
     fn nz(n: u128) -> NonZeroU128 {
         NonZeroU128::new(n).expect("non-zero")
     }
 
-    fn short() -> FakechainSchedule {
-        FakechainSchedule::new(
+    fn short() -> CappedEpoch {
+        CappedEpoch::new(
             SettlementEpochBlocks::new(512).expect("non-zero"),
             BlockCount::from_raw(64),
         )
         .expect("64 is inside 512")
     }
 
-    fn cap_only() -> FakechainSchedule {
-        FakechainSchedule::new(PRODUCTION.settlement().blocks(), BlockCount::from_raw(64))
+    fn cap_only() -> CappedEpoch {
+        CappedEpoch::new(PRODUCTION.settlement().blocks(), BlockCount::from_raw(64))
             .expect("64 is inside the production epoch")
     }
 
@@ -260,7 +259,7 @@ mod tests {
     fn regtests_levers_apply_onto_its_own_set() {
         let fixed = ChainRules::new(Network::Regtest, Some(nz(7)), PRODUCTION).expect("permitted");
         let set = fixed.in_force(BlockHeight::from_raw(5));
-        assert_eq!(set, RuleSet::fakechain(Some(nz(7)), PRODUCTION));
+        assert_eq!(set, RuleSet::GENESIS.with_levers(Some(nz(7)), PRODUCTION));
         assert_ne!(set, RuleSet::GENESIS, "same id, different set");
         assert_eq!(set.id(), RuleSet::GENESIS.id());
         // The schedule lever alone: the genesis target, a 512-block epoch.

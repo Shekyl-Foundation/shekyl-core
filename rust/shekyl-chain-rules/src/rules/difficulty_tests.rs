@@ -314,9 +314,9 @@ fn a_recorded_block_with_no_work_is_still_a_valid_short_chain() {
 
 #[test]
 fn cen_d7_a_fakechain_rule_set_fixes_the_target_and_forces_one_at_genesis() {
-    let seven = RuleSet::fakechain(
+    let seven = RuleSet::GENESIS.with_levers(
         core::num::NonZeroU128::new(7),
-        crate::FakechainSchedule::PRODUCTION,
+        crate::CappedEpoch::PRODUCTION,
     );
     // Past the window the DAA would derive something else entirely; the
     // fixed set says 7 regardless.
@@ -380,9 +380,9 @@ fn cen_d7_no_public_network_schedule_can_name_a_fixed_target() {
 #[test]
 fn cen_d7_the_rule_set_id_is_no_longer_a_proxy_for_the_rule_set() {
     // The caveat, pinned: same id, different rules.
-    let fixed = RuleSet::fakechain(
+    let fixed = RuleSet::GENESIS.with_levers(
         core::num::NonZeroU128::new(3),
-        crate::FakechainSchedule::PRODUCTION,
+        crate::CappedEpoch::PRODUCTION,
     );
     assert_eq!(fixed.id(), RuleSet::GENESIS.id());
     assert_ne!(fixed, RuleSet::GENESIS);
@@ -390,9 +390,9 @@ fn cen_d7_the_rule_set_id_is_no_longer_a_proxy_for_the_rule_set() {
 
 #[test]
 fn cen_d7_fakechain_validate_mints_past_n() {
-    let seven = RuleSet::fakechain(
+    let seven = RuleSet::GENESIS.with_levers(
         core::num::NonZeroU128::new(7),
-        crate::FakechainSchedule::PRODUCTION,
+        crate::CappedEpoch::PRODUCTION,
     );
     let (chain, _, _) = worked_chain(N_USIZE + 3);
     let candidate = crate::harness::fixture::candidate_on(&chain, Vec::new());

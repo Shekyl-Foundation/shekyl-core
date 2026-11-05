@@ -26,7 +26,7 @@ use shekyl_chain_ingest::service::{
 use shekyl_chain_ingest::{
     ChainRules, CorpusReader, IngestEvent, Inject, ProductionSubstrate, ServeCredit, Source,
 };
-use shekyl_chain_rules::{AtHeight, FakechainSchedule, SettlementEpochBlocks};
+use shekyl_chain_rules::{AtHeight, CappedEpoch, SettlementEpochBlocks};
 use shekyl_chain_store::apply_policy::ApplyPolicy;
 use shekyl_chain_store::store::{ChainStore, Horizons};
 use shekyl_hash_budget::Budget;
@@ -104,7 +104,7 @@ impl Corpus {
 
     /// The corpus's epoch, at `difficulty` and reorg cap `cap`.
     fn rules_with(&self, difficulty: u128, cap: u64) -> ChainRules {
-        let schedule = FakechainSchedule::new(
+        let schedule = CappedEpoch::new(
             SettlementEpochBlocks::new(self.epoch).expect("a captured epoch"),
             BlockCount::from_raw(cap),
         )
