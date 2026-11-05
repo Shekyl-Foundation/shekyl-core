@@ -630,25 +630,26 @@ jobs:
           $rc = $LASTEXITCODE
           Get-Content daemon-crates.out
           if ($rc -ne 0) { exit $rc }
-          # shekyl-daemon-rpc's console tests moved to shekyl-cli (R8). shekyl-cli
-          # is covered by the Rust workspace job, not this MSVC link step. The
-          # daemon-rpc, ffi and process floors were re-set at the p2p cutover
-          # (2026-11-05), which deleted the seam-facts and p2p halves of the
-          # first two and moved the hardening tests into the third: Linux
-          # lib counts were 182, 116 and 3. shekyl-ffi's account and KEM
-          # exports went with the C++ wallet account code
-          # (NETWORK_IDENTITY.md NI-R7) and their 19 tests with them; the
-          # merged lib ran at 97 on Linux.
-          $floors = @{ 'shekyl_options-' = 25; 'shekyl_daemon-' = 30; 'shekyl_daemon_config-' = 60; 'shekyl_daemon_rpc-' = 170; 'shekyl_ffi-' = 80; 'shekyl_process-' = 2 }
+          # A floor is per test binary, keyed by its name under deps\. The
+          # libs are the crates' own; shekyl-process's lib tests are all Unix
+          # (core limits, dumpable, procctl), so its Windows floor is the
+          # integration test that faults a child under hardening, which moved
+          # here from shekyl-ffi with the code. Windows counts at the p2p
+          # cutover (2026-11-05): options 31, daemon 44, daemon-config 63,
+          # daemon-rpc 180, ffi 97, dc_q21_a_fault_ends_with_its_code 4. The
+          # cutover deleted the seam-facts and p2p halves of daemon-rpc and
+          # ffi; shekyl-cli, which took daemon-rpc's console tests (R8), is
+          # covered by the Rust workspace job, not this MSVC link step.
+          $floors = @{ 'shekyl_options-' = 25; 'shekyl_daemon-' = 30; 'shekyl_daemon_config-' = 60; 'shekyl_daemon_rpc-' = 170; 'shekyl_ffi-' = 80; 'dc_q21_a_fault_ends_with_its_code-' = 4 }
           $lines = Get-Content daemon-crates.out
-          foreach ($crate in $floors.Keys) {
-            $at = ($lines | Select-String -Pattern ("Running unittests .*\\" + [regex]::Escape($crate)) | Select-Object -First 1).LineNumber
-            if (-not $at) { Write-Error "no lib test binary ran for $crate"; exit 1 }
+          foreach ($binary in $floors.Keys) {
+            $at = ($lines | Select-String -Pattern ("Running .*\\deps\\" + [regex]::Escape($binary)) | Select-Object -First 1).LineNumber
+            if (-not $at) { Write-Error "no test binary ran for $binary"; exit 1 }
             $result = $lines[$at..($lines.Length - 1)] | Select-String -Pattern 'test result: ok\. (\d+) passed' | Select-Object -First 1
-            if (-not $result) { Write-Error "no result line after the $crate lib tests"; exit 1 }
+            if (-not $result) { Write-Error "no result line after the $binary tests"; exit 1 }
             $passed = [int]$result.Matches[0].Groups[1].Value
-            if ($passed -lt $floors[$crate]) {
-              Write-Error "the $crate lib tests passed $passed on Windows; the floor is $($floors[$crate])"
+            if ($passed -lt $floors[$binary]) {
+              Write-Error "the $binary tests passed $passed on Windows; the floor is $($floors[$binary])"
               exit 1
             }
           }
