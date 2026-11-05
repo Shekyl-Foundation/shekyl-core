@@ -30,7 +30,6 @@
 
 use crate::bind::BoundListener;
 use crate::conn_limit::{ConnLimits, ConnTracker, LimitedListener};
-use crate::core::CoreRpc;
 use crate::handlers::{binary, json, json_rpc, submit};
 use crate::handles::Handles;
 use crate::middleware::DEFAULT_BODY_LIMIT;
@@ -51,7 +50,6 @@ use tower_http::limit::RequestBodyLimitLayer;
 use tracing::info;
 
 pub struct AppState {
-    pub core: Arc<CoreRpc>,
     /// The Rust admission engine behind `POST /submit_transaction`
     /// (`docs/design/DAEMON_SUBMIT_VERDICT.md` §3).
     pub submit_engine: Arc<DaemonSubmitEngine>,
@@ -63,8 +61,8 @@ pub struct AppState {
     /// What `option_set` and `option_show` read and write
     /// (`options::OptionsFacts`, RT-O26); the composition root supplies it.
     pub options: Arc<dyn OptionsFacts>,
-    /// The node's handles (N1). Present, and not yet what the live routes
-    /// read: those keep the C++ `core` until the store flip.
+    /// The node's handles (N1): every route reads through them, the p2p
+    /// facts included.
     pub handles: Handles,
     /// One hash budget for every bounded caller (§6.3).
     pub hash_budget: Arc<HashBudget>,
@@ -400,7 +398,7 @@ where
     }))
 }
 
-/// Serves the RPC section's two listener sets on one core: `admin` at the
+/// Serves the RPC section's two listener sets on one node: `admin` at the
 /// admin listener's authority (every grant, and the host's) and `view` at the
 /// view listener's (`crate::authority::Authority::VIEW_LISTENER`), with one
 /// submit engine and ONE connection
@@ -411,7 +409,6 @@ where
 /// once already. An empty set serves nothing; both empty is a daemon with no
 /// RPC, which returns once the stop arrives.
 pub async fn serve_listeners(
-    core: Arc<CoreRpc>,
     config: ServerConfig,
     submit_engine: Arc<DaemonSubmitEngine>,
     admin: Vec<BoundListener>,
@@ -423,7 +420,6 @@ pub async fn serve_listeners(
     let coinbase_reads = Arc::new(Semaphore::new(1));
     let router_at = |authority: Authority| {
         let state = Arc::new(AppState {
-            core: core.clone(),
             submit_engine: submit_engine.clone(),
             conn_tracker: conn_tracker.clone(),
             shard_view: config.shard_view.clone(),

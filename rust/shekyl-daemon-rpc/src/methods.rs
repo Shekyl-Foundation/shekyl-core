@@ -2783,6 +2783,9 @@ pub(crate) mod tests {
         fn p2p_state(&self) -> Result<P2pRead<()>, FactsFault> {
             self.state.clone()
         }
+        fn stem_tallies(&self) -> Result<String, FactsFault> {
+            Ok("{}".to_owned())
+        }
     }
 
     /// In-memory chain sync view.
@@ -3090,7 +3093,7 @@ pub(crate) mod tests {
     #[test]
     fn an_unreadable_p2p_state_is_a_fault_not_an_empty_reply() {
         let broken = FakeP2p {
-            peers: Err(FactsFault::NullHandle),
+            peers: Err(FactsFault::HubAbsent),
             state: Err(FactsFault::NotReady),
             ..FakeP2p::default()
         };

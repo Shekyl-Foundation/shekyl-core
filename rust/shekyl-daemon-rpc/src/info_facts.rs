@@ -38,11 +38,10 @@
 //! - [`InfoFacts::store_size`] reports a size it could not read as
 //!   [`FactsFault::StoreUnreadable`], never as `0` (RK-D23). The size is
 //!   read on this side, by [`store_file_size`], for that reason.
-//! - [`InfoFacts::sessions`] reports a p2p layer that is not up as
-//!   [`FactsFault::HubAbsent`], never as zero sessions. It is read from
-//!   the seam board, which is Rust's, without visiting C++, and it is
-//!   **one** snapshot: `has_peers` and the two connection counts describe
-//!   the same board.
+//! - [`InfoFacts::sessions`] reports a network that is not up as
+//!   [`FactsFault::HubAbsent`], never as zero sessions. The node reads it
+//!   from the session layer's board, and it is **one** snapshot:
+//!   `has_peers` and the two connection counts describe the same board.
 
 use std::path::Path;
 
@@ -247,18 +246,6 @@ impl SessionCounts {
     }
 }
 
-/// The seam board's session counts, through the reads the composition
-/// root installed.
-///
-/// # Errors
-///
-/// [`FactsFault::HubAbsent`] when no hub is bound. Zero sessions is an
-/// answer ([`SessionCounts::NONE`] is what an offline node carries) and
-/// is never what a missing hub returns.
-pub fn sessions() -> Result<SessionCounts, FactsFault> {
-    (crate::p2p_reads::reads().sessions)().map_err(FactsFault::from)
-}
-
 /// The size of the chain store's data file.
 ///
 /// This is the whole of the size read, and it lives here so that it is the
@@ -290,13 +277,11 @@ pub fn store_file_size(path: &Path) -> Result<u64, FactsFault> {
 mod tests {
     use super::*;
 
-    /// **A missing hub is a fault, and zero sessions is an answer.** The
-    /// unit-test process installs no reads, so the read is the fault. An
-    /// offline node carries [`SessionCounts::NONE`], which is not that
-    /// fault: the two do not share a value.
+    /// **Zero sessions is an answer**, the one an offline node carries, and
+    /// it is not the missing-network fault ([`FactsFault::HubAbsent`]): the
+    /// two do not share a value.
     #[test]
-    fn a_missing_hub_is_a_fault_and_zero_sessions_is_an_answer() {
-        assert_eq!(sessions(), Err(FactsFault::HubAbsent));
+    fn zero_sessions_is_an_answer() {
         assert_eq!(
             SessionCounts::NONE,
             SessionCounts {

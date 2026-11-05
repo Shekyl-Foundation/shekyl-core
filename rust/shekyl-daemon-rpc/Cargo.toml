@@ -1,16 +1,14 @@
 [package]
 name = "shekyl-daemon-rpc"
-description = "Rust daemon RPC server over C++ core_rpc_server via FFI"
+description = "The daemon's RPC server over the node's handles"
 version.workspace = true
 edition.workspace = true
 rust-version.workspace = true
 license.workspace = true
 
-# rlib only: this crate is never linked as its own staticlib. It reaches
-# the daemon inside the single Rust image: the `shekyld` binary crate
-# links it through `shekyl-ffi` (one image, one `tracing-core`
-# dispatcher; see V3_WALLET_DECISION_LOG.md single-image contract and
-# the nm gate in src/daemon/CMakeLists.txt).
+# rlib only: the `shekyld` binary crate links it through `shekyl-daemon`
+# (one image, one `tracing-core` dispatcher; see V3_WALLET_DECISION_LOG.md
+# single-image contract).
 [lib]
 name = "shekyl_daemon_rpc"
 crate-type = ["lib"]
@@ -63,14 +61,9 @@ shekyl-archival-retention = { path = "../shekyl-archival-retention" }
 # Also the store-backed facts' derivations (DRS-X PR 3): the next target,
 # the medians, the volume window and the fee ladder.
 shekyl-chain-rules = { path = "../shekyl-chain-rules" }
-# CEN-M9's prepared reversion (`submit/rust_pool_shim.rs`): the
-# `SubmitStateShim` over the Rust pool, reading the committed chain through
-# the store's `SnapshotView`. Not routed until the DRS-X flip, but linked:
-# `shekyl-ffi`, which the `shekyld` binary crate links, depends on this
-# crate, so both crates link into shekyld. The protocol handler's
-# pool door is `shekyl-ffi`'s `pool_ffi`, which depends on `shekyl-mempool`
-# and not on this crate. Also the store-backed facts' one snapshot per call
-# (DRS-X PR 3).
+# `submit/rust_pool_shim.rs`: the `SubmitStateShim` over the Rust pool,
+# reading the committed chain through the store's `SnapshotView`. Also the
+# store-backed facts' one snapshot per call (DRS-X PR 3).
 shekyl-chain-store = { path = "../shekyl-chain-store" }
 shekyl-mempool = { path = "../shekyl-mempool" }
 shekyl-bulletproofs = { path = "../shekyl-bulletproofs" }
@@ -94,7 +87,7 @@ shekyl-runtime = { path = "../shekyl-runtime" }
 shekyl-difficulty = { path = "../shekyl-difficulty" }
 # calc_pow's hash, under a cache the daemon's one CacheStore already holds:
 # the RPC calls `lookup` and `compute_hash`, never a derivation (ruled
-# 2026-10-17). In the graph already through shekyl-ffi and the ingest.
+# 2026-10-17). In the graph already through the ingest.
 shekyl-pow-randomx = { path = "../shekyl-pow-randomx" }
 # The daemon's one hasher budget (PR2-Q3): calc_pow hashes under a permit
 # in its class, below the chain's and above the miner's.

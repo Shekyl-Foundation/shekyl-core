@@ -13,8 +13,7 @@
 //! [`from_error`] / [`blocking`] cover mining, bans, and the pool.
 
 use crate::authority::Authority;
-use crate::chain_facts::FfiP2pFacts;
-use crate::core::CoreRpc;
+use crate::chain_facts::P2pFacts;
 use crate::handles::ChainReadHandle;
 use crate::methods::{InternalFault, RpcFault};
 use crate::server::AppState;
@@ -193,11 +192,11 @@ pub(super) async fn native_method(
             // see `methods::sync_info`.
             let chain = Arc::clone(&state.handles.chain);
             Some(frame_native(
-                run_blocking(state, move |core| {
+                run_blocking(state, move |p2p| {
                     crate::methods::sync_info(
                         chain.as_chain_facts(),
                         chain.as_sync_view(),
-                        &FfiP2pFacts::new(core),
+                        p2p.as_ref(),
                     )
                 })
                 .await,
@@ -206,8 +205,8 @@ pub(super) async fn native_method(
         NativeMethod::Connections => {
             let chain = Arc::clone(&state.handles.chain);
             Some(frame_native(
-                run_blocking(state, move |core| {
-                    crate::methods::get_connections(&FfiP2pFacts::new(core), chain.as_sync_view())
+                run_blocking(state, move |p2p| {
+                    crate::methods::get_connections(p2p.as_ref(), chain.as_sync_view())
                 })
                 .await,
             ))
@@ -583,17 +582,17 @@ where
     join_fault(tokio::task::spawn_blocking(move || f(&chain)).await)?
 }
 
-/// Run a native method on a worker thread holding the live core.
+/// Run a native method on a worker thread holding the p2p facts.
 ///
-/// What remains here reads the C++ p2p remnant (connections, net stats). A
+/// What runs here reads the network's board (connections, net stats). A
 /// join failure is an [`InternalFault`], never a fact about the chain.
 pub(super) async fn run_blocking<T, F>(state: &Arc<AppState>, f: F) -> Result<T, RpcFault>
 where
     T: Send + 'static,
-    F: FnOnce(Arc<CoreRpc>) -> Result<T, RpcFault> + Send + 'static,
+    F: FnOnce(Arc<dyn P2pFacts>) -> Result<T, RpcFault> + Send + 'static,
 {
-    let core = state.core.clone();
-    join_fault(tokio::task::spawn_blocking(move || f(core)).await)?
+    let p2p = Arc::clone(&state.handles.p2p);
+    join_fault(tokio::task::spawn_blocking(move || f(p2p)).await)?
 }
 
 /// What a JSON-RPC caller is told when a native method does not answer.

@@ -95,10 +95,7 @@ const POW_ALGORITHM: &str = "RandomX";
 impl From<FactsFault> for RpcError {
     fn from(fault: FactsFault) -> Self {
         match fault {
-            FactsFault::NotReady
-            | FactsFault::NullHandle
-            | FactsFault::HubAbsent
-            | FactsFault::ListsAbsent => Self::new(
+            FactsFault::NotReady | FactsFault::HubAbsent => Self::new(
                 ErrorClass::NotReady,
                 Diagnostic::new(codes::NOT_READY, "the node is not ready; ask again later"),
             ),
@@ -106,7 +103,7 @@ impl From<FactsFault> for RpcError {
                 ErrorClass::StoreFault,
                 Diagnostic::new(codes::STORE, "the node's store faulted while answering"),
             ),
-            FactsFault::Internal | FactsFault::Unknown(_) => Self::new(
+            FactsFault::Internal => Self::new(
                 ErrorClass::Internal,
                 Diagnostic::new(codes::INTERNAL, "the node failed while answering"),
             ),

@@ -22,8 +22,9 @@ use shekyl_types::{BlockHash, BlockHeight, KeyImage, PCanonicalId, PowHash, TxHa
 
 use crate::chain_facts::{
     BlockAt, BlockHashAt, BlockHeaderAt, BlockLookup, ChainFacts, ChainTip, DaemonIdentity,
-    FactsFault, FeeEstimate,
+    FactsFault, FeeEstimate, NetStats, P2pFacts,
 };
+use crate::core::{ConnectionsSnapshot, P2pRead, PeerEntry};
 use crate::info_facts::{
     InfoChainFacts, InfoFacts, InfoStatusFacts, PeerFacts, PoolCounts, PoolScope, PoolState,
     SessionCounts,
@@ -360,7 +361,11 @@ pub trait StopFacts: Send + Sync {
 /// A stop handle.
 pub type StopHandle = Arc<dyn StopFacts>;
 
-/// The six handles, absent unless the composition root supplied a node.
+/// A p2p facts handle: the board, the link totals, the peer lists and the
+/// stem tallies, which the node reads from `shekyl-p2p`'s `Network`.
+pub type P2pHandle = Arc<dyn P2pFacts>;
+
+/// The seven handles, absent unless the composition root supplied a node.
 #[derive(Clone)]
 pub struct Handles {
     /// Chain reads.
@@ -375,6 +380,8 @@ pub struct Handles {
     pub bans: BansHandle,
     /// The stop latch.
     pub stop: StopHandle,
+    /// The p2p facts.
+    pub p2p: P2pHandle,
 }
 
 impl Default for Handles {
@@ -394,6 +401,7 @@ impl Handles {
             mining: Arc::new(MiningAbsent),
             bans: Arc::new(BansAbsent),
             stop: Arc::new(StopAbsent),
+            p2p: Arc::new(P2pAbsent),
         }
     }
 }
@@ -621,6 +629,31 @@ struct StopAbsent;
 
 impl StopFacts for StopAbsent {
     fn request_stop(&self) -> Result<(), FactsFault> {
+        Err(FactsFault::NotReady)
+    }
+}
+
+/// No p2p facts were supplied.
+pub struct P2pAbsent;
+
+impl P2pFacts for P2pAbsent {
+    fn net_stats(&self) -> Result<NetStats, FactsFault> {
+        Err(FactsFault::NotReady)
+    }
+
+    fn connections(&self) -> Result<ConnectionsSnapshot, FactsFault> {
+        Err(FactsFault::NotReady)
+    }
+
+    fn peer_list(&self, _public_only: bool) -> Result<P2pRead<Vec<PeerEntry>>, FactsFault> {
+        Err(FactsFault::NotReady)
+    }
+
+    fn p2p_state(&self) -> Result<P2pRead<()>, FactsFault> {
+        Err(FactsFault::NotReady)
+    }
+
+    fn stem_tallies(&self) -> Result<String, FactsFault> {
         Err(FactsFault::NotReady)
     }
 }

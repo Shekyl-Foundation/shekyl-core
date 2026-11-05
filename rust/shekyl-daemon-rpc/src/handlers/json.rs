@@ -335,12 +335,9 @@ pub async fn pop_blocks(
 /// `/get_net_stats` — process start plus the global throttle counters
 /// (RK-5a). Admin-only; the route table is what enforces that.
 pub async fn get_net_stats(State(state): State<Arc<AppState>>, _body: String) -> impl IntoResponse {
-    let core = state.core.clone();
-    let result = tokio::task::spawn_blocking(move || {
-        let facts = crate::chain_facts::FfiP2pFacts::new(core);
-        crate::methods::get_net_stats(&facts)
-    })
-    .await;
+    let facts = Arc::clone(&state.handles.p2p);
+    let result =
+        tokio::task::spawn_blocking(move || crate::methods::get_net_stats(facts.as_ref())).await;
     render("get_net_stats", "p2p facts unavailable", result)
 }
 
@@ -372,10 +369,9 @@ pub async fn get_peer_list(State(state): State<Arc<AppState>>, body: String) -> 
             }
         }
     };
-    let core = state.core.clone();
+    let facts = Arc::clone(&state.handles.p2p);
     let result = tokio::task::spawn_blocking(move || {
-        let facts = crate::chain_facts::FfiP2pFacts::new(core);
-        crate::methods::get_peer_list(&request, &facts)
+        crate::methods::get_peer_list(&request, facts.as_ref())
     })
     .await;
     render("get_peer_list", "p2p facts unavailable", result)
@@ -441,17 +437,19 @@ fn render<T: serde::Serialize>(
 /// not the host's administrator before the handler runs. The gate is asserted
 /// on the assembled router, against a specification written out
 /// independently of the table, so a row moved into a grant fails rather than
-/// silently changing the oracle. A daemon fixture is not owed: naming this
-/// handler from a test would pull `core_rpc_ffi_*` into the lib test binary.
+/// silently changing the oracle.
 pub async fn get_stem_tallies(State(state): State<Arc<AppState>>) -> impl IntoResponse {
-    let core = state.core.clone();
-    match tokio::task::spawn_blocking(move || core.stem_tallies())
-        .await
-        .ok()
-        .flatten()
-    {
-        Some(body) => json_ok(body),
-        None => json_dispatch_error(),
+    let facts = Arc::clone(&state.handles.p2p);
+    match tokio::task::spawn_blocking(move || facts.stem_tallies()).await {
+        Ok(Ok(body)) => json_ok(body),
+        Ok(Err(fault)) => {
+            tracing::warn!(?fault, "get_stem_tallies: facts unavailable");
+            json_dispatch_error()
+        }
+        Err(e) => {
+            tracing::warn!(?e, "get_stem_tallies: handler task did not complete");
+            json_dispatch_error()
+        }
     }
 }
 
