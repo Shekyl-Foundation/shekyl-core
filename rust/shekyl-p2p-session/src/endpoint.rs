@@ -16,10 +16,6 @@ use shekyl_transport_layer::{
     CloseCause, CloseKind, ConnectorId, Direction, NetworkAddress, OpenError, OpenSocket, Sockets,
 };
 
-/// Octets of a v3 onion hostname, including `.onion`. The adapter's host
-/// buffer is this long.
-pub const TOR_HOST_MAX: usize = 62;
-
 /// What the connector observed, and what `established` posts.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Endpoint {

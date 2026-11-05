@@ -18,9 +18,6 @@ use shekyl_timing_engine::{Clock, OwnerHandle, Tick};
 
 pub use shekyl_timing_engine::OwnerClass;
 
-/// Nanoseconds in a second, the tick's unit.
-const NANOS: u64 = 1_000_000_000;
-
 /// How long an inbound session may sit in `Handshaking` before it is
 /// closed; the connector profile's `handshake_within`, in the layer's
 /// [`crate::SessionConfig`].
@@ -76,12 +73,6 @@ pub(crate) fn ticks(duration: Duration) -> Tick {
 /// `now + span`, saturating.
 pub(crate) fn after(now: Tick, span: Tick) -> Tick {
     Tick::new(now.get().saturating_add(span.get()))
-}
-
-/// A second, as the tick's unit, for the tests and the draw's docs.
-#[allow(dead_code)]
-pub(crate) const fn seconds(n: u64) -> Tick {
-    Tick::new(n * NANOS)
 }
 
 /// Which deadline a wake found due.
@@ -171,7 +162,6 @@ impl<C: Clock> Deadlines<C> {
     }
 
     /// The earliest live deadline, for the tests.
-    #[allow(dead_code)]
     pub(crate) fn earliest(&self) -> Option<Tick> {
         [self.handshake, self.invoke, self.timed_sync]
             .into_iter()
@@ -199,6 +189,11 @@ fn ignore<E>(result: Result<(), E>) {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// A second, as the tick's unit.
+    const fn seconds(n: u64) -> Tick {
+        Tick::new(n * 1_000_000_000)
+    }
     use shekyl_draw_rng::SplitMix64;
 
     #[test]

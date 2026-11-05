@@ -46,7 +46,7 @@ mod timing;
 
 pub use board::{Board, Row};
 pub use dial::{Channel, ConnectFuture, Dial};
-pub use endpoint::{admit, Endpoint, TOR_HOST_MAX};
+pub use endpoint::{admit, Endpoint};
 pub use handle::{Encoded, Established, Message, SendRefused, SessionHandle};
 pub use layer::{
     DialAim, DialOutcome, Dialed, Parts, PerConnector, ProbeHandshake, SessionConfig, SessionLayer,
