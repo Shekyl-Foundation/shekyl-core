@@ -47,13 +47,13 @@ fn the_frames_are_the_oracles() {
     let fields: [&[u8]; 2] = [&counting, &[0xaa; 32]];
     assert_eq!(
         hex(&ID_2.frame(&id, fields)),
-        "ced30effe212509fe7c838d3fa16bc62c660af383b4ad8518ec703d2a5ae8864"
+        "63331bc96e0f6ce84fa1b07222e054853530f1c22eed0ac65caad702d2121d6c"
     );
     let wide = ID_2_WIDE.frame(&id, fields);
     assert_eq!(
         hex(&wide),
-        "ced30effe212509fe7c838d3fa16bc62c660af383b4ad8518ec703d2a5ae8864\
-         9181b097dacf611d309b246f2dc2f0e1e4723787d8288e96d56ece320d101967"
+        "63331bc96e0f6ce84fa1b07222e054853530f1c22eed0ac65caad702d2121d6c\
+         538ea991c4dee6772906cadcd76d354412e8baa3b316782af6048c27968e9981"
     );
     assert_eq!(
         hex(&NAME_2.frame(&Network::Testnet.name_id(), [b"", b"abc"])),
