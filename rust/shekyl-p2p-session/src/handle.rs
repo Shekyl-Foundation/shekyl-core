@@ -229,6 +229,19 @@ impl SessionHandle {
         self.control.send(self.id, encoded.bytes().to_vec())
     }
 
+    /// Queue one window of the relay's covert carrier
+    /// (`DAEMON_RELAY_PRIVACY.md` §42): a Levin frame the carrier built in
+    /// `shekyl-levin`, a dummy (`noise_notify`) or one fragment of a stem
+    /// (`fragmented_notify`), every window the same length. Not a
+    /// [`Message`]: the typed set names what a message means, and a
+    /// window's property is that nothing can be read from it.
+    ///
+    /// # Errors
+    /// [`SendRefused::QueueFull`] or [`SendRefused::Closed`].
+    pub fn send_window(&self, window: &[u8]) -> Result<(), SendRefused> {
+        self.control.send(self.id, window.to_vec())
+    }
+
     /// Ask the session layer to close this session with `cause`. The
     /// cause is recorded as the first end if none is recorded yet; only
     /// the session layer closes the socket.

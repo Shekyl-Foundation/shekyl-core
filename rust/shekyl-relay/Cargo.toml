@@ -19,9 +19,24 @@ repository.workspace = true
 # points — and therefore the 33-test oracle — available (DAEMON_RELAY_PRIVACY.md
 # §18.1).
 shekyl-relay-privacy = { path = "../shekyl-relay-privacy" }
-# The RNG seam the zone's draws are generic over. The daemon supplies its
-# CSPRNG through `shekyl-ffi`.
+# The RNG seam the zone's draws are generic over. `owner::SecureRelayRng`
+# is the daemon's CSPRNG behind it.
 shekyl-draw-rng = { path = "../shekyl-draw-rng" }
+# The owner's seat: `RelayOwner`, `Established`, `Taken`, `Message`
+# (`P2P_3_REMNANT_CUTOVER_BRIEF.md` §2.1, §7). Owners sit above sessions;
+# the session crate never names this one.
+shekyl-p2p-session = { path = "../shekyl-p2p-session" }
+# The relay's messages and the carrier's windows are built here and
+# nowhere else (brief §2.1, "Relay dispatch").
+shekyl-levin = { path = "../shekyl-levin" }
+# Every wake is a timing-engine owner (brief §2 rule 7): the zone's
+# `next_wake` is armed on an `OwnerClass::Relay` handle.
+shekyl-timing-engine = { path = "../shekyl-timing-engine" }
+# The owner is one task: its inbox, the node's sync watch, the verdict watch.
+tokio = { version = "1", default-features = false, features = ["macros", "rt", "sync"] }
+# `OsRng` for `SecureRelayRng`. Pinned per crate as `shekyl-ffi` pinned it;
+# the workspace has no `rand` entry (rule 17 §1).
+rand = "0.8"
 # The seam's byte-pinned vocabulary (`RelayMethod`, `NetZone`) lives below both
 # this crate and the daemon store (rule 18; DRS-E1 S-POOL `SPL-Q6`).
 shekyl-types = { path = "../shekyl-types" }
@@ -35,6 +50,11 @@ tracing = "0.1"
 [dev-dependencies]
 # `SplitMix64`, for the unit tests only. Not a grader feature.
 shekyl-draw-rng = { path = "../shekyl-draw-rng", features = ["splitmix"] }
+# The owner's tests drive it from the far side of the session layer's
+# in-memory peer (`tests/owner.rs`).
+shekyl-p2p-session = { path = "../shekyl-p2p-session", features = ["harness"] }
+shekyl-peer-policy = { path = "../shekyl-peer-policy" }
+tokio = { version = "1", default-features = false, features = ["macros", "rt-multi-thread", "sync", "time"] }
 
 [lints]
 workspace = true
