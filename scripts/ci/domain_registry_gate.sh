@@ -380,7 +380,12 @@ count_pattern() {
 # shekyl/archival-support-draw-v1, both already registered. One
 # #[cfg(test)] site in the same file hashes the economy preimage under
 # the existing draw label to show the support labels are not that label.
-MECH1_EXPECTED=82
+# Network name binding (2026-11-04, NI-R16; the signing envelope §2.6):
+# 82 -> 83. One site in rust/shekyl-network/src/tests.rs
+# (`the_name_id_is_the_tags_cshake`) recomputes each row's name_id under
+# the new domain shekyl/network-name-v1, registered with it. The rows hold
+# name_id as constants, so production adds no call.
+MECH1_EXPECTED=83
 mech1=$(count_pattern 'cshake256_(?:32|64)\(|CShake256Core::new\(')
 if [[ "$mech1" != "$MECH1_EXPECTED" ]]; then
   echo "COUNT DRIFT mech 1 (cSHAKE call sites): found $mech1, pinned $MECH1_EXPECTED." >&2
