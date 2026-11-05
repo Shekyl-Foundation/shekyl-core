@@ -10,7 +10,7 @@ network (`WALLET_MESSAGE_SIGNING.md` SM-R-3, wire layout version 2; the signing
 envelope §2.1, §2.6):
 
     preimage = frame("shekyl/msg-sign-v2", network_id,
-                     [u64_le(mode), segment, message])
+                     [u64_le(mode), segment, message])[..64]
 
 with `mode = 0x01` and `network_id` the network's 16-byte genesis-derived id
 at position 0. The wire layout version is not hashed: the domain's `-v2` is
@@ -56,7 +56,7 @@ CASES = (
 
 
 def preimage(nid: bytes, segment: bytes, message: bytes) -> bytes:
-    return cs.frame(MSG_SIGN_DST, nid, [MODE_SPEND.to_bytes(8, "little"), segment, message])
+    return cs.frame(MSG_SIGN_DST, nid, [MODE_SPEND.to_bytes(8, "little"), segment, message], 64)
 
 
 def build() -> dict:
@@ -65,8 +65,9 @@ def build() -> dict:
         "description": (
             "Message-signing preimages (WALLET_MESSAGE_SIGNING.md SM-R-3, wire "
             "layout version 2; NETWORK_IDENTITY.md NI-F2; the signing envelope "
-            "§2.6): frame(shekyl/msg-sign-v2, network id, [u64_le(mode), segment, "
-            "message]), the id the network's 16-byte genesis-derived id. "
+            "§2.6, §2.7): frame(shekyl/msg-sign-v2, network id, [u64_le(mode), "
+            "segment, message]) read to 64 bytes, the id the network's 16-byte "
+            "genesis-derived id. "
             "Generated and checked by "
             "scripts/kat/msg_sign_preimage_oracle.py; read by "
             "rust/shekyl-crypto-pq/tests/kat_msg_sign_preimage_v2.rs."

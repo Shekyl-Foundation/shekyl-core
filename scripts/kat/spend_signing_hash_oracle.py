@@ -18,7 +18,10 @@ them apart without any help from the Rust, then computes
     tx_signable    = frame("shekyl/tx-signable-v1", id,
                            [keccak256(varint(version) ‖ prefix), keccak256(base)])
     signed_hash(i) = frame("shekyl/fcmp-spend-signing-v2", id,
-                           [tx_signable, header(i), key_hashes, prunable_hash])
+                           [tx_signable, header(i), key_hashes, prunable_hash])[..64]
+
+(the spend hash is 64 bytes, a hybrid signature's signed content; the signing
+envelope §2.7)
 
 on each network, through `stdlib_cshake.py` (Keccak, cSHAKE256 and `frame`
 written from the specifications, anchored on published samples before use).
@@ -223,7 +226,7 @@ def main() -> int:
                 signable[name] = tx_signable.hex()
                 hashes[name] = [
                     cs.frame(SPEND_SIGNING_DST, ids[name],
-                             [tx_signable, h, key_hashes, prunable_hash]).hex()
+                             [tx_signable, h, key_hashes, prunable_hash], 64).hex()
                     for h in headers
                 ]
         else:

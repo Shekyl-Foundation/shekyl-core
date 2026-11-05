@@ -347,7 +347,7 @@ fn test_invalid_combined_ss_length() {
 #[test]
 fn test_sign_pqc_length_mismatch() {
     let result = sign_pqc_auths(
-        &[SigningPayloadHash::from_bytes([0u8; 32]); 2],
+        &[SigningPayloadHash::from_bytes([0u8; 64]); 2],
         &[dummy_spend_input(100)],
     );
     assert!(matches!(

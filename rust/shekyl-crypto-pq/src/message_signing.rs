@@ -101,7 +101,7 @@ use zeroize::Zeroizing;
 
 use shekyl_address::BoundClassicalSegment;
 
-use shekyl_network::envelope::IdDomain;
+use shekyl_network::envelope::{IdDomain, W64};
 
 use crate::account::{salt_for, Network, MASTER_SEED_BYTES};
 use crate::schnorr;
@@ -114,7 +114,7 @@ use crate::CryptoError;
 /// layout version and the id's position moved into the envelope (the
 /// domain string is the only hashed version), and the message is framed
 /// whole where `-v1` pre-hashed it under its own domain.
-pub const MSG_SIGN: IdDomain<3> = IdDomain::new(b"shekyl/msg-sign-v2");
+pub const MSG_SIGN: IdDomain<3, W64> = IdDomain::new(b"shekyl/msg-sign-v2");
 
 /// Signing-identity derivation label (SM-R-4): the literal, not a
 /// template — rule 30's inventory collision-checks literals. If the
@@ -177,8 +177,10 @@ pub const SLH_192S_SIG_LEN: usize = slh_dsa_sha2_192s::SIG_LEN;
 /// Classical (spend-Schnorr) signature length: `R ‖ s`.
 pub const CLASSICAL_SIG_LEN: usize = schnorr::SIG_LEN;
 
-/// Length of the signing preimage (cSHAKE256-32 output).
-pub const MSG_PREIMAGE_LEN: usize = 32;
+/// Length of the signing preimage: 64 bytes, because SLH-DSA-192s signs it
+/// and a 32-byte digest caps collision resistance at 2^128, below the
+/// scheme's Category 3 (the signing envelope §2.7; `cshake256_64`'s rule).
+pub const MSG_PREIMAGE_LEN: usize = 64;
 
 /// Outer message the classical half signs: `preimage ‖ σ_pq`.
 pub const OUTER_MSG_LEN: usize = MSG_PREIMAGE_LEN + SLH_192S_SIG_LEN;
@@ -205,7 +207,7 @@ const _: () = assert!(slh_dsa_sha2_192s::N == SLH_192S_N);
 // 3 + 16224 + 64 + 4 — the ~21.7 KB-encoded blob the round priced.
 const _: () = assert!(MSG_SIG_CANONICAL_LEN == 16_295);
 const _: () = assert!(OUTER_MSG_LEN == MSG_PREIMAGE_LEN + SLH_192S_SIG_LEN);
-const _: () = assert!(MSG_PREIMAGE_LEN == 32);
+const _: () = assert!(MSG_PREIMAGE_LEN == 64);
 
 /// Message-signing errors, split on the SM-R-6 boundary: a *shape* error
 /// is the caller's bug; a *verification failure* is an answer.
@@ -308,8 +310,10 @@ pub fn derive_message_signing_public_key(
 ///
 /// ```text
 /// preimage = frame("shekyl/msg-sign-v2", network_id,
-///                  [u64_le(mode), classical_segment, message])
+///                  [u64_le(mode), classical_segment, message])[..64]
 /// ```
+///
+/// 64 bytes: SLH-DSA-192s signs it (the signing envelope §2.7).
 ///
 /// `network_id` is the network's 16-byte genesis-derived id
 /// ([`Network::network_id`], `NETWORK_IDENTITY.md` NI-F2) at position 0 of

@@ -16,9 +16,12 @@
 //!
 //! ```text
 //! tx_signable    = frame("shekyl/tx-signable-v1", id, [prefix_hash, ct_base_hash])
-//! signed_hash(i) = frame("shekyl/fcmp-spend-signing-v2", id,
-//!                        [tx_signable, header(i), key_hashes, prunable_hash])
+//! signed_hash(i) = frame64("shekyl/fcmp-spend-signing-v2", id,
+//!                          [tx_signable, header(i), key_hashes, prunable_hash])
 //! ```
+//!
+//! `frame64` is the same frame read to 64 bytes (§2.7): the spend hash is
+//! a hybrid signature's signed content.
 //!
 //! `frame` is the envelope ([`shekyl_network::envelope`]); `id` is the
 //! network's 16-byte genesis-derived id (NI-R10), so a proof or signature
@@ -39,7 +42,7 @@
 //! [`PrunableHash`] component.
 
 use shekyl_crypto_hash::keccak256;
-use shekyl_network::envelope::IdDomain;
+use shekyl_network::envelope::{IdDomain, W64};
 use shekyl_network::NetworkId;
 use shekyl_types::{CtBaseHash, PrefixHash, PrunableHash, SigningPayloadHash, TxSignableHash};
 
@@ -51,8 +54,9 @@ pub const TX_SIGNABLE: IdDomain<2> = IdDomain::new(b"shekyl/tx-signable-v1");
 
 /// The spend signature's hash (`NETWORK_IDENTITY.md` §2.4.1, the signing
 /// envelope §2.2): fields `[tx_signable, header(i), key_hashes,
-/// prunable_hash]`.
-pub const FCMP_SPEND_SIGNING: IdDomain<4> = IdDomain::new(b"shekyl/fcmp-spend-signing-v2");
+/// prunable_hash]`, 64 bytes wide because a hybrid ML-DSA-65 signature
+/// signs it (§2.7).
+pub const FCMP_SPEND_SIGNING: IdDomain<4, W64> = IdDomain::new(b"shekyl/fcmp-spend-signing-v2");
 
 /// `tx_signable` on the network whose id is `network_id`, from the txid's
 /// first two components. [`Transaction::tx_signable`] reads them from a

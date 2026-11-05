@@ -433,7 +433,8 @@ fn synthetic_spend_pqc_signing_payload_hashes_are_pinned() {
     assert_eq!(hashes.len(), 1, "one PQC signing hash per input");
     assert_eq!(
         hashes[0].to_string(),
-        "faf54a6b311ad25cab1ab1efdfabc3b6656700b5507b82561b5c68dcd5b95224",
+        "faf54a6b311ad25cab1ab1efdfabc3b6656700b5507b82561b5c68dcd5b95224\
+         8a85f1488924ae78ab35f8848dec05919932a04ac5630478d38a594cc52c3854",
         "FCMP++ PQC signing preimage drifted (§1.1)"
     );
     // Structural: the fee is bound into the preimage (it lives in ct_base_blob), so

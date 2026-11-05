@@ -599,10 +599,15 @@ fn fcmp_spend_real_tree_verifies_against_consensus() {
     let pqc_auths = sign_pqc_auths(
         // A stand-in message: the prefix hash's bytes, not the §1.1 per-input
         // payload (`phase1_payload_hashes`). These auths are never verified
-        // here; `.to_bytes()` then `SigningPayloadHash::from_bytes` is the
-        // deliberate, visible un-typing and re-typing — both newtypes refuse
-        // the silent form (RTN-7 Q3), which is why a stand-in has to say so.
-        &[SigningPayloadHash::from_bytes(tx_prefix_hash.to_bytes())],
+        // here. The prefix hash's 32 bytes, zero-extended to the 64 a signed
+        // hash carries (the signing envelope §2.7), re-typed visibly: both
+        // newtypes refuse the silent form (RTN-7 Q3), which is why a stand-in
+        // has to say so.
+        &[SigningPayloadHash::from_bytes({
+            let mut wide = [0u8; 64];
+            wide[..32].copy_from_slice(tx_prefix_hash.as_bytes());
+            wide
+        })],
         std::slice::from_ref(&spend_input),
     )
     .expect("Phase-2 PQC auth signing");

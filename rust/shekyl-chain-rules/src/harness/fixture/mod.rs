@@ -711,7 +711,7 @@ fn fixture_signature(seed: &[u8; 64], hash: &SigningPayloadHash) -> Vec<u8> {
     use std::collections::HashMap;
     use std::sync::{Mutex, OnceLock};
     /// `(seed, signed hash)` → the canonical signature bytes.
-    type Signatures = HashMap<([u8; 64], [u8; 32]), Vec<u8>>;
+    type Signatures = HashMap<([u8; 64], [u8; 64]), Vec<u8>>;
     static SIGNATURES: OnceLock<Mutex<Signatures>> = OnceLock::new();
     let cache = SIGNATURES.get_or_init(|| Mutex::new(HashMap::new()));
     let mut cache = cache

@@ -676,27 +676,76 @@ hash32! {
     PqcAuthHash
 }
 
-hash32! {
-    /// `frame("shekyl/fcmp-spend-signing-v2", network_id, [tx_signable,
-    /// header(i), key_hashes, prunable_hash])` — the **message one input's
-    /// hybrid PQC signature is over** (`FCMP_SPEND_SIGNING_PREIMAGE.md`
-    /// §1.1; the signing envelope §2.2; derived by
-    /// `shekyl_wire::PqcSigningPreimage`), bound to one network
-    /// (`NETWORK_IDENTITY.md` NI-Q4). The wallet signs it
-    /// (`shekyl-tx-builder`), the daemon's submit verifier checks against it
-    /// (daemon-rpc K13), and the validator records its derivation as
-    /// CEN-I17 and verifies over it as CEN-I18.
-    ///
-    /// A component of **no** txid, so not a member of the component-hash
-    /// family: **not** [`PqcAuthHash`] (the txid's third component, over the
-    /// `pqc_auths` themselves — this value is what those auths *sign*, and
-    /// the two are one letter apart by name and 32 bytes apart by nature) and
-    /// **not** [`TxSignableHash`] (what the FCMP++ SAL proves over, and
-    /// this hash's first field). One per `pqc_auths` entry; none for a body without
-    /// them. Minted 2026-09-25 when the value gained its second consumer —
-    /// the reopening criterion `RTN_7_WIRE_HASH_TYPES.md` §4 set when it
-    /// stayed raw for one.
-    SigningPayloadHash
+/// `frame("shekyl/fcmp-spend-signing-v2", network_id, [tx_signable,
+/// header(i), key_hashes, prunable_hash])` — the **message one input's
+/// hybrid PQC signature is over** (`FCMP_SPEND_SIGNING_PREIMAGE.md`
+/// §1.1; the signing envelope §2.2; derived by
+/// `shekyl_wire::PqcSigningPreimage`), bound to one network
+/// (`NETWORK_IDENTITY.md` NI-Q4). The wallet signs it
+/// (`shekyl-tx-builder`), the daemon's submit verifier checks against it
+/// (daemon-rpc K13), and the validator records its derivation as
+/// CEN-I17 and verifies over it as CEN-I18.
+///
+/// A component of **no** txid, so not a member of the component-hash
+/// family: **not** [`PqcAuthHash`] (the txid's third component, over the
+/// `pqc_auths` themselves — this value is what those auths *sign*, and
+/// the two are one letter apart by name and 32 bytes apart by nature) and
+/// **not** [`TxSignableHash`] (what the FCMP++ SAL proves over, and
+/// this hash's first field). One per `pqc_auths` entry; none for a body without
+/// them. Minted 2026-09-25 when the value gained its second consumer —
+/// the reopening criterion `RTN_7_WIRE_HASH_TYPES.md` §4 set when it
+/// stayed raw for one.
+///
+/// **64 bytes** (the signing envelope §2.7): it is the signed content of a
+/// hybrid ML-DSA-65 signature, and a 32-byte digest caps collision
+/// resistance at 2^128, below ML-DSA-65's Category 3 target
+/// (`shekyl_crypto_hash::cshake256_64`'s rule). Not a `hash32!` family
+/// member for that reason; its accessors mirror theirs.
+#[derive(Clone, Copy, PartialEq, Eq, Hash, ::zeroize::Zeroize)]
+#[repr(transparent)]
+pub struct SigningPayloadHash([u8; 64]);
+
+impl SigningPayloadHash {
+    /// Wrap raw bytes. An *edge* constructor.
+    #[must_use]
+    pub const fn from_bytes(bytes: [u8; 64]) -> Self {
+        SigningPayloadHash(bytes)
+    }
+
+    /// Unwrap to the raw bytes. An *edge* accessor.
+    #[must_use]
+    pub const fn to_bytes(self) -> [u8; 64] {
+        self.0
+    }
+
+    /// Borrow the raw bytes (the message the signature is made over).
+    #[must_use]
+    pub const fn as_bytes(&self) -> &[u8; 64] {
+        &self.0
+    }
+}
+
+impl AsRef<[u8]> for SigningPayloadHash {
+    fn as_ref(&self) -> &[u8] {
+        &self.0
+    }
+}
+
+impl fmt::Display for SigningPayloadHash {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        for &byte in &self.0 {
+            write!(f, "{byte:02x}")?;
+        }
+        Ok(())
+    }
+}
+
+impl fmt::Debug for SigningPayloadHash {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_tuple("SigningPayloadHash")
+            .field(&format_args!("{self}"))
+            .finish()
+    }
 }
 
 hash32! {

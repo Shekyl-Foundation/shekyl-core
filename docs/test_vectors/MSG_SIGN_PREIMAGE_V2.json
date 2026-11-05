@@ -1,5 +1,5 @@
 {
-    "description": "Message-signing preimages (WALLET_MESSAGE_SIGNING.md SM-R-3, wire layout version 2; NETWORK_IDENTITY.md NI-F2; the signing envelope §2.6): frame(shekyl/msg-sign-v2, network id, [u64_le(mode), segment, message]), the id the network's 16-byte genesis-derived id. Generated and checked by scripts/kat/msg_sign_preimage_oracle.py; read by rust/shekyl-crypto-pq/tests/kat_msg_sign_preimage_v2.rs.",
+    "description": "Message-signing preimages (WALLET_MESSAGE_SIGNING.md SM-R-3, wire layout version 2; NETWORK_IDENTITY.md NI-F2; the signing envelope §2.6, §2.7): frame(shekyl/msg-sign-v2, network id, [u64_le(mode), segment, message]) read to 64 bytes, the id the network's 16-byte genesis-derived id. Generated and checked by scripts/kat/msg_sign_preimage_oracle.py; read by rust/shekyl-crypto-pq/tests/kat_msg_sign_preimage_v2.rs.",
     "sig_format_version": 2,
     "mode": 1,
     "network_ids": {
@@ -14,10 +14,10 @@
             "segment_hex": "000102030405060708090a0b0c0d0e0f101112131415161718191a1b1c1d1e1f202122232425262728292a2b2c2d2e2f303132333435363738393a3b3c3d3e3f404142434445464748494a4b4c4d4e4f505152535455565758595a5b5c5d5e5f606162636465666768696a6b6c6d6e6f70",
             "message_hex": "7368656b796c206d6573736167652d7369676e696e67204b4154",
             "preimage_by_network": {
-                "mainnet": "6ca207dcf1f83692be40f3b78912cc08dcb4d6362bfca9f3e6d7ff519ca641d0",
-                "testnet": "4de63e1095631517950b3a76d057405a7e17ada2ed0eae132df7cf14f5cb8b5b",
-                "stagenet": "c8475d7e4fcd628fc77669dc443340b9237a582cbc55727e0fc58c34f65f7a04",
-                "regtest": "4f15116ba792bb31d781d924e0306c075aae1431560e7fd650732e9b9204fa9f"
+                "mainnet": "6ca207dcf1f83692be40f3b78912cc08dcb4d6362bfca9f3e6d7ff519ca641d0e754331cd26846e3d5e4dbff6e14a41cb60d76a468e9bfdc4811bb648cc6c16d",
+                "testnet": "4de63e1095631517950b3a76d057405a7e17ada2ed0eae132df7cf14f5cb8b5b127346d704b158d2d864ac2f7e9456b4ce89e0b177c3b051cdea7fdf109d7010",
+                "stagenet": "c8475d7e4fcd628fc77669dc443340b9237a582cbc55727e0fc58c34f65f7a049c7b1bb7d614b1bd03133c2432a5b8b9d42c79de81a36ad6686b4409eeb8f529",
+                "regtest": "4f15116ba792bb31d781d924e0306c075aae1431560e7fd650732e9b9204fa9fec5702fc425a402eea8428501b96990638a5b01e0440b6583296478ff475d790"
             }
         },
         {
@@ -25,10 +25,10 @@
             "segment_hex": "000102030405060708090a0b0c0d0e0f101112131415161718191a1b1c1d1e1f202122232425262728292a2b2c2d2e2f303132333435363738393a3b3c3d3e3f404142434445464748494a4b4c4d4e4f505152535455565758595a5b5c5d5e5f606162636465666768696a6b6c6d6e6f70",
             "message_hex": "",
             "preimage_by_network": {
-                "mainnet": "c356f1d041786f0a238f66424af763f1714d9f095046b676c29265f6683a8c98",
-                "testnet": "7e22dffc46c9013fedcd6502e748765c47c8fbabc9f9ce1601805bc1f54b8620",
-                "stagenet": "46385d8557c8129c4ad819045b681ed038248274283d211de684a6de9e13e340",
-                "regtest": "cfadfafb4df70ef25cfd2f0e91d399bb1d5a87d51d379141558380f7c68beab0"
+                "mainnet": "c356f1d041786f0a238f66424af763f1714d9f095046b676c29265f6683a8c98182e9d2db25128811f12620e0bbd02b066bef3affadfe0d27a3e36c2bc29ac43",
+                "testnet": "7e22dffc46c9013fedcd6502e748765c47c8fbabc9f9ce1601805bc1f54b86202a001a579c3d6a3a380fbaafeb5392ecbccd75654f421078a02610c3a334ee1d",
+                "stagenet": "46385d8557c8129c4ad819045b681ed038248274283d211de684a6de9e13e34040a7e05cb0cc9b9a1d287b545251e8d02e970d5d2e1237020412307ec0a9eae3",
+                "regtest": "cfadfafb4df70ef25cfd2f0e91d399bb1d5a87d51d379141558380f7c68beab009689fc9806d3123a3ec16d33c0905d64e179c38f79250c619cfc363c6abde9c"
             }
         },
         {
@@ -36,10 +36,10 @@
             "segment_hex": "",
             "message_hex": "7368656b796c206d6573736167652d7369676e696e67204b4154",
             "preimage_by_network": {
-                "mainnet": "ac4d2e4eaf4af308c25ff1af63fa22f8e43a15f387aab9fb1e6ad26ab6af75cf",
-                "testnet": "98a8aa653fd3aa6327284ce947dad3a4961f9ef835cb62251b74e5dcedc7c190",
-                "stagenet": "b2ba1c58143d02a2ad3a657df0be2177a6b91f5ba5f595979b7ab830f8caecc1",
-                "regtest": "755d5c520ace77d1955b47d6c55edc7906281fbed00db90779dde372cc00b448"
+                "mainnet": "ac4d2e4eaf4af308c25ff1af63fa22f8e43a15f387aab9fb1e6ad26ab6af75cf639f576f679977fdf4d9c3ced4dc89d08b3078be62fad25b6a24215fb3478a85",
+                "testnet": "98a8aa653fd3aa6327284ce947dad3a4961f9ef835cb62251b74e5dcedc7c19042794cdc52eb3e88d9c900c949b9ceee3c182eeb40bda10c918688014d381fc0",
+                "stagenet": "b2ba1c58143d02a2ad3a657df0be2177a6b91f5ba5f595979b7ab830f8caecc11354eb901765540346e119d24746c428d52b0b4b55e693771e9cc68595f10f58",
+                "regtest": "755d5c520ace77d1955b47d6c55edc7906281fbed00db90779dde372cc00b448f45af4d405b17b5dbcef61817130b0ba7826f6b51c95ad59ba847c57459a97f4"
             }
         },
         {
@@ -47,10 +47,10 @@
             "segment_hex": "000102030405060708090a0b0c0d0e0f101112131415161718191a1b1c1d1e1f202122232425262728292a2b2c2d2e2f303132333435363738393a3b3c3d3e3f404142434445464748494a4b4c4d4e4f505152535455565758595a5b5c5d5e5f606162636465666768696a6b6c6d6e6f707172737475767778797a7b7c7d7e7f808182838485868788898a8b8c8d8e8f909192939495969798999a9b9c9d9e9fa0a1a2a3a4a5a6a7a8a9aaabacadaeafb0b1b2b3b4b5b6b7b8b9babbbcbdbebfc0c1c2c3c4c5c6c7c8c9cacbcccdcecfd0d1d2d3d4d5d6d7d8d9dadbdcdddedfe0e1e2e3e4e5e6e7e8e9eaebecedeeeff0f1f2f3f4f5f6f7f8f9fa000102030405060708090a0b0c0d0e0f101112131415161718191a1b1c1d1e1f202122232425262728292a2b2c2d2e2f30",
             "message_hex": "000102030405060708090a0b0c0d0e0f101112131415161718191a1b1c1d1e1f202122232425262728292a2b2c2d2e2f303132333435363738393a3b3c3d3e3f404142434445464748494a4b4c4d4e4f505152535455565758595a5b5c5d5e5f606162636465666768696a6b6c6d6e6f707172737475767778797a7b7c7d7e7f808182838485868788898a8b8c8d8e8f909192939495969798999a9b9c9d9e9fa0a1a2a3a4a5a6a7a8a9aaabacadaeafb0b1b2b3b4b5b6b7b8b9babbbcbdbebfc0c1c2c3c4c5c6c7c8c9cacbcccdcecfd0d1d2d3d4d5d6d7d8d9dadbdcdddedfe0e1e2e3e4e5e6e7e8e9eaebecedeeeff0f1f2f3f4f5f6f7f8f9fafbfcfdfeff000102030405060708090a0b0c0d0e0f101112131415161718191a1b1c1d1e1f202122232425262728292a2b2c2d2e2f303132333435363738393a3b3c3d3e3f404142434445464748494a4b4c4d4e4f505152535455565758595a5b5c5d5e5f606162636465666768696a6b6c6d6e6f707172737475767778797a7b7c7d7e7f808182838485868788898a8b8c8d8e8f909192939495969798999a9b9c9d9e9fa0a1a2a3a4a5a6a7a8a9aaabacadaeafb0b1b2b3b4b5b6b7b8b9babbbcbdbebfc0c1c2c3c4c5c6c7c8c9cacbcccdcecfd0d1d2d3d4d5d6d7d8d9dadbdcdddedfe0e1e2e3e4e5e6e7e8e9eaebecedeeeff0f1f2f3f4f5f6f7f8f9fafbfcfdfeff",
             "preimage_by_network": {
-                "mainnet": "28a81fe626afefd683a075a0068b230785057f4192416278d4c1ec0df54fe93e",
-                "testnet": "7f22d3892c48590c91b777aed34425304b6baa534d26991f3d038e19809329a0",
-                "stagenet": "cadfce0695983424cf7d42b713daf2fcb7811f04b19c54ac3603789e46a3a1d6",
-                "regtest": "2725e28ba5a5fd5edc16d3baac9531d890b2fcbf412cdb2bdc898f101a181c58"
+                "mainnet": "28a81fe626afefd683a075a0068b230785057f4192416278d4c1ec0df54fe93e81ac060956b8daf87bf6218fff892317cb813e53566ffdeefd8de0cfb3278237",
+                "testnet": "7f22d3892c48590c91b777aed34425304b6baa534d26991f3d038e19809329a0beca7309acc8dd4ef204173abf375cbcc8f741af150781e37470cc259fde06c1",
+                "stagenet": "cadfce0695983424cf7d42b713daf2fcb7811f04b19c54ac3603789e46a3a1d68efb348f25c300dfdc5b740e0e80ec817861dccb4ff7b42387e390aa69465e3f",
+                "regtest": "2725e28ba5a5fd5edc16d3baac9531d890b2fcbf412cdb2bdc898f101a181c58ecdf1ae5d7844b838d954254a4d2a8cdbda1b1ca0843cda8347fd63a514d45e1"
             }
         }
     ]
