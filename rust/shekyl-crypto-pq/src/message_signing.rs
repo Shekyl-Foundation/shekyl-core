@@ -761,7 +761,7 @@ mod tests {
         assert_ne!(a, b);
         assert_ne!(
             a, c,
-            "Fakechain shares Mainnet's address encoding, not its transcript"
+            "regtest binds its own preimage, distinct from mainnet"
         );
     }
 

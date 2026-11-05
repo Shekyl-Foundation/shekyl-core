@@ -505,17 +505,8 @@ fn wallet_handle(
     WalletHandle {
         name: name.to_owned(),
         capability: capability_mode_str(engine.capability()).to_owned(),
-        network: network_str(engine.network()).to_owned(),
+        network: crate::types::network_wire(engine.network()).to_owned(),
         restore_height_hint,
-    }
-}
-
-fn network_str(network: Network) -> &'static str {
-    match network {
-        Network::Mainnet => "MAINNET",
-        Network::Testnet => "TESTNET",
-        Network::Stagenet => "STAGENET",
-        Network::Regtest => "REGTEST",
     }
 }
 
@@ -563,10 +554,9 @@ pub(crate) async fn make_daemon(
             tracing::warn!(error = %e, "daemon transport construction failed");
             WalletRpcError::DaemonUnreachable
         })?;
-    // Identity-verifying (VC-4): the daemon must prove it is this network's,
+    // Identity-verifying (VC-4): the daemon must prove it is this network,
     // running this build's rules and RPC contract, before the first request.
-    // `Refuse` on fakechain is the shipped value and there is no flag to
-    // change it (VC-R3).
+    // The match is exact on every network, regtest included (VC-R3).
     Ok(DaemonClient::verifying(rpc, DaemonExpectation { network }))
 }
 
