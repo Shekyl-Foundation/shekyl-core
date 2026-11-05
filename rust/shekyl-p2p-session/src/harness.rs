@@ -22,12 +22,13 @@ use shekyl_levin::{
 use shekyl_peer_policy::InboundCeiling;
 use shekyl_timing_engine::Tick;
 use shekyl_transport_layer::{
-    ConnectorId, DialEnd, DialFailure, Reached, Retry, SocketId, Sockets, StreamEnd,
+    CloseCause, CloseKind, ConnectorId, DialEnd, DialFailure, Direction, NetworkAddress, OpenError,
+    OpenSocket, Reached, Retry, SocketId, Sockets, StreamEnd,
 };
 use tokio::sync::mpsc;
 
 use crate::dial::{Channel, ConnectFuture, Dial};
-use crate::endpoint::{admit, Endpoint};
+use crate::endpoint::Endpoint;
 use crate::Command;
 
 /// How long a test waits for anything before it fails.
@@ -407,4 +408,40 @@ pub fn request_headers() -> Vec<u8> {
     .store()
     .expect("request stores");
     notify(Command::RequestHeaders.wire_id(), &payload)
+}
+
+/// Reserve a socket for `endpoint` on `sockets`, as the connector that
+/// carries it would: the clearnet listener's accept, a dial, the Tor
+/// forward's accept. Refusal is a D12 cause; nothing is reserved then. A
+/// harness builds its table with no accept-rate gate
+/// ([`Sockets::with_clearnet_gate`]`(None)`), since it admits at a fixed
+/// tick where no bucket refills.
+pub fn admit(
+    sockets: &Sockets,
+    endpoint: &Endpoint,
+    now: Tick,
+    ceiling: InboundCeiling,
+) -> Result<OpenSocket, CloseCause> {
+    let opened = match endpoint {
+        Endpoint::Clearnet {
+            ip,
+            direction: Direction::Outbound,
+            ..
+        } => sockets.open_clearnet(*ip),
+        Endpoint::Clearnet {
+            ip,
+            direction: Direction::Inbound,
+            ..
+        } => sockets.accept_clearnet(*ip, ceiling, now),
+        Endpoint::TorInbound => sockets.accept_tor(ceiling),
+        Endpoint::Tor { key, port } => sockets.open_tor(&NetworkAddress::Tor {
+            host: shekyl_onion_v3::v3_onion_hostname(key),
+            port: *port,
+        }),
+    };
+    match opened {
+        Ok(open) => Ok(open),
+        Err(OpenError::Refused(cause)) => Err(cause),
+        Err(OpenError::Exhausted) => Err(CloseCause::new(CloseKind::AdmissionRefused)),
+    }
 }

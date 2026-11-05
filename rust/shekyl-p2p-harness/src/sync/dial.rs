@@ -25,12 +25,46 @@ use shekyl_levin::{
     invoke, response, BasicNodeData, BucketReader, CoreSyncData, HandshakeRequest,
     HandshakeResponse, PortableMap, Received, TimedSyncResponse, DEFAULT_MAX_PACKET_SIZE,
 };
-use shekyl_p2p_session::{admit, Channel, Command, ConnectFuture, Dial, Endpoint};
+use shekyl_p2p_session::{Channel, Command, ConnectFuture, Dial, Endpoint};
 use shekyl_peer_policy::InboundCeiling;
 use shekyl_timing_engine::Tick;
 use shekyl_transport_layer::{
-    ConnectorId, DialEnd, DialFailure, Reached, Retry, SocketId, Sockets, StreamEnd,
+    CloseCause, CloseKind, ConnectorId, DialEnd, DialFailure, Direction, OpenError, OpenSocket,
+    Reached, Retry, SocketId, Sockets, StreamEnd,
 };
+
+/// Reserve the socket a scripted peer's channel runs on, as the clearnet
+/// connector would: its dial, or its listener's accept. This harness
+/// dials clearnet only; a Tor endpoint is refused. Its table has no
+/// accept-rate gate ([`Sockets::with_clearnet_gate`]`(None)`), since it
+/// admits at a fixed tick where no bucket refills.
+fn admit(
+    sockets: &Sockets,
+    endpoint: &Endpoint,
+    now: Tick,
+    ceiling: InboundCeiling,
+) -> Result<OpenSocket, CloseCause> {
+    let opened = match endpoint {
+        Endpoint::Clearnet {
+            ip,
+            direction: Direction::Outbound,
+            ..
+        } => sockets.open_clearnet(*ip),
+        Endpoint::Clearnet {
+            ip,
+            direction: Direction::Inbound,
+            ..
+        } => sockets.accept_clearnet(*ip, ceiling, now),
+        Endpoint::TorInbound | Endpoint::Tor { .. } => {
+            return Err(CloseCause::new(CloseKind::AdmissionRefused))
+        }
+    };
+    match opened {
+        Ok(open) => Ok(open),
+        Err(OpenError::Refused(cause)) => Err(cause),
+        Err(OpenError::Exhausted) => Err(CloseCause::new(CloseKind::AdmissionRefused)),
+    }
+}
 
 /// The far end of one channel.
 pub trait SyncPeer: Send {

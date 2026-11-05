@@ -986,7 +986,7 @@ session_test!(a_ban_drops_the_hosts_sessions_and_refuses_the_next, async {
     assert_eq!(kind(end), CloseKind::LocalClose);
     assert!(rig.sockets.is_banned(common::ip(25)));
     assert!(
-        shekyl_p2p_session::admit(
+        shekyl_p2p_session::harness::admit(
             &rig.sockets,
             &inbound_clearnet(25),
             Tick::new(0),

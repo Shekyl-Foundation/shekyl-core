@@ -218,7 +218,8 @@ impl Default for Settings {
 
 impl Rig {
     pub fn new(settings: Settings) -> Self {
-        let sockets = Sockets::new();
+        // No accept-rate gate: the loopback admits at a fixed tick.
+        let sockets = Sockets::with_clearnet_gate(None);
         let (events_tx, events) = mpsc::unbounded_channel();
         let recorder = Arc::new(Recorder {
             events: events_tx,

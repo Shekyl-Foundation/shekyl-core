@@ -313,7 +313,8 @@ impl Rig {
             .build()
             .expect("the rig's runtime");
         let clock = ManualClock::new(Tick::new(1_000_000));
-        let sockets = Sockets::new();
+        // No accept-rate gate: the loopback admits at a fixed tick.
+        let sockets = Sockets::with_clearnet_gate(None);
         let (loopback, dialed) = Loopback::new(sockets.clone(), CEILING, SEND_CAP);
         let engine = EngineService::start(clock.clone());
         let timing = engine.handle();

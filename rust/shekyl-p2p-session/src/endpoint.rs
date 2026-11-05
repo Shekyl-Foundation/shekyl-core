@@ -10,11 +10,7 @@
 
 use std::net::IpAddr;
 
-use shekyl_peer_policy::InboundCeiling;
-use shekyl_timing_engine::Tick;
-use shekyl_transport_layer::{
-    CloseCause, CloseKind, ConnectorId, Direction, NetworkAddress, OpenError, OpenSocket, Sockets,
-};
+use shekyl_transport_layer::{ConnectorId, Direction};
 
 /// What the connector observed, and what `established` posts.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -36,7 +32,7 @@ pub enum Endpoint {
     TorInbound,
     /// Tor outbound. The v3 service that was dialed.
     ///
-    /// The hostname is not stored. A dial re-encodes [`shekyl_onion_v3::v3_onion_hostname`].
+    /// The hostname is not stored. A dial re-encodes it from the key (`shekyl_onion_v3::v3_onion_hostname`).
     /// A host that is not a v3 onion never becomes this variant.
     Tor {
         /// The service key.
@@ -73,44 +69,5 @@ impl Endpoint {
             Self::Clearnet { ip, .. } => Some(*ip),
             Self::TorInbound | Self::Tor { .. } => None,
         }
-    }
-}
-
-/// Reserve a socket for `endpoint` on `sockets`.
-///
-/// Refusal is a D12 cause. Nothing is reserved in that case.
-///
-/// An inbound clearnet endpoint reserves through
-/// [`Sockets::reserve_clearnet_inbound`]: the ban, the ceilings and an
-/// id, and no accept-rate token. The callers here are harnesses. The
-/// network accept is [`Sockets::accept_clearnet`], in the clearnet
-/// listener, and that is the call the gate prices.
-pub fn admit(
-    sockets: &Sockets,
-    endpoint: &Endpoint,
-    now: Tick,
-    ceiling: InboundCeiling,
-) -> Result<OpenSocket, CloseCause> {
-    let opened = match endpoint {
-        Endpoint::Clearnet {
-            ip,
-            direction: Direction::Outbound,
-            ..
-        } => sockets.open_clearnet(*ip),
-        Endpoint::Clearnet {
-            ip,
-            direction: Direction::Inbound,
-            ..
-        } => sockets.reserve_clearnet_inbound(*ip, ceiling, now),
-        Endpoint::TorInbound => sockets.accept_tor(ceiling),
-        Endpoint::Tor { key, port } => sockets.open_tor(&NetworkAddress::Tor {
-            host: shekyl_onion_v3::v3_onion_hostname(key),
-            port: *port,
-        }),
-    };
-    match opened {
-        Ok(open) => Ok(open),
-        Err(OpenError::Refused(cause)) => Err(cause),
-        Err(OpenError::Exhausted) => Err(CloseCause::new(CloseKind::AdmissionRefused)),
     }
 }

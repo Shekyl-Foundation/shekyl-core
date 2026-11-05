@@ -465,7 +465,8 @@ impl Rig {
             .enable_all()
             .build()
             .expect("the rig's runtime");
-        let sockets = Sockets::new();
+        // No accept-rate gate: the loopback admits at a fixed tick.
+        let sockets = Sockets::with_clearnet_gate(None);
         prepare(&sockets);
         let links = Arc::new(Links::new());
         for connector in &build.routes {

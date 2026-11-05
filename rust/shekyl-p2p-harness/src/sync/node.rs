@@ -288,7 +288,8 @@ impl Node {
         let timing = engine.handle();
         let timer = timing.register(OwnerClass::Sync).expect("registered");
         let executor = Arc::new(Executor::new(budget, substrate));
-        let sockets = Sockets::new();
+        // No accept-rate gate: the harness admits at a fixed tick.
+        let sockets = Sockets::with_clearnet_gate(None);
         let dial = Arc::new(PeerDial::new(
             sockets.clone(),
             NETWORK_ID,
