@@ -483,10 +483,32 @@ Recorded as they are found; each names the anchor it corrects.
   `local_close_after_channel()` and the deadline closes with
   `DialEnd::levin_handshake_timeout()` (`CloseKind::LevinHandshakeTimeout`,
   kind 7); two kinds are minted, `NetworkMismatch` (18, a `Gap`) and
-  `InvokeTimeout` (19, `ChannelExists`), with the header parity test
-  (`the_header_is_the_enum`) and `close_cause.h` updated. `SessionRefused`
-  stays the bucket-shape refusal.
+  `InvokeTimeout` (19, `ChannelExists`). `SessionRefused` stays the
+  bucket-shape refusal.
 - **F6 (2026-11-05):** a ban that admission records does not close the
   sessions it covers; the hub did that. Since only the session layer
   closes, the `ban_*` verbs are on `SessionLayer` (§7.9) and return the
   ids they dropped.
+- **F7 (2026-11-05), §3's walk of the rest of `shekyl-ffi`:** after the
+  p2p modules go, it holds `difficulty_ffi`, `chain_digest_ffi`,
+  `pow_randomx_ffi` (the hash only), `curve_tree_replica_ffi`,
+  `tx_extra_ffi`, `tx_extra_codec_ffi`, `txid_ffi`, `tx_signing_ffi`,
+  `archival_ffi`, `ct_balance_ffi`, `economics_ffi`, and the `legacy_*`
+  crypto, FCMP, KEM, proof, transaction and FROST modules. Its C++
+  callers are `src/cryptonote_basic` and `src/fcmp` (libraries),
+  `contrib/epee/src` (`mlog`, `mlocker`, `memwipe`, `net_ssl`), the two
+  debug utilities, and
+  the C++ tests (`unit_tests`, `difficulty`, `randomx_v2_parity`, a fuzz
+  target). `cargo tree -e normal,build -i shekyl-ffi` finds no edge from
+  `shekyld`, `shekyl-node`, `shekyl-daemon`, `shekyl-p2p` or
+  `shekyl-daemon-rpc`.
+- **F8 (2026-11-05), §5's C++ that remains and what builds it:** under
+  `src/`, `common`, `crypto`, `fcmp`, `cryptonote_basic`,
+  `serialization`, `device`, `platform` and `shekyl` (the FFI headers),
+  about 40,000 lines with `contrib/epee`'s 11,600. The default CMake build
+  compiles them for the C++ tests and for two executables,
+  `shekyl-gen-ssl-cert` and `shekyl-utils-deserialize`, which are staged
+  into `bin/` beside the three Rust binaries; `bin/` is what the release
+  archives carry, so those two still ship, linking `libshekyl_ffi.a`.
+  `shekyld`, `shekyl-cli` and `shekyl-wallet-rpc` are cargo builds with
+  no C++ in their links.
