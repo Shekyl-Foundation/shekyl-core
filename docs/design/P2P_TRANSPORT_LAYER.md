@@ -352,6 +352,12 @@ names them.
 
 ## Seam — construction contract (RULED 2026-09-28)
 
+*Superseded 2026-11-05: the seam, its strands, the executor and the
+chain-sync router are deleted with the C++ host. The boundary is the
+session layer (`shekyl-p2p-session`; `P2P_3_REMNANT_CUTOVER_BRIEF.md`
+§7), and each command's owner is named in its dispatch table. What
+follows is the record of the seam as it was built and ruled.*
+
 Both connectors are in. The seam is the handler boundary they attach to:
 one `Sockets` table, the connector's `Session`, and the posts onto that
 connection's strand. A `Dial` is how a channel is born. Zone bind, which

@@ -644,6 +644,7 @@ stale_through = [
   { through = "6945d00c70", note = "levin: the two command enums (DefinedCommand, SyncCommand) become one Command; shekyl-clearnet's sizes.rs classifies a wire id with one match in place of two lookups. A release build constructs no size record. The dial, the handshake and the gap do the same I/O. Not re-measured." },
   { through = "dd41e79476", note = "p2p-session: cause.rs gains two close kinds the session layer closes with (NetworkMismatch, InvokeTimeout). An enum table only; the connectors' dial, handshake and gap are unchanged. Not re-measured." },
   { through = "a45484558e", note = "p2p: the C++ host is deleted. In these paths cause.rs drops the C projection of CloseKind (c_name, name_nul, c_header) and lib.rs its re-export; no close kind, deadline or dial I/O changes. The spans the connectors read are unchanged. Not re-measured; the clearnet rows stay stale from the capture." },
+  { through = "c0f6274413", note = "transport: the inbound reservation that skipped the accept-rate gate is deleted; harness tables are built with no gate and take accept_clearnet. The listener's accept checks the ban, the ceilings and the rate in the same order as before; no dial, handshake or gap I/O changes. Not re-measured." },
 ]
 
 [[constant]]
@@ -716,6 +717,7 @@ stale_through = [
   { through = "fbfc1fff5", note = "PR-3 diagnosis instrumentation: one more debug line set on the Tor driver's wake and close. Logging only; the dial and the gap wait do the same I/O. Not re-measured." },
   { through = "dc9130534", note = "PR-3 fix 2 (Rick, 2026-10-14): the gap now ends at the peer's first complete Levin frame, not at this node's handshake verdict, and a fired wake waits one IO driver turn for the reader before it times the peer out. This changes what the gap span bounds: the capture measured channel to verdict, which includes this node's own handshake work, so it overstates the peer's silence the gap now measures. The span stays as it is until the cold-first-contact rerun measures channel to first frame. The dial is unchanged. Not re-measured." },
   { through = "034bbdd5e", note = "PR-3, the measurement build (Rick, 2026-10-14): under the measurement-spans feature, set only by CMake's SHEKYL_MEASUREMENT_SPANS (default OFF, gated out of release by check_measurement_spans.py), the Tor dial and gap are 120 s. A default build compiles the released lines unchanged, so no released deadline or I/O moved. Not re-measured; the measurement build is what the cold-first-contact rerun measures with." },
+  { through = "c0f6274413", note = "transport: the inbound reservation that skipped the accept-rate gate is deleted; harness tables are built with no gate and take accept_clearnet. The listener's accept checks the ban, the ceilings and the rate in the same order as before; no dial, handshake or gap I/O changes. Not re-measured." },
 ]
 cleared = [
   { through = "ee87fc633", reason = "The Tor connector names its own SOCKS proxy: a failed TCP connect to it, or an exchange it closed without a reply, closes as ProxyUnavailable instead of LocalClose, with a rate-limited warning; a new close kind in cause.rs. The dial and the gap wait do the same I/O; only the close's label and one log line change. No cost moved." },
@@ -774,6 +776,7 @@ cleared = [
   { through = "c9fb52ee4b", reason = "The socket table claims one ban timer for the process engine it registers on, and the node starts that timer at open, so a finite ban expires with no zone host. The claim is taken when the timer starts, not on a dial. The Tor dial, the gap, the shutdown wait and their I/O are unchanged, so the 2026-10-14 capture still prices this tree." },
   { through = "dd41e79476", reason = "p2p-session: cause.rs gains two close kinds the session layer closes with (NetworkMismatch, InvokeTimeout). An enum table only; the Tor dial, the gap and the shutdown wait are unchanged." },
   { through = "a45484558e", reason = "p2p: the C++ host is deleted. In these paths cause.rs drops the C projection of CloseKind (c_name, name_nul, c_header) and lib.rs its re-export; no close kind, deadline or dial I/O changes, and the Tor spans are unchanged. The RustPath captures still describe the code: the connectors they measured are the ones running under the Rust session layer." },
+  { through = "c0f6274413", reason = "transport: the inbound reservation that skipped the accept-rate gate is deleted; harness tables are built with no gate and take accept_clearnet. The listener's accept checks the ban, the ceilings and the rate in the same order as before; no dial, handshake or gap I/O changes. Not re-measured." },
 ]
 
 [[constant]]
