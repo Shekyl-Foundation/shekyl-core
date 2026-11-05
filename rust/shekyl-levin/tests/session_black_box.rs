@@ -21,7 +21,7 @@ use std::time::{Duration, Instant};
 
 use live_daemon::{connect_from, regtest_network_id, Daemon, LoopbackHost};
 use shekyl_levin::{
-    invoke, notify, BasicNodeData, BucketReader, CoreSyncData, GetTxpoolComplement,
+    invoke, notify, BasicNodeData, BucketReader, Command, CoreSyncData, GetTxpoolComplement,
     HandshakeRequest, NewTransactions, PortableMap, Received, TimedSyncRequest, COMMAND_HANDSHAKE,
     COMMAND_TIMED_SYNC, NOTIFY_GET_TXPOOL_COMPLEMENT, NOTIFY_NEW_TRANSACTIONS,
 };
@@ -334,6 +334,26 @@ fn nothing_but_a_handshake_is_accepted_before_it() {
         other => panic!(
             "transactions before the handshake must close the socket; the wire did {other:?}"
         ),
+    }
+
+    // Every other command, as the notify its owner would read: each closes
+    // the socket unanswered. The payload is not read before the command is
+    // judged, so an empty one stands for any.
+    let others = Command::ALL.into_iter().filter(|command| {
+        !matches!(
+            command,
+            Command::Handshake | Command::TimedSync | Command::NewTransactions
+        )
+    });
+    for (n, command) in (2u32..).zip(others) {
+        let mut early = Peer::connect(&daemon, LoopbackHost::peer(n));
+        early.send(&notify(command.wire_id(), &[]));
+        match early.next(SETTLE) {
+            Wire::Closed => {}
+            other => panic!(
+                "{command:?} before the handshake must close the socket; the wire did {other:?}"
+            ),
+        }
     }
 }
 
