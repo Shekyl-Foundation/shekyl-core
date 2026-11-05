@@ -521,7 +521,8 @@ fn measure(
         &pqc_pk_hashes,
         tree_root.as_bytes(),
         signed.tree_depth,
-        tx_prefix_hash.to_bytes(),
+        // The message the proof was made over (the signing envelope §2.2).
+        signed.tx_signable.to_bytes(),
     )
     .expect("verify must not error");
     let verify_proof = started.elapsed();

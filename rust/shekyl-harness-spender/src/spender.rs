@@ -757,6 +757,9 @@ impl Spender {
             &tree,
         )
         .expect("sign the spend");
+        // The message the proof was made over: the transaction's
+        // network-bound tx_signable (the signing envelope §2.2).
+        let tx_signable = signed.tx_signable;
         if twist.break_range_proof {
             // Bit 0 of `r1`'s low byte: after `A ‖ A1 ‖ B`, so every point
             // still decompresses and the scalar stays reduced. Before
@@ -830,7 +833,7 @@ impl Spender {
             &pqc_scalars,
             tree.tree_root.as_bytes(),
             open.layers(),
-            tx_prefix_hash.to_bytes(),
+            tx_signable.to_bytes(),
         );
         match verified {
             Ok(true) => assert!(
