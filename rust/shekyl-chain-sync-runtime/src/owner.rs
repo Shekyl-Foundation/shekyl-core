@@ -1087,8 +1087,35 @@ where
         });
     }
 
+    /// The latch watch's report. Recording it does not read the chain: the
+    /// watch is the store's answer. The plan that follows still wants a
+    /// snapshot, and waits when that read fails. A dropped report would
+    /// leave a write that landed in flight, where nothing retries it.
     fn latch(&mut self, set: bool) {
-        self.event(Event::Latch { set });
+        let mut out = Vec::new();
+        if let Ok(wall) = self.executor.wall() {
+            self.sync.set_wall(wall);
+        }
+        let now = self.now();
+        match self.store.begin_read() {
+            Ok(snap) => {
+                let main = SnapshotView::new(&snap);
+                if let Err(err) =
+                    self.sync
+                        .handle(Event::Latch { set }, &main, now, &mut self.rng, &mut out)
+                {
+                    tracing::error!(%err, "the store could not be read: the event is dropped");
+                }
+            }
+            Err(err) => {
+                tracing::error!(
+                    %err,
+                    "the store could not be read: the latch is recorded and the plan waits"
+                );
+                self.sync.latch_reported(set);
+            }
+        }
+        self.commands(out);
         self.published.alarm_tx.send_replace(self.sync.alarm());
     }
 

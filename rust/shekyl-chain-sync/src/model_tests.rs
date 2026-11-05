@@ -617,6 +617,21 @@ fn a_refused_latch_write_is_retried_until_the_latch_is_set() {
         ),
         "the retry without a view did not raise the same evidence: {bare_retried:?}"
     );
+    // The watch's report, also with no chain view. The owner records it
+    // this way when the store cannot be read: the write is done, and a
+    // later refusal or retry asks for nothing.
+    let mut reported = Sync::<u8, _>::new(Trust::UNPINNED, issued);
+    reported.raise_alarm(evidence, &mut Vec::new());
+    reported.latch_reported(true);
+    assert!(reported.alarm(), "the latch is not set after the report");
+    assert_eq!(reported.alarm_write, AlarmWrite::Written);
+    let mut after_report = Vec::new();
+    reported.alarm_refused(now, &mut after_report);
+    reported.alarm_retry(&mut after_report);
+    assert!(
+        after_report.is_empty(),
+        "a reported latch was asked for again: {after_report:?}"
+    );
 
     for event in [Event::AlarmRefused, Event::AlarmRetry] {
         let after = step(&mut sync, event);
