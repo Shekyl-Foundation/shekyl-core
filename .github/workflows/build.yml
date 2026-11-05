@@ -645,11 +645,12 @@ jobs:
           foreach ($binary in $floors.Keys) {
             $at = ($lines | Select-String -Pattern ("Running .*\\deps\\" + [regex]::Escape($binary)) | Select-Object -First 1).LineNumber
             if (-not $at) { Write-Error "no test binary ran for $binary"; exit 1 }
-            # This binary's own block: up to the next binary's Running line,
-            # so a missing result is never read off the binary after it.
-            # Case-sensitive: Select-String ignores case by default, and
-            # libtest's own "running N tests" line is the block's second.
-            $next = ($lines[$at..($lines.Length - 1)] | Select-String -CaseSensitive -Pattern '^\s*Running ' | Select-Object -First 1).LineNumber
+            # This binary's own block: up to the next binary's Running line
+            # or cargo's Doc-tests header, so a missing result is never read
+            # off what follows. Case-sensitive: Select-String ignores case by
+            # default, and libtest's own "running N tests" line is the
+            # block's second.
+            $next = ($lines[$at..($lines.Length - 1)] | Select-String -CaseSensitive -Pattern '^\s*(Running|Doc-tests) ' | Select-Object -First 1).LineNumber
             $end = if ($next) { $at + $next - 2 } else { $lines.Length - 1 }
             $result = $lines[$at..$end] | Select-String -Pattern 'test result: ok\. (\d+) passed' | Select-Object -First 1
             if (-not $result) { Write-Error "no passing result line in the $binary tests"; exit 1 }
