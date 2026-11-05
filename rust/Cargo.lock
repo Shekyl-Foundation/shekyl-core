@@ -5030,6 +5030,7 @@ dependencies = [
  "shekyl-clearnet",
  "shekyl-dialer",
  "shekyl-draw-rng",
+ "shekyl-levin",
  "shekyl-onion-v3",
  "shekyl-p2p-session",
  "shekyl-peer-policy",

@@ -718,17 +718,29 @@ impl Network {
 /// Adopt what the connectors admit into the session layer. An inbound Tor
 /// session is counted for the dialer's held tally; a Tor dial whose onion
 /// is not a v3 service is refused here, before any byte.
+///
+/// Each connector's channel closes on its own: a node with Tor off never
+/// holds a Tor sender, so that receiver ends at start. A closed channel
+/// retires its arm and nothing else; the pump ends when both have closed.
+/// Ending it on the first would drop the clearnet receiver with the Tor
+/// one, and every clearnet admission on a Tor-off node would then fail as
+/// this node's own failure before its handshake was read.
 async fn pump(
     layer: Layer,
     dialer: Peers,
     mut clearnet_rx: mpsc::UnboundedReceiver<shekyl_clearnet::Admitted>,
     mut tor_rx: mpsc::UnboundedReceiver<shekyl_tor::Admitted>,
 ) {
-    loop {
+    let mut clearnet_open = true;
+    let mut tor_open = true;
+    while clearnet_open || tor_open {
         tokio::select! {
             biased;
-            admitted = clearnet_rx.recv() => {
-                let Some(admitted) = admitted else { break };
+            admitted = clearnet_rx.recv(), if clearnet_open => {
+                let Some(admitted) = admitted else {
+                    clearnet_open = false;
+                    continue;
+                };
                 layer.adopt(Channel {
                     open: admitted.open,
                     session: admitted.session,
@@ -740,8 +752,11 @@ async fn pump(
                     gap: admitted.gap,
                 });
             }
-            admitted = tor_rx.recv() => {
-                let Some(admitted) = admitted else { break };
+            admitted = tor_rx.recv(), if tor_open => {
+                let Some(admitted) = admitted else {
+                    tor_open = false;
+                    continue;
+                };
                 let endpoint = match admitted.onion {
                     Some((host, port)) => match shekyl_onion_v3::v3_pubkey(&host) {
                         Some(key) => Endpoint::Tor { key, port },
