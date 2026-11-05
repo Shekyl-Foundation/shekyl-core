@@ -37,12 +37,12 @@ on:
     # Order matters: the last matching pattern wins.
     branches: [main]
   pull_request:
-    types: [opened, synchronize, reopened, edited]
+    types: [opened, synchronize, reopened]
 
 # Own concurrency group (distinct from build.yml's `build-<ref>`) so same-PR
 # reruns of the Rust gate supersede only each other, not the OS build run.
 concurrency:
-  group: rust-audit-${{ github.ref }}${{ github.event.action == 'edited' && !contains(toJSON(github.event.changes), '"base":') && '-edited' || '' }}
+  group: rust-audit-${{ github.ref }}
   cancel-in-progress: true
 
 permissions:
@@ -70,7 +70,6 @@ jobs:
   #
   # Fails closed: an uncomputable file list yields `false` and the suite runs.
   changes:
-    if: (github.event.action != 'edited' || contains(toJSON(github.event.changes), '"base":'))
     name: 'Change scope (rust)'
     runs-on: ubuntu-latest
     outputs:
@@ -102,7 +101,7 @@ jobs:
   rust-audit-and-test:
     name: "Rust: audit, test, determinism"
     needs: changes
-    if: (github.event.action != 'edited' || contains(toJSON(github.event.changes), '"base":')) && (needs.changes.outputs.docs_only != 'true')
+    if: needs.changes.outputs.docs_only != 'true'
     runs-on: ubuntu-latest
     container:
       image: ubuntu:24.04
