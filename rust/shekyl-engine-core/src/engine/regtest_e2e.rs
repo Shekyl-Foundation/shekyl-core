@@ -1554,13 +1554,15 @@ pub(super) async fn try_generate_blocks(
 
 /// A stop's last lines reach the log file: the daemon flushes its queued
 /// sinks last, after the lock's release, before it exits (`shekyl-logging`'s
-/// `flush`; Rick's ruling of 2026-10-17, item 7). `Deinitializing core...` is
-/// the last line the stop logs; SIGTERM is the operator's stop.
+/// `flush`; Rick's ruling of 2026-10-17, item 7). "the node closed in …;
+/// the daemon exits" is the last line the stop logs (`shekyl-daemon`'s
+/// `run.rs`, `finish`; it was the C++ remnant's `Deinitializing core...`
+/// until the p2p remnant cutover); SIGTERM is the operator's stop.
 #[cfg(unix)]
 #[tokio::test(flavor = "multi_thread")]
 #[ignore = "Track-2 regtest: requires SHEKYLD_BIN; spawns a live daemon"]
 async fn a_stops_last_line_reaches_the_log_file() {
-    const LAST_LINE: &str = "Deinitializing core...";
+    const LAST_LINE: &str = "; the daemon exits";
     const STOP_WITHIN: Duration = Duration::from_secs(60);
     let mut daemon = RegtestDaemon::start().await;
     let pid = daemon.child.id().to_string();

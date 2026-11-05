@@ -1292,8 +1292,10 @@ clearnet off; shekyl-dev `data/tsr-acceptance/2026-10-30-linux-vm-clock/`):
     id, as a fetch's (§4.5, the two-miss rule's paragraph). This run's
     facet stood on the clock throughout.
 - **Seen in the stop path, not this round's:** the C++ remnant's
-  teardown throws `std::out_of_range` from `on_connection_close` on most
-  stops, caught (FOLLOWUPS, `DAEMON_CONFIG_CUTOVER.md` §2.2).
+  teardown threw `std::out_of_range` from `on_connection_close` on most
+  stops, caught. Its FOLLOWUPS row closed with the remnant
+  (`P2P_3_REMNANT_CUTOVER_BRIEF.md` §3; the stop now ends with the Rust
+  node's close, timed in the log).
 - **The stop after a clock set back (2026-11-01, shekyl-dev
   `data/tsr-acceptance/2026-11-01-linux-vm-stops/`).** Every stop that
   never exited on the VM followed a backward change of the wall clock

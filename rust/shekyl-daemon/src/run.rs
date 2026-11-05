@@ -325,6 +325,12 @@ fn supervise(
 /// dropped (its network stops, the connector finishes its message and the
 /// store closes) while the managed Tor is torn down (`TOR_SUPERVISOR.md`
 /// §1, DX-Q6). Returns the exit status.
+///
+/// The last line the stop logs names how long the node took to close.
+/// The stop path reports on itself: a store on a slow disk once held the
+/// C++ daemon's main thread in uninterruptible sleep for tens of seconds
+/// after its deinit line, silently. `regtest_e2e`'s
+/// `a_stops_last_line_reaches_the_log_file` reads this line from the file.
 fn finish(
     pool: &shekyl_runtime::Pool,
     supervisor: Option<tor::Supervisor>,
@@ -338,11 +344,17 @@ fn finish(
     if let Some(rpc) = rpc {
         rpc.stop();
     }
+    let closing = std::time::Instant::now();
     drop(node);
+    let closed_in = closing.elapsed();
     if let Some(supervisor) = supervisor {
         pool.block_on(supervisor.shutdown());
         tracing::info!(target: "global", "the managed Tor was torn down");
     }
+    tracing::info!(
+        target: "daemon",
+        "the node closed in {closed_in:?}; the daemon exits"
+    );
     if preserve_status {
         0
     } else {
