@@ -494,13 +494,10 @@ fn verify_emission(
         ));
     }
 
-    // ── E5: the F-C1c signable hash — the prefix hash with the emission
-    // vin removed wholesale (blockchain.cpp:3907-3919) ──────────────────
-    let signable_tx_hash = {
-        let mut pruned = parsed.tx.clone();
-        pruned.prefix.inputs.remove(emission_index);
-        pruned.prefix_hash()
-    };
+    // ── E5: the transaction's one network-bound message, framed over the
+    // F-C1c signable prefix hash (the prefix with the emission vin removed
+    // wholesale, CEN-J22; the signing envelope §2.2) ─────────────────────
+    let tx_signable = parsed.tx.tx_signable(network);
 
     // ── E6 + E7 facts → the verify context and per-epoch sources ────────
     // The engine pre-checked presence (ShimContract); the `None` arm is
@@ -624,11 +621,8 @@ fn verify_emission(
         .ok()
         .and_then(|depth| depth.checked_add(1))
         .ok_or_else(|| VerifyReject::stale_root("emission E9: tree_depth + 1 overflows u8"))?;
-    // `shekyl-archival-retention` takes the signable hash as bytes (the
-    // proof-crate boundary, RTN-7 §3.2).
-    let backing =
-        emission_vin_verify_backing(vin, &reference.root, layers, signable_tx_hash.to_bytes())
-            .map_err(|e| emission_reject(&e))?;
+    let backing = emission_vin_verify_backing(vin, &reference.root, layers, &tx_signable)
+        .map_err(|e| emission_reject(&e))?;
     let reward_commits: Vec<RewardCommit> = parsed
         .tx
         .prefix
@@ -645,7 +639,7 @@ fn verify_emission(
         })
         .collect::<Option<Vec<_>>>()
         .ok_or_else(|| VerifyReject::malformed("emission: loud vout without a commitment"))?;
-    let auth = emission_vin_verify_auth(vin, &reward_commits, signable_tx_hash.as_bytes(), network)
+    let auth = emission_vin_verify_auth(vin, &reward_commits, &tx_signable, network)
         .map_err(|e| emission_reject(&e))?;
     // The witness assembly is infallible once the three minters passed —
     // mirroring the deleted C++ oracle's single verify FFI (`DEL-008`)

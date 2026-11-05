@@ -576,10 +576,14 @@ impl J25 {
             Ok(None) => return Ok(refuse()),
             Err(refused) => return Ok(Err(refused)),
         };
-        let Some(signable) = J22::signable_hash(cx) else {
+        // J22's signable prefix hash exists only for the emission class;
+        // the message both the backing proof and the auths prove over is the
+        // transaction's one tx_signable, framed over it (the signing envelope
+        // §2.2).
+        if J22::signable_hash(cx).is_none() {
             return Ok(refuse());
-        };
-        let signable = signable.to_bytes();
+        }
+        let signable = cx.tx.tx_signable(network);
         let Some(layers) = reference.tree_depth.checked_add(1) else {
             return Ok(refuse());
         };
@@ -596,7 +600,7 @@ impl J25 {
             return Ok(refuse());
         };
         let Ok(backing) =
-            emission_vin_verify_backing(vin, reference.anchor.as_bytes(), layers, signable)
+            emission_vin_verify_backing(vin, reference.anchor.as_bytes(), layers, &signable)
         else {
             return Ok(refuse());
         };

@@ -414,7 +414,7 @@ pub struct MembershipOnlyProof {
 pub fn prove_backing_membership(
     input: &SpendInput,
     tree: &TreeContext,
-    signable_tx_hash: PrefixHash,
+    tx_signable: TxSignableHash,
 ) -> Result<MembershipOnlyProof, TxBuilderError> {
     // The blind is not read on the membership-only path: pseudo-out blinds
     // are a full-path (key-image) concern; the membership-only pseudo-out
@@ -425,7 +425,7 @@ pub fn prove_backing_membership(
         &[prove_input],
         tree.tree_root.as_bytes(),
         tree.tree_depth,
-        signable_tx_hash.to_bytes(),
+        tx_signable.to_bytes(),
         tree.tree_root.as_bytes(),
     )
     .map_err(|e| TxBuilderError::FcmpProveError(e.to_string()))?;

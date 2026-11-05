@@ -32,6 +32,7 @@ use shekyl_archival_retention::{EmissionAuthRole, RewardCommit, EMISSION_KAT_SHA
 use shekyl_crypto_pq::multisig::{SINGLE_KEY_CANONICAL_LEN, SINGLE_SIG_CANONICAL_LEN};
 use shekyl_crypto_pq::signature::{HybridEd25519MlDsa, HybridSecretKey, SignatureScheme};
 use shekyl_types::BlockHeight;
+use shekyl_types::TxSignableHash;
 
 /// Claimed settlement epoch for the base fixture.
 const E: u64 = 5;
@@ -630,7 +631,8 @@ fn backing_rejects_bad_proof() {
     let fx = Fixture::new(E);
     let vin = honest_vin(&fx);
     assert!(matches!(
-        emission_vin_verify_backing(&vin, &[0u8; 32], 3, [0u8; 32]).unwrap_err(),
+        emission_vin_verify_backing(&vin, &[0u8; 32], 3, &TxSignableHash::from_bytes([0u8; 32]))
+            .unwrap_err(),
         EmissionVerifyError::BackingRejected(_)
     ));
 }
@@ -661,14 +663,14 @@ fn source_count_mismatch_rejects() {
 // ---------------------------------------------------------------------------
 
 /// Tx-level auth context shared by builder (signer) and verifier below.
-fn auth_tx_context() -> (Vec<RewardCommit>, [u8; 32]) {
+fn auth_tx_context() -> (Vec<RewardCommit>, TxSignableHash) {
     (
         vec![RewardCommit {
             commitment: [0x71; 32],
             amount_plain: 1_000,
             one_time_key: [0x72; 32],
         }],
-        [0x5F; 32],
+        TxSignableHash::from_bytes([0x5F; 32]),
     )
 }
 
@@ -678,7 +680,7 @@ fn auth_tx_context() -> (Vec<RewardCommit>, [u8; 32]) {
 fn authed_vin(
     fx: &Fixture,
     commits: &[RewardCommit],
-    tx_hash: &[u8; 32],
+    tx_hash: &TxSignableHash,
 ) -> (ArchivalRewardEmissionVin, HybridSecretKey, HybridSecretKey) {
     let scheme = HybridEd25519MlDsa;
     let (p_pk, p_sk) = scheme
@@ -827,7 +829,7 @@ fn auth_rejects_tampered_tx_context() {
         }
     ));
 
-    let other_tx_hash = [0x60; 32];
+    let other_tx_hash = TxSignableHash::from_bytes([0x60; 32]);
     assert!(matches!(
         emission_vin_verify_auth(&vin, &commits, &other_tx_hash, &testnet()).unwrap_err(),
         EmissionVerifyError::AuthRejected {

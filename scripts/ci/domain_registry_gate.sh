@@ -419,7 +419,12 @@ count_pattern() {
 # rust/shekyl-address/src/multisig_address.rs frames the payload under
 # shekyl/multisig-address-v3 and the name_id; its cshake256_32 site and the
 # two #[cfg(test)] sites that rebuilt the -v2 input by hand are gone.
-MECH1_EXPECTED=85
+# Emission auths on the envelope (2026-11-05, the signing envelope §2.2,
+# §2.7): 85 -> 82. `auth_msg` and `auth_msgs` in
+# rust/shekyl-archival-retention/src/emission_wire.rs called cshake256_64
+# three times under the -v3 customizations; they frame the eight fields
+# under shekyl/archival-emission-auth-{backing,claim}-v4 at 64 bytes.
+MECH1_EXPECTED=82
 mech1=$(count_pattern 'cshake256_(?:32|64)\(|CShake256Core::new\(')
 if [[ "$mech1" != "$MECH1_EXPECTED" ]]; then
   echo "COUNT DRIFT mech 1 (cSHAKE call sites): found $mech1, pinned $MECH1_EXPECTED." >&2

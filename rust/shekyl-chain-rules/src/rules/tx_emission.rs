@@ -173,10 +173,8 @@ impl Rule for J22 {
 impl J22 {
     /// The signable hash, if the class is `Emission`.
     pub(crate) fn signable_hash(cx: &TxContext<'_>) -> Option<PrefixHash> {
-        let (index, _) = the_emission(cx)?;
-        let mut prefix = cx.tx.prefix.clone();
-        prefix.inputs.remove(index);
-        Some(prefix.hash())
+        the_emission(cx)?;
+        Some(cx.tx.signable_prefix_hash())
     }
 }
 

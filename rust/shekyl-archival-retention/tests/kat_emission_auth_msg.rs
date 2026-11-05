@@ -54,10 +54,11 @@ use shekyl_archival_retention::hash::{cshake256_32, cshake256_64};
 use shekyl_archival_retention::{
     ArchivalRewardEmissionVin, EmissionAuthRole, HoldingsDescriptor, HoldingsKind,
     MembershipOnlyBacking, RewardCommit, ShardSet, ShardWorkEntry, WorkEpochClaim,
-    EMISSION_AUTH_BACKING_CUSTOMIZATION, EMISSION_AUTH_CLAIM_CUSTOMIZATION,
+    EMISSION_AUTH_BACKING, EMISSION_AUTH_CLAIM,
 };
 use shekyl_crypto_pq::multisig::{SINGLE_KEY_CANONICAL_LEN, SINGLE_SIG_CANONICAL_LEN};
 use shekyl_network::Network;
+use shekyl_types::TxSignableHash;
 
 /// The vector file, read whole: the framed inventory and the per-network
 /// role digests are pinned there, where `scripts/kat/emission_auth_msg_oracle.py`
@@ -133,7 +134,9 @@ fn fixture_commits() -> Vec<RewardCommit> {
     }]
 }
 
-const FIXTURE_TX_HASH: [u8; 32] = [0x42; 32];
+/// The fixture's field 8: a stand-in `tx_signable` (the message is over its
+/// 32 bytes, whatever transaction produced them).
+const FIXTURE_TX_SIGNABLE: TxSignableHash = TxSignableHash::from_bytes([0x42; 32]);
 
 #[test]
 fn emission_auth_msg_matches_pinned_vectors() {
@@ -143,18 +146,18 @@ fn emission_auth_msg_matches_pinned_vectors() {
 
     assert_eq!(
         vectors["customizations"]["backing"].as_str(),
-        std::str::from_utf8(EMISSION_AUTH_BACKING_CUSTOMIZATION).ok(),
+        std::str::from_utf8(EMISSION_AUTH_BACKING.customization()).ok(),
         "the file's backing customization is the code's"
     );
     assert_eq!(
         vectors["customizations"]["claim"].as_str(),
-        std::str::from_utf8(EMISSION_AUTH_CLAIM_CUSTOMIZATION).ok(),
+        std::str::from_utf8(EMISSION_AUTH_CLAIM.customization()).ok(),
         "the file's claim customization is the code's"
     );
 
     // The framed inventory (fields 1-8), the part after the network id.
     let framed = vin
-        .auth_msg_framed(&commits, &FIXTURE_TX_HASH)
+        .auth_msg_framed(&commits, &FIXTURE_TX_SIGNABLE)
         .expect("fixture is valid");
     assert_eq!(
         vectors["expected"]["auth_msg_framed_hex"].as_str(),
@@ -163,8 +166,9 @@ fn emission_auth_msg_matches_pinned_vectors() {
          pre-genesis format bump regenerated EMISSION_AUTH_MSG_V1"
     );
 
-    // Each network's two digests, as the oracle computes them from the
-    // framed bytes with the id at byte 0 (NETWORK_IDENTITY.md NI-F11).
+    // Each network's two digests, as the oracle computes them: the
+    // envelope frame of the fields under the id, 64 bytes (NI-F11; the
+    // signing envelope §2.2, §2.7).
     let pinned = &vectors["expected"]["auth_msgs_by_network"];
     let mut seen = Vec::new();
     for net in Network::ALL {
@@ -174,7 +178,7 @@ fn emission_auth_msg_matches_pinned_vectors() {
             (EmissionAuthRole::Claim, "claim"),
         ] {
             let digest = vin
-                .auth_msg(&id, &commits, &FIXTURE_TX_HASH, role)
+                .auth_msg(&id, &commits, &FIXTURE_TX_SIGNABLE, role)
                 .expect("fixture is valid");
             assert_eq!(
                 pinned[net.name()][key].as_str(),
@@ -197,9 +201,9 @@ fn emission_auth_msg_matches_pinned_vectors() {
 fn the_digest_without_the_network_id_is_not_pinned() {
     let vectors: serde_json::Value = serde_json::from_str(VECTORS).expect("vectors parse");
     let framed = fixture_vin()
-        .auth_msg_framed(&fixture_commits(), &FIXTURE_TX_HASH)
+        .auth_msg_framed(&fixture_commits(), &FIXTURE_TX_SIGNABLE)
         .expect("fixture is valid");
-    let bare = hex::encode(cshake256_64(EMISSION_AUTH_CLAIM_CUSTOMIZATION, &framed));
+    let bare = hex::encode(cshake256_64(EMISSION_AUTH_CLAIM.customization(), &framed));
     for net in Network::ALL {
         let pinned = vectors["expected"]["auth_msgs_by_network"][net.name()]["claim"]
             .as_str()

@@ -16,6 +16,8 @@
 //!
 //! ```text
 //! tx_signable    = frame("shekyl/tx-signable-v1", id, [prefix_hash, ct_base_hash])
+//!   where prefix_hash is CEN-J22's: the prefix hash without the emission
+//!   input, the plain prefix hash when there is none
 //! signed_hash(i) = frame64("shekyl/fcmp-spend-signing-v2", id,
 //!                          [tx_signable, header(i), key_hashes, prunable_hash])
 //! ```
@@ -46,7 +48,7 @@ use shekyl_network::envelope::{IdDomain, W64};
 use shekyl_network::NetworkId;
 use shekyl_types::{CtBaseHash, PrefixHash, PrunableHash, SigningPayloadHash, TxSignableHash};
 
-use super::{Ct, PqcAuth, Transaction};
+use super::{Ct, Input, PqcAuth, Transaction};
 
 /// A transaction's one network-bound message (the signing envelope §2.2):
 /// fields `[prefix_hash, ct_base_hash]`.
@@ -153,14 +155,37 @@ impl PqcSigningPreimage {
 }
 
 impl Transaction {
+    /// CEN-J22's signable prefix hash: the prefix hash of this transaction
+    /// with its emission input removed whole (F-C1c). The input cannot be
+    /// covered by a hash its own backing proof and auths prove over, and
+    /// every property its removal loses is bound again by the auths' fields
+    /// 1–6 (J22). For a transaction with no emission input it is the plain
+    /// prefix hash, so there is no emission branch in [`Self::tx_signable`].
+    ///
+    /// Every emission input is removed; consensus admits at most one
+    /// (Q3 arity 1), so for a body the validator accepts this is J22's
+    /// "the emission vin".
+    #[must_use]
+    pub fn signable_prefix_hash(&self) -> PrefixHash {
+        let is_emission = |input: &Input| matches!(input, Input::ArchivalRewardEmission { .. });
+        if !self.prefix.inputs.iter().any(is_emission) {
+            return self.prefix_hash();
+        }
+        let mut prefix = self.prefix.clone();
+        prefix.inputs.retain(|input| !is_emission(input));
+        prefix.hash()
+    }
+
     /// This transaction's `tx_signable` on the network whose id is
-    /// `network_id` ([`tx_signable`]): its prefix hash and base hash,
-    /// framed. Defined for every body; the SAL proofs of a spend and the
-    /// signatures over [`Self::pqc_signing_payload_hashes`] are what read
-    /// it.
+    /// `network_id` ([`tx_signable`]): J22's signable prefix hash
+    /// ([`Self::signable_prefix_hash`]) and the base hash, framed. One
+    /// message for every transaction: the SAL proofs (the fee inputs' and an
+    /// emission's backing proof alike), the emission auths and the
+    /// signatures over [`Self::pqc_signing_payload_hashes`] all read it (the
+    /// signing envelope §2.2).
     #[must_use]
     pub fn tx_signable(&self, network_id: &NetworkId) -> TxSignableHash {
-        tx_signable(network_id, self.prefix_hash(), self.ct.base_hash())
+        tx_signable(network_id, self.signable_prefix_hash(), self.ct.base_hash())
     }
 
     /// Every input's `signed_hash(i)` on the network whose id is

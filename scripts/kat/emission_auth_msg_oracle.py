@@ -9,10 +9,13 @@ fixture's framed field inventory (`expected.auth_msg_framed_hex`, fields 1-8 of
 `ArchivalRewardEmissionVin::auth_msg`) and, per network and role, the 64-byte
 digest the two hybrid auths sign:
 
-    auth_msg(role) = cSHAKE256-64(S = "shekyl/archival-emission-auth-<role>-v3",
-                                  X = network_id || framed)
+    auth_msg(role) = frame("shekyl/archival-emission-auth-<role>-v4", network_id,
+                           [field 1, ..., field 8])[..64]
 
-with `network_id` the network's 16-byte genesis-derived id, unframed at byte 0.
+the signing envelope's frame (§2.2, §2.6, §2.7) with `network_id` the network's
+16-byte genesis-derived id at position 0 and field 8 the transaction's
+`tx_signable`. The frame's input is `network_id || framed`, so the digest is
+recomputed from the pinned framed bytes.
 This script recomputes every digest from the framed bytes through
 `stdlib_cshake.py`, which shares nothing with the Rust and is anchored before
 use. It anchors the framed bytes too: hashed alone under the `-v2`
@@ -43,8 +46,8 @@ _SPEC.loader.exec_module(cs)
 
 VECTORS = cs.ROOT / "docs/test_vectors/EMISSION_AUTH_MSG_V1/vectors.json"
 CUSTOMIZATIONS = {
-    "backing": b"shekyl/archival-emission-auth-backing-v3",
-    "claim": b"shekyl/archival-emission-auth-claim-v3",
+    "backing": b"shekyl/archival-emission-auth-backing-v4",
+    "claim": b"shekyl/archival-emission-auth-claim-v4",
 }
 
 # The fixture's digests as pinned on 2026-09-14 (PL-D3), under the -v2
@@ -62,12 +65,25 @@ PRIOR_V2 = {
 }
 
 
+def unframe(framed: bytes) -> list[bytes]:
+    """The fields of a framed inventory: each behind its u64-LE length."""
+    fields, at = [], 0
+    while at < len(framed):
+        n = int.from_bytes(framed[at:at + 8], "little")
+        fields.append(framed[at + 8:at + 8 + n])
+        at += 8 + n
+    if at != len(framed) or len(fields) != 8:
+        sys.exit("the framed bytes are not eight length-framed fields")
+    return fields
+
+
 def digests(framed: bytes) -> dict:
+    fields = unframe(framed)
     out = {}
     for name in cs.NETWORKS:
         nid = cs.network_id(name)
         out[name] = {
-            role: cs.cshake256(nid + framed, 64, s=custom).hex()
+            role: cs.frame(custom, nid, fields, 64).hex()
             for role, custom in CUSTOMIZATIONS.items()
         }
     return out

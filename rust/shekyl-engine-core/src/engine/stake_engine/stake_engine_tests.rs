@@ -1620,41 +1620,36 @@ mod emission_claim_assembly {
         assert_eq!(reward_commits[0].amount_plain, reply.total_reward);
         let vout_reward_sum: u64 = reward_commits.iter().map(|c| c.amount_plain).sum();
 
-        // (2) The erase rule: remove the emission vin WHOLESALE from the
-        // parsed prefix; hash what remains through the wire crate's own
-        // prefix-hash path (independent of the builder's from-parts
-        // hasher).
+        // (2) The erase rule: tx_signable is framed over the prefix with the
+        // emission vin removed WHOLESALE (CEN-J22), hashed through the wire
+        // crate's own path (independent of the builder's from-parts hasher).
+        let net = shekyl_network::HARNESS_NETWORK_ID;
+        let tx_signable = tx.tx_signable(&net);
         let full_prefix_hash = tx.prefix_hash();
+        let un_erased = shekyl_wire::tx_signable(&net, full_prefix_hash, tx.ct.base_hash());
         tx.prefix.inputs.remove(emission_index);
-        let signable = tx.prefix_hash();
+        assert_eq!(
+            tx_signable,
+            shekyl_wire::tx_signable(&net, tx.prefix_hash(), tx.ct.base_hash()),
+            "tx_signable is framed over the vin-less prefix"
+        );
 
-        // Premise arm: the erase is load-bearing — the vin-less hash
-        // differs from the full prefix hash, and the auths REFUSE the
-        // wrong (un-erased) operand. Without this, the accepts below
-        // could go vacuously green if the two hashes ever coincided.
-        assert_ne!(signable, full_prefix_hash, "the erase must change the hash");
-        emission_vin_verify_auth(
-            &vin,
-            &reward_commits,
-            full_prefix_hash.as_bytes(),
-            &shekyl_network::HARNESS_NETWORK_ID,
-        )
-        .expect_err("auths must refuse a signable hash that was not erase-derived");
+        // Premise arm: the erase is load-bearing — the message over the full
+        // prefix differs, and the auths REFUSE it. Without this, the accepts
+        // below could go vacuously green if the two ever coincided.
+        assert_ne!(tx_signable, un_erased, "the erase must change the message");
+        emission_vin_verify_auth(&vin, &reward_commits, &un_erased, &net)
+            .expect_err("auths must refuse a message that was not erase-derived");
 
         // The three landed-verifier legs over the PARSED vin and the
         // recomputed operands: membership proof + leaf gate, both role
         // auths, and the economics recompute. A builder/daemon drift in
         // the signable hash, index derivation, commit set, or either
         // auth key refuses here.
-        emission_vin_verify_backing(&vin, tree_root.as_bytes(), depth, signable.to_bytes())
-            .expect("backing leg verifies against the erase-rule hash");
-        emission_vin_verify_auth(
-            &vin,
-            &reward_commits,
-            signable.as_bytes(),
-            &shekyl_network::HARNESS_NETWORK_ID,
-        )
-        .expect("both auth legs verify against the erase-rule hash");
+        emission_vin_verify_backing(&vin, tree_root.as_bytes(), depth, &tx_signable)
+            .expect("backing leg verifies against the erase-rule message");
+        emission_vin_verify_auth(&vin, &reward_commits, &tx_signable, &net)
+            .expect("both auth legs verify against the erase-rule message");
         self_check_claims(source, &vin, vout_reward_sum)
             .expect("claims leg verifies against the paired source");
     }
@@ -1804,10 +1799,11 @@ mod emission_claim_assembly {
         let root = shape.tree_ctx.tree_root.as_bytes();
         let depth = shape.tree_ctx.tree_depth;
         let full = Transaction::from_bytes(&drivers.bytes).expect("parses");
+        let net = shekyl_network::HARNESS_NETWORK_ID;
         assert_eq!(
-            full.prefix_hash(),
-            drivers.prefix_hash,
-            "the prefix hash the proofs bound"
+            full.tx_signable(&net),
+            drivers.tx_signable,
+            "the message every proof bound"
         );
         let mut erased = full.clone();
         erased
@@ -1815,17 +1811,17 @@ mod emission_claim_assembly {
             .inputs
             .retain(|i| !matches!(i, Input::ArchivalRewardEmission { .. }));
         assert_eq!(
-            erased.prefix_hash(),
-            drivers.signable,
-            "the erase-rule signable hash"
+            shekyl_wire::tx_signable(&net, erased.prefix_hash(), full.ct.base_hash()),
+            drivers.tx_signable,
+            "framed over the erase-rule prefix"
         );
-        emission_vin_verify_backing(&drivers.vin, root, depth, drivers.signable.to_bytes())
+        emission_vin_verify_backing(&drivers.vin, root, depth, &drivers.tx_signable)
             .expect("the driver's backing proof verifies");
         emission_vin_verify_auth(
             &drivers.vin,
             &drivers.reward_commits,
-            drivers.signable.as_bytes(),
-            &shekyl_network::HARNESS_NETWORK_ID,
+            &drivers.tx_signable,
+            &net,
         )
         .expect("the driver's dual auth verifies");
         self_check_claims(

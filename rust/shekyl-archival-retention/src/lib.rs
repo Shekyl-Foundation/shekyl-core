@@ -209,8 +209,8 @@ pub use shekyl_types::archival::{ReceiptSignPk, RECEIPT_SIGN_PK_LEN};
 pub use emission_wire::{
     ArchivalRewardEmissionVin, EmissionAuthMsgs, EmissionAuthRole, MembershipOnlyBacking,
     RewardCommit, ShardWorkEntry, WireError as EmissionWireError, WorkEpochClaim,
-    EMISSION_AUTH_BACKING_CUSTOMIZATION, EMISSION_AUTH_CLAIM_CUSTOMIZATION,
-    MAX_BACKING_PROOF_BYTES, MAX_SETTLEMENT_EPOCHS_PER_EMISSION, VIN_TYPE_ARCHIVAL_REWARD_EMISSION,
+    EMISSION_AUTH_BACKING, EMISSION_AUTH_CLAIM, MAX_BACKING_PROOF_BYTES,
+    MAX_SETTLEMENT_EPOCHS_PER_EMISSION, VIN_TYPE_ARCHIVAL_REWARD_EMISSION,
 };
 pub use error::VerifyError;
 pub use failure_window::{
