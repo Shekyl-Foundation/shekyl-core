@@ -582,7 +582,7 @@ async fn a_block_a_node_mines_reaches_its_peer_by_relay() {
     let serial = serial_lock().lock_owned().await;
     let a_p2p = RegtestDaemon::free_port();
     let b_p2p = RegtestDaemon::free_port_excluding(&[a_p2p]);
-    let address = mine_address_from_seed(&[0x6b; 64], shekyl_address::Network::Mainnet);
+    let address = mine_address_from_seed(&[0x6b; 32], shekyl_address::Network::Regtest);
     let b = RegtestDaemon::spawn(RegtestSpawn::new(None).with_peering(Peering::Linked {
         p2p_port: b_p2p,
         peer_p2p_port: a_p2p,
