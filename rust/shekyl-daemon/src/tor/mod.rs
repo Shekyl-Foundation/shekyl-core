@@ -55,7 +55,7 @@ use tokio::task::JoinHandle;
 mod probe;
 mod wake;
 
-use self::wake::{led, plain_inputs, take_queued, wait, Sources, Wake, Woken};
+use self::wake::{led, plain_inputs, take_queued, wait, Open, Sources, Wake, Woken};
 
 /// A control reply this far past due is a process fault. Not a bootstrap limit.
 const REPLY_BOUND: Duration = Duration::from_secs(30);
@@ -357,6 +357,7 @@ async fn drive(
         death_tx,
         death_rx,
         bootstrap: None,
+        open: Open::ALL,
     }
     .run()
     .await;
@@ -408,6 +409,9 @@ struct Drive {
     death_tx: mpsc::Sender<(u64, TorDeath)>,
     death_rx: mpsc::Receiver<(u64, TorDeath)>,
     bootstrap: Option<watch::Receiver<BootstrapState>>,
+    /// The process-lived watches still in the wait ([`wake`]'s rule: a
+    /// closed sender takes its source out).
+    open: Open,
 }
 
 impl Drive {
@@ -422,6 +426,7 @@ impl Drive {
             let entered = self.now();
             arm(&self.owner, armed);
             let sources = Sources {
+                open: &mut self.open,
                 stop: &mut self.stop,
                 forward: &mut self.forward,
                 origin: &mut self.origin,
@@ -685,7 +690,7 @@ impl Drive {
                 .and_then(|(_, how)| observed_death(how))
                 .into_iter()
                 .collect(),
-            Woken::Bootstrap => self.bootstrap_input().into_iter().collect(),
+            Woken::Bootstrap(state) => vec![self.bootstrap_input(state)],
             plain => plain_inputs(&plain),
         };
         self.fold_many(led(lead, inputs)).await;
@@ -1064,17 +1069,18 @@ impl Drive {
         self.kept = Some(control.stop_for_respawn().await);
     }
 
-    fn bootstrap_input(&mut self) -> Option<Input> {
-        let state = *self.bootstrap.as_ref()?.borrow();
+    /// The bootstrap watch's state as the core reads it. `Ready` and
+    /// `Failed` arrive once: the wait has taken the watch out after either.
+    fn bootstrap_input(&mut self, state: BootstrapState) -> Input {
         match state {
             BootstrapState::Ready => {
                 if let Some(control) = self.control.as_mut() {
                     control.mark_bootstrapped();
                 }
-                Some(Input::BootstrapComplete)
+                Input::BootstrapComplete
             }
-            BootstrapState::Failed => Some(Input::ControlEnded),
-            BootstrapState::Connecting { progress } => Some(Input::BootstrapNoted { progress }),
+            BootstrapState::Failed => Input::ControlEnded,
+            BootstrapState::Connecting { progress } => Input::BootstrapNoted { progress },
         }
     }
 
