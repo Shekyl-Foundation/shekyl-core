@@ -30,8 +30,9 @@
 //! timer. It waits on the change that could supply it, and the wake spacing
 //! resumes when the connector is ready. The tip and the network id are the
 //! session layer's: it does not exist before they do.
-//! The `tor_tally` module publishes how many Tor sessions are held. An
-//! inbound accept counts there and is not a dial.
+//! The `tor_tally` module publishes how many Tor sessions are held. The
+//! count refreshes when a Tor handshake finishes or a Tor session closes.
+//! An inbound session is not a dial.
 //!
 //! The dialer is the session layer's peers owner ([`PeerOwner`]): the layer
 //! asks it for the list a handshake or timed sync discloses, hands it the

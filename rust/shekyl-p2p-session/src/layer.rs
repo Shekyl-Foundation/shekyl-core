@@ -550,9 +550,9 @@ impl<C: Clock + Clone + Send + Sync + 'static> Shared<C> {
         };
         {
             let mut table = self.table.lock().expect("session table");
-            // A ban that lands while the channel waits for its row (the
-            // pump's queue, or a dial between its connect and its
-            // handshake) releases the admission and finds no session to
+            // A ban that lands while the channel is between the connector's
+            // publish and this placement (or a dial between its connect and
+            // its handshake) releases the admission and finds no session to
             // close. Admission is read here under the table's lock: a ban
             // either released it before this read, or finds the row once
             // it is placed and closes it (§7.9). An unplaced channel drops,

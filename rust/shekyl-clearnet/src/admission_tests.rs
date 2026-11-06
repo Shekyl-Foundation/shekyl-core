@@ -53,7 +53,7 @@ fn dial_a_listener(sockets: Sockets) -> (Option<DialEnd>, bool) {
             let _sent = end_tx.send(end);
         }),
         send_queue_bytes: 65_536,
-        admitted: admitted_tx,
+        admitted: super::super::publish_on(admitted_tx),
     };
     pool.spawn(super::super::dial_one(dial, engine.handle()));
     let accepted = pool.block_on(async {

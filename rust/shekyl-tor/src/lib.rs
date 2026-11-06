@@ -18,7 +18,7 @@
 //! `INPUT_GRAMMAR.md` IG-Q18): `tor-socks` is the SOCKS endpoint outbound
 //! dials through, and `tor-onion` with `tor-onion-listen` is the operator's
 //! own onion and the local endpoint its Tor forwards to. A bind failure
-//! returns before a listener exists, which is the zone not being inserted.
+//! returns before a listener exists, so nothing is left listening.
 //! Whether the managed Tor is alive is the managed-Tor supervisor's
 //! liveness sample (`TOR_SUPERVISOR.md` §4.11), not this connector's.
 
@@ -45,7 +45,9 @@ pub use replies::{
     refused, reply_end, socks_reply_is_our_request, stamp_reply, stamp_stream_end, Observed,
 };
 
-pub use drive::{accept_inbound, accept_one, dial_one, Accept, Admitted, Dial, Inbound};
+pub use drive::{
+    accept_inbound, accept_one, dial_one, publish_on, Accept, Admitted, Dial, Inbound, Publish,
+};
 
 /// Caller inputs. The dial span, the gap span, and the send-queue byte
 /// cap are unmeasured until a measurement names them.
@@ -232,7 +234,7 @@ where
                 Arc::new(move |end: DialEnd| on_cause(end.cause()))
             },
             send_queue_bytes: self.send_queue_bytes,
-            admitted: self.admitted_tx.clone(),
+            admitted: publish_on(self.admitted_tx.clone()),
         };
         let engine = self.engine.clone();
         self.handle.spawn(dial_one(dial, engine));
@@ -254,7 +256,7 @@ impl<C: Clock + Clone> Drop for Listener<C> {
 /// a clone and does not mint a table.
 ///
 /// One failed bind drops the listeners that succeeded and returns the
-/// error. The caller does not insert the zone. An accepted socket is
+/// error. Nothing is left listening. An accepted socket is
 /// handed to admission directly. There is no queue of sockets ahead of
 /// that check.
 pub fn listen<C>(
@@ -305,7 +307,7 @@ where
             gap_within,
             on_cause: Arc::clone(&on_cause),
             send_queue_bytes,
-            admitted: admitted_tx.clone(),
+            admitted: publish_on(admitted_tx.clone()),
             backoff,
         };
         let engine = engine.clone();

@@ -18,7 +18,7 @@ use std::net::{IpAddr, SocketAddr};
 use std::sync::{Arc, Mutex};
 
 use shekyl_clearnet::{ChannelChoice, HandshakeTally};
-use shekyl_p2p_session::{Channel, ConnectFuture, Dial, Endpoint};
+use shekyl_p2p_session::{Channel, ConnectFuture, Dial, Endpoint, SessionLayer};
 use shekyl_socks::Proxy;
 use shekyl_timing_engine::{Handle, MonotonicClock, Tick};
 use shekyl_transport_layer::{
@@ -148,7 +148,7 @@ impl Connectors {
             tally: ready.tally,
             on_end,
             send_queue_bytes: self.spans.send_queue_bytes,
-            admitted: admitted_tx,
+            admitted: shekyl_clearnet::publish_on(admitted_tx),
         };
         let spawned = self
             .runtime
@@ -189,7 +189,7 @@ impl Connectors {
             gap_within: self.spans.tor_gap_within,
             on_end,
             send_queue_bytes: self.spans.send_queue_bytes,
-            admitted: admitted_tx,
+            admitted: shekyl_tor::publish_on(admitted_tx),
         };
         let spawned = self
             .runtime
@@ -207,6 +207,54 @@ impl Connectors {
             },
         ))
     }
+}
+
+/// Adopt a clearnet accept into the session layer.
+///
+/// The publish reports success. A channel that arrives after the layer has
+/// shut down is dropped inside `adopt`, and the connector's task ends with
+/// the runtime.
+#[must_use]
+pub(crate) fn adopt_clearnet(layer: SessionLayer<MonotonicClock>) -> shekyl_clearnet::Publish {
+    Arc::new(move |admitted| {
+        layer.adopt(Channel {
+            open: admitted.open,
+            session: admitted.session,
+            endpoint: Endpoint::Clearnet {
+                ip: admitted.ip,
+                port: admitted.port,
+                direction: Direction::Inbound,
+            },
+            gap: admitted.gap,
+        });
+        true
+    })
+}
+
+/// Adopt a Tor accept. A dialed host that is not a v3 onion is dropped
+/// here, before any byte, and the publish still reports success so the
+/// connector does not also close the socket as its own failure.
+#[must_use]
+pub(crate) fn adopt_tor(layer: SessionLayer<MonotonicClock>) -> shekyl_tor::Publish {
+    Arc::new(move |admitted| {
+        let endpoint = match admitted.onion {
+            Some((host, port)) => match shekyl_onion_v3::v3_pubkey(&host) {
+                Some(key) => Endpoint::Tor { key, port },
+                None => {
+                    tracing::error!("tor session refused: dialed host is not a v3 onion");
+                    return true;
+                }
+            },
+            None => Endpoint::TorInbound,
+        };
+        layer.adopt(Channel {
+            open: admitted.open,
+            session: admitted.bytes,
+            endpoint,
+            gap: Some(admitted.gap),
+        });
+        true
+    })
 }
 
 impl Dial for Connectors {

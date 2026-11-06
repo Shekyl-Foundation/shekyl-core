@@ -6,8 +6,8 @@
 //! The composition starts and stops: offline, and with a clearnet listener
 //! that accepts a connection. Twice in one process, since the link gate
 //! and the ban-timer generation are process-wide. And with Tor off, a
-//! clearnet handshake reaches the session layer and is answered: the
-//! connectors' admissions are pumped independently of one another.
+//! clearnet handshake reaches the session layer and is answered: each
+//! connector adopts on its own accept task.
 
 use std::io::{Read, Write};
 use std::net::{Ipv4Addr, SocketAddr, TcpStream};
@@ -133,11 +133,11 @@ fn clearnet_binds_accepts_and_stops_twice_in_one_process() {
     }
 }
 
-/// With Tor off the Tor admission channel has no sender and ends at start.
-/// A clearnet handshake must still be adopted and answered: the pump that
-/// hands admissions to the session layer retires a closed connector's arm,
-/// not itself. (Found 2026-11-05 by the black-box walk: every clearnet
-/// admission on a Tor-off node ended as the node's own failure.)
+/// With Tor off there is no Tor accept task. A clearnet handshake must
+/// still be adopted and answered: each connector publishes into the session
+/// layer on its own task. (Found 2026-11-05 by the black-box walk: one pump
+/// retired on the first closed channel, and every clearnet admission on a
+/// Tor-off node ended as the node's own failure.)
 #[test]
 fn a_clearnet_handshake_is_answered_with_tor_off() {
     let dir = tempfile::tempdir().expect("tempdir");

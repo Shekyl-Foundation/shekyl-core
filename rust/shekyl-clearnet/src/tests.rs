@@ -849,7 +849,7 @@ fn two_listeners_share_the_linger_cap() {
             tally: Arc::new(super::zero_tally()),
             on_cause: Arc::clone(&on_cause),
             send_queue_bytes: 65_536,
-            admitted: admitted_tx.clone(),
+            admitted: super::publish_on(admitted_tx.clone()),
             linger: linger.clone(),
             backoff: Duration::from_millis(1),
         };

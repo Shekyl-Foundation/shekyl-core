@@ -65,6 +65,18 @@ pub struct Admitted {
     pub gap: Option<oneshot::Sender<()>>,
 }
 
+/// Where a connected socket is published.
+///
+/// Called on the accept or dial task. `false` means the publisher is gone
+/// and the connector ends the connection as its own failure.
+pub type Publish = Arc<dyn Fn(Admitted) -> bool + Send + Sync>;
+
+/// Publish onto a channel. `false` is a closed receiver.
+#[must_use]
+pub fn publish_on(tx: mpsc::UnboundedSender<Admitted>) -> Publish {
+    Arc::new(move |admitted| tx.send(admitted).is_ok())
+}
+
 pub struct Dial {
     pub address: NetworkAddress,
     pub proxy: Option<Proxy>,
@@ -87,7 +99,7 @@ pub struct Dial {
     pub on_end: Arc<dyn Fn(DialEnd) + Send + Sync>,
     pub send_queue_bytes: usize,
     /// The one place a connected socket is published.
-    pub admitted: mpsc::UnboundedSender<Admitted>,
+    pub admitted: Publish,
 }
 
 pub struct Accept {
@@ -106,7 +118,7 @@ pub struct Accept {
     pub on_cause: Arc<dyn Fn(CloseCause) + Send + Sync>,
     pub send_queue_bytes: usize,
     /// The one place a connected socket is published.
-    pub admitted: mpsc::UnboundedSender<Admitted>,
+    pub admitted: Publish,
 }
 
 /// What an accept loop needs besides the socket it just took.
@@ -126,7 +138,7 @@ pub struct Inbound<F> {
     pub tally: Arc<HandshakeTally>,
     pub on_cause: Arc<dyn Fn(CloseCause) + Send + Sync>,
     pub send_queue_bytes: usize,
-    pub admitted: mpsc::UnboundedSender<Admitted>,
+    pub admitted: Publish,
     pub linger: Linger,
     pub backoff: Duration,
 }
@@ -559,7 +571,7 @@ async fn serve<C>(
     stream: TcpStream,
     engine: Handle<C>,
     open: &OpenSocket,
-    admitted: &mpsc::UnboundedSender<Admitted>,
+    admitted: &Publish,
     job: ChannelOpen,
 ) -> DialEnd
 where
@@ -613,7 +625,7 @@ where
         port: job.peer.port(),
         gap: gap_tx,
     };
-    if admitted.send(published).is_err() {
+    if !admitted(published) {
         return end_connection(
             hold,
             &inbound,

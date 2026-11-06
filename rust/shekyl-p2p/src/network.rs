@@ -14,7 +14,7 @@
 //! layer's dial; the session layer over all three owners; the dialer and
 //! the ban verbs attached to it; the ban expiry and the periodic reports;
 //! then each connector the plan names: its listeners bound, its route
-//! published, its owner loop started, its accept pumps spawned.
+//! published, its owner loop started, its accept loops spawned.
 //!
 //! **Stop order.** The owner loops end and their threads are joined; the
 //! session layer closes every slot; the relay owner stops; the engine
@@ -31,8 +31,8 @@ use shekyl_capped_stream::{node_gate, process_write_stall};
 use shekyl_clearnet::{channel_choice, zero_tally, ClearnetOption, Linger};
 use shekyl_dialer::Dialer;
 use shekyl_p2p_session::{
-    Channel, CoreSyncData, Endpoint, Intervals, Owners, Parts, PerConnector, ProbeHandshake,
-    SessionConfig, SessionLayer,
+    CoreSyncData, Intervals, Owners, Parts, PerConnector, ProbeHandshake, SessionConfig,
+    SessionLayer,
 };
 use shekyl_peer_policy::InboundCeiling;
 use shekyl_peerlist::RefusedSet;
@@ -44,10 +44,10 @@ use shekyl_runtime::{runtime, Pool, RuntimeBudget, ThreadName};
 use shekyl_socks::{Proxy, SocksUsername};
 use shekyl_timing_engine::{Clock, EngineService, Handle, MonotonicClock};
 use shekyl_transport_layer::{
-    spans, ConnectorId, Direction, DownCause, InboundFacet, Links, Route, RoutePublish, Sockets,
+    spans, ConnectorId, DownCause, InboundFacet, Links, Route, RoutePublish, Sockets,
 };
 use tokio::net::TcpListener;
-use tokio::sync::{mpsc, watch};
+use tokio::sync::watch;
 
 use crate::bans::{self, BanSpan, Bans};
 use crate::descriptors;
@@ -285,15 +285,6 @@ impl Network {
         crate::reports::spawn_lateness_report(&handle, timing.clone());
         crate::reports::spawn_refusal_report(&handle, &timing, sockets.clone());
 
-        let (clearnet_tx, clearnet_rx) = mpsc::unbounded_channel();
-        let (tor_tx, tor_rx) = mpsc::unbounded_channel();
-        drop(handle.spawn(pump(
-            layer.clone(),
-            Arc::clone(&dialer),
-            clearnet_rx,
-            tor_rx,
-        )));
-
         let mut network = Self {
             inner: Arc::new(Inner {
                 pool: Mutex::new(Some(pool)),
@@ -314,7 +305,7 @@ impl Network {
                 stopped: AtomicBool::new(false),
             }),
         };
-        let listening = match network.start_connectors(&plan, ceiling, &clearnet_tx, tor_tx) {
+        let listening = match network.start_connectors(&plan, ceiling) {
             Ok(listening) => listening,
             Err(err) => {
                 network.stop();
@@ -331,8 +322,6 @@ impl Network {
         &self,
         plan: &NetworkPlan,
         ceiling: InboundCeiling,
-        clearnet_tx: &mpsc::UnboundedSender<shekyl_clearnet::Admitted>,
-        tor_tx: mpsc::UnboundedSender<shekyl_tor::Admitted>,
     ) -> Result<Listening, StartError> {
         let inner = &self.inner;
         let mut listening = Listening::default();
@@ -391,6 +380,7 @@ impl Network {
                     .runtime
                     .block_on(async move { Linger::spawn(engine, cap, span) })
             };
+            let publish = crate::dial::adopt_clearnet(inner.layer.clone());
             for listener in listeners {
                 let inbound = shekyl_clearnet::Inbound {
                     sockets: inner.sockets.clone(),
@@ -402,7 +392,7 @@ impl Network {
                     tally: Arc::clone(&tally),
                     on_cause: Arc::clone(&inner.connectors.on_cause),
                     send_queue_bytes: spans.send_queue_bytes,
-                    admitted: clearnet_tx.clone(),
+                    admitted: Arc::clone(&publish),
                     linger: linger.clone(),
                     backoff: ACCEPT_BACKOFF,
                 };
@@ -423,7 +413,11 @@ impl Network {
                 }
                 let forward = self.bind_tor(SocketAddr::from((Ipv4Addr::LOCALHOST, 0)))?;
                 listening.tor_forward = Some(forward.0);
-                self.spawn_tor_accept(forward.1, ceiling, tor_tx);
+                self.spawn_tor_accept(
+                    forward.1,
+                    ceiling,
+                    crate::dial::adopt_tor(inner.layer.clone()),
+                );
             }
             TorPlan::Operator {
                 socks,
@@ -440,9 +434,10 @@ impl Network {
                 if let Some(extra) = onion_listen {
                     let forward = self.bind_tor(SocketAddr::from((Ipv4Addr::LOCALHOST, 0)))?;
                     listening.tor_forward = Some(forward.0);
-                    self.spawn_tor_accept(forward.1, ceiling, tor_tx.clone());
+                    let publish = crate::dial::adopt_tor(inner.layer.clone());
+                    self.spawn_tor_accept(forward.1, ceiling, Arc::clone(&publish));
                     let extra = self.bind_tor(*extra)?;
-                    self.spawn_tor_accept(extra.1, ceiling, tor_tx);
+                    self.spawn_tor_accept(extra.1, ceiling, publish);
                 }
             }
         }
@@ -465,7 +460,7 @@ impl Network {
         &self,
         listener: TcpListener,
         ceiling: InboundCeiling,
-        tor_tx: mpsc::UnboundedSender<shekyl_tor::Admitted>,
+        admitted: shekyl_tor::Publish,
     ) {
         let inner = &self.inner;
         let spans = inner.connectors.spans;
@@ -475,7 +470,7 @@ impl Network {
             gap_within: spans.tor_gap_within,
             on_cause: Arc::clone(&inner.connectors.on_cause),
             send_queue_bytes: spans.send_queue_bytes,
-            admitted: tor_tx,
+            admitted,
             backoff: ACCEPT_BACKOFF,
         };
         let engine = inner.handle.clone();
@@ -715,73 +710,6 @@ impl Network {
         inner.sockets.clear_zone_caps();
         for connector in ConnectorId::ALL {
             inner.links.withdraw(*connector);
-        }
-    }
-}
-
-/// Adopt what the connectors admit into the session layer. An inbound Tor
-/// session is counted for the dialer's held tally; a Tor dial whose onion
-/// is not a v3 service is refused here, before any byte.
-///
-/// Each connector's channel closes on its own: a node with Tor off never
-/// holds a Tor sender, so that receiver ends at start. A closed channel
-/// retires its arm and nothing else; the pump ends when both have closed.
-/// Ending it on the first would drop the clearnet receiver with the Tor
-/// one, and every clearnet admission on a Tor-off node would then fail as
-/// this node's own failure before its handshake was read.
-async fn pump(
-    layer: Layer,
-    dialer: Peers,
-    mut clearnet_rx: mpsc::UnboundedReceiver<shekyl_clearnet::Admitted>,
-    mut tor_rx: mpsc::UnboundedReceiver<shekyl_tor::Admitted>,
-) {
-    let mut clearnet_open = true;
-    let mut tor_open = true;
-    while clearnet_open || tor_open {
-        tokio::select! {
-            biased;
-            admitted = clearnet_rx.recv(), if clearnet_open => {
-                let Some(admitted) = admitted else {
-                    clearnet_open = false;
-                    continue;
-                };
-                layer.adopt(Channel {
-                    open: admitted.open,
-                    session: admitted.session,
-                    endpoint: Endpoint::Clearnet {
-                        ip: admitted.ip,
-                        port: admitted.port,
-                        direction: Direction::Inbound,
-                    },
-                    gap: admitted.gap,
-                });
-            }
-            admitted = tor_rx.recv(), if tor_open => {
-                let Some(admitted) = admitted else {
-                    tor_open = false;
-                    continue;
-                };
-                let endpoint = match admitted.onion {
-                    Some((host, port)) => match shekyl_onion_v3::v3_pubkey(&host) {
-                        Some(key) => Endpoint::Tor { key, port },
-                        None => {
-                            tracing::error!("tor session refused: dialed host is not a v3 onion");
-                            continue;
-                        }
-                    },
-                    None => Endpoint::TorInbound,
-                };
-                let inbound = matches!(endpoint, Endpoint::TorInbound);
-                layer.adopt(Channel {
-                    open: admitted.open,
-                    session: admitted.bytes,
-                    endpoint,
-                    gap: Some(admitted.gap),
-                });
-                if inbound {
-                    dialer.note_inbound_tor();
-                }
-            }
         }
     }
 }

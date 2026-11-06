@@ -8,8 +8,8 @@
 //! The control call is [`DaemonTorControl::publish`] with proof-of-work
 //! on. A [`DaemonTorPublishError::PowRefused`] is returned as that fault.
 //! This function does not call publish again. A bind failure is not this
-//! function: [`crate::listen`] returns before a listener exists, and the
-//! caller does not insert the zone.
+//! function: [`crate::listen`] returns before a listener exists, so
+//! nothing is left listening.
 //!
 //! The address this returns is this node's own onion: the caller records it
 //! in the dialer's lists with `shekyl_ffi::dialer_ffi::note_own_onion`.

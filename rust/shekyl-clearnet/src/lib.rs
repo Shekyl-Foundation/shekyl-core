@@ -72,7 +72,8 @@ pub use seam::ChannelChoice;
 pub use shekyl_capped_stream::Session;
 
 pub use drive::{
-    accept_inbound, accept_one, dial_one, zero_tally, Accept, Admitted, Dial, Inbound,
+    accept_inbound, accept_one, dial_one, publish_on, zero_tally, Accept, Admitted, Dial, Inbound,
+    Publish,
 };
 pub use linger::Linger;
 use seam::ChannelChoice as Choice;
@@ -234,7 +235,7 @@ where
                 Arc::new(move |end: DialEnd| on_cause(end.cause()))
             },
             send_queue_bytes: self.send_queue_bytes,
-            admitted: self.admitted_tx.clone(),
+            admitted: publish_on(self.admitted_tx.clone()),
         };
         let engine = self.engine.clone();
         self.handle.spawn(drive::dial_one(dial, engine));
@@ -307,7 +308,7 @@ where
         tally: Arc::clone(&tally),
         on_cause: Arc::clone(&config.on_cause),
         send_queue_bytes,
-        admitted: admitted_tx,
+        admitted: publish_on(admitted_tx),
         linger,
         backoff: config.accept_backoff,
     };
