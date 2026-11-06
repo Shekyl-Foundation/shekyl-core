@@ -216,6 +216,10 @@ Default. Lands before genesis if it should exist at launch.
   - Owner: EUP-5 ([`ECONOMY_UMBRELLA_PLAN.md`](design/ECONOMY_UMBRELLA_PLAN.md)); the instrument is ESR-16 ([`ECONOMICS_SIM_PRODUCTION_REBASE.md`](design/ECONOMICS_SIM_PRODUCTION_REBASE.md) §2)
   - Target: pre-genesis
 
+- **`--secret-draw-production` runs the shipped count rule only.** The mode is EUP-5 H's instrument (the challenge doctrine), and it reads `archival_params()`. A `--set` is accepted in `--stage2` alone, and there the count-rule fields (the catch-up share, the horizon floor, the cap multiple and the section multiple) are refused as having no reader. Before H runs, the mode takes the run's `ArchivalParams`, so H's cells are overrides on the baseline like every other sweep. Falsifier: `--secret-draw-production --set archival.count_cap_multiple=4` prints a count table that differs from the default run's.
+  - Owner: EUP-5 ([`ECONOMY_UMBRELLA_PLAN.md`](design/ECONOMY_UMBRELLA_PLAN.md)); the mode is `rust/shekyl-economics-sim/src/secret_draw_production.rs`
+  - Target: pre-genesis
+
 - **The staking sim's windowed worst and peak series miss the post-exit state and the shock instant.** Its coverage series take one mid-epoch sample, before `process_exits`, so a worst or peak over the window cannot see the state an exit leaves (the code's own comment says the next epoch's re-acquisition hides it), and the shock peaks and troughs are read after the same epoch's re-seat. Found by the economics-sim lane's search for extremes taken over sampled heights ([`ECONOMICS_SIM_PHASE0.md`](design/ECONOMICS_SIM_PHASE0.md) §P0.1); the fix is to sample again after the exits and at the shock instant and take the extreme over both.
   - Owner: EUP-3 ([`ECONOMY_UMBRELLA_PLAN.md`](design/ECONOMY_UMBRELLA_PLAN.md)); the code is `rust/shekyl-staking-sim/src/scenarios.rs`
   - Target: pre-genesis
