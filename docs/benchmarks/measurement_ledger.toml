@@ -132,7 +132,7 @@ stale_through = [
   { through = "e3e573d19d", note = "The signing envelope's tx_signable (#1266): in this path set, frost_sal.rs renames the FROST session's message field to tx_signable, and legacy_fcmp.rs deletes shekyl_derive_pqc_public_key, an export with no reader. The SAL still proves over one 32-byte message, now the framed tx_signable instead of the prefix hash, and the verify, the batch weights and the Ed25519 + ML-DSA-65 sign and verify that block verification prices do the same work. Not re-measured; the rows stay stale from PL-D3." },
   { through = "d59fdb3387", note = "In this path set, signature.rs deletes SCHEME_DOMAIN_WITNESS_CARRIER, a scheme-3 domain constant no signer or verifier used, and fn_dsa_hybrid.rs drops a test assertion that named it. No function or code path the block-verify capture priced changed. Not re-measured; the rows stay stale from PL-D3." },
   { through = "bf2fcbe091", note = "In this path set, the hybrid combiner's Ed25519 half moves from verify to verify_strict and first re-compresses the key to refuse a non-canonical encoding; signature.rs gains two tests. Per hybrid verify that adds one point compression and two small-order checks (a few doublings each) beside the unchanged Ed25519 and ML-DSA-65 verifies, which dominate; the emission auths frame one more field (the backing's bytes) into the same cSHAKE. Expected well under 1% of a block verify. Not re-measured; the rows stay stale from PL-D3." },
-  { through = "df9ec749d1", note = "In this path set, vm.rs's test module gains the_verifier_reproduces_the_canonical_known_answer (2f8386e9ae), which hashes one blob under the existing canonical test cache, and its doc comment is reworded (df9ec749d1). Test code and a comment only: no code the verifier, the cache derivation or the VM runs is changed. The rows stay stale from PL-D3." },
+  { through = "d56e34bda4", note = "In this path set, vm.rs's test module gains the_verifier_reproduces_the_canonical_known_answer (2f8386e9ae), which hashes one blob under the existing canonical test cache, its doc comment is reworded (df9ec749d1), and the test's seed check casts with try_from (d56e34bda4). Test code and a comment only: no code the verifier, the cache derivation or the VM runs is changed. The rows stay stale from PL-D3." },
 ]
 
 [[constant]]
@@ -1028,7 +1028,7 @@ stale_through = [
   { through = "a6b029e82", note = "DRS-X PR 3 (#1106): the crate-level doc comment in lib.rs names its consumers (shekyl-ffi, the ingest substrate, shekyl-miner). Doc text only; no code changed. An incidental reading, not BA-T14's protocol: the miner's rate test derived one cache in 2.19 s on the floor device in release at bf45b6d30, against the 200 ms target." },
   { through = "fe6f6bfa1", note = "DRS-X PR 3 (#1106): the crate doc in lib.rs names that calc_pow and the Rust miner call CacheStore::lookup and never derive, and that pin_canonical is the validator's epoch fill. Doc text only; cache derivation is unchanged. The 341 ms record and the 200 ms target are untouched, and the row stays stale." },
   { through = "3e75b28d9a", note = "Doc comments only in lib.rs and CacheStore::pin_canonical: the deleted FFI pin is no longer named as a second caller. Cache derivation is unchanged. The 341 ms record and the 200 ms target are untouched, and the row stays stale." },
-  { through = "df9ec749d1", note = "In this path set, vm.rs's test module gains the_verifier_reproduces_the_canonical_known_answer (2f8386e9ae), which hashes one blob under the existing canonical test cache, and its doc comment is reworded (df9ec749d1). Test code and a comment only: no code the verifier, the cache derivation or the VM runs is changed. The 341 ms record and the 200 ms target are untouched, and the row stays stale." },
+  { through = "d56e34bda4", note = "In this path set, vm.rs's test module gains the_verifier_reproduces_the_canonical_known_answer (2f8386e9ae), which hashes one blob under the existing canonical test cache, its doc comment is reworded (df9ec749d1), and the test's seed check casts with try_from (d56e34bda4). Test code and a comment only: no code the verifier, the cache derivation or the VM runs is changed. The 341 ms record and the 200 ms target are untouched, and the row stays stale." },
 ]
 
 [[constant]]
@@ -1049,7 +1049,7 @@ id = "randomx-vm"
 spec = ["rust/shekyl-pow-randomx/src/vm.rs"]
 cleared = [
   { through = "bb7f72df9", reason = "Two commits touch vm.rs after the capture. d27da3ad8 rewrites two `% n == 0` tests as `is_multiple_of`, in a const assertion and a decode predicate, neither on the allocation path. bb7f72df9 changes one comment in this file." },
-  { through = "df9ec749d1", reason = "In this path set, vm.rs's test module gains the_verifier_reproduces_the_canonical_known_answer (2f8386e9ae), which hashes one blob under the existing canonical test cache, and its doc comment is reworded (df9ec749d1). Test code and a comment only: no code the verifier, the cache derivation or the VM runs is changed. VM allocation is unchanged." },
+  { through = "d56e34bda4", reason = "In this path set, vm.rs's test module gains the_verifier_reproduces_the_canonical_known_answer (2f8386e9ae), which hashes one blob under the existing canonical test cache, its doc comment is reworded (df9ec749d1), and the test's seed check casts with try_from (d56e34bda4). Test code and a comment only: no code the verifier, the cache derivation or the VM runs is changed. VM allocation is unchanged." },
 ]
 
 [[constant]]
@@ -1202,7 +1202,7 @@ cleared = [
   { through = "e44ab0a578", reason = "Introduces the hash budget and sets HASH_CPU_NANOS from the floor run at 3d0bf6844c. The instrument that produced the capture is not this file, and this commit does not change it." },
   { through = "b257c61a6f", reason = "fill_pow_hash reads the hash recorded at validation and no longer charges this budget. The module comment says so, and a test reads the balance. HASH_CPU_NANOS is unchanged, and the instrument the capture timed is unchanged." },
   { through = "6d9cc0f756", reason = "The spend is judged at the caller's instant, so a test can hold time still. The charge is still one HASH_CPU_NANOS. The RandomX sources this row watches are unchanged." },
-  { through = "df9ec749d1", reason = "In this path set, vm.rs's test module gains the_verifier_reproduces_the_canonical_known_answer (2f8386e9ae), which hashes one blob under the existing canonical test cache, and its doc comment is reworded (df9ec749d1). Test code and a comment only: no code the verifier, the cache derivation or the VM runs is changed. The hash the capture timed is unchanged." },
+  { through = "d56e34bda4", reason = "In this path set, vm.rs's test module gains the_verifier_reproduces_the_canonical_known_answer (2f8386e9ae), which hashes one blob under the existing canonical test cache, its doc comment is reworded (df9ec749d1), and the test's seed check casts with try_from (d56e34bda4). Test code and a comment only: no code the verifier, the cache derivation or the VM runs is changed. The hash the capture timed is unchanged." },
 ]
 
 [[constant]]
