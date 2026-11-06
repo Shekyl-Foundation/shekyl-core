@@ -1547,10 +1547,10 @@ are fixed before the work starts:
    second death signal. **Implemented** (#1091).
 3. The supervisor core (sans-IO) and its timing-engine driver; the pin gate per
    spawn; the respawn routine per the `TSR-Q1`/`TSR-Q2` rulings. **Implemented.**
-   Step 8 does not wait for Tor (`rust/shekyl-daemon/src/run.rs:333`), and the
+   Step 8 does not wait for Tor (`rust/shekyl-daemon/src/run.rs` `supervise`), and the
    300 s bootstrap deadline is gone. A managed route exists only as
    `ManagedRunning`, built on the transition into `Running`
-   (`rust/shekyl-tor-control-client/src/supervisor/core/mod.rs:87`). The public
+   (`rust/shekyl-tor-control-client/src/supervisor/core/mod.rs` `ManagedRunning`). The public
    directory cache is increment 3b, not this one. `ManagedTorFix`, `OwnTx`
    and the one typed read and renderer are `shekyl-tor-control-client`'s
    `supervisor` module. `TSR-M2` is recorded (2026-10-22); the driver's base
