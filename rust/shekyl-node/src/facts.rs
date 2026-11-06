@@ -39,11 +39,10 @@ use shekyl_daemon_rpc::store_facts::{NodeFacts, StoreFacts, SyncFacts};
 use shekyl_daemon_rpc::sync_facts::{
     BodySpanFacts, RequestTiming, SyncSessionFacts, SyncViewFacts, SyncViewRead,
 };
-use shekyl_ffi::seam_ffi::bans::{BanPath, BanSpan, BanTarget};
 use shekyl_mempool::Pool;
+use shekyl_p2p::{session_of, BanSpan, BanTarget, Bans, Network, PeerCounts};
 use shekyl_rpc_types::{ChainSyncState, SyncMode};
-use shekyl_seam::SocketId;
-use shekyl_transport_layer::{BanLeft, Ipv4Subnet, ListedBan};
+use shekyl_transport_layer::{BanLeft, Ipv4Subnet, ListedBan, SocketId};
 use shekyl_types::{BlockHash, BlockHeight, PCanonicalId, PowHash, TxHash};
 
 fn lock<T>(mutex: &Mutex<T>) -> std::sync::MutexGuard<'_, T> {
@@ -95,6 +94,28 @@ pub(crate) struct Surroundings {
     /// The service's retirement flag: a pool whose file has faulted is
     /// not read here, as the pool handle does not read it.
     pub(crate) health: PoolHealth,
+    /// The network's counts: the board's sessions and the peers owner's
+    /// lists.
+    pub(crate) network: Arc<dyn NetworkCounts>,
+}
+
+/// What `get_info` counts on the network. The node's [`Network`] is the
+/// one production reader.
+pub(crate) trait NetworkCounts: Send + Sync {
+    /// Sockets per connector and direction, and the list sizes.
+    fn peer_counts(&self) -> PeerCounts;
+    /// Handshaken sessions, `(outbound, inbound)`.
+    fn session_counts(&self) -> (u64, u64);
+}
+
+impl NetworkCounts for Network {
+    fn peer_counts(&self) -> PeerCounts {
+        Self::peer_counts(self)
+    }
+
+    fn session_counts(&self) -> (u64, u64) {
+        Self::session_counts(self)
+    }
 }
 
 impl NodeFacts for Surroundings {
@@ -229,14 +250,13 @@ impl NodeFacts for Surroundings {
         }))
     }
 
-    /// The bound hub's sockets and the dialer's lists. An offline node
-    /// has no peers by configuration; before the hub binds, a missing hub
-    /// is not zero peers.
+    /// The socket table's sockets and the peers owner's lists. An offline
+    /// node has no peers by configuration.
     fn peers(&self) -> Result<PeerFacts, FactsFault> {
         if self.offline {
             return Ok(PeerFacts::Offline);
         }
-        let counts = shekyl_ffi::rpc_peerlist_ffi::peer_counts().ok_or(FactsFault::HubAbsent)?;
+        let counts = self.network.peer_counts();
         Ok(PeerFacts::Running(InfoPeersFacts {
             public_incoming_sockets: counts.clearnet_in,
             public_outgoing_sockets: counts.clearnet_out,
@@ -247,14 +267,13 @@ impl NodeFacts for Surroundings {
         }))
     }
 
-    /// The bound hub board's handshaken sessions. The per-connection sync
-    /// claims are chain sync's view (`sync_info`), not read here.
+    /// The board's handshaken sessions. The per-connection sync claims are
+    /// chain sync's view (`sync_info`), not read here.
     fn sessions(&self) -> Result<SessionCounts, FactsFault> {
         if self.offline {
             return Ok(SessionCounts::NONE);
         }
-        let (outbound, inbound) =
-            shekyl_ffi::rpc_peerlist_ffi::session_counts().ok_or(FactsFault::HubAbsent)?;
+        let (outbound, inbound) = self.network.session_counts();
         Ok(SessionCounts { outbound, inbound })
     }
 
@@ -274,12 +293,11 @@ impl NodeFacts for Surroundings {
     }
 }
 
-/// The connection id the board and the C++ name a socket by: eight zero
-/// bytes, then the socket id (`seam_endpoint.h`'s `seam_connection_id`).
+/// The connection id `get_connections` and the peer lists name a session
+/// by ([`session_of`]): the socket id, little-endian, in the first eight
+/// bytes. `sync_info` names the same session the same way.
 fn connection_id(socket: SocketId) -> [u8; 16] {
-    let mut id = [0u8; 16];
-    id[8..].copy_from_slice(&socket.get().to_ne_bytes());
-    id
+    session_of(socket).0
 }
 
 /// A duration in whole milliseconds, saturating.
@@ -496,11 +514,21 @@ pub(crate) struct PoolBridge {
     /// The service's own retirement flag: a pool it has retired is not
     /// served here, and a fault met here retires it there.
     health: PoolHealth,
+    /// Where a flushed id's relay state is released.
+    departed: shekyl_chain_ingest::service::Departed,
 }
 
 impl PoolBridge {
-    pub(crate) fn new(pool: Arc<Mutex<Option<Arc<Mutex<Pool>>>>>, health: PoolHealth) -> Self {
-        Self { pool, health }
+    pub(crate) fn new(
+        pool: Arc<Mutex<Option<Arc<Mutex<Pool>>>>>,
+        health: PoolHealth,
+        departed: shekyl_chain_ingest::service::Departed,
+    ) -> Self {
+        Self {
+            pool,
+            health,
+            departed,
+        }
     }
 }
 
@@ -553,6 +581,7 @@ impl PoolFacts for PoolBridge {
     fn flush(&self, ids: Vec<TxHash>) -> Pending<'_, Vec<TxHash>> {
         let pool = self.pool();
         let health = self.health.clone();
+        let departed = Arc::clone(&self.departed);
         Box::pin(async move {
             let pool = pool?;
             let gone = tokio::task::spawn_blocking(move || {
@@ -576,7 +605,7 @@ impl PoolFacts for PoolBridge {
             .await
             .map_err(|_| FactsFault::Internal)?;
             if let Ok(ids) = &gone {
-                shekyl_ffi::pool_ffi::note_left(ids);
+                departed(ids);
             }
             gone
         })
@@ -707,14 +736,14 @@ impl DoorFacts for DoorBridge {
     }
 }
 
-/// The node's ban table through the one ban path: the bound hub while
-/// there is one, otherwise the node's own socket table (DX-Q3, Q11).
+/// The node's ban table through the network's ban verbs (DX-Q3, Q11):
+/// one socket table, one clock, and the sessions a ban closes.
 pub(crate) struct BansBridge {
-    path: BanPath,
+    path: Bans,
 }
 
 impl BansBridge {
-    pub(crate) const fn new(path: BanPath) -> Self {
+    pub(crate) const fn new(path: Bans) -> Self {
         Self { path }
     }
 }
@@ -746,9 +775,9 @@ impl BansFacts for BansBridge {
     }
 
     fn fits(&self, seconds: u64) -> Result<bool, FactsFault> {
-        Ok(BanPath::fits(BanSpan::For(std::time::Duration::from_secs(
-            seconds,
-        ))))
+        Ok(self
+            .path
+            .fits(BanSpan::For(std::time::Duration::from_secs(seconds))))
     }
 
     fn lift(&self, target: BanTargetFacts) -> Result<bool, FactsFault> {
@@ -802,8 +831,22 @@ impl StopFacts for StopBridge {
 mod tests {
     use super::*;
 
+    /// No network: the counts these tests do not read.
+    struct NoNetwork;
+
+    impl NetworkCounts for NoNetwork {
+        fn peer_counts(&self) -> PeerCounts {
+            PeerCounts::default()
+        }
+
+        fn session_counts(&self) -> (u64, u64) {
+            (0, 0)
+        }
+    }
+
     /// The view's rows reach the RPC named by the connection id the board
-    /// and the C++ use (eight zero bytes, then the socket id), with the
+    /// and `get_connections` use (the socket id, little-endian, in the
+    /// first eight bytes), with the
     /// mode and the state mapped one to one and each request's timing
     /// read at the call.
     #[test]
@@ -838,13 +881,14 @@ mod tests {
             latch,
             view: tokio::sync::watch::channel(view).1,
             health: PoolHealth::unwired(),
+            network: Arc::new(NoNetwork),
         };
         let facts = surroundings.sync_view().expect("a view");
         assert_eq!(facts.state, ChainSyncState::Synced);
         assert_eq!(facts.target, 9);
         let row = &facts.sessions[0];
         let mut expected = [0u8; 16];
-        expected[8..].copy_from_slice(&0x0102_0304_0506_0708_u64.to_ne_bytes());
+        expected[..8].copy_from_slice(&0x0102_0304_0506_0708_u64.to_le_bytes());
         assert_eq!(row.connection_id, expected);
         assert_eq!(row.mode, SyncMode::PastCap);
         assert_eq!(row.claimed_height, None);
@@ -868,6 +912,7 @@ mod tests {
             latch,
             view: tokio::sync::watch::channel(SyncView::empty()).1,
             health: PoolHealth::unwired(),
+            network: Arc::new(NoNetwork),
         };
         assert!(surroundings.sync().expect("open").synchronized);
         drop(sender);
@@ -897,6 +942,7 @@ mod tests {
             latch,
             view: tokio::sync::watch::channel(SyncView::empty()).1,
             health: PoolHealth::unwired(),
+            network: Arc::new(NoNetwork),
         };
         assert!(!surroundings.sync().expect("open").following_degraded);
         latch_tx.send_replace(Some(evidence));
@@ -924,6 +970,7 @@ mod tests {
             latch,
             view: tokio::sync::watch::channel(SyncView::empty()).1,
             health: PoolHealth::unwired(),
+            network: Arc::new(NoNetwork),
         };
         let none = surroundings.sync().expect("open");
         assert_eq!(

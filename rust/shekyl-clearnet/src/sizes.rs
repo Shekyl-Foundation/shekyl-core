@@ -77,7 +77,7 @@ mod present {
     use std::sync::OnceLock;
     use std::time::Instant;
 
-    use shekyl_levin::{AfterFrame, DefinedCommand, FrameHeads, SyncCommand, HEADER_SIZE};
+    use shekyl_levin::{AfterFrame, Command, FrameHeads, HEADER_SIZE};
 
     use super::Way;
 
@@ -89,9 +89,8 @@ mod present {
 
     /// The class of a command: what the record keeps instead of its name.
     ///
-    /// Dispatch commands take their class from [`DefinedCommand`] and
-    /// [`SyncCommand`], the protocol's closed sets. A wire id neither names
-    /// is [`Class::Unknown`].
+    /// Dispatch commands take their class from [`Command`], the protocol's
+    /// closed set. A wire id it does not name is [`Class::Unknown`].
     #[derive(Clone, Copy, Debug, PartialEq, Eq)]
     pub(crate) enum Class {
         /// The handshake and timed sync.
@@ -103,27 +102,25 @@ mod present {
         BlockRelay,
         /// Chain sync: chain entries, headers, bodies and objects.
         Sync,
-        /// A command neither closed set names.
+        /// A command the closed set does not name.
         Unknown,
     }
 
     impl Class {
         pub(crate) const fn of(command: u32) -> Self {
-            if let Some(command) = DefinedCommand::from_wire(command) {
-                return match command {
-                    DefinedCommand::Handshake | DefinedCommand::TimedSync => Self::Control,
-                    DefinedCommand::NewTransactions | DefinedCommand::GetTxpoolComplement => {
-                        Self::TxRelay
-                    }
-                    DefinedCommand::NewCompactBlock | DefinedCommand::RequestCompactMissingTx => {
-                        Self::BlockRelay
-                    }
-                };
-            }
-            if SyncCommand::from_wire(command).is_some() {
-                Self::Sync
-            } else {
-                Self::Unknown
+            match Command::from_wire(command) {
+                Some(Command::Handshake | Command::TimedSync) => Self::Control,
+                Some(Command::NewTransactions | Command::GetTxpoolComplement) => Self::TxRelay,
+                Some(Command::NewCompactBlock | Command::RequestCompactMissingTx) => {
+                    Self::BlockRelay
+                }
+                Some(
+                    Command::RequestHeaders
+                    | Command::ResponseHeaders
+                    | Command::RequestBodies
+                    | Command::ResponseBodies,
+                ) => Self::Sync,
+                None => Self::Unknown,
             }
         }
 
@@ -292,22 +289,18 @@ mod present {
 
         #[test]
         fn every_protocol_command_has_its_class() {
-            for command in DefinedCommand::ALL {
+            for command in Command::ALL {
                 assert_ne!(
                     Class::of(command.wire_id()),
                     Class::Unknown,
                     "{command:?} is in the closed set"
                 );
             }
-            for command in SyncCommand::ALL {
-                assert_eq!(
-                    Class::of(command.wire_id()),
-                    Class::Sync,
-                    "{command:?} is chain sync"
-                );
+            for id in 2011..=2014 {
+                assert_eq!(Class::of(id), Class::Sync, "{id} is chain sync");
             }
-            // Retired ids, and the noise/fragment command 0: neither closed
-            // set names them. Ping (PWD-B10), support flags, new-block (PWD-B6).
+            // Retired ids, and the noise/fragment command 0: the closed set
+            // does not name them. Ping (PWD-B10), support flags, new-block (PWD-B6).
             for retired in [0u32, 1003, 1007, 2001] {
                 assert_eq!(Class::of(retired), Class::Unknown, "retired {retired}");
             }

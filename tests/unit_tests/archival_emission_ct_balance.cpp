@@ -73,7 +73,6 @@ extern "C"
 #include "crypto/crypto-ops.h"
 }
 #include "cryptonote_basic/cryptonote_basic.h"
-#include "cryptonote_basic/verification_context.h"
 #include "cryptonote_config.h"
 #include "fcmp/bulletproofs_plus.h"
 #include "fcmp/ct_ops.h"

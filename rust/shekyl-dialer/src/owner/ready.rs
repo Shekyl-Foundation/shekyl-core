@@ -17,8 +17,8 @@ use std::pin::pin;
 use std::sync::{Arc, Mutex};
 use std::task::{Context, Poll, Wake, Waker};
 
-use shekyl_seam::{DownCause, Outbound};
 use shekyl_timing_engine::{Clock, OwnerHandle};
+use shekyl_transport_layer::{DownCause, Outbound};
 
 /// What a connector lacks to dial. The plan draws nothing while any is
 /// missing.
@@ -28,10 +28,8 @@ pub enum NotReady {
     NoRoute,
     /// The connector's link is down.
     LinkDown(DownCause),
-    /// The core has not published a tip.
-    NoTip,
-    /// The zone host has not named the network.
-    NoNetworkId,
+    /// The session layer is not attached yet ([`super::Dialer::attach`]).
+    NoLayer,
 }
 
 impl NotReady {
@@ -56,8 +54,7 @@ impl NotReady {
             Self::LinkDown(DownCause::ProcessStopped) => {
                 "its link is down: the Tor it dials through was stopped"
             }
-            Self::NoTip => "the core has published no tip",
-            Self::NoNetworkId => "no network id is set",
+            Self::NoLayer => "the session layer is not attached",
         }
     }
 }

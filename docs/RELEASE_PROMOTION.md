@@ -156,9 +156,8 @@ then tag** (avoids the "tag not on the default branch" trap that
    request** from that branch to `main`, titled `Release: vX.Y.Z`. Never
    promote from `dev` itself: the pull request's head would be `dev`, so `dev`
    could take no merge until the release shipped. The branch must be cut from
-   a commit in `dev`: the dial-path freeze's release exemption applies only
-   when `compare dev...<head>` is ahead by 0 (`scripts/ci/is_release_promotion.py`).
-   The build and test workflows run on pull requests and on pushes to `main`,
+   a commit in `dev`, so that every commit the promotion carries was judged
+   there. The build and test workflows run on pull requests and on pushes to `main`,
    not on pushes to `dev`, so this pull request is the first full run on the
    frozen SHA against `main`. To see a gate that only fails against `main`
    before the freeze, open a draft rehearsal pull request from a branch at
@@ -171,13 +170,10 @@ then tag** (avoids the "tag not on the default branch" trap that
    so `main`'s history shows discrete release points. Never squash, rebase or
    fast-forward: the merge commit is the branch-topology release marker. Its
    tree must equal the frozen SHA's tree. The merge's push to `main` runs the
-   grep gates again, and the dial-path freeze's release exemption covers it
-   only on that condition (`is_release_promotion.py`). It is decided from
-   GitHub lookups, and the step's `promotion check:` line says why a push
-   was not exempt. If a lookup failed, rerun the job. If the pushed tree is
-   not the merged parent's, or the parent is not in `dev`, the merge brought
-   in content `dev` never judged. The step 11 pull request's head is
-   `main`, so the push's result shows there too.
+   grep gates again; a gate that only fails against `main` shows there. (The
+   dial-path freeze, whose base-relative verdict needed a release exemption
+   here, was deleted with the C++ dial path on 2026-11-05.) The step 11 pull
+   request's head is `main`, so the push's result shows there too.
 6. **Sign the tag** on that merge commit with the Foundation signing subkey
    (`6914D74823DDA8DC`), by the ceremony in `SIGNING.md`
    §"Release-tag signing ceremony". The merge happened on the remote, so the
@@ -260,7 +256,7 @@ what follows from it, in one change:
       `rust/shekyl-chain-rules/src/genesis_pin.rs` (`GenesisPin::TESTNET`, a
       byte array, so a search for the hex string does not find it),
       `tests/unit_tests/mining_parity.cpp` and `docs/GENESIS_ALLOCATIONS.md`;
-- [ ] the id and prefix in `rust/shekyl-ffi/src/network_id_ffi.rs`'s KAT, which
+- [ ] the id and prefix in `rust/shekyl-network/src/tests.rs`'s `RECORDED`, which
       fails and prints the new bytes until they are recorded, and the same
       two values in the table in `docs/design/SHEKYL_P2P_PROTOCOL.md`.
 

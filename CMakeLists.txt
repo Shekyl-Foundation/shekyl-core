@@ -38,11 +38,10 @@ if (IOS)
     INCLUDE(CmakeLists_IOS.txt)
 endif()
 
-# 3.22: what Corrosion (external/corrosion, the bridge that links the C++
-# remnant into the Rust daemon binary; DAEMON_CONFIG_CUTOVER.md DC-Q23)
-# requires. Raising the floor from 3.5 also moves every policy up to
-# 3.22's NEW behaviour; cmake/MsvcStaticRuntime.cmake already handles
-# CMP0091 either way.
+# 3.22: raised from 3.5 for Corrosion (DAEMON_CONFIG_CUTOVER.md DC-Q23),
+# which went with the last C++ archive in the daemon's link; the floor
+# stays, since every policy is now at 3.22's NEW behaviour and
+# cmake/MsvcStaticRuntime.cmake already handles CMP0091 either way.
 cmake_minimum_required(VERSION 3.22)
 message(STATUS "CMake version ${CMAKE_VERSION}")
 
@@ -665,13 +664,13 @@ option(STATIC "Link libraries statically" ${DEFAULT_STATIC})
 # object, so each .so embeds its own copy of the Rust image — its own
 # tracing dispatcher and its own copy of every Rust `static` — next to the
 # executable's image. That violates the single-Rust-image contract
-# (V3_WALLET_DECISION_LOG.md 2026-06-11 / 2026-09-10) in a way the
-# post-link nm gate in src/daemon/CMakeLists.txt cannot see, because the
-# duplicates live in the .so files rather than in the binary it inspects.
-# Observed: a Debug shekyld whose Blockchain::init armed the regtest
-# settlement-epoch schedule in libcryptonote_core.so's copy while the RPC
-# submit verifier read the executable's unarmed copy and refused every
-# emission claim as not-yet-finalized under the genesis schedule.
+# (V3_WALLET_DECISION_LOG.md 2026-06-11 / 2026-09-10) in a way no
+# post-link inspection of the binary can see, because the duplicates live
+# in the .so files. Observed (while the daemon still linked C++): a Debug
+# shekyld whose Blockchain::init armed the regtest settlement-epoch
+# schedule in libcryptonote_core.so's copy while the RPC submit verifier
+# read the executable's unarmed copy and refused every emission claim as
+# not-yet-finalized under the genesis schedule.
 if(BUILD_SHARED_LIBS)
   message(FATAL_ERROR "BUILD_SHARED_LIBS=ON is not supported: shared internal libraries each embed a separate copy of the Rust image and split its process-global state (single-Rust-image contract, V3_WALLET_DECISION_LOG.md 2026-09-10). Configure without -DBUILD_SHARED_LIBS.")
 endif()
@@ -841,17 +840,6 @@ function (monero_add_library_with_deps)
     PRIVATE $<TARGET_PROPERTY:${MONERO_ADD_LIBRARY_NAME},INTERFACE_COMPILE_DEFINITIONS>)
 endfunction ()
 
-# Generate header for embedded translations
-# Generate header for embedded translations, use target toolchain if depends, otherwise use the
-# lrelease and lupdate binaries from the host
-include(ExternalProject)
-ExternalProject_Add(generate_translations_header
-  SOURCE_DIR "${CMAKE_CURRENT_SOURCE_DIR}/translations"
-  BINARY_DIR "${CMAKE_CURRENT_BINARY_DIR}/translations"
-  STAMP_DIR ${LRELEASE_PATH}
-  CMAKE_ARGS -DLRELEASE_PATH=${LRELEASE_PATH}
-  INSTALL_COMMAND ${CMAKE_COMMAND} -E echo "")
-include_directories("${CMAKE_CURRENT_BINARY_DIR}/translations")
 # Git-free randomx-v2 populate check. Must not call check_submodule
 # (that function exists only inside if(NOT MANUAL_SUBMODULES)/if(GIT_FOUND)).
 # BUILD_RANDOMX_V2_DIFFERENTIAL_HARNESS auto-flips miner-lib ON above,
@@ -884,9 +872,8 @@ add_subdirectory(external)
 
 if(MSVC)
   # No `/GS-`: the compiler's stack-buffer security checks stay on in every
-  # C++ object the Rust `shekyld` links (DAEMON_CONFIG_CUTOVER.md DC-Q21,
-  # §3.8 of the Rust-binary PR). The flag was inherited; nothing measured
-  # a need for it.
+  # C++ object (DAEMON_CONFIG_CUTOVER.md DC-Q21, §3.8 of the Rust-binary
+  # PR). The flag was inherited; nothing measured a need for it.
   add_definitions("/bigobj /MP /FS /W3 /D_CRT_SECURE_NO_WARNINGS /wd4996 /wd4345 /D_WIN32_WINNT=0x0600 /DWIN32_LEAN_AND_MEAN /DNOMINMAX /DGTEST_HAS_TR1_TUPLE=0 /FIinline_c.h /D__SSE4_1__ /Zc:preprocessor")
   set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} /FIiso646.h")
   # set(CMAKE_C_FLAGS "${CMAKE_C_FLAGS} /Dinline=__inline")

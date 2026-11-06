@@ -28,15 +28,15 @@ Set-StrictMode -Version Latest
 $RepoRoot = (Resolve-Path (Join-Path $PSScriptRoot '../..')).Path
 Set-Location -LiteralPath $RepoRoot
 
-# Output path of the Rust-linking daemon. The importer, mdb_copy and
-# core_tests went with the C++ chain.
+# Output path of the daemon. The importer, mdb_copy and core_tests went
+# with the C++ chain.
 $Shekyld = 'build\bin\Release\shekyld.exe'
 $MsvcLinkSubjects = @($Shekyld)
 
-# Corrosion's build target for the daemon. `shekyld` itself is an IMPORTED
-# target with no build steps; the crate is built by `cargo-build_shekyld`,
-# which stages the binary into `build\bin\Release\` (DC-Q23).
-$MsvcBuildTargets = @('cargo-build_shekyld')
+# The target that builds the daemon: one cargo invocation for the Rust
+# binaries (on Windows, `shekyld` alone), which stages the binary into
+# `build\bin\Release\` (DC-Q23).
+$MsvcBuildTargets = @('shekyl_rust_bins')
 # The runner's parallelism for this one build. A name, so the cmake line
 # is not where the number lives.
 $MsvcBuildParallelism = 2

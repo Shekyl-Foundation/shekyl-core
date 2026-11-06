@@ -10,9 +10,9 @@
 //! network is declared, that list alone. The wake that re-admits dials
 //! nothing; the next draws.
 //!
-//! Cases with no kept session use a hub with no connector, so every dial
-//! fails at once as a local close. Cases with a kept session install an
-//! answering dial; the handshake it is given decides whether that dial is
+//! Cases with no kept session run with no connector installed, so every
+//! dial fails at once as a local close. Cases with a kept session queue an
+//! answer per dial; the handshake it is given decides whether that dial is
 //! kept. Every case runs on a hand-moved clock.
 //!
 //! Under the gray lifecycle (Rick, 2026-10-24) a failed test that proves
@@ -27,36 +27,23 @@
 
 #[path = "support/log_capture.rs"]
 mod log_capture;
+#[path = "support/rig.rs"]
+mod rig;
 #[path = "support/tables.rs"]
 mod tables;
 
 use log_capture::log_text;
-use std::collections::VecDeque;
+use rig::{Answer, Build, Rig, NETWORK, OTHER_NETWORK};
 use std::net::Ipv4Addr;
-use std::sync::{Arc, Mutex};
 
-use shekyl_capped_stream::Session;
 use shekyl_dialer::{DialAim, Dialer};
 use shekyl_draw_rng::SplitMix64;
-use shekyl_levin::{
-    response, BasicNodeData, CoreSyncData, HandshakeResponse, PeerlistEntry, PortableMap,
-    COMMAND_HANDSHAKE,
-};
-use shekyl_peer_policy::InboundCeiling;
-use shekyl_peerlist::{ConnectorId, ListName, NetworkAddress, RefusedSet, Tick};
-use shekyl_seam::{
-    Channel, Dial, Endpoint, Hub, Loopback, Route, RoutePublish, SocketId, SyncPayload,
-};
+use shekyl_peerlist::{ConnectorId, ListName, NetworkAddress, Tick};
 use shekyl_timing_engine::{Clock, ManualClock};
-use shekyl_transport_layer::Sockets;
-use shekyl_transport_layer::{DialEnd, DialFailure, StreamEnd};
+use shekyl_transport_layer::DialEnd;
 
 const CLEARNET: ConnectorId = ConnectorId::Clearnet;
-const NETWORK: [u8; 16] = [7; 16];
-const OTHER_NETWORK: [u8; 16] = [9; 16];
-/// The loopback's outbound byte cap. The handshake frames in these tests
-/// sit far under it.
-const SEND_CAP: usize = 64 * 1024;
+type TestDialer = Dialer<ManualClock>;
 
 fn peer(n: u8) -> NetworkAddress {
     NetworkAddress::Ipv4 {
@@ -70,132 +57,35 @@ const PAST_COOLDOWN_NANOS: u64 = 2 * shekyl_peerlist::dial_profile(ConnectorId::
     .cooldown
     .cap_nanos;
 
-fn hub_on(clock: &ManualClock) -> Hub {
-    Hub::new(
-        Sockets::new(),
-        InboundCeiling::Bounded(8),
-        Arc::new(|_post| {}),
-        Arc::new(clock.clone()),
-    )
-}
-
-fn open_dialer(hub: Hub) -> Arc<Dialer> {
-    let dialer = Arc::new(Dialer::new(
-        hub,
-        RefusedSet::NON_GLOBAL,
-        Arc::new(|| {
-            Some(SyncPayload {
-                current_height: 1,
-                cumulative_difficulty: 1,
-                cumulative_difficulty_top64: 0,
-                top_id: [0; 32],
-            })
-        }),
-    ));
-    dialer.set_network_id(NETWORK);
-    // The link is usable: the plan draws only then (TSR-F1).
-    assert!(
-        matches!(
-            dialer
-                .hub()
-                .links()
-                .publish_usable(CLEARNET, Route::Direct, Tick::new(1),),
-            RoutePublish::Installed { .. }
-        ),
-        "the test route was not already usable"
-    );
-    dialer
+/// No connector, on `clock`. Every dial fails at once as a local close.
+fn rig_on(clock: &ManualClock) -> Rig {
+    let rig = Build::on(clock).routes(&[CLEARNET]).finish();
+    rig.peer.refuse_unqueued(DialEnd::local_close());
+    rig
 }
 
 /// No connector. Every dial fails at once as a local close.
-fn dialer() -> Arc<Dialer> {
-    dialer_on(&ManualClock::new(Tick::new(1)))
-}
-
-/// No connector, on `clock`.
-fn dialer_on(clock: &ManualClock) -> Arc<Dialer> {
-    open_dialer(hub_on(clock))
+fn rig() -> Rig {
+    rig_on(&ManualClock::new(Tick::new(1)))
 }
 
 /// A connector that answers each dial with the next handshake, in order,
 /// on `clock`. A dial with no answer left blocks in the read, so a test
 /// queues one handshake per dial it will make.
-fn keeping_on(clock: &ManualClock, answers: Vec<Vec<u8>>) -> (Hub, Arc<Dialer>) {
-    let hub = hub_on(clock);
-    hub.install_dial(Arc::new(AnswerDial::answering(answers)));
-    let dialer = open_dialer(hub.clone());
-    (hub, dialer)
-}
-
-/// The loopback, handing the next queued handshake to each channel it opens.
-struct AnswerDial {
-    inner: Loopback,
-    answers: Mutex<VecDeque<Vec<u8>>>,
-}
-
-impl AnswerDial {
-    fn answering(answers: Vec<Vec<u8>>) -> Self {
-        Self {
-            inner: Loopback::new(Sockets::new(), SEND_CAP, tables::tables),
-            answers: Mutex::new(answers.into()),
-        }
+fn keeping_on(clock: &ManualClock, answers: Vec<Vec<u8>>) -> Rig {
+    let rig = Build::on(clock).routes(&[CLEARNET]).finish();
+    for answer in answers {
+        rig.peer.answer_next(Answer::Answered(answer));
     }
-}
-
-impl Dial for AnswerDial {
-    fn connect(
-        &self,
-        endpoint: &Endpoint,
-        ceiling: InboundCeiling,
-        now: Tick,
-    ) -> Result<Channel, DialEnd> {
-        let channel = self.inner.connect(endpoint, ceiling, now)?;
-        if let Some(answer) = self.answers.lock().expect("answers").pop_front() {
-            assert!(
-                self.inner.inject(channel.open.id(), answer),
-                "the handshake was not waiting in the channel"
-            );
-        }
-        Ok(channel)
-    }
-
-    fn stamp_stream_end(&self, connector: ConnectorId, end: StreamEnd) -> DialFailure {
-        self.inner.stamp_stream_end(connector, end)
-    }
-
-    fn inject(&self, id: SocketId, frame: Vec<u8>) -> bool {
-        self.inner.inject(id, frame)
-    }
-
-    fn reader_stopped(&self, id: SocketId) {
-        self.inner.reader_stopped(id);
-    }
-
-    fn retired(&self, id: SocketId) {
-        self.inner.retired(id);
-    }
-
-    fn drive(&self, hub: &Hub, id: SocketId, session: Session) {
-        self.inner.drive(hub, id, session);
-    }
+    rig
 }
 
 fn reply(network_id: [u8; 16]) -> Vec<u8> {
-    let body = HandshakeResponse {
-        node_data: BasicNodeData { network_id },
-        payload_data: CoreSyncData {
-            current_height: 20,
-            cumulative_difficulty: 200,
-            cumulative_difficulty_top64: 0,
-            top_id: [2; 32],
-        },
-        local_peerlist_new: Vec::<PeerlistEntry>::new(),
-    };
-    response(COMMAND_HANDSHAKE, &body.store().expect("encode"))
+    rig::reply(network_id, Vec::new())
 }
 
 /// The clearnet gray list, as addresses.
-fn gray(dialer: &Dialer) -> Vec<NetworkAddress> {
+fn gray(dialer: &TestDialer) -> Vec<NetworkAddress> {
     dialer
         .shared()
         .lists
@@ -210,7 +100,7 @@ fn gray(dialer: &Dialer) -> Vec<NetworkAddress> {
 }
 
 /// Dial `address` once: with no connector it fails, and cools in gray.
-fn fail_out(dialer: &Dialer, address: &NetworkAddress, rng: &mut SplitMix64) {
+fn fail_out(dialer: &TestDialer, address: &NetworkAddress, rng: &mut SplitMix64) {
     assert!(
         gray(dialer).contains(address),
         "{address:?} is in gray to fail"
@@ -242,20 +132,21 @@ fn past_cooldowns(clock: &ManualClock) {
 #[test]
 fn a_stranded_connector_redials_a_cooling_configured_address_no_faster_than_its_cooldown() {
     let clock = ManualClock::new(Tick::new(1));
-    let dialer = dialer_on(&clock);
+    let rig = rig_on(&clock);
+    let dialer = &rig.dialer;
     let mut rng = SplitMix64::new(1);
     let named = peer(1);
     dialer
         .admit_operator(&named, Tick::new(1), &mut rng)
         .expect("admitted");
-    fail_out(&dialer, &named, &mut rng);
+    fail_out(dialer, &named, &mut rng);
 
     // Stranded, inside the cooldown: every wake re-admits nothing new and
     // draws nothing.
     for _ in 0..5 {
         assert!(dialer.choose(CLEARNET, &mut rng).is_none());
         assert_eq!(
-            gray(&dialer),
+            gray(dialer),
             vec![named.clone()],
             "still seated, still cooling"
         );
@@ -264,7 +155,7 @@ fn a_stranded_connector_redials_a_cooling_configured_address_no_faster_than_its_
 
     // Past the cooldown the address is drawable, and the wake draws it.
     past_cooldowns(&clock);
-    let (drawn, _aim, _nonce) = dialer
+    let (drawn, _aim) = dialer
         .choose(CLEARNET, &mut rng)
         .expect("the cooled address is drawn once its cooldown ends");
     assert_eq!(drawn, named);
@@ -272,13 +163,14 @@ fn a_stranded_connector_redials_a_cooling_configured_address_no_faster_than_its_
 
 #[test]
 fn a_healthy_connector_leaves_a_dead_add_peer_cooling() {
-    let dialer = dialer();
+    let rig = rig();
+    let dialer = &rig.dialer;
     let mut rng = SplitMix64::new(2);
     let dead = peer(1);
     dialer
         .admit_operator(&dead, Tick::new(1), &mut rng)
         .expect("admitted");
-    fail_out(&dialer, &dead, &mut rng);
+    fail_out(dialer, &dead, &mut rng);
 
     // A candidate is drawable, so the connector is not stranded, and the
     // dead address is left where its failed test put it: cooling.
@@ -286,7 +178,7 @@ fn a_healthy_connector_leaves_a_dead_add_peer_cooling() {
     dialer
         .admit_operator(&live, Tick::new(1), &mut rng)
         .expect("admitted");
-    let (drawn, _aim, _nonce) = dialer.choose(CLEARNET, &mut rng).expect("a draw");
+    let (drawn, _aim) = dialer.choose(CLEARNET, &mut rng).expect("a draw");
     assert_eq!(drawn, live);
     assert!(
         dialer.shared().lists.is_cooling(&dead),
@@ -297,24 +189,25 @@ fn a_healthy_connector_leaves_a_dead_add_peer_cooling() {
 #[test]
 fn a_declared_closed_network_draws_only_its_list_once_its_cooldowns_end() {
     let clock = ManualClock::new(Tick::new(1));
-    let dialer = dialer_on(&clock);
+    let rig = rig_on(&clock);
+    let dialer = &rig.dialer;
     let mut rng = SplitMix64::new(3);
     // Named before the declaration, and failed: it cools in gray.
     let outside = peer(9);
     dialer
         .admit_operator(&outside, Tick::new(1), &mut rng)
         .expect("admitted");
-    fail_out(&dialer, &outside, &mut rng);
+    fail_out(dialer, &outside, &mut rng);
 
     let population = vec![peer(1), peer(2)];
     dialer.set_exclusive(population.clone(), Tick::new(1), &mut rng);
     for address in &population {
-        fail_out(&dialer, address, &mut rng);
+        fail_out(dialer, address, &mut rng);
     }
     // Everything is seated and cooling: the stranded wake has nothing to
     // re-admit and draws nothing.
     assert!(dialer.choose(CLEARNET, &mut rng).is_none());
-    assert_eq!(gray(&dialer).len(), 3, "nothing left gray");
+    assert_eq!(gray(dialer).len(), 3, "nothing left gray");
 
     // Past the cooldowns, every wake draws from the declared list: the
     // address named outside it is seated and drawable, and never drawn.
@@ -348,7 +241,8 @@ fn a_declared_closed_network_draws_only_its_list_once_its_cooldowns_end() {
 #[test]
 fn a_connector_under_target_redials_its_cooling_configured_address_no_faster_than_its_cooldown() {
     let clock = ManualClock::new(Tick::new(1));
-    let (_hub, dialer) = keeping_on(&clock, vec![reply(NETWORK), reply(OTHER_NETWORK)]);
+    let rig = keeping_on(&clock, vec![reply(NETWORK), reply(OTHER_NETWORK)]);
+    let dialer = &rig.dialer;
     let mut rng = SplitMix64::new(5);
     dialer.set_target(CLEARNET, 2, &mut rng);
     for n in [1, 2] {
@@ -366,8 +260,15 @@ fn a_connector_under_target_redials_its_cooling_configured_address_no_faster_tha
         None,
         "the second dial is refused"
     );
-    assert_eq!(gray(&dialer), vec![peer(2)], "the failed draw stays gray");
+    assert_eq!(gray(dialer), vec![peer(2)], "the failed draw stays gray");
     assert!(dialer.shared().lists.is_cooling(&peer(2)), "and cools");
+    // The refused session leaves the board when its task ends, which can
+    // trail the dial's answer; while it is there its host is not drawn
+    // (no redial of a host with a session). Wait for it, so the draw below
+    // reads the cooldown and nothing else.
+    rig::wait_until("the refused session left the board", || {
+        rig.layer.board().rows().len() == 1
+    });
 
     // Under the target with nothing drawable: every wake inside the
     // cooldown is recovery, re-admits nothing new, and draws nothing.
@@ -378,7 +279,7 @@ fn a_connector_under_target_redials_its_cooling_configured_address_no_faster_tha
 
     // The first wake past the cooldown draws it.
     past_cooldowns(&clock);
-    let (drawn, _aim, _nonce) = dialer
+    let (drawn, _aim) = dialer
         .choose(CLEARNET, &mut rng)
         .expect("the cooled address is drawn once its cooldown ends");
     assert_eq!(drawn, peer(2));
@@ -404,7 +305,8 @@ fn the_recovery_log_is_one_episode_while_a_dead_configured_address_cools() {
     const WAKES: usize = 20;
     // The keep, then another network's handshake for the dead address.
     let clock = ManualClock::new(Tick::new(1));
-    let (hub, dialer) = keeping_on(&clock, vec![reply(NETWORK), reply(OTHER_NETWORK)]);
+    let rig = keeping_on(&clock, vec![reply(NETWORK), reply(OTHER_NETWORK)]);
+    let dialer = &rig.dialer;
     let mut rng = SplitMix64::new(11);
     dialer.set_target(CLEARNET, 2, &mut rng);
     for n in [1, 2] {
@@ -414,9 +316,9 @@ fn the_recovery_log_is_one_episode_while_a_dead_configured_address_cools() {
     }
     // The clock does not advance, so a ban one tick ahead lasts the run.
     // peer(3) is configured and never admitted.
-    let until = Tick::new(hub.now().get().saturating_add(1));
+    let until = Tick::new(clock.now().get().saturating_add(1));
     let banned = peer(3).ip().expect("clearnet address");
-    hub.ban_host(banned, until);
+    rig.layer.ban_host(banned, until);
     assert!(matches!(
         dialer.admit_operator(&peer(3), Tick::new(1), &mut rng),
         Err(shekyl_peerlist::Refusal::Banned)
@@ -452,7 +354,7 @@ fn the_recovery_log_is_one_episode_while_a_dead_configured_address_cools() {
     );
     assert_eq!(dialer.kept_sessions(CLEARNET), 1);
     assert!(
-        !gray(&dialer).contains(&peer(3)),
+        !gray(dialer).contains(&peer(3)),
         "the banned address stays out"
     );
 }
@@ -488,7 +390,8 @@ fn a_gained_session_closes_the_episode_on_the_following_wake() {
     ];
     answers.extend(std::iter::repeat_n(reply(OTHER_NETWORK), DEAD_DRAWS));
     let clock = ManualClock::new(Tick::new(1));
-    let (hub, dialer) = keeping_on(&clock, answers);
+    let rig = keeping_on(&clock, answers);
+    let dialer = &rig.dialer;
     let mut rng = SplitMix64::new(17);
     dialer.set_target(CLEARNET, TARGET, &mut rng);
     for n in [1, 2] {
@@ -498,11 +401,13 @@ fn a_gained_session_closes_the_episode_on_the_following_wake() {
     }
     // A ban that outlasts every cooldown this test moves the clock past.
     let until = Tick::new(
-        hub.now()
+        clock
+            .now()
             .get()
             .saturating_add((DEAD_DRAWS as u64 + 2) * PAST_COOLDOWN_NANOS),
     );
-    hub.ban_host(peer(4).ip().expect("clearnet address"), until);
+    rig.layer
+        .ban_host(peer(4).ip().expect("clearnet address"), until);
     assert!(matches!(
         dialer.admit_operator(&peer(4), Tick::new(1), &mut rng),
         Err(shekyl_peerlist::Refusal::Banned)
@@ -543,6 +448,16 @@ fn a_gained_session_closes_the_episode_on_the_following_wake() {
             None,
             "the dead address fails its test and cools"
         );
+        // Each refused session leaves the board when its task ends, which can
+        // trail the dial's answer; while it is there its host is not drawn.
+        // Wait for the two kept sessions alone, so each draw below reads the
+        // cooldown and nothing else.
+        let settled = || {
+            rig::wait_until("the refused session left the board", || {
+                rig.layer.board().rows().len() == 2
+            })
+        };
+        settled();
         for _ in 0..DEAD_DRAWS {
             assert!(
                 !dialer.wake(CLEARNET, &mut rng),
@@ -553,6 +468,7 @@ fn a_gained_session_closes_the_episode_on_the_following_wake() {
                 dialer.wake(CLEARNET, &mut rng),
                 "past the cooldown the dead address is drawn"
             );
+            settled();
         }
     });
 
@@ -594,7 +510,7 @@ fn a_gained_session_closes_the_episode_on_the_following_wake() {
     );
     assert_eq!(dialer.kept_sessions(CLEARNET), 2);
     assert!(
-        !gray(&dialer).contains(&peer(4)),
+        !gray(dialer).contains(&peer(4)),
         "the banned address stays out"
     );
 }

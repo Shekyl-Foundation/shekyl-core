@@ -5,10 +5,8 @@
 
 //! Chain-sync commands 2011–2014 (CS-Q3, `P2P_3_CHAIN_SYNC_BRIEF.md`).
 //!
-//! These are new commands with new ids. They are not [`crate::DefinedCommand`]
-//! arms: ingress admits a command for dispatch, and no handler exists until
-//! the cutover. The ids they replace (2003, 2004, 2006, 2007) stay until
-//! that cutover retires them.
+//! These are new commands with new ids, arms of [`crate::Command`] like the
+//! rest. The ids they replaced (2003, 2004, 2006, 2007) are retired.
 //!
 //! A body is a [`shekyl_wire::BlockBody`]. This module moves it; it does
 //! not judge it. The partition of a body response is judged here, because
@@ -232,69 +230,6 @@ const _: () = assert!(NOTIFY_REQUEST_HEADERS == 2011);
 const _: () = assert!(NOTIFY_RESPONSE_HEADERS == 2012);
 const _: () = assert!(NOTIFY_REQUEST_BODIES == 2013);
 const _: () = assert!(NOTIFY_RESPONSE_BODIES == 2014);
-
-/// The chain-sync commands, as chain sync's router admits them
-/// (`P2P_3_CHAIN_SYNC_BRIEF.md` CS-3 §4.2).
-///
-/// Not [`crate::DefinedCommand`]: that set is what the C++ ingress admits
-/// for its handler, and 2011–2014 are not added to it. The router reads a
-/// bucket's command, admits these here with their caps, and hands the bytes
-/// to the sync owner; every other command goes on to the C++ handler.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub enum SyncCommand {
-    /// `NOTIFY_REQUEST_HEADERS` (2011).
-    RequestHeaders,
-    /// `NOTIFY_RESPONSE_HEADERS` (2012).
-    ResponseHeaders,
-    /// `NOTIFY_REQUEST_BODIES` (2013).
-    RequestBodies,
-    /// `NOTIFY_RESPONSE_BODIES` (2014).
-    ResponseBodies,
-}
-
-impl SyncCommand {
-    /// Every arm.
-    pub const ALL: [Self; 4] = [
-        Self::RequestHeaders,
-        Self::ResponseHeaders,
-        Self::RequestBodies,
-        Self::ResponseBodies,
-    ];
-
-    /// The wire id this arm speaks.
-    #[must_use]
-    pub const fn wire_id(self) -> u32 {
-        match self {
-            Self::RequestHeaders => NOTIFY_REQUEST_HEADERS,
-            Self::ResponseHeaders => NOTIFY_RESPONSE_HEADERS,
-            Self::RequestBodies => NOTIFY_REQUEST_BODIES,
-            Self::ResponseBodies => NOTIFY_RESPONSE_BODIES,
-        }
-    }
-
-    /// A wire command id as a chain-sync command, or `None`.
-    #[must_use]
-    pub const fn from_wire(command: u32) -> Option<Self> {
-        match command {
-            NOTIFY_REQUEST_HEADERS => Some(Self::RequestHeaders),
-            NOTIFY_RESPONSE_HEADERS => Some(Self::ResponseHeaders),
-            NOTIFY_REQUEST_BODIES => Some(Self::RequestBodies),
-            NOTIFY_RESPONSE_BODIES => Some(Self::ResponseBodies),
-            _ => None,
-        }
-    }
-
-    /// The payload cap the router applies before it buffers a message.
-    #[must_use]
-    pub const fn payload_cap(self) -> u64 {
-        match self {
-            Self::RequestHeaders => CAP_REQUEST_HEADERS,
-            Self::ResponseHeaders => CAP_RESPONSE_HEADERS,
-            Self::RequestBodies => CAP_REQUEST_BODIES,
-            Self::ResponseBodies => CAP_RESPONSE_BODIES,
-        }
-    }
-}
 
 fn capped<T: PortableMap>(bytes: &[u8], cap: u64, limits: Limits) -> Result<T, Error> {
     let max = usize::try_from(cap).expect("an encoded cap fits usize");

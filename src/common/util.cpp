@@ -694,8 +694,8 @@ std::string get_nix_version_display_string()
     // the backend it was written against and wrong for the one underneath it.
     //
     // Every entry point now initialises logging exactly once, with its FINAL
-    // configuration. Callers that genuinely want stderr only say so themselves
-    // (cn_deserialize.cpp, gen_ssl_cert.cpp).
+    // configuration. A caller that genuinely wants stderr only says so itself
+    // (cn_deserialize.cpp).
     //
     // M*/MC* calls before that final init (the glibc warning below, the
     // wallet missing-config MERROR, the daemon FAT32 MERROR) reach stderr

@@ -143,8 +143,8 @@ pub const CORE_RPC_VERSION_MAJOR: u32 = 3;
 /// per-amount output-count query over caller-chosen unlock and recency
 /// windows is a statistical disclosure surface with no consumer on a chain
 /// without rings (`DRS_E1_SOUT_KI.md` SOK-Q3, ruled B; census U-7). 3.32:
-/// `calc_pow` drops leftover `major_version` (RandomX-only longhash; C++
-/// daemon RPC is still live via `core_rpc_ffi`). 3.31: `get_archival_shard_coverage` and
+/// `calc_pow` drops leftover `major_version` (RandomX-only longhash; the
+/// C++ daemon RPC was then still live via `core_rpc_ffi`). 3.31: `get_archival_shard_coverage` and
 /// `request_archival_shard` (`ARCHIVAL_SHARD_SELECTION_LIST.md` `SL-D`).
 /// 3.30: `get_fee_estimate.fees` drops the dead
 /// fourth slot — three priced tiers, one slot each (FL-R25; the RK-5 bridge

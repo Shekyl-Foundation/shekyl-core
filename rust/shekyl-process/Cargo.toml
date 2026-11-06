@@ -1,0 +1,58 @@
+# Copyright (c) 2026, The Shekyl Foundation
+#
+# All rights reserved.
+# BSD-3-Clause
+
+[package]
+name = "shekyl-process"
+description = "The daemon's process: hardening before an argument is read (DC-Q21), the panic hook, and the account's roots from the operating system (IG-13)"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+publish = false
+
+[dependencies]
+# `platform::current` yields the configuration's `Platform` value.
+shekyl-daemon-config = { path = "../shekyl-daemon-config" }
+tracing = "0.1"
+
+[target.'cfg(unix)'.dependencies]
+libc = "0.2"
+
+[target.'cfg(windows)'.dependencies]
+# The known-folder roots for the daemon configuration (IG-13) and the
+# raw standard-error write the panic hook makes.
+shekyl-win-sec = { path = "../shekyl-win-sec" }
+# `harden_process`'s calls: `SetErrorMode`, `SetUnhandledExceptionFilter`
+# and `EXCEPTION_POINTERS` (gated behind `Win32_System_Kernel` for the
+# `CONTEXT` they carry), `TerminateProcess`, the `STATUS_*` codes (DC-Q21).
+windows-sys = { version = "0.61", features = [
+  "Win32_Foundation",
+  "Win32_System_Diagnostics_Debug",
+  "Win32_System_Kernel",
+  "Win32_System_Threading",
+] }
+
+[dev-dependencies]
+# The acceptance tests re-exec this binary into a child that faults; the
+# spawn lock keeps a fork from inheriting another test's descriptors.
+shekyl-tor-control-client = { path = "../shekyl-tor-control-client" }
+tempfile = "3"
+
+[target.'cfg(windows)'.dev-dependencies]
+# `tests/dc_q21_a_fault_ends_with_its_code.rs` sets a per-application
+# `LocalDumps` scratch policy for its own binary and removes it: the
+# registry module, and `Win32_Security` for the `SECURITY_ATTRIBUTES`
+# parameter `RegCreateKeyExW` is gated on (the `W` variant that takes the
+# 64-bit-view flag). It also clears the error mode its parent handed it
+# before hardening (`GetErrorMode`; DC-F44). Test-only: no shipped binary
+# writes the registry.
+windows-sys = { version = "0.61", features = [
+  "Win32_Security",
+  "Win32_System_Registry",
+] }
+
+[lints]
+workspace = true

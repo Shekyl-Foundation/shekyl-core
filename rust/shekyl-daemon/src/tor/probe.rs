@@ -15,7 +15,8 @@
 //! ended here, a round stuck for five minutes and a sink that dropped
 //! events, share [`Drive::end_round`].
 
-use shekyl_ffi::dialer_ffi::ProbeHandshake;
+use shekyl_node::Network;
+use shekyl_p2p::ProbeHandshake;
 use shekyl_timing_engine::Tick;
 use shekyl_tor_control_client::control::{
     parse_service_descriptor, Command, HsDescEvent, RelayFingerprint, ServiceDescriptor,
@@ -59,10 +60,10 @@ impl Drive {
         let Some(service) = self.service.clone() else {
             return Input::ProbeNotDialed;
         };
-        let Some(proxy) = shekyl_ffi::zone_ffi::managed_route(self.probe_pair.shared()) else {
+        let Some(proxy) = self.network.managed_route(self.probe_pair.shared()) else {
             return Input::ProbeNotDialed;
         };
-        let Some(mut handshake) = shekyl_ffi::dialer_ffi::mint_probe() else {
+        let Some(mut handshake) = self.network.mint_probe() else {
             return Input::ProbeNotDialed;
         };
         let minted_at = handshake.minted_at.get();
@@ -108,7 +109,7 @@ impl Drive {
     /// the second probe follows, a fresh delay later; the fetch's `HS_DESC`
     /// events carry the descriptor id, so no upload round counts them.
     pub(super) async fn refetch(&self) -> Input {
-        let draw = shekyl_ffi::tor_link::probe_delay_draw();
+        let draw = self.network.probe_delay_draw();
         let (Some(control), Some(service)) = (self.control.as_ref(), self.service.clone()) else {
             return Input::DescriptorRefetched { draw };
         };
@@ -150,7 +151,7 @@ impl Drive {
         }
         if let Some(rounds) = self.rounds.as_mut() {
             let marks = rounds.observe(event);
-            for input in round_inputs(&marks, shekyl_ffi::tor_link::probe_delay_draw) {
+            for input in round_inputs(&marks, || self.network.probe_delay_draw()) {
                 say_round(&input);
                 inputs.push(input);
             }
@@ -190,7 +191,7 @@ impl Drive {
         let Some(mark) = self.rounds.as_mut().and_then(UploadRounds::resync) else {
             return Vec::new();
         };
-        round_inputs(&[mark], shekyl_ffi::tor_link::probe_delay_draw)
+        round_inputs(&[mark], || self.network.probe_delay_draw())
     }
 
     /// Publish the inbound facet on the managed route's link. Before a route
@@ -201,7 +202,7 @@ impl Drive {
             return;
         };
         let facet = link_inbound(inbound);
-        if shekyl_ffi::zone_ffi::publish_tor_inbound(incarnation, facet) {
+        if self.network.publish_tor_inbound(incarnation, facet) {
             tracing::info!(target: "tor", "this node's onion: {facet:?}");
         }
     }
@@ -229,7 +230,7 @@ impl Drive {
                     .map(|to| DirectoryFetch {
                         hsdir: to.hsdir,
                         descriptor_id: to.descriptor_id.clone(),
-                        draw: shekyl_ffi::tor_link::probe_delay_draw(),
+                        draw: self.network.probe_delay_draw(),
                     })
                     .collect()
             })
@@ -318,10 +319,10 @@ impl Drive {
 /// probe's delay from the CSPRNG, as a round's probe does. Tor's own
 /// `ClockJumped` is already logged; the probe logs itself when it runs, and
 /// does not while the clock is named.
-pub(super) fn jump_probe() -> Input {
+pub(super) fn jump_probe(network: &Network) -> Input {
     tracing::debug!(target: "tor", "a probe delay is drawn after Tor's clock jump");
     Input::JumpProbeDrawn {
-        draw: shekyl_ffi::tor_link::probe_delay_draw(),
+        draw: network.probe_delay_draw(),
     }
 }
 
@@ -342,8 +343,8 @@ pub(super) fn say_round(input: &Input) {
 
 /// The core's inbound facet as the link carries it. The core's clock is the
 /// process clock the link's ticks read.
-fn link_inbound(inbound: Inbound) -> shekyl_ffi::zone_ffi::InboundFacet {
-    use shekyl_ffi::zone_ffi::{InboundCause as LinkCause, InboundFacet};
+fn link_inbound(inbound: Inbound) -> shekyl_p2p::InboundFacet {
+    use shekyl_p2p::{InboundCause as LinkCause, InboundFacet};
     match inbound {
         Inbound::NotOffered => InboundFacet::NotOffered,
         Inbound::Publishing => InboundFacet::Publishing,

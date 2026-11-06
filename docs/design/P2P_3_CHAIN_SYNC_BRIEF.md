@@ -1610,7 +1610,7 @@ handler.
 | 6 | C++ caller, in `update_sync_search` | `.inl:1747` |
 | 7 | C++ caller, in `needs_new_sync_connections` | `.inl:2553` |
 | 8 | Declarations | `src/shekyl/shekyl_ffi.h` (deleted by CS-5) |
-| 9 | Module | `rust/shekyl-ffi/src/lib.rs:184` |
+| 9 | Module | line 184 of `rust/shekyl-ffi/src/lib.rs` at `e8838b0095` |
 | 10 | FFI signature gate's registration | `scripts/ci/check_ffi_signatures.sh:87-88` |
 | 11 | `sync_connector_of` | 1c #9 |
 | 12 | `P2P_DEFAULT_SYNC_SEARCH_CONNECTIONS_COUNT` (no C++ user) | `src/cryptonote_config.h:200` |

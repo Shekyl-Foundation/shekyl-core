@@ -182,12 +182,8 @@ In this increment:
   when an entry is looked up. A new ban closes live sockets to that
   host. Nothing in the RPC calls it yet. That call is the seam, when
   Rust owns the sockets.
-- One `CloseCause` is the D12 table. The discriminants in
-  `src/shekyl/close_cause.h` are generated from that enum, and the
-  header's size and field offsets are the `repr(C)` struct's.
-  `shekyl_ffi.h` includes it. The test fails if the header drifts, and
-  the C++ build fails if the typedef no longer matches that layout.
-  There is no second table to edit.
+- One `CloseCause` is the D12 table (`shekyl-transport-layer`). No C++
+  reads it, and there is no second table to edit.
 
 Not in that increment: sockets, a thread count, a deadline, an accept
 rate, the seam, the differential harness, and cutover. The constructor
@@ -355,6 +351,12 @@ handshake span are the caller's, labelled unmeasured until a measurement
 names them.
 
 ## Seam — construction contract (RULED 2026-09-28)
+
+*Superseded 2026-11-05: the seam, its strands, the executor and the
+chain-sync router are deleted with the C++ host. The boundary is the
+session layer (`shekyl-p2p-session`; `P2P_3_REMNANT_CUTOVER_BRIEF.md`
+§7), and each command's owner is named in its dispatch table. What
+follows is the record of the seam as it was built and ruled.*
 
 Both connectors are in. The seam is the handler boundary they attach to:
 one `Sockets` table, the connector's `Session`, and the posts onto that
@@ -1807,10 +1809,10 @@ listener, and so a connection in the gap phase.
    (`accept_rate.rs`) is two token buckets, the connector's and the
    host's, checked in `Sockets::accept_clearnet` under the socket
    table's lock, after the ban and the ceilings and before a socket is
-   reserved. The in-memory loopback harness is not that accept: it
-   reserves a row through `reserve_clearnet_inbound` (the ban, the
-   ceilings, an id) and spends no token. An accept spends a token from
-   both or from neither, so a
+   reserved. The in-memory loopback harness takes the same accept on a
+   table built with no gate (`Sockets::with_clearnet_gate(None)`), since
+   it admits at a fixed tick. An accept spends a token from both or from
+   neither, so a
    host whose own bucket is empty does not drain the connector's. A
    host is an IPv4 address, or an IPv6 /64; an IPv4 address carried in
    IPv6, as a dual-stack listener reports it, is that IPv4 host. The
@@ -2007,7 +2009,7 @@ The set:
 - `contrib/epee/include/net/abstract_tcp_server2.h`
 - `contrib/epee/include/net/abstract_tcp_server2.inl`
 - `connection_basic.hpp` / `connection_basic.cpp` and `network_throttle*`, after the rate-limit calls move in this same cutover. Today `core_rpc_server.cpp` calls `connection_basic::get_rate_*` / `set_rate_*`, `rpc_facts_ffi.cpp` reads `network_throttle_manager`, and `cryptonote_protocol_handler-base.cpp` sleeps and accounts through the global out-throttle. Those three call the operator link budget in "Rate limit is four jobs": default unlimited, backpressure, no close. The files go only once that `rg` is empty.
-- the SOCKS dial: `socks_connect.cpp`, `socks_connect.h`, and the client `net_node` calls. Not a wildcard over `src/net/socks*`. `parse.cpp` parses a proxy URL (`src/net/parse.cpp:34`, the `socks` parser at `:260`), and `tests/unit_tests/net.cpp` exercises that API. The endpoint type those use stays, or moves with them in this cutover. The deletion gate is no remaining dial, not an empty `socks.h` while the parser still includes it.
+- the SOCKS dial: `socks_connect.cpp`, `socks_connect.h`, and the client `net_node` calls. Not a wildcard over `src/net/socks*`. `parse.cpp` parses a proxy URL (`get_network_address`, line 158 of `src/net/parse.cpp` at `dc46e903f0`, the `socks` parser at line 257), and `tests/unit_tests/net.cpp` exercises that API. The endpoint type those use stays, or moves with them in this cutover. The deletion gate is no remaining dial, not an empty `socks.h` while the parser still includes it.
 - `network_pipe_ops` and `set_network_pipe`
 - `rust/shekyl-p2p-transport/src/pipe.rs`, and its module and re-export in `rust/shekyl-p2p-transport/src/lib.rs`
 - `rust/shekyl-ffi/src/clearnet_transport_ffi.rs`, and `pub mod clearnet_transport_ffi` in `rust/shekyl-ffi/src/lib.rs`

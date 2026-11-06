@@ -73,7 +73,11 @@ if ! python3 "$here/strip_c_comments.py" --self-test >/dev/null; then
 fi
 
 MINT_PATTERN='reward_P|archival.*emission.*mint|mint.*archival.*reward'
-MINT_ROOTS=(src/fcmp src/cryptonote_core)
+# The C++ that could have carried a mint path: src/fcmp is what is left of it
+# since the C++ block-connect host (src/cryptonote_core) was deleted on
+# 2026-11-05 with the p2p remnant cutover; connect is Rust's
+# (rust/shekyl-chain-rules), outside this C++-only grep.
+MINT_ROOTS=(src/fcmp)
 
 # Negative controls for comment handling (rule 50). A regression here is a
 # silent green on the tree: refuse to judge until these hold.

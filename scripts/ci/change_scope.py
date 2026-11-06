@@ -272,7 +272,7 @@ SELFTEST = [
     ("README.md", True),                                  # quoted only in a cmake comment
     ("rust/shekyl-tor/src/lib.rs", False),                # any .rs, doc comment or not
     ("CMakeLists.txt", False),
-    ("src/p2p/net_node.inl", False),
+    ("src/cryptonote_basic/account.cpp", False),
     (".github/workflows/build.yml", False),
     ("scripts/ci/change_scope.py", False),
     ("docs/formal/checkct/dynamic/src/main.rs", False),   # a crate the rust job builds under docs/

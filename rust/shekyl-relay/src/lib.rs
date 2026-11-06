@@ -58,6 +58,13 @@
 //! Any new shared state is a new inventory line that must resolve to
 //! single-owner-or-atomic before it lands.
 //!
+//! The boundary named above was the C++ `levin_notify.cpp` across
+//! `shekyl-ffi`. It is now [`owner`], one task in this crate on the session
+//! layer's dispatch table (`P2P_3_REMNANT_CUTOVER_BRIEF.md` §2.1): the
+//! callbacks became direct calls, the published atomics a
+//! [`owner::RelaySnapshot`], and the registry the owner's own map of
+//! `Established` handles.
+//!
 //! # Sync core, driven from outside
 //!
 //! [`Relay`] is a plain `&mut self` state machine that returns deadlines —
@@ -71,6 +78,7 @@ pub mod driver;
 pub mod floor_diag;
 pub mod graph;
 mod noise_queue;
+pub mod owner;
 pub mod stem_watch;
 
 pub use driver::{Driver, Effect};
@@ -82,5 +90,5 @@ pub use graph::{
     RelayDispatch, RelayNewError, RelayPlan, TxBlob, NEVER_SENT_RETRY_MS,
 };
 pub use noise_queue::{CarrierOutcome, CarrierToken, NoiseQueues, NoiseSend};
-pub use shekyl_relay_privacy::SlotIndex;
+pub use shekyl_relay_privacy::{ConnectionId, SlotIndex};
 pub use stem_watch::{StemOutcome, StemTally, StemTallySnapshot, StemWatch, TxId};

@@ -42,8 +42,6 @@ monero_add_library(serialization
 target_link_libraries(serialization
   LINK_PRIVATE
     cryptonote_basic
-    cryptonote_core
-    cryptonote_protocol
     epee
     ${Boost_CHRONO_LIBRARY}
     ${Boost_REGEX_LIBRARY}

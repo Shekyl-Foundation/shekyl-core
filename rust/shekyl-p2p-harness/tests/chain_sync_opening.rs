@@ -20,7 +20,7 @@ use shekyl_p2p_harness::sync::{Bodies, MutePeer, Node, ServingPeer, Step};
 #[path = "chain_sync/support.rs"]
 mod support;
 
-use support::{claim, claim_of, logs, rng, source, spend, wait_synced, LIMIT};
+use support::{claim, claim_of, logs, rng, session_rng, source, spend, wait_synced, LIMIT};
 
 /// One past the longest header deadline the model arms: the first
 /// session's transit, at most a few seconds on a hand clock's connector,
@@ -87,10 +87,18 @@ async fn a_fresh_node_behind_reads_no_view_then_behind_then_synced() {
     let (corpus, steps) = spend();
     let held = source("opening-behind-src", &corpus, &steps).await;
     let (count, _, _) = held.tip().expect("a chain");
-    let mut node = Node::start("opening-behind", corpus.rules(), &steps[..1], 2, rng()).await;
+    let mut node = Node::start(
+        "opening-behind",
+        corpus.rules(),
+        &steps[..1],
+        2,
+        rng(),
+        session_rng(),
+    )
+    .await;
     let (kinds, watcher) = record(&node);
     let (peer, _seen) = ServingPeer::new(Arc::clone(&held.store), Bodies::Honest);
-    node.connect(Box::new(peer), Some(claim_of(&held)));
+    node.connect(Box::new(peer), Some(claim_of(&held))).await;
     wait_synced(&node, count).await;
     let kinds = history(&node, &kinds, &watcher);
     assert_eq!(kinds, vec!["NoView", "Behind", "Synced"]);
@@ -107,10 +115,18 @@ async fn a_node_at_the_tip_reads_no_view_then_synced_and_asks_nothing() {
     logs();
     let (corpus, steps) = spend();
     let held = source("opening-tip-src", &corpus, &steps).await;
-    let mut node = Node::start("opening-tip", corpus.rules(), &steps, 2, rng()).await;
+    let mut node = Node::start(
+        "opening-tip",
+        corpus.rules(),
+        &steps,
+        2,
+        rng(),
+        session_rng(),
+    )
+    .await;
     let (kinds, watcher) = record(&node);
     let (peer, seen) = ServingPeer::new(Arc::clone(&held.store), Bodies::Honest);
-    node.connect(Box::new(peer), Some(claim_of(&held)));
+    node.connect(Box::new(peer), Some(claim_of(&held))).await;
     assert!(
         node.wait(LIMIT, |node| node.state() == SyncState::Synced)
             .await,
@@ -137,10 +153,19 @@ async fn a_node_at_the_tip_reads_no_view_then_synced_and_asks_nothing() {
 async fn a_liar_holds_the_opening_until_the_header_deadline_and_no_longer() {
     logs();
     let (corpus, steps) = spend();
-    let mut node = Node::start("opening-liar", corpus.rules(), &steps, 2, rng()).await;
+    let mut node = Node::start(
+        "opening-liar",
+        corpus.rules(),
+        &steps,
+        2,
+        rng(),
+        session_rng(),
+    )
+    .await;
     let (count, work, top) = node.chain.tip().expect("a chain");
     let (liar, _seen) = MutePeer::new();
-    node.connect(Box::new(liar), Some(claim(count + 50, work * 4, top)));
+    node.connect(Box::new(liar), Some(claim(count + 50, work * 4, top)))
+        .await;
     // Long enough for an owner that publishes on the open or the claim to
     // have done so.
     let early = node
@@ -161,7 +186,8 @@ async fn a_liar_holds_the_opening_until_the_header_deadline_and_no_longer() {
         node.state()
     );
     let (second, _seen) = MutePeer::new();
-    node.connect(Box::new(second), Some(claim(count + 90, work * 8, top)));
+    node.connect(Box::new(second), Some(claim(count + 90, work * 8, top)))
+        .await;
     let moved = node
         .wait(Duration::from_secs(5), |node| {
             node.state() != SyncState::Synced
@@ -195,11 +221,20 @@ async fn during_the_opening_a_local_block_connects_and_is_not_relayed() {
             ml_kem_ek: recipient.ml_kem_ek.clone(),
         }
     };
-    let mut node =
-        Node::start_mining("opening-quiet", corpus.rules(), before, 2, rng(), keys).await;
+    let mut node = Node::start_mining(
+        "opening-quiet",
+        corpus.rules(),
+        before,
+        2,
+        rng(),
+        session_rng(),
+        keys,
+    )
+    .await;
     let (count, work, top) = node.chain.tip().expect("a chain");
     let (liar, seen) = MutePeer::new();
-    node.connect(Box::new(liar), Some(claim(count + 50, work * 4, top)));
+    node.connect(Box::new(liar), Some(claim(count + 50, work * 4, top)))
+        .await;
     let mined = node
         .chain
         .service

@@ -33,15 +33,20 @@ shekyl-chain-rules = { path = "../shekyl-chain-rules" }
 shekyl-chain-store = { path = "../shekyl-chain-store" }
 shekyl-daemon-config = { path = "../shekyl-daemon-config" }
 shekyl-daemon-rpc = { path = "../shekyl-daemon-rpc" }
-shekyl-ffi = { path = "../shekyl-ffi" }
 shekyl-genesis-tool = { path = "../shekyl-genesis-tool" }
 shekyl-hash-budget = { path = "../shekyl-hash-budget" }
 shekyl-mempool = { path = "../shekyl-mempool" }
 shekyl-miner = { path = "../shekyl-miner" }
+# Hostnames the connection list renders from a dialed onion's service key.
+shekyl-onion-v3 = { path = "../shekyl-onion-v3" }
+# The network the node builds and stops (P2P_3_REMNANT_CUTOVER_BRIEF.md
+# section 2): the one way sockets, sessions and the relay are reached.
+shekyl-p2p = { path = "../shekyl-p2p" }
+# The handshake network id from the pinned genesis (PWD-B1).
+shekyl-p2p-transport = { path = "../shekyl-p2p-transport" }
 shekyl-pow-randomx = { path = "../shekyl-pow-randomx" }
 shekyl-rpc-types = { path = "../shekyl-rpc-types" }
 shekyl-runtime = { path = "../shekyl-runtime" }
-shekyl-seam = { path = "../shekyl-seam" }
 shekyl-timing-engine = { path = "../shekyl-timing-engine" }
 shekyl-relay = { path = "../shekyl-relay" }
 shekyl-transport-layer = { path = "../shekyl-transport-layer" }

@@ -56,17 +56,15 @@
 //! `/get_stem_tallies` carries that connector on the row.
 //!
 //! ```text
-//! levin_notify.cpp  dandelionpp_notify        <- every zone, noise-off
-//!         |
-//!         v
-//! levin_notify.cpp  record_stem_observation
-//!         |
-//!         v
-//! shekyl-ffi        shekyl_relay_zone_record_stem
+//! shekyl-relay      owner::actor  (a stem forwarded to a successor)
 //!         |
 //!         v
 //! shekyl-relay      Relay::record_stem  ->  StemWatch::stemmed
 //! ```
+//!
+//! (Until 2026-11-05 the first two hops were `levin_notify.cpp`'s
+//! `dandelionpp_notify` → `record_stem_observation` and `shekyl-ffi`'s
+//! `shekyl_relay_zone_record_stem`; the relay owner took their place.)
 //!
 //! **An empty tally for a connector that is not configured still means "no
 //! stems", not "no drops".** The two read identically off [`StemTally`] and
@@ -105,6 +103,34 @@ impl TxId {
     #[must_use]
     pub const fn as_bytes(&self) -> &[u8; 32] {
         &self.0
+    }
+
+    /// The ids' first eight bytes, hex, space-separated: the form the
+    /// relay's debug lines name transactions in, so one transaction can be
+    /// followed from a sender's log to a receiver's (the brief's fleet
+    /// evidence, `P2P_3_REMNANT_CUTOVER_BRIEF.md` §5).
+    #[must_use]
+    pub fn short_list(ids: &[TxId]) -> String {
+        let mut out = String::with_capacity(ids.len() * 17);
+        for (n, id) in ids.iter().enumerate() {
+            if n > 0 {
+                out.push(' ');
+            }
+            for byte in &id.0[..8] {
+                out.push_str(&format!("{byte:02x}"));
+            }
+        }
+        out
+    }
+
+    /// [`Self::short_list`] for a relay debug line, in a measurement build
+    /// only (the `measurement-spans` feature). A shipped node logs counts:
+    /// ids beside the session a batch came from, or the stem hop it went
+    /// to, would let its own log name the transactions it originated and
+    /// where it first sent them, which the C++ relay's lines never did.
+    #[must_use]
+    pub fn measured_list(ids: &[TxId]) -> Option<String> {
+        cfg!(feature = "measurement-spans").then(|| Self::short_list(ids))
     }
 }
 
@@ -444,6 +470,28 @@ mod tests {
         let mut x = [0u8; 16];
         x[0] = b;
         ConnectionId::from_bytes(x)
+    }
+
+    #[test]
+    fn short_list_names_each_id_by_its_first_eight_bytes() {
+        let mut full = [0xabu8; 32];
+        full[7] = 0x01;
+        full[8] = 0xff;
+        assert_eq!(
+            TxId::short_list(&[tx(0x5a), TxId::from_bytes(full)]),
+            "5a00000000000000 ababababababab01",
+            "sixteen hex digits each, the ninth byte never shown, space-separated"
+        );
+        assert_eq!(TxId::short_list(&[]), "");
+    }
+
+    /// The ids reach a debug line in a measurement build only.
+    #[test]
+    fn only_a_measurement_build_names_the_ids() {
+        assert_eq!(
+            TxId::measured_list(&[tx(0x5a)]).is_some(),
+            cfg!(feature = "measurement-spans")
+        );
     }
 
     #[test]

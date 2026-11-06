@@ -10,7 +10,6 @@ All binaries are placed in `build/release/bin/` (or `build/debug/bin/`).
 | `shekyld` | Full-node daemon (P2P, consensus, RPC) |
 | `shekyl-cli` | Interactive command-line wallet (Rust) |
 | `shekyl-wallet-rpc` | Headless wallet exposed via JSON-RPC |
-| `shekyl-gen-ssl-cert` | TLS certificate / key generator for RPC |
 | `shekyl-utils-deserialize` | Decode hex blobs to human-readable JSON |
 
 The `shekyl-utils-*` executables are only built when `BUILD_DEBUG_UTILITIES=ON`.
@@ -383,40 +382,7 @@ shekyl-wallet-rpc --wallet-dir ~/wallets \
                   --rpc-login user:password
 ```
 
-## 4. `shekyl-gen-ssl-cert` — TLS Certificate Generator
-
-Generates an RSA TLS certificate and private key. No Shekyl RPC binary consumes them any more (the C++ `--rpc-ssl-*` surface is retired, §3); the output suits a TLS terminator you run in front of the daemon.
-Prints the SHA-256 fingerprint of the generated certificate.
-
-### Usage
-
-```
-shekyl-gen-ssl-cert --certificate-filename=<file> --private-key-filename=<file> [options]
-```
-
-### Options
-
-| Option | Description |
-|--------|-------------|
-| `--certificate-filename <file>` | Output path for the PEM certificate (required) |
-| `--private-key-filename <file>` | Output path for the PEM private key (required) |
-| `--passphrase <pass>` | Encrypt the private key with a passphrase |
-| `--passphrase-file <file>` | Read passphrase from a file |
-| `--prompt-for-passphrase` | Interactively prompt for a passphrase |
-
-### Example
-
-```bash
-shekyl-gen-ssl-cert \
-    --certificate-filename /etc/shekyl/rpc.crt \
-    --private-key-filename /etc/shekyl/rpc.key
-# → prints SHA-256 fingerprint. No Shekyl RPC binary takes `--rpc-ssl-*` any
-#   more (see §3); the output is for a TLS terminator you run in front.
-```
-
----
-
-## 5. Debug Utilities
+## 4. Debug Utilities
 
 Built only when `BUILD_DEBUG_UTILITIES=ON` is set at CMake configure time.
 

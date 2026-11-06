@@ -129,7 +129,7 @@ pub fn install_dispositions() {
     // A peer that closes its socket mid-write must be an `EPIPE` on that
     // write, never a signal that ends the daemon.
     #[cfg(unix)]
-    shekyl_ffi::platform::ignore_sigpipe();
+    shekyl_process::platform::ignore_sigpipe();
 }
 
 #[cfg(test)]

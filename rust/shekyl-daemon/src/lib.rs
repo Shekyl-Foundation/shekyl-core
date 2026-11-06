@@ -4,76 +4,45 @@
 // BSD-3-Clause
 
 //! The daemon's Rust `main()` (`docs/design/DAEMON_CONFIG_CUTOVER.md` §2.2,
-//! DC-Q13, DC-Q19).
+//! DC-Q13, DC-Q19; `P2P_3_REMNANT_CUTOVER_BRIEF.md` §2).
 //!
 //! `shekyld` (`rust/shekyld`) is the binary: its `main` is Rust's, and it
-//! calls [`main`] with the C++ remnant's two functions ([`remnant`]) and the
-//! process's argument vector. Everything here is safe Rust: the remnant is
-//! reached through function pointers the binary handed over, the one
-//! export it calls back is [`stop`], and the platform probes come from
-//! `shekyl-ffi`.
+//! calls [`main`] with the process's argument vector. Everything here is
+//! safe Rust: the node and its network are `shekyl-node`'s, the process
+//! probes and hardening are `shekyl-process`'s, and nothing reaches an
+//! FFI.
 
 #![deny(unsafe_code)]
 
 pub mod help;
+pub mod levers;
 pub mod network;
+pub mod notify;
 pub mod options;
-pub mod p2p_reads;
-pub mod remnant;
 pub mod run;
 pub mod signals;
-pub mod stop;
 pub mod tor;
 pub mod verify;
 
-pub use remnant::{RelayLocalFn, Remnant, RunFn, StopFn};
-pub use run::{Host, EXIT_FAILED, EXIT_REFUSED};
+pub use run::{EXIT_FAILED, EXIT_REFUSED};
 
 /// The entry with the real platform: the account's roots from the
-/// operating system, the network id's one derivation, and `args`, the
-/// argument vector Rust's process entry resolved (IG-Q2). Returns the exit
-/// status; the binary exits with it.
+/// operating system, and `args`, the argument vector Rust's process entry
+/// resolved (IG-Q2). Returns the exit status; the binary exits with it.
 ///
 /// The first statement is the process hardening (DC-Q21): no core, no
 /// same-account tracer, before an argument is read. A process that cannot
 /// apply it does not go on to hold anything worth protecting; it says so
 /// on standard error and exits [`EXIT_FAILED`].
 #[must_use]
-pub fn main(remnant: Remnant, args: &[std::ffi::OsString]) -> i32 {
-    if let Err(e) = shekyl_ffi::harden::harden_process() {
+pub fn main(args: &[std::ffi::OsString]) -> i32 {
+    if let Err(e) = shekyl_process::harden::harden_process() {
         run::tell(
             &mut std::io::stderr(),
             &format!("shekyld: process hardening {e}; not starting"),
         );
         return EXIT_FAILED;
     }
-    shekyl_ffi::panic_hook::install();
-    // The RPC's reads, before anything could construct an RPC: the
-    // remnant's `run` reaches `shekyl_daemon_rpc_start` from C++ (DC-F43).
-    // The peer lists and the session counts are Rust, installed here
-    // because this crate sees both the RPC and `shekyl-ffi`. The core
-    // seam is only the C++ functions the binary handed over.
-    if !shekyl_daemon_rpc::p2p_reads::install(p2p_reads::installed()) {
-        run::tell(
-            &mut std::io::stderr(),
-            "shekyld: the p2p reads were already installed; not starting",
-        );
-        return EXIT_FAILED;
-    }
-    if !shekyl_daemon_rpc::seam::install(remnant.core) {
-        run::tell(
-            &mut std::io::stderr(),
-            "shekyld: the core seam was already installed; not starting",
-        );
-        return EXIT_FAILED;
-    }
-    run::main(remnant, args, &host())
-}
-
-/// This machine's platform facts and the network id derivation.
-pub(crate) fn host() -> Host {
-    Host {
-        platform: shekyl_ffi::platform::current(),
-        network_id_of: shekyl_ffi::network_id_ffi::network_id_of,
-    }
+    shekyl_process::panic_hook::install();
+    run::main(args, &shekyl_process::platform::current())
 }

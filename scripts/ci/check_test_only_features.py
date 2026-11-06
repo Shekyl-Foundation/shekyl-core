@@ -260,6 +260,15 @@ TEST_ONLY: dict[tuple[str, str], str] = {
     "A driver that shipped would be a second producer (the crate's own "
     "docs); this row is what keeps it in tests",
     (
+        "shekyl-p2p-session",
+        "harness",
+    ): "the in-memory peer and the scripted frames (Loopback, Wire, the "
+    "1001/1002/2002 builders). The session crate's own tests enable it on "
+    "the crate's dev edge, and shekyl-p2p-harness's tests enable it on "
+    "theirs; the harness library builds its own 1001 from the public Levin "
+    "types, so no normal edge names the feature. A shipped session has no "
+    "in-memory peer",
+    (
         "shekyl-draw-rng",
         "splitmix",
     ): "compiles SplitMix64, the seeded reference generator the relay, "
@@ -366,6 +375,9 @@ PERMANENT: dict[tuple[str, str], str] = {
 # feature, and it is test-only.
 # `shekyl-bundle-producer` joined 2026-10-25, the commit whose ingest
 # feature first enables its `fetch` (`SO-D12` increment 4c).
+# `shekyl-p2p-session` joined 2026-11-05 (the p2p remnant cutover, PR #1272):
+# its `harness` feature is enabled across a crate boundary by
+# shekyl-p2p-harness's tests. That is its only feature, and it is test-only.
 #
 # This set is opt-in — the crates named below, out of a workspace approaching
 # seventy — so exhaustiveness holds *within* governance. The rule for joining: **a crate
@@ -392,6 +404,7 @@ GOVERNED_OWNERS: frozenset[str] = frozenset(
         "shekyl-mempool",
         "shekyl-bundle-producer",
         "shekyl-curve-tree",
+        "shekyl-p2p-session",
         "shekyl-network",
     }
 )

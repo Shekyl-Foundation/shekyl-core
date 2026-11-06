@@ -11,23 +11,27 @@
 //! is missing the owner loop waits on the change, not on its timer.
 //!
 //! Each wake here is [`Dialer::wake`], what the owner loop runs when its timer
-//! fires. [`Dialer::dial`] is the named draw, and it reads the same gate. The
-//! hub has no connector installed, so a dial that is made fails at once as a
-//! local close, as a dial through a dead proxy does.
+//! fires. [`Dialer::dial`] is the named draw, and it reads the same gate. No
+//! connector is installed on the rig's peer, so a dial that is made fails at
+//! once as a local close, as a dial through a dead proxy does.
+
+#[path = "support/rig.rs"]
+mod rig;
+#[path = "support/tables.rs"]
+mod tables;
 
 use std::collections::BTreeSet;
 use std::net::Ipv4Addr;
 use std::sync::Arc;
 use std::thread;
-use std::time::{Duration, Instant};
+use std::time::Duration;
 
-use shekyl_dialer::{DialAim, Dialer, NotReady, SnapshotSource};
+use rig::{wait_until, Build, Rig};
+use shekyl_dialer::{DialAim, Dialer, NotReady};
 use shekyl_draw_rng::SplitMix64;
-use shekyl_peer_policy::InboundCeiling;
-use shekyl_peerlist::{ConnectorId, ListName, NetworkAddress, RefusedSet, Tick};
-use shekyl_seam::{DownCause, Hub, Route, RoutePublish, SyncPayload};
-use shekyl_timing_engine::{Clock, EngineService, ManualClock, OwnerClass};
-use shekyl_transport_layer::Sockets;
+use shekyl_peerlist::{ConnectorId, ListName, NetworkAddress, Tick};
+use shekyl_timing_engine::{Clock, ManualClock, OwnerClass};
+use shekyl_transport_layer::{DialEnd, DownCause, Route, RoutePublish};
 
 const CLEARNET: ConnectorId = ConnectorId::Clearnet;
 
@@ -47,38 +51,30 @@ fn peer(n: u8) -> NetworkAddress {
     }
 }
 
-fn tip() -> SnapshotSource {
-    Arc::new(|| {
-        Some(SyncPayload {
-            current_height: 1,
-            cumulative_difficulty: 1,
-            cumulative_difficulty_top64: 0,
-            top_id: [0; 32],
-        })
-    })
-}
+type TestDialer = Dialer<ManualClock>;
 
-/// A dialer over a hub with no connector, with four clearnet addresses in
-/// gray. The link and the network id are left to each test.
-fn dialer(clock: &ManualClock, snapshot: SnapshotSource) -> Arc<Dialer> {
-    let hub = Hub::new(
-        Sockets::new(),
-        InboundCeiling::Bounded(8),
-        Arc::new(|_post| {}),
-        Arc::new(clock.clone()),
-    );
-    let dialer = Arc::new(Dialer::new(hub, RefusedSet::NON_GLOBAL, snapshot));
+/// A rig with no connector installed and no route published, with four
+/// clearnet addresses in gray. The link and the layer are left to each
+/// test.
+fn rig_on(clock: &ManualClock, attached: bool) -> Rig {
+    let build = Build::on(clock).routes(&[]);
+    let rig = if attached { build } else { build.unattached() }.finish();
+    rig.peer.refuse_unqueued(DialEnd::local_close());
     let mut rng = SplitMix64::new(1);
     for n in 1..=4 {
-        dialer
+        rig.dialer
             .admit_operator(&peer(n), Tick::new(1), &mut rng)
             .expect("admitted");
     }
-    dialer
+    rig
+}
+
+fn rig() -> Rig {
+    rig_on(&ManualClock::new(Tick::new(1)), true)
 }
 
 /// The clearnet gray list.
-fn gray(dialer: &Dialer) -> BTreeSet<NetworkAddress> {
+fn gray(dialer: &TestDialer) -> BTreeSet<NetworkAddress> {
     dialer
         .shared()
         .lists
@@ -93,15 +89,15 @@ fn gray(dialer: &Dialer) -> BTreeSet<NetworkAddress> {
 }
 
 /// Run `n` wakes; how many of them dialed.
-fn wakes(dialer: &Dialer, n: usize) -> usize {
+fn wakes(dialer: &TestDialer, n: usize) -> usize {
     let mut rng = SplitMix64::new(9);
     (0..n).filter(|_| dialer.wake(CLEARNET, &mut rng)).count()
 }
 
 /// Usable, then down, as the zone host publishes a Tor route and that Tor's
 /// death.
-fn take_link_down(dialer: &Dialer) {
-    let links = dialer.hub().links();
+fn take_link_down(dialer: &TestDialer) {
+    let links = dialer.links();
     let incarnation = links
         .publish_usable(CLEARNET, Route::Direct, Tick::new(1))
         .incarnation();
@@ -118,17 +114,17 @@ fn take_link_down(dialer: &Dialer) {
 /// one address, the dial failed locally, and the address left gray.
 #[test]
 fn a_connector_whose_link_is_down_keeps_its_gray_list() {
-    let dialer = dialer(&ManualClock::new(Tick::new(1)), tip());
-    dialer.set_network_id([7; 16]);
-    take_link_down(&dialer);
-    let before = gray(&dialer);
+    let rig = rig();
+    let dialer = &rig.dialer;
+    take_link_down(dialer);
+    let before = gray(dialer);
     assert_eq!(before.len(), 4);
     assert_eq!(
         dialer.readiness(CLEARNET),
         Err(NotReady::LinkDown(DownCause::ProcessExited))
     );
-    assert_eq!(wakes(&dialer, WAKES), 0, "no wake dialed");
-    assert_eq!(gray(&dialer), before, "gray is unchanged, seat for seat");
+    assert_eq!(wakes(dialer, WAKES), 0, "no wake dialed");
+    assert_eq!(gray(dialer), before, "gray is unchanged, seat for seat");
 }
 
 /// A named dial is the other draw. It reads the same gate, so a down
@@ -136,15 +132,15 @@ fn a_connector_whose_link_is_down_keeps_its_gray_list() {
 /// address, the dial fails locally, and the address leaves gray.
 #[test]
 fn a_direct_dial_draws_nothing_while_the_link_is_down() {
-    let dialer = dialer(&ManualClock::new(Tick::new(1)), tip());
-    dialer.set_network_id([7; 16]);
-    take_link_down(&dialer);
-    let before = gray(&dialer);
+    let rig = rig();
+    let dialer = &rig.dialer;
+    take_link_down(dialer);
+    let before = gray(dialer);
     let address = before.iter().next().expect("a gray address").clone();
     assert!(dialer
         .dial(CLEARNET, &address, DialAim::Keep, &mut SplitMix64::new(4))
         .is_none());
-    assert_eq!(gray(&dialer), before, "an unready dial does not draw");
+    assert_eq!(gray(dialer), before, "an unready dial does not draw");
 }
 
 /// A stop and an exit are different causes. The waiting line names which.
@@ -167,20 +163,19 @@ fn a_stopped_link_is_not_described_as_an_exit() {
 /// draws, three addresses gone".*
 #[test]
 fn the_same_wakes_over_a_usable_link_draw_and_cool_their_addresses() {
-    let dialer = dialer(&ManualClock::new(Tick::new(1)), tip());
-    dialer.set_network_id([7; 16]);
+    let rig = rig();
+    let dialer = &rig.dialer;
     assert!(
         matches!(
             dialer
-                .hub()
                 .links()
                 .publish_usable(CLEARNET, Route::Direct, Tick::new(1)),
             RoutePublish::Installed { .. }
         ),
         "the test route was not already usable"
     );
-    assert_eq!(wakes(&dialer, 3), 3);
-    let gray = gray(&dialer);
+    assert_eq!(wakes(dialer, 3), 3);
+    let gray = gray(dialer);
     assert_eq!(gray.len(), 4, "three draws, nothing gone");
     let cooling = gray
         .iter()
@@ -191,59 +186,40 @@ fn the_same_wakes_over_a_usable_link_draw_and_cool_their_addresses() {
 
 #[test]
 fn a_connector_with_no_route_draws_nothing() {
-    let dialer = dialer(&ManualClock::new(Tick::new(1)), tip());
-    dialer.set_network_id([7; 16]);
-    let before = gray(&dialer);
+    let rig = rig();
+    let dialer = &rig.dialer;
+    let before = gray(dialer);
     assert_eq!(dialer.readiness(CLEARNET), Err(NotReady::NoRoute));
-    assert_eq!(wakes(&dialer, WAKES), 0);
-    assert_eq!(gray(&dialer), before);
+    assert_eq!(wakes(dialer, WAKES), 0);
+    assert_eq!(gray(dialer), before);
 }
 
+/// Before the composition attaches the session layer there is nothing to
+/// dial through: the tip and the network id are the layer's (brief §2.1),
+/// so the one gate that was `NoTip` and `NoNetworkId` is the layer's
+/// absence. *Records-was (to the remnant cutover): the dialer read a tip
+/// closure and a network id of its own.*
 #[test]
-fn a_connector_with_no_published_tip_draws_nothing() {
-    let dialer = dialer(&ManualClock::new(Tick::new(1)), Arc::new(|| None));
-    dialer.set_network_id([7; 16]);
+fn a_connector_with_no_session_layer_draws_nothing() {
+    let rig = rig_on(&ManualClock::new(Tick::new(1)), false);
+    let dialer = &rig.dialer;
     assert!(
         matches!(
             dialer
-                .hub()
                 .links()
                 .publish_usable(CLEARNET, Route::Direct, Tick::new(1)),
             RoutePublish::Installed { .. }
         ),
         "the test route was not already usable"
     );
-    let before = gray(&dialer);
-    assert_eq!(dialer.readiness(CLEARNET), Err(NotReady::NoTip));
-    assert_eq!(wakes(&dialer, WAKES), 0);
-    assert_eq!(gray(&dialer), before);
-}
-
-#[test]
-fn a_connector_with_no_network_id_draws_nothing() {
-    let dialer = dialer(&ManualClock::new(Tick::new(1)), tip());
-    assert!(
-        matches!(
-            dialer
-                .hub()
-                .links()
-                .publish_usable(CLEARNET, Route::Direct, Tick::new(1)),
-            RoutePublish::Installed { .. }
-        ),
-        "the test route was not already usable"
+    let before = gray(dialer);
+    assert_eq!(dialer.readiness(CLEARNET), Err(NotReady::NoLayer));
+    assert_eq!(
+        NotReady::NoLayer.describe(),
+        "the session layer is not attached"
     );
-    let before = gray(&dialer);
-    assert_eq!(dialer.readiness(CLEARNET), Err(NotReady::NoNetworkId));
-    assert_eq!(wakes(&dialer, WAKES), 0);
-    assert_eq!(gray(&dialer), before);
-}
-
-fn wait_until(what: &str, mut condition: impl FnMut() -> bool) {
-    let start = Instant::now();
-    while !condition() {
-        assert!(start.elapsed() < Duration::from_secs(5), "{what}");
-        thread::sleep(Duration::from_millis(2));
-    }
+    assert_eq!(wakes(dialer, WAKES), 0);
+    assert_eq!(gray(dialer), before);
 }
 
 /// **The owner loop parks on change.** While the link is down the loop arms
@@ -254,23 +230,19 @@ fn wait_until(what: &str, mut condition: impl FnMut() -> bool) {
 #[test]
 fn the_owner_loop_waits_on_the_link_and_resumes_when_it_returns() {
     let clock = ManualClock::new(Tick::new(1_000_000_000));
-    let service = EngineService::start(clock.clone());
-    let dialer = dialer(&clock, tip());
-    dialer.set_network_id([7; 16]);
-    take_link_down(&dialer);
-    let before = gray(&dialer);
+    let rig = rig_on(&clock, true);
+    let dialer = &rig.dialer;
+    let service = &rig.timing;
+    take_link_down(dialer);
+    let before = gray(dialer);
 
-    let owner = service
-        .handle()
-        .register(OwnerClass::Discovery)
-        .expect("register");
-    let running = Arc::clone(&dialer);
+    let owner = service.register(OwnerClass::Discovery).expect("register");
+    let running = Arc::clone(dialer);
     let loop_thread = thread::spawn(move || {
         running.run(CLEARNET, &owner, &mut SplitMix64::new(2));
     });
     let fires = || {
         service
-            .handle()
             .lateness(OwnerClass::Discovery)
             .expect("lateness")
             .fires
@@ -280,13 +252,10 @@ fn the_owner_loop_waits_on_the_link_and_resumes_when_it_returns() {
     let spacing = WAKE_BASE_NANOS + WAKE_JITTER_NANOS;
     thread::sleep(Duration::from_millis(100));
     clock.set(Tick::new(clock.now().get() + 10 * spacing));
-    let nudge = service
-        .handle()
-        .register(OwnerClass::Interim)
-        .expect("nudge");
+    let nudge = service.register(OwnerClass::Interim).expect("nudge");
     thread::sleep(Duration::from_millis(200));
     assert_eq!(fires(), 0, "a parked loop armed a timer");
-    assert_eq!(gray(&dialer), before);
+    assert_eq!(gray(dialer), before);
     drop(nudge);
 
     // The link returns: a return from down is a new route, the loop arms
@@ -294,7 +263,6 @@ fn the_owner_loop_waits_on_the_link_and_resumes_when_it_returns() {
     assert!(
         matches!(
             dialer
-                .hub()
                 .links()
                 .publish_usable(CLEARNET, Route::Direct, clock.now()),
             RoutePublish::Installed { .. }
@@ -303,22 +271,19 @@ fn the_owner_loop_waits_on_the_link_and_resumes_when_it_returns() {
     );
     thread::sleep(Duration::from_millis(100));
     clock.set(Tick::new(clock.now().get() + spacing + 1));
-    let _nudge = service
-        .handle()
-        .register(OwnerClass::Interim)
-        .expect("nudge");
+    let _nudge = service.register(OwnerClass::Interim).expect("nudge");
     // A dial that fails cools its address rather than dropping it (the gray
     // lifecycle), so the sign of a dial is a cooling address.
     wait_until("the loop did not dial after the link returned", || {
-        gray(&dialer)
+        gray(dialer)
             .iter()
             .any(|address| dialer.shared().lists.is_cooling(address))
     });
-    assert_eq!(gray(&dialer).len(), before.len(), "nothing left gray");
+    assert_eq!(gray(dialer).len(), before.len(), "nothing left gray");
     assert!(fires() >= 1);
 
-    // Closing the engine ends the loop wherever it waits.
-    service.close();
+    // Stopping the dialer ends the loop wherever it waits.
+    dialer.stop();
     wait_until("the loop did not end when the engine closed", || {
         loop_thread.is_finished()
     });
@@ -338,17 +303,15 @@ enum Ending {
 /// engine's close (Copilot on #1092: the bell alone saw only the stop).
 fn a_parked_loop_ends_at(ending: Ending) {
     let clock = ManualClock::new(Tick::new(1_000_000_000));
-    let service = EngineService::start(clock.clone());
-    let dialer = dialer(&clock, tip());
-    dialer.set_network_id([7; 16]);
-    take_link_down(&dialer);
+    let rig = rig_on(&clock, true);
+    let dialer = &rig.dialer;
+    take_link_down(dialer);
     let owner = Arc::new(
-        service
-            .handle()
+        rig.timing
             .register(OwnerClass::Discovery)
             .expect("register"),
     );
-    let running = Arc::clone(&dialer);
+    let running = Arc::clone(dialer);
     let held = Arc::clone(&owner);
     let loop_thread = thread::spawn(move || {
         running.run(CLEARNET, &held, &mut SplitMix64::new(3));
@@ -360,7 +323,7 @@ fn a_parked_loop_ends_at(ending: Ending) {
     );
     match ending {
         Ending::Stop => dialer.stop(),
-        Ending::EngineClosed => service.close(),
+        Ending::EngineClosed => rig.close_engine(),
         Ending::OwnerDeregistered => owner.deregister().expect("deregister"),
     }
     wait_until("the parked loop did not end", || loop_thread.is_finished());

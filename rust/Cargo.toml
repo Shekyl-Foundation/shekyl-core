@@ -103,7 +103,7 @@ members = [
     # draws + the stem map), derived from the paper rather than inherited as
     # `#define`s. The default build's one dependency is `shekyl-draw-rng`.
     # Its `conformance` feature pulls `shekyl-stats`, the same grader split
-    # as `shekyl-standoff`. The C++ relay path is still the daemon's.
+    # as `shekyl-standoff`. The relay owner (`shekyl-relay`) consumes it.
     "shekyl-relay-privacy",
 
     # Live daemon relay scheduler (RP-3a): owns the Dandelion++ zone state and
@@ -149,10 +149,9 @@ members = [
 
     # Levin p2p framing layer (bucket header, fragments, noise) — the
     # byte-exact Rust skeleton of docs/LEVIN_PROTOCOL.md, KAT'd against the
-    # C++ epee::levin oracle. Framing only: no portable_storage, no sockets.
-    # Ingress policy and the white-noise emitters are production-live
-    # through shekyl-ffi's shekyl_levin_* exports; the reader is inert until
-    # the scheduled p2p cutover (IMPLEMENTATION_INDEX.md LV row).
+    # pinned C++ epee::levin vectors. Framing and the portable-storage maps;
+    # no sockets. The session layer (`shekyl-p2p-session`) is its one
+    # production reader and writer since the p2p cutover (2026-11-05).
     "shekyl-levin",
 
     # LV-2a: binary portable_storage codec. Limits are a parameter so HTTP
@@ -185,9 +184,10 @@ members = [
     "shekyl-archival-bond-builder",
 
     # The daemon binary (DAEMON_CONFIG_CUTOVER.md DC-Q19): a Rust `main`
-    # over `shekyl-daemon`'s sequence, linking the C++ remnant's archives
-    # through CMake (Corrosion). One Rust dependency graph, so one
-    # tracing-core dispatcher; the staged binary's nm gate asserts it.
+    # over `shekyl-daemon`'s sequence. All Rust since the p2p cutover
+    # (2026-11-05): it links no C++ and does not depend on `shekyl-ffi`.
+    # One Rust dependency graph, so one tracing-core dispatcher; the staged
+    # binary's nm gate asserts it.
     "shekyld",
     "shekyl-encoding",
     "shekyl-address",
@@ -320,7 +320,7 @@ members = [
     "shekyl-peerlist",
     # The outbound dialer: the fill rule, the wake spacing, the failed-address
     # memory and the self-connection nonces, over `shekyl-peerlist`
-    # (P2P-3 slice 3). The C++ reaches it only through `shekyl-ffi`.
+    # (P2P-3 slice 3). The peers owner's dialing half, under `shekyl-p2p`.
     "shekyl-dialer",
     # SOCKS5 CONNECT, no authentication. Clearnet's --proxy and the Tor
     # connector share it. It does not know which connector is calling.
@@ -336,9 +336,15 @@ members = [
     # the blocking pool. Dial is SOCKS5 through shekyl-socks. Inbound is
     # accept_tor, then the gap timer. See P2P_TRANSPORT_LAYER.md.
     "shekyl-tor",
-    # The seam: SocketId, one cause, posts onto the connection strand.
-    # epee's TCP server is deleted (D13).
-    "shekyl-seam",
+    # The session layer: the Levin handshake both ways, the self-connection
+    # nonces, timed sync, the dispatch table over `Command`, the board
+    # (P2P_3_REMNANT_CUTOVER_BRIEF.md §7). Replaced shekyl-seam.
+    "shekyl-p2p-session",
+    # The network composition: connectors per configuration, the session
+    # layer and its owners, the process engine and transport runtime, the
+    # stop order, the RPC's facts from the board (brief §2). The node builds
+    # one `Network`; nothing above it reaches shekyl-ffi.
+    "shekyl-p2p",
     # P2P conformance harness (P2P_DIFFERENTIAL_HARNESS.md). The scripted
     # peer, the seam host, the transcript comparator, and check-goldens.
     # Nothing in the production graph depends on it. The epee recording
@@ -444,14 +450,17 @@ members = [
     # the table, precedence, the file, the lock, the marker, the sections.
     "shekyl-daemon-config",
 
+    # The daemon's process: hardening (DC-Q21), the panic hook, the account's
+    # roots from the operating system (IG-13).
+    "shekyl-process",
+
     # The daemon's Rust main() and its one signal owner (DAEMON_CONFIG_CUTOVER.md
-    # §2.2); the C++ remnant is a run/stop pair it drives. Called by the
-    # `shekyld` binary crate (DC-Q19).
+    # §2.2). Called by the `shekyld` binary crate (DC-Q19).
     "shekyl-daemon",
 
     # The daemon's one Node (DRS_X_STORE_FLIP.md DX-Q6, N1): the store, the
     # ingest service, the pool, the hasher budget, the job board and the
-    # socket table. Nothing is routed from C++ until the store flip.
+    # socket table. Opens the `Network` (`shekyl-p2p`); the daemon builds it.
     "shekyl-node",
 
     # Pure-software RandomX v2 verifier (docs/design/RANDOMX_V2_PLAN.md,

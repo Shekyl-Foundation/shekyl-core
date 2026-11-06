@@ -37,15 +37,12 @@ set(unit_tests_sources
   decompose_amount_into_digits.cpp
   device.cpp
   difficulty.cpp
-  epee_levin_protocol_handler_async.cpp
-  seam_endpoint.cpp
   epee_serialization.cpp
   epee_utils.cpp
   expect.cpp
   json_serialization.cpp
   get_xtype_from_string.cpp
   keccak.cpp
-  levin.cpp
   logging.cpp
   main.cpp
   memwipe.cpp
@@ -54,18 +51,12 @@ set(unit_tests_sources
   mtp_boundary.cpp
   mul_div.cpp
   multiexp.cpp
-  net.cpp
-  node_server.cpp
   parse_amount.cpp
-  peer_policy_drop_verdict.cpp
   random.cpp
   rpc_target_wire_contract.cpp
-  rpc_facts_ffi_roundtrip.cpp
   rolling_median.cpp
-  seed_epoch.cpp
   serialization.cpp
   sha256.cpp
-  stall_detection_calibration.cpp
   test_tx_utils.cpp
   threadpool.cpp
   util.cpp
@@ -84,7 +75,6 @@ set(unit_tests_sources
   pruned_tx_hash_parity.cpp
   prunable_digest_parity.cpp
   tx_prunable_region_sole_occupant.cpp
-  relay_category.cpp
   )
 
 set(unit_tests_headers
@@ -96,12 +86,9 @@ monero_add_minimal_executable(unit_tests
 target_link_libraries(unit_tests
   PRIVATE
     fcmp
-    cryptonote_protocol
-    cryptonote_core
-    rpc
-    net
+    cryptonote_basic
     serialization
-    p2p
+    epee
     # The one Rust archive a C++ binary links (libshekyl_ffi.a; the
     # single-image contract, V3_WALLET_DECISION_LOG.md 2026-06-11). The
     # daemon's RPC server and its `shekyl_rpc_*` exports are not in it:

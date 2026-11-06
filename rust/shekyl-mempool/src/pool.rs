@@ -330,6 +330,33 @@ impl Pool {
         )
     }
 
+    /// Whether `txid` is a duplicate: the pool holds it, or the chain
+    /// carries it. Admission answers this first, before any judgement. A
+    /// door that verifies outside the pool's lock asks it before verifying,
+    /// so a transaction this node already has costs a peer that re-sends it
+    /// no proofs. The answer can change once the lock is released, and
+    /// admission asks again under it.
+    ///
+    /// # Errors
+    ///
+    /// The chain view's fault.
+    pub fn duplicate<'id, V: ChainView<'id>>(
+        &self,
+        txid: &TxHash,
+        chain: &V,
+    ) -> Result<Option<Duplicate>, PoolFault<V::Fault>> {
+        if self.held.contains_key(txid) {
+            return Ok(Some(Duplicate::InPool));
+        }
+        if chain
+            .has_transaction(txid)
+            .map_err(|fault| PoolFault::Chain(Fault::View(fault)))?
+        {
+            return Ok(Some(Duplicate::OnChain));
+        }
+        Ok(None)
+    }
+
     /// Admission by `arrival`. A held transaction a block carries is made
     /// public (P2): a block has published it on every node, and a pool
     /// that kept it hidden would answer peer sync differently for a
@@ -351,18 +378,20 @@ impl Pool {
     ) -> Result<Admission, PoolFault<V::Fault>> {
         let txid = tx.txid_parts().hash;
         let carried = arrival == Arrival::Carried;
-        if let Some(held) = self.held.get_mut(&txid) {
-            if carried && !held.record.public {
-                self.store.write(|batch| batch.publish(&txid))?;
-                held.record.public = true;
+        match self.duplicate(&txid, chain)? {
+            Some(Duplicate::InPool) => {
+                if carried {
+                    if let Some(held) = self.held.get_mut(&txid) {
+                        if !held.record.public {
+                            self.store.write(|batch| batch.publish(&txid))?;
+                            held.record.public = true;
+                        }
+                    }
+                }
+                return Ok(Admission::Duplicate(Duplicate::InPool));
             }
-            return Ok(Admission::Duplicate(Duplicate::InPool));
-        }
-        if chain
-            .has_transaction(&txid)
-            .map_err(|fault| PoolFault::Chain(Fault::View(fault)))?
-        {
-            return Ok(Admission::Duplicate(Duplicate::OnChain));
+            Some(duplicate) => return Ok(Admission::Duplicate(duplicate)),
+            None => {}
         }
         // CEN-M10's rising minimum, before the door's crypto: a full pool
         // holds nothing it would give up for a candidate paying no more per

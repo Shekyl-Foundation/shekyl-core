@@ -10,19 +10,20 @@
 //! the test moves the judge's, so five tests can fail inside one bracket.
 //! Each test names the edit that makes it fail.
 
-use std::sync::atomic::Ordering;
 use std::sync::Arc;
 use std::time::Duration;
 
 use shekyl_dialer::{Dialer, Launch};
 use shekyl_draw_rng::SplitMix64;
+use shekyl_p2p_session::harness::Wire;
+use shekyl_p2p_session::Endpoint;
 use shekyl_peerlist::{dial_profile, ConnectorId, NetworkAddress, Tick};
-use shekyl_seam::{Dial, Endpoint, Hub, SocketId};
 use shekyl_timing_engine::{Clock, ManualClock};
-use shekyl_transport_layer::{DialEnd, Sockets};
+use shekyl_transport_layer::{DialEnd, SocketId};
 
 use super::life::Life;
-use super::{dialer_on, onions, peer, reply, HeldDial, CLEARNET, NETWORK, TOR, TOR_WINDOW};
+use super::rig::{Answer, Rig};
+use super::{onions, peer, reply, CLEARNET, NETWORK, TOR, TOR_WINDOW};
 
 /// The judge's clock at the start, in milliseconds.
 const START_MS: u64 = 1_000_000;
@@ -32,32 +33,45 @@ const START_MS: u64 = 1_000_000;
 const PAST_THE_BRACKET_MS: u64 = 60_000;
 
 struct JudgeRig {
+    rig: Rig,
     clock: ManualClock,
-    hub: Hub,
-    dial: Arc<HeldDial>,
-    dialer: Arc<Dialer>,
+    dialer: Arc<Dialer<ManualClock>>,
     connector: ConnectorId,
     life: Life,
     rng: SplitMix64,
+    /// The far sides of the inbound sessions this rig accepted, open for
+    /// the test.
+    inbound: Vec<Wire>,
 }
 
 impl JudgeRig {
     fn new(connector: ConnectorId, seed: u64) -> Self {
         let clock = ManualClock::new(Tick::new(1_000_000_000));
-        let sockets = Sockets::new();
-        let dial = Arc::new(HeldDial::answering(sockets.clone(), Vec::new()));
-        let (hub, dialer) = dialer_on(&clock, &sockets, Arc::clone(&dial) as Arc<dyn Dial>);
+        let rig = Rig::on(&clock);
+        let dialer = Arc::clone(&rig.dialer);
         dialer.set_window(TOR, Some(TOR_WINDOW));
         let life = Life::install_own(&dialer, START_MS);
         Self {
+            rig,
             clock,
-            hub,
-            dial,
             dialer,
             connector,
             life,
             rng: SplitMix64::new(seed),
+            inbound: Vec::new(),
         }
+    }
+
+    /// Accept an inbound Tor connection and, with `established`, run its
+    /// handshake from the far side. The far side is held for the test.
+    fn accept_tor(&mut self, established: bool) -> SocketId {
+        let mut wire = self.rig.accept(Endpoint::TorInbound);
+        if established {
+            self.rig.establish_inbound(&mut wire);
+        }
+        let id = wire.id;
+        self.inbound.push(wire);
+        id
     }
 
     /// `count` addresses on the rig's connector, numbered from `from`.
@@ -83,14 +97,10 @@ impl JudgeRig {
     /// kept or confirmed as the plan aims. Returns the sessions it left
     /// held.
     fn open_one(&mut self) -> Vec<SocketId> {
-        let before = self.dial.opened();
-        self.dial
-            .answers
-            .lock()
-            .expect("answers")
-            .push_back(reply(NETWORK));
+        let before = self.rig.opened();
+        self.rig.peer.answer_next(Answer::Answered(reply(NETWORK)));
         assert!(self.dialer.wake(self.connector, &mut self.rng), "a dial");
-        self.dial
+        self.rig
             .opened()
             .into_iter()
             .filter(|id| !before.contains(id))
@@ -103,11 +113,7 @@ impl JudgeRig {
     /// other address is admitted.
     fn hold(&mut self, from: usize) -> SocketId {
         match self.connector {
-            ConnectorId::Tor => {
-                let held = self.hub.connect(&Endpoint::TorInbound).expect("accepted");
-                self.hub.session_established(held.id);
-                held.id
-            }
+            ConnectorId::Tor => self.accept_tor(true),
             ConnectorId::Clearnet => {
                 let address = self.addresses(from, 1);
                 self.admit(&address);
@@ -126,10 +132,7 @@ impl JudgeRig {
         self.admit(&addresses);
         let ids: Vec<SocketId> = (0..count).flat_map(|_| self.open_one()).collect();
         for id in ids {
-            let end = crate::tables::peer_closed(self.connector);
-            self.hub.finish(id, end);
-            self.dialer
-                .session_closed_from_seam(id, end, &mut SplitMix64::new(0));
+            self.rig.close_as_peer(id);
         }
         for address in &addresses {
             assert!(self.lists_white(address), "{address:?} white");
@@ -152,7 +155,7 @@ impl JudgeRig {
     /// One attempt at a drawable address, failing with `cause` after
     /// `took` on the engine's clock.
     fn fail(&mut self, cause: DialEnd, took: Duration) {
-        self.dial.refuse_after(&self.clock, cause, took);
+        self.rig.peer.refuse_after(cause, took);
         assert!(self.dialer.wake(self.connector, &mut self.rng), "a draw");
     }
 
@@ -284,12 +287,12 @@ fn an_outages_onset_excuses_the_tests_in_flight() {
     for address in &whites {
         assert!(rig.lists_white(address) && !rig.cooling(address));
     }
-    let connects = rig.dial.connects.load(Ordering::Acquire);
+    let connects = rig.rig.peer.connects();
     let fresh = rig.addresses(12, 1);
     rig.admit(&fresh);
     rig.fail(shekyl_tor::reply_end(0x08), Duration::ZERO);
     assert_eq!(
-        rig.dial.connects.load(Ordering::Acquire),
+        rig.rig.peer.connects(),
         connects + 1,
         "the dialer dials while the verdicts wait"
     );
@@ -493,19 +496,18 @@ fn boot_with_the_network_down_demotes_and_climbs_nothing() {
 #[test]
 fn the_probe_never_corroborates() {
     let mut rig = JudgeRig::new(TOR, 250);
-    let probe = rig.hub.connect(&Endpoint::TorInbound).expect("accepted");
+    let probe = rig.accept_tor(false);
     let white = rig.whites(0, 1).remove(0);
-    rig.life.received_now(probe.id);
+    rig.life.received_now(probe);
     rig.later(1_000);
     rig.fail_uncertain();
     assert_eq!(rig.pending(), 0, "the probe's byte is not a sign of life");
     assert!(rig.lists_white(&white) && rig.excused(&white));
 
     let mut rig = JudgeRig::new(TOR, 251);
-    let session = rig.hub.connect(&Endpoint::TorInbound).expect("accepted");
-    rig.hub.session_established(session.id);
+    let session = rig.accept_tor(true);
     rig.whites(0, 1);
-    rig.life.received_now(session.id);
+    rig.life.received_now(session);
     rig.later(1_000);
     rig.fail_uncertain();
     assert_eq!(rig.pending(), 1, "an established session's byte is");
@@ -626,7 +628,7 @@ fn the_failing_attempts_own_stream_never_vouches_for_it() {
     let mut rig = JudgeRig::new(TOR, 290);
     let white = rig.whites(0, 1).remove(0);
     rig.life.advance_per_read(1);
-    rig.dial.close_on_open();
+    rig.rig.peer.close_on_open();
     let attempts = usize::from(dial_profile(TOR).attempts.white);
     for attempt in 1..=attempts {
         assert!(rig.dialer.wake(TOR, &mut rig.rng), "attempt {attempt}");
@@ -671,7 +673,7 @@ fn a_stream_is_dated_when_it_opened() {
     // attempt's end the one after: the deadline falls between the last two.
     rig.life.set_ms(failed + bracket - 1_500);
     rig.life.advance_per_read(1_000);
-    rig.dial.close_on_open();
+    rig.rig.peer.close_on_open();
     assert!(
         rig.dialer.wake(TOR, &mut rig.rng),
         "the other white's attempt"
@@ -696,11 +698,9 @@ fn a_queued_failure_is_dated_when_the_attempt_ended() {
     let held = rig.hold(0);
     let white = rig.whites(0, 1).remove(0);
     let ended = rig.life.now_ms();
-    rig.dial.refuse_after(
-        &rig.clock,
-        shekyl_tor::reply_end(0x01),
-        Duration::from_secs(1),
-    );
+    rig.rig
+        .peer
+        .refuse_after(shekyl_tor::reply_end(0x01), Duration::from_secs(1));
     let Launch::Running(id) = rig.dialer.launch(TOR, &mut rig.rng) else {
         panic!("a draw");
     };
@@ -737,11 +737,9 @@ fn recovery_inside_the_bracket_does_not_corroborate_a_queued_failure() {
     let held = rig.hold(0);
     let white = rig.whites(0, 1).remove(0);
     let ended = rig.life.now_ms();
-    rig.dial.refuse_after(
-        &rig.clock,
-        shekyl_tor::reply_end(0x01),
-        Duration::from_secs(1),
-    );
+    rig.rig
+        .peer
+        .refuse_after(shekyl_tor::reply_end(0x01), Duration::from_secs(1));
     let Launch::Running(id) = rig.dialer.launch(TOR, &mut rig.rng) else {
         panic!("a draw");
     };

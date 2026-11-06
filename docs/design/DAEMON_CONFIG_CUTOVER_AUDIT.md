@@ -103,8 +103,9 @@ data directory
 `src/blockchain_db/lmdb/db_lmdb.cpp`),
 and `p2pstate.bin`
 ([`src/cryptonote_config.h:217`](../../src/cryptonote_config.h)), which PR-3
-made the Rust dialer's address file under the same name
-([`src/p2p/net_node.inl:123`](../../src/p2p/net_node.inl)). The marker
+made the Rust dialer's address file under the same name (then line 123 of
+`src/p2p/net_node.inl`, at `e8838b0095`; now `ADDRESS_FILE`,
+`rust/shekyl-daemon/src/network.rs:30`). The marker
 treats either as a store.
 
 ## 4. Dependencies (§9 item 4, rule 17)
@@ -149,7 +150,8 @@ The test reproduces the syscall, not the C++ path, because a Rust test
 cannot link `tools::spawn` and the defect is the disposition, whoever sets
 it. It is a binary of its own because a disposition is process-wide.
 Commit (d) added the positive twin,
-[`rust/shekyl-ffi/tests/dc_f12_runner_reaps_its_children.rs`](../../rust/shekyl-ffi/tests/dc_f12_runner_reaps_its_children.rs):
+[`rust/shekyl-daemon/tests/dc_f12_runner_reaps_its_children.rs`](../../rust/shekyl-daemon/tests/dc_f12_runner_reaps_its_children.rs)
+(under `shekyl-ffi` until the p2p remnant cutover, 2026-11-05):
 the Rust runner runs one command of each kind and awaits each, and a tokio
 child spawned afterwards still returns its status from `wait()`. A binary
 of its own, for the same reason as the negative one.
@@ -312,7 +314,8 @@ of its own, for the same reason as the negative one.
   and is absent from both; `option_show` refuses it by name with
   `config.dev.network`, the startup parse's own refusal.
 - **The notify runner (commit (d), §2.10, DC-Q14).** The runner
-  ([`rust/shekyl-ffi/src/notify_ffi.rs`](../../rust/shekyl-ffi/src/notify_ffi.rs))
+  ([`rust/shekyl-daemon/src/notify.rs`](../../rust/shekyl-daemon/src/notify.rs);
+  `shekyl-ffi`'s `notify_ffi.rs` until the p2p remnant cutover, 2026-11-05)
   is installed by the Rust `main()` from the notify section beside the RPC
   configure, before the core exists, and its children run on the signal
   owner's runtime, so they are awaited by the process that spawned them and
@@ -578,15 +581,12 @@ of its own, for the same reason as the negative one.
   mining replies all passed `false`. The Rust loop's below-daemon OS
   priority (DRS-X PR 3) replaces it by design; the foreground loop stays,
   the live miner until the DRS-X flip routes the Rust loop.
-- **The C++ exports Rust imports are gated.** `check_ffi_signatures.sh`
-  covers Rust exports; `scripts/ci/check_cpp_import_signatures.py` covers
-  the other direction (the one `extern "C"` block of
-  `rust/shekyld/src/main.rs` against the headers under `src/`; before
-  DC-F43 it read `shekyl-daemon-rpc/src/ffi.rs`'s), comparing arity and
-  type classes, with a `cfg(test)` definition of an imported name not
-  counted as an export, and since DC-F43 holding every other crate to
-  importing no C++ at all. It was bitten on the posture parameter the one
-  RPC start needed.
+- **Rust imports no C++.** `scripts/ci/check_rust_only_daemon.py` holds
+  it on the Linux build: the staged `shekyld` needs no C++ runtime and
+  carries none of our C++'s symbols, and no `extern` block under `rust/`
+  imports a C-linkage name declared under `src/`.
+  `check_ffi_signatures.sh` covers the Rust exports the C++ tests and
+  debug utilities call.
 - **A test for every §6 row.** Commit (a) carries a table from each §6 row
   to its test. A row that only Windows can exercise names where it runs:
   the Windows CI job, or the Windows seat by hand. A `cfg(windows)` test

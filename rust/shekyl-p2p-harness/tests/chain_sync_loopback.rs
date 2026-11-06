@@ -22,21 +22,19 @@ use shekyl_chain_rules::{form_header, target_claim, FormAttempt, Substrate};
 use shekyl_chain_store::codec::FollowingDegradedCell;
 use shekyl_chain_store::store::SnapshotView;
 use shekyl_chain_sync::SyncState;
-use shekyl_levin::{
-    notify, RequestBodies, ResponseBodies, ResponseHeaders, SyncCommand, COMMAND_HANDSHAKE,
-    NOTIFY_NEW_COMPACT_BLOCK, NOTIFY_NEW_TRANSACTIONS,
-};
+use shekyl_levin::{Command, RequestBodies, ResponseBodies, ResponseHeaders};
 use shekyl_p2p_harness::sync::{
     announcement, fork_headers, frame, request_headers, substrate, Bodies, HeaderChainPeer, Node,
     ServingPeer, Silent, Step, SyncPeer,
 };
+use shekyl_p2p_session::harness::new_transactions;
 use shekyl_transport_layer::CloseKind;
 use shekyl_types::{BlockHash, BlockHeight};
 use shekyl_wire::{Block, PowBlob};
 #[path = "chain_sync/support.rs"]
 mod support;
 
-use support::{claim, claim_of, logs, rng, source, spend, wait_synced, CLOSES, LIMIT};
+use support::{claim, claim_of, logs, rng, session_rng, source, spend, wait_synced, CLOSES, LIMIT};
 
 /// The model's closes on node `tag`, by session.
 fn model_closes(tag: &str) -> HashMap<u64, String> {
@@ -60,7 +58,15 @@ async fn a_fresh_node_syncs_a_corpus_from_two_honest_peers_hashing_headers_only(
     let (corpus, steps) = spend();
     let held = source("honest-src", &corpus, &steps).await;
     let (count, _, _) = held.tip().expect("a chain");
-    let mut node = Node::start("honest", corpus.rules(), &steps[..1], 2, rng()).await;
+    let mut node = Node::start(
+        "honest",
+        corpus.rules(),
+        &steps[..1],
+        2,
+        rng(),
+        session_rng(),
+    )
+    .await;
     let before = node.hashes();
     // Every state the node's handle publishes, in order. With genesis
     // alone and no claim yet, the first session is `Synced`; the claim
@@ -80,7 +86,7 @@ async fn a_fresh_node_syncs_a_corpus_from_two_honest_peers_hashing_headers_only(
     for _ in 0..2 {
         let (peer, asked) = ServingPeer::new(Arc::clone(&held.store), Bodies::Honest);
         seen.push(asked);
-        node.connect(Box::new(peer), Some(claim_of(&held)));
+        node.connect(Box::new(peer), Some(claim_of(&held))).await;
     }
     wait_synced(&node, count).await;
     assert_eq!(
@@ -148,11 +154,13 @@ async fn the_liar_closes_at_claim_unmet() {
     logs();
     let (corpus, steps) = spend();
     let short = source("liar-src", &corpus, &steps[..41]).await;
-    let node = Node::start("liar", corpus.rules(), &steps, 2, rng()).await;
+    let node = Node::start("liar", corpus.rules(), &steps, 2, rng(), session_rng()).await;
     let mut node = node;
     let (_, _, top) = short.tip().expect("a chain");
     let (peer, seen) = ServingPeer::new(Arc::clone(&short.store), Bodies::Honest);
-    let id = node.connect(Box::new(peer.stating(400)), Some(claim(400, 400, top)));
+    let id = node
+        .connect(Box::new(peer.stating(400)), Some(claim(400, 400, top)))
+        .await;
     assert!(
         node.wait(LIMIT, |node| node.closed(id).is_some()).await,
         "the liar was not closed; asked {} times",
@@ -173,9 +181,17 @@ async fn the_withholder_keeps_its_session_and_serves_nothing() {
     logs();
     let (corpus, steps) = spend();
     let held = source("withhold-src", &corpus, &steps).await;
-    let mut node = Node::start("withhold", corpus.rules(), &steps[..1], 2, rng()).await;
+    let mut node = Node::start(
+        "withhold",
+        corpus.rules(),
+        &steps[..1],
+        2,
+        rng(),
+        session_rng(),
+    )
+    .await;
     let (peer, seen) = ServingPeer::new(Arc::clone(&held.store), Bodies::Withhold);
-    let id = node.connect(Box::new(peer), Some(claim_of(&held)));
+    let id = node.connect(Box::new(peer), Some(claim_of(&held))).await;
     assert!(
         node.wait(LIMIT, |_| seen.bodies() >= 1).await,
         "no body was asked for"
@@ -198,10 +214,10 @@ async fn the_slow_drip_is_excluded_as_a_body_source_and_not_closed() {
     let (corpus, steps) = spend();
     let held = source("drip-src", &corpus, &steps).await;
     let (count, _, _) = held.tip().expect("a chain");
-    let mut node = Node::start("drip", corpus.rules(), &steps[..1], 2, rng()).await;
+    let mut node = Node::start("drip", corpus.rules(), &steps[..1], 2, rng(), session_rng()).await;
     let late = Arc::new(Mutex::new(Vec::new()));
     let (peer, seen) = ServingPeer::new(Arc::clone(&held.store), Bodies::Hold(Arc::clone(&late)));
-    let drip = node.connect(Box::new(peer), Some(claim_of(&held)));
+    let drip = node.connect(Box::new(peer), Some(claim_of(&held))).await;
     assert!(
         node.wait(LIMIT, |_| seen.bodies() >= 1).await,
         "no body was asked for"
@@ -210,7 +226,7 @@ async fn the_slow_drip_is_excluded_as_a_body_source_and_not_closed() {
     // Past every body deadline: the budget at the rate floor, plus transit.
     node.advance(Duration::from_secs(4_096));
     let (honest, _) = ServingPeer::new(Arc::clone(&held.store), Bodies::Honest);
-    node.connect(Box::new(honest), Some(claim_of(&held)));
+    node.connect(Box::new(honest), Some(claim_of(&held))).await;
     wait_synced(&node, count).await;
     assert_eq!(seen.bodies(), asked, "an excluded source was asked again");
     // The late answers arrive now.
@@ -231,7 +247,7 @@ async fn the_slow_drip_is_excluded_as_a_body_source_and_not_closed() {
 async fn a_low_work_fork_is_never_asked_for() {
     logs();
     let (corpus, steps) = spend();
-    let mut node = Node::start("lowwork", corpus.rules(), &steps, 2, rng()).await;
+    let mut node = Node::start("lowwork", corpus.rules(), &steps, 2, rng(), session_rng()).await;
     let mut chain: Vec<(BlockHash, Vec<u8>)> = (0..=60)
         .map(|height| {
             let block = node.chain.block(height);
@@ -242,7 +258,7 @@ async fn a_low_work_fork_is_never_asked_for() {
     let (_, top_work, _) = node.chain.tip().expect("a chain");
     let top = chain.last().expect("a fork").0;
     let (peer, seen) = HeaderChainPeer::new(chain, 66);
-    let id = node.connect(Box::new(peer), Some(claim(66, 66, top)));
+    let id = node.connect(Box::new(peer), Some(claim(66, 66, top))).await;
     tokio::time::sleep(Duration::from_secs(5)).await;
     assert!(top_work > 66);
     assert_eq!(seen.headers(), 0, "a lighter chain was asked for");
@@ -266,7 +282,7 @@ async fn a_past_cap_heavier_fork_raises_the_alarm_and_the_latch_reads_back() {
     const CAP: u64 = 32;
     let (corpus, steps) = spend();
     let rules = corpus.rules_under_reorg_depth(CAP);
-    let mut node = Node::start("pastcap", rules, &steps, 2, rng()).await;
+    let mut node = Node::start("pastcap", rules, &steps, 2, rng(), session_rng()).await;
     let (count, work, _) = node.chain.tip().expect("a chain");
     let depth = CAP + 6;
     let fork_at = count - 1 - depth;
@@ -284,10 +300,12 @@ async fn a_past_cap_heavier_fork_raises_the_alarm_and_the_latch_reads_back() {
     let fork_work = u128::from(fork_at + 1 + fork_len);
     assert!(fork_work > work, "the fork is heavier");
     let (peer, seen) = HeaderChainPeer::new(chain, fork_work);
-    let id = node.connect(
-        Box::new(peer),
-        Some(claim(fork_at + 1 + fork_len, fork_work, top)),
-    );
+    let id = node
+        .connect(
+            Box::new(peer),
+            Some(claim(fork_at + 1 + fork_len, fork_work, top)),
+        )
+        .await;
     assert!(
         node.wait(LIMIT, |_| seen.headers() >= 1).await,
         "the fork was not asked for"
@@ -324,7 +342,7 @@ async fn a_forged_header_closes_on_its_first_real_hash() {
     let (corpus, steps) = spend();
     // A target of 2: half of all hashes fail it.
     let rules = corpus.rules_at(2);
-    let mut node = Node::start("forged", rules, &steps[..1], 2, rng()).await;
+    let mut node = Node::start("forged", rules, &steps[..1], 2, rng(), session_rng()).await;
     let genesis = node.chain.block(0);
     let Step::Block { block, .. } = &steps[1] else {
         panic!("height 1 is a block");
@@ -367,7 +385,9 @@ async fn a_forged_header_closes_on_its_first_real_hash() {
     ];
     let (peer, _) = HeaderChainPeer::new(chain, 1_000);
     let before = node.hashes();
-    let id = node.connect(Box::new(peer), Some(claim(2, 1_000, forged.hash())));
+    let id = node
+        .connect(Box::new(peer), Some(claim(2, 1_000, forged.hash())))
+        .await;
     assert!(
         node.wait(LIMIT, |node| node.closed(id).is_some()).await,
         "the forger was not closed"
@@ -403,10 +423,10 @@ async fn substituted(tag: &str, bodies: Bodies, expected: &str) {
     let (corpus, steps) = spend();
     let held = source(&format!("{tag}-src"), &corpus, &steps).await;
     let (count, _, _) = held.tip().expect("a chain");
-    let mut node = Node::start(tag, corpus.rules(), &steps[..1], 2, rng()).await;
+    let mut node = Node::start(tag, corpus.rules(), &steps[..1], 2, rng(), session_rng()).await;
     let before = node.hashes();
     let (peer, _) = ServingPeer::new(Arc::clone(&held.store), bodies);
-    let bad = node.connect(Box::new(peer), Some(claim_of(&held)));
+    let bad = node.connect(Box::new(peer), Some(claim_of(&held))).await;
     assert!(
         node.wait(LIMIT, |node| node.closed(bad).is_some()).await,
         "the substituter was not closed"
@@ -418,7 +438,7 @@ async fn substituted(tag: &str, bodies: Bodies, expected: &str) {
     // The headers survive. An honest peer that names our tip serves the
     // bodies under them (CS-F8), and nothing is hashed again.
     let (honest, _) = ServingPeer::new(Arc::clone(&held.store), Bodies::Honest);
-    node.connect(Box::new(honest), Some(claim_of(&held)));
+    node.connect(Box::new(honest), Some(claim_of(&held))).await;
     wait_synced(&node, count).await;
     assert_eq!(
         node.hashes() - before,
@@ -439,9 +459,17 @@ async fn a_skeleton_only_server_is_kept_and_its_skeletons_are_wanted_whole() {
     let (corpus, steps) = spend();
     let held = source("skeleton-src", &corpus, &steps).await;
     let (count, _, _) = held.tip().expect("a chain");
-    let mut node = Node::start("skeleton", corpus.rules(), &steps[..1], 2, rng()).await;
+    let mut node = Node::start(
+        "skeleton",
+        corpus.rules(),
+        &steps[..1],
+        2,
+        rng(),
+        session_rng(),
+    )
+    .await;
     let (peer, seen) = ServingPeer::new(Arc::clone(&held.store), Bodies::Skeleton);
-    let skeleton = node.connect(Box::new(peer), Some(claim_of(&held)));
+    let skeleton = node.connect(Box::new(peer), Some(claim_of(&held))).await;
     assert!(
         node.wait(LIMIT, |_| seen.bodies() >= 1).await,
         "no body was asked for"
@@ -456,7 +484,7 @@ async fn a_skeleton_only_server_is_kept_and_its_skeletons_are_wanted_whole() {
     assert!(stopped, "count {} of {count}", node.count());
     assert!(node.count() < count, "a skeleton connected");
     let (honest, _) = ServingPeer::new(Arc::clone(&held.store), Bodies::Honest);
-    node.connect(Box::new(honest), Some(claim_of(&held)));
+    node.connect(Box::new(honest), Some(claim_of(&held))).await;
     wait_synced(&node, count).await;
     assert_eq!(node.closed(skeleton), None);
     assert!(!model_closes("skeleton").contains_key(&skeleton.get()));
@@ -472,17 +500,27 @@ async fn a_peer_naming_our_tip_and_withholding_every_body_is_the_withholder() {
     let (corpus, steps) = spend();
     let held = source("named-src", &corpus, &steps).await;
     let (count, _, _) = held.tip().expect("a chain");
-    let mut node = Node::start("named", corpus.rules(), &steps[..1], 2, rng()).await;
+    let mut node = Node::start(
+        "named",
+        corpus.rules(),
+        &steps[..1],
+        2,
+        rng(),
+        session_rng(),
+    )
+    .await;
     // The headers come from a peer whose bodies do not bind: it closes, and
     // the headers stay.
     let (bad, _) = ServingPeer::new(Arc::clone(&held.store), Bodies::SubstituteBody);
-    let bad = node.connect(Box::new(bad), Some(claim_of(&held)));
+    let bad = node.connect(Box::new(bad), Some(claim_of(&held))).await;
     assert!(
         node.wait(LIMIT, |node| node.closed(bad).is_some()).await,
         "the substituter was not closed"
     );
     let (withholder, asked) = ServingPeer::new(Arc::clone(&held.store), Bodies::Withhold);
-    let withholder = node.connect(Box::new(withholder), Some(claim_of(&held)));
+    let withholder = node
+        .connect(Box::new(withholder), Some(claim_of(&held)))
+        .await;
     assert!(
         node.wait(LIMIT, |_| asked.bodies() >= 1).await,
         "the named tip made no body source"
@@ -494,7 +532,7 @@ async fn a_peer_naming_our_tip_and_withholding_every_body_is_the_withholder() {
     );
     assert_eq!(node.count(), 1);
     let (honest, _) = ServingPeer::new(Arc::clone(&held.store), Bodies::Honest);
-    node.connect(Box::new(honest), Some(claim_of(&held)));
+    node.connect(Box::new(honest), Some(claim_of(&held))).await;
     wait_synced(&node, count).await;
     assert_eq!(node.closed(withholder), None);
     assert!(!model_closes("named").contains_key(&withholder.get()));
@@ -518,32 +556,50 @@ async fn an_announce_flood_does_not_stall_a_solicited_sync() {
     let held = source("flood-src", &corpus, &steps).await;
     let (count, _, _) = held.tip().expect("a chain");
 
-    let mut quiet = Node::start("flood-quiet", corpus.rules(), &steps[..1], 2, rng()).await;
+    let mut quiet = Node::start(
+        "flood-quiet",
+        corpus.rules(),
+        &steps[..1],
+        2,
+        rng(),
+        session_rng(),
+    )
+    .await;
     let started = Instant::now();
     let (peer, _) = ServingPeer::new(Arc::clone(&held.store), Bodies::Honest);
-    quiet.connect(Box::new(peer), Some(claim_of(&held)));
+    quiet.connect(Box::new(peer), Some(claim_of(&held))).await;
     wait_synced(&quiet, count).await;
     let unflooded = started.elapsed();
     quiet.stop().await;
 
-    let mut loud = Node::start("flood", corpus.rules(), &steps[..1], 2, rng()).await;
+    let mut loud = Node::start(
+        "flood",
+        corpus.rules(),
+        &steps[..1],
+        2,
+        rng(),
+        session_rng(),
+    )
+    .await;
     let (genesis_count, genesis_work, genesis) = loud.chain.tip().expect("genesis");
     let started = Instant::now();
     let (peer, _) = ServingPeer::new(Arc::clone(&held.store), Bodies::Honest);
-    loud.connect(Box::new(peer), Some(claim_of(&held)));
+    loud.connect(Box::new(peer), Some(claim_of(&held))).await;
     // The flooder states genesis, as a handshake does: a session whose
     // claim never arrives would hold the opening until its deadline
     // (CS-Q2 step 8), which a hand clock does not reach.
-    let flooder = loud.connect(
-        Box::new(Silent),
-        Some(claim(genesis_count, genesis_work, genesis)),
-    );
-    let hub = loud.hub.clone();
+    let flooder = loud
+        .connect(
+            Box::new(Silent),
+            Some(claim(genesis_count, genesis_work, genesis)),
+        )
+        .await;
+    let dial = Arc::clone(&loud.dial);
     let announce = announcement(&held.store, count - 1);
     const ANNOUNCES: usize = 2_000;
     let flood = tokio::task::spawn_blocking(move || {
         (0..ANNOUNCES)
-            .filter(|_| hub.inject(flooder, announce.clone()))
+            .filter(|_| dial.inject(flooder, announce.clone()))
             .count()
     });
     wait_synced(&loud, count).await;
@@ -556,16 +612,6 @@ async fn an_announce_flood_does_not_stall_a_solicited_sync() {
         "an unplaceable announcement is no fault"
     );
     assert!(
-        !loud
-            .stub
-            .lock()
-            .expect("stub")
-            .commands
-            .iter()
-            .any(|(session, command)| *session == flooder && *command == NOTIFY_NEW_COMPACT_BLOCK),
-        "an announcement reached the C++ handler"
-    );
-    assert!(
         flooded <= unflooded * 3 + Duration::from_secs(10),
         "flooded {flooded:?}, unflooded {unflooded:?}"
     );
@@ -576,16 +622,23 @@ async fn an_announce_flood_does_not_stall_a_solicited_sync() {
     held.stop().await;
 }
 
-/// A bucket whose header does not read is the transport's refusal, as
-/// today: the router hands the bytes to the C++ handler raw, its ingress
-/// refuses them, and the session closes as refused.
+/// A bucket whose header does not read is the session layer's refusal:
+/// its ingress refuses the bytes, and the session closes as refused.
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
-async fn a_malformed_bucket_is_refused_by_the_cpp_ingress() {
+async fn a_malformed_bucket_is_refused_by_the_ingress() {
     logs();
     let (corpus, steps) = spend();
-    let mut node = Node::start("malformed", corpus.rules(), &steps[..1], 1, rng()).await;
+    let mut node = Node::start(
+        "malformed",
+        corpus.rules(),
+        &steps[..1],
+        1,
+        rng(),
+        session_rng(),
+    )
+    .await;
     let (peer, _) = HeaderChainPeer::new(Vec::new(), 0);
-    let id = node.connect(Box::new(peer), None);
+    let id = node.connect(Box::new(peer), None).await;
     let mut bad = request_headers(vec![[0; 32]]);
     bad[0] ^= 0xFF;
     assert!(node.inject(id, bad).await);
@@ -594,49 +647,6 @@ async fn a_malformed_bucket_is_refused_by_the_cpp_ingress() {
         "the session stayed open"
     );
     assert_eq!(node.closed(id), Some(CloseKind::SessionRefused));
-    assert_eq!(node.stub.lock().expect("stub").refused, vec![id]);
-    node.stop().await;
-}
-
-/// The router forwards every non-sync command to the C++ handler byte for
-/// byte: a handshake and a transaction relay reach the stub unchanged, and
-/// a chain-sync request does not.
-#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
-async fn the_router_forwards_non_sync_commands_untouched() {
-    logs();
-    let (corpus, steps) = spend();
-    let mut node = Node::start("forward", corpus.rules(), &steps[..1], 1, rng()).await;
-    let (peer, _) = HeaderChainPeer::new(Vec::new(), 0);
-    let id = node.connect(Box::new(peer), None);
-    let handshake = notify(COMMAND_HANDSHAKE, b"a handshake the stub does not parse");
-    let relay = notify(NOTIFY_NEW_TRANSACTIONS, b"a relay the stub does not parse");
-    let mut both = handshake.clone();
-    both.extend_from_slice(&request_headers(vec![[0; 32]]));
-    both.extend_from_slice(&relay);
-    assert!(node.inject(id, both).await);
-    assert!(
-        node.wait(LIMIT, |node| node.stub.lock().expect("stub").commands.len()
-            >= 2)
-            .await,
-        "nothing reached the C++ handler"
-    );
-    let mut expected = handshake;
-    expected.extend_from_slice(&relay);
-    let (delivered, commands) = {
-        let stub = node.stub.lock().expect("stub");
-        let delivered: Vec<u8> = stub
-            .delivered
-            .iter()
-            .filter(|(session, _)| *session == id)
-            .flat_map(|(_, bytes)| bytes.clone())
-            .collect();
-        (delivered, stub.commands.clone())
-    };
-    assert_eq!(delivered, expected, "the non-sync bytes, unchanged");
-    assert_eq!(
-        commands,
-        vec![(id, COMMAND_HANDSHAKE), (id, NOTIFY_NEW_TRANSACTIONS)]
-    );
     node.stop().await;
 }
 
@@ -654,11 +664,11 @@ struct Asker(Arc<Mutex<Answers>>);
 impl SyncPeer for Asker {
     fn on_message(&mut self, command: u32, payload: &[u8]) -> Vec<Vec<u8>> {
         let mut answers = self.0.lock().expect("answers");
-        match SyncCommand::from_wire(command) {
-            Some(SyncCommand::ResponseHeaders) => answers
+        match Command::from_wire(command) {
+            Some(Command::ResponseHeaders) => answers
                 .headers
                 .push(ResponseHeaders::decode(payload).expect("the node's response decodes")),
-            Some(SyncCommand::ResponseBodies) => answers
+            Some(Command::ResponseBodies) => answers
                 .bodies
                 .push(ResponseBodies::decode(payload).expect("the node's response decodes")),
             _ => {}
@@ -673,10 +683,12 @@ impl SyncPeer for Asker {
 async fn the_node_serves_requests_its_own_form_checks_accept() {
     logs();
     let (corpus, steps) = spend();
-    let mut node = Node::start("serve", corpus.rules(), &steps, 1, rng()).await;
+    let mut node = Node::start("serve", corpus.rules(), &steps, 1, rng(), session_rng()).await;
     let (count, _, _) = node.chain.tip().expect("a chain");
     let answers = Arc::new(Mutex::new(Answers::default()));
-    let id = node.connect(Box::new(Asker(Arc::clone(&answers))), None);
+    let id = node
+        .connect(Box::new(Asker(Arc::clone(&answers))), None)
+        .await;
     assert!(node.inject(id, request_headers(vec![[0; 32]])).await);
     assert!(
         node.wait(LIMIT, |_| !answers
@@ -708,7 +720,7 @@ async fn the_node_serves_requests_its_own_form_checks_accept() {
         hashes: hashes[1..].to_vec(),
     };
     assert!(
-        node.inject(id, frame(SyncCommand::RequestBodies, &request))
+        node.inject(id, frame(Command::RequestBodies, &request))
             .await
     );
     assert!(
@@ -792,41 +804,45 @@ async fn a_locator_hash_held_only_as_an_alternative_is_skipped() {
     chain.stop().await;
 }
 
-/// A chunk that mixes chain-sync requests with bytes for the C++ handler
-/// is finished by that handler, not after serving, so the transport does
-/// not hold the peer back. The owner's queue bounds it instead: a flood of
-/// header requests packed beside a relay is answered a few times, not once
-/// per request, and the session stays open. A last request for our tip
-/// (answered with no headers) marks the end of the flood's serving.
+/// A chunk that mixes chain-sync requests with a relay is dispatched
+/// message by message under the session's one permit (`SESSION_QUEUE_DEPTH`):
+/// a request's permit is held until its answer is sent, so the peer's
+/// remaining bytes wait in the stream and nothing queues at the owner. A
+/// flood of header requests packed beside a relay is therefore answered
+/// once per request, the relay reaches its owner in its turn, and the
+/// session stays open. A last request for our tip (answered with no
+/// headers) marks the end of the flood's serving.
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
-async fn a_request_flood_beside_cpp_bytes_is_bounded_by_the_serving_queue() {
+async fn a_request_flood_beside_a_relay_is_served_in_turn_under_the_permit() {
     logs();
     let (corpus, steps) = spend();
-    let mut node = Node::start("serve-flood", corpus.rules(), &steps, 1, rng()).await;
+    let mut node = Node::start(
+        "serve-flood",
+        corpus.rules(),
+        &steps,
+        1,
+        rng(),
+        session_rng(),
+    )
+    .await;
     let (_, _, tip) = node.chain.tip().expect("a chain");
     let answers = Arc::new(Mutex::new(Answers::default()));
-    let id = node.connect(Box::new(Asker(Arc::clone(&answers))), None);
+    let id = node
+        .connect(Box::new(Asker(Arc::clone(&answers))), None)
+        .await;
     const REQUESTS: usize = 64;
     let mut chunk = Vec::new();
     for index in 0..REQUESTS {
         chunk.extend_from_slice(&request_headers(vec![[0; 32]]));
         if index == REQUESTS / 2 {
-            chunk.extend_from_slice(&notify(
-                NOTIFY_NEW_TRANSACTIONS,
-                b"a relay the stub does not parse",
-            ));
+            chunk.extend_from_slice(&new_transactions(1));
         }
     }
     assert!(node.inject(id, chunk).await);
     assert!(
-        node.wait(LIMIT, |node| node
-            .stub
-            .lock()
-            .expect("stub")
-            .commands
-            .contains(&(id, NOTIFY_NEW_TRANSACTIONS)))
+        node.wait(LIMIT, |node| node.record().transactions.contains(&id))
             .await,
-        "the relay did not reach the C++ handler"
+        "the relay did not reach its owner"
     );
     assert!(
         node.inject(id, request_headers(vec![*tip.as_bytes()]))
@@ -850,10 +866,9 @@ async fn a_request_flood_beside_cpp_bytes_is_bounded_by_the_serving_queue() {
         .filter(|response| !response.blobs.is_empty())
         .count();
     eprintln!("{REQUESTS} packed header requests were answered {flood} times");
-    assert!(flood >= 1, "the flood was not served at all");
-    assert!(
-        flood < REQUESTS,
-        "every packed request was served: the queue is unbounded"
+    assert_eq!(
+        flood, REQUESTS,
+        "a request the permit admitted went unanswered"
     );
     assert_eq!(node.closed(id), None);
     node.stop().await;

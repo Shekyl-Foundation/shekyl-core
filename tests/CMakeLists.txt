@@ -84,8 +84,6 @@ else ()
   endif()
 endif()
 
-
-
 set(hash_targets_sources
   hash-target.cpp)
 
@@ -96,7 +94,7 @@ monero_add_minimal_executable(hash-target-tests
   ${hash_targets_headers})
 target_link_libraries(hash-target-tests
   PRIVATE
-    cryptonote_core)
+    cryptonote_basic)
 set_property(TARGET hash-target-tests
   PROPERTY
     FOLDER "${folder}")

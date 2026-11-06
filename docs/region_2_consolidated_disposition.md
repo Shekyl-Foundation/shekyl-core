@@ -79,11 +79,11 @@ abandoned. (One false positive: `main`, far behind `dev`, carries
 ### 1.3 The C-FFI `ShekylWalletMetadata` is a different, also-doomed thing
 
 `ShekylWalletMetadata` (`rust/shekyl-ffi/src/engine_file_ffi.rs:219`, 96-byte layout pinned by
-a `static_assert` at `:253`, mirrored in `src/shekyl/shekyl_ffi.h:1433`) is a flat C struct
+a `static_assert` at `:253`) is a flat C struct
 populated from **region 1** + AAD — `network`, `capability_mode`, `seed_format`,
 `creation_timestamp`, `restore_height_hint`, `expected_classical_address`
 (`engine_file_ffi.rs:792-802`, reading `w.inner.capability()` etc.). It does **not** touch the
-`WalletMetadata` JSON. Its only C++ caller is `wallet2.cpp:5320`, which is deleted in the
+`WalletMetadata` JSON. The C header does not declare it: the mirror left with that file. Its only C++ caller is `wallet2.cpp:5320`, which is deleted in the
 cutover. It is irrelevant to the orphan's disposition except as a name-collision hazard.
 (The struct's source file is `engine_file_ffi.rs`; the older name `wallet_file_ffi.rs` survives
 only in stale code comments.)

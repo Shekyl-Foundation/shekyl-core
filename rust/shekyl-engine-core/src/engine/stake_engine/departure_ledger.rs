@@ -25,11 +25,12 @@
 //!    during it, and departed again after it carries a pre-gap timestamp that
 //!    describes an absence which *ended*. Clocking from it can release
 //!    immediately.
-//! 2. **A rollback.** The daemon's `synchronized` flag is **sticky** — the
-//!    inherited C++ sets it `false → true` exactly once
-//!    (`cryptonote_protocol_handler.inl:2465`, the only mutation; the
-//!    constructor at `:219` is the only other write) and never clears it on a
-//!    pop or reorg. So a rollback between the sync read and the record read
+//! 2. **A rollback.** The daemon's `synchronized` flag does not witness a
+//!    pop: on the C++ daemon this was written against it was **sticky** (the
+//!    inherited `cryptonote_protocol_handler.inl`, deleted 2026-11-05, set it
+//!    `false → true` exactly once and never cleared it), and the Rust
+//!    daemon's flag follows the chain-sync view, which a rollback of the
+//!    local tip does not change either. So a rollback between the sync read and the record read
 //!    leaves a witness whose height is *above* the record's, and reading the
 //!    ledger's clock off the witness counts epoch opens the current record
 //!    never crossed.

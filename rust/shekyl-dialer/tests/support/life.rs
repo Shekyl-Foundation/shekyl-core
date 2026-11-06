@@ -16,8 +16,11 @@ use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::{Arc, Mutex};
 
 use shekyl_dialer::Dialer;
-use shekyl_seam::SocketId;
 use shekyl_timing_engine::{Clock, ManualClock};
+use shekyl_transport_layer::SocketId;
+
+/// The dialer these tests drive: on the manual clock.
+type TestDialer = Dialer<ManualClock>;
 
 /// The received bytes a test shows the judge, and the judge's clock.
 #[derive(Clone)]
@@ -36,7 +39,7 @@ pub fn ms(clock: &ManualClock) -> u64 {
 
 impl Life {
     /// Drive `dialer`'s judge from `clock`. Nothing has received a byte.
-    pub fn install(dialer: &Dialer, clock: &ManualClock) -> Self {
+    pub fn install(dialer: &TestDialer, clock: &ManualClock) -> Self {
         let clock = clock.clone();
         Self::with_clock(
             dialer,
@@ -49,7 +52,7 @@ impl Life {
     /// Drive `dialer`'s judge from a clock of its own, at `start_ms` until
     /// [`Self::set_ms`] moves it, and moving by itself at each read once
     /// [`Self::advance_per_read`] says so.
-    pub fn install_own(dialer: &Dialer, start_ms: u64) -> Self {
+    pub fn install_own(dialer: &TestDialer, start_ms: u64) -> Self {
         let own = Arc::new(AtomicU64::new(start_ms));
         let step = Arc::new(AtomicU64::new(0));
         let (read, by) = (Arc::clone(&own), Arc::clone(&step));
@@ -62,7 +65,7 @@ impl Life {
     }
 
     fn with_clock(
-        dialer: &Dialer,
+        dialer: &TestDialer,
         now: Arc<dyn Fn() -> u64 + Send + Sync>,
         own: Arc<AtomicU64>,
         step: Arc<AtomicU64>,

@@ -130,12 +130,9 @@ assert_population() {
 DOC_ALLOWLIST=(
   'src/cryptonote_config.h'
   'src/cryptonote_basic/difficulty.h'
-  'src/cryptonote_core/difficulty_engine_error.h'
-  'tests/core_tests/block_validation.cpp'
   'tests/difficulty/CMakeLists.txt'
   'tests/difficulty/zawy12_lwma1_reference.h'
   'tests/unit_tests/rpc_target_wire_contract.cpp'
-  'tests/unit_tests/stall_detection_calibration.cpp'
 )
 
 build_glob_excludes() {
@@ -255,10 +252,10 @@ echo "[5/5] sync orphan arm re-syncs without penalizing (C2-R1c-Q3b)"
 # the supplier with a header request and closes nothing; a refused block
 # is the arm that closes. The test
 # an_unlinked_body_relocates_its_supplier_and_closes_nothing pins the
-# same split.
+# same split. (The C++ handler whose `m_marked_as_orphaned` this gate
+# also refused was deleted on 2026-11-05; chain sync is the only arm.)
 ENTRY=rust/shekyl-chain-sync/src/runs/entry.rs
 ORPHAN_TEST=rust/shekyl-chain-sync/src/relay_tests.rs
-INL=src/cryptonote_protocol/cryptonote_protocol_handler.inl
 UNLINKED_ARM=$(awk '/Outcome::Unlinked \{ at \} => \{/,/^            \}$/' "$ENTRY")
 REFUSED_ARM=$(awk '/Outcome::Refused \{ verdict \} => \{/,/^            \}$/' "$ENTRY")
 if [[ ! -f "$ENTRY" || -z "$UNLINKED_ARM" || -z "$REFUSED_ARM" ]]; then
@@ -276,9 +273,6 @@ elif ! printf '%s\n' "$UNLINKED_ARM" | grep -q 'self.locate('; then
   FAIL=1
 elif ! printf '%s\n' "$REFUSED_ARM" | grep -q 'self.close('; then
   echo "      FAIL: the Refused arm no longer closes -- the severing arm is gone."
-  FAIL=1
-elif rg -n 'm_marked_as_orphaned' "$INL" >/dev/null; then
-  echo "      FAIL: $INL names m_marked_as_orphaned -- orphans are chain sync's."
   FAIL=1
 else
   echo "      OK"

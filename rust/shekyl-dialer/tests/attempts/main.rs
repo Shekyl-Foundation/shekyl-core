@@ -14,6 +14,8 @@
 mod life;
 #[path = "../support/log_capture.rs"]
 mod log_capture;
+#[path = "../support/rig.rs"]
+mod rig;
 #[path = "../support/tables.rs"]
 mod tables;
 
@@ -21,31 +23,19 @@ mod judge;
 mod white;
 
 use log_capture::log_text;
-use std::collections::{HashMap, VecDeque};
-use std::future::Future;
+use rig::{wait_until, Answer, Rig, NETWORK};
 use std::net::Ipv4Addr;
-use std::pin::Pin;
-use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
-use std::sync::{Arc, Mutex};
-use std::task::{Context, Poll};
+use std::sync::atomic::Ordering;
+use std::sync::Arc;
 use std::thread;
-use std::time::{Duration, Instant};
+use std::time::Duration;
 
-use shekyl_capped_stream::{ByteQueue, InboundEnd, QueueHold, Session, StreamEnds};
-use shekyl_dialer::{Dialer, Launch, NonceTake};
+use shekyl_dialer::Launch;
 use shekyl_draw_rng::SplitMix64;
-use shekyl_levin::{
-    response, BasicNodeData, BucketReader, CoreSyncData, HandshakeRequest, HandshakeResponse,
-    PeerlistEntry, PortableMap, Received, COMMAND_HANDSHAKE,
-};
-use shekyl_peer_policy::InboundCeiling;
-use shekyl_peerlist::{ConnectorId, NetworkAddress, RefusedSet, Tick};
-use shekyl_seam::{
-    admit, drive_inbound, Channel, ConnectFuture, Dial, Endpoint, Hub, Route, RoutePublish,
-    SocketId, SyncPayload,
-};
-use shekyl_timing_engine::{Clock, EngineService, ManualClock, OwnerClass};
-use shekyl_transport_layer::{DialEnd, DialFailure, Reached, Retry, Sockets, StreamEnd};
+use shekyl_p2p_session::{Endpoint, NonceTake};
+use shekyl_peerlist::{ConnectorId, NetworkAddress, Tick};
+use shekyl_timing_engine::{Clock, ManualClock, OwnerClass};
+use shekyl_transport_layer::{DialEnd, Direction};
 
 const CLEARNET: ConnectorId = ConnectorId::Clearnet;
 const TOR: ConnectorId = ConnectorId::Tor;
@@ -57,8 +47,6 @@ const WAKE_BASE_NANOS: u64 = shekyl_peerlist::dial_profile(ConnectorId::Tor)
 const WAKE_JITTER_NANOS: u64 = shekyl_peerlist::dial_profile(ConnectorId::Tor)
     .wake
     .jitter_nanos;
-const NETWORK: [u8; 16] = [7; 16];
-const SEND_CAP: usize = 64 * 1024;
 
 fn peer(n: u16) -> NetworkAddress {
     let [hi, lo] = n.to_be_bytes();
@@ -79,293 +67,14 @@ fn onions(count: usize) -> Vec<NetworkAddress> {
 }
 
 fn reply(network_id: [u8; 16]) -> Vec<u8> {
-    let body = HandshakeResponse {
-        node_data: BasicNodeData { network_id },
-        payload_data: CoreSyncData {
-            current_height: 20,
-            cumulative_difficulty: 200,
-            cumulative_difficulty_top64: 0,
-            top_id: [2; 32],
-        },
-        local_peerlist_new: Vec::<PeerlistEntry>::new(),
-    };
-    response(COMMAND_HANDSHAKE, &body.store().expect("encode"))
+    rig::reply(network_id, Vec::new())
 }
 
-fn wait_until(what: &str, mut condition: impl FnMut() -> bool) {
-    let start = Instant::now();
-    while !condition() {
-        assert!(start.elapsed() < Duration::from_secs(5), "{what}");
-        thread::sleep(Duration::from_millis(2));
-    }
-}
-
-/// The ends of one channel the held dial opened.
-struct Held {
-    connector: ConnectorId,
-    inbound: InboundEnd,
-    writer: ByteQueue,
-    _hold: QueueHold,
-}
-
-/// Opens each channel through the transport layer's admission, answers it
-/// with the next queued handshake (or nothing), and keeps its ends: the
-/// test reads what the dialer wrote and can close a session as the peer.
-struct HeldDial {
-    sockets: Sockets,
-    answers: Mutex<VecDeque<Vec<u8>>>,
-    held: Mutex<HashMap<SocketId, Held>>,
-    /// Causes the next connects fail with, in order, before any answer: the
-    /// connector refusing the dial, after the nanoseconds it took.
-    refusals: Mutex<VecDeque<(DialEnd, u64)>>,
-    /// The clock a refusal moves by the time it took.
-    clock: Mutex<Option<ManualClock>>,
-    /// Every connect, refused or not.
-    connects: AtomicUsize,
-    /// The peer closes each channel as soon as it opens.
-    close_on_open: AtomicBool,
-}
-
-impl HeldDial {
-    fn answering(sockets: Sockets, answers: Vec<Vec<u8>>) -> Self {
-        Self {
-            sockets,
-            answers: Mutex::new(answers.into()),
-            held: Mutex::new(HashMap::new()),
-            refusals: Mutex::new(VecDeque::new()),
-            clock: Mutex::new(None),
-            connects: AtomicUsize::new(0),
-            close_on_open: AtomicBool::new(false),
-        }
-    }
-
-    /// From now on the peer closes each channel as soon as it opens: a
-    /// stream that opened, then the peer's end.
-    fn close_on_open(&self) {
-        self.close_on_open.store(true, Ordering::Release);
-    }
-
-    /// The next connect fails with `cause` after `took` on `clock`.
-    fn refuse_after(&self, clock: &ManualClock, cause: DialEnd, took: Duration) {
-        *self.clock.lock().expect("clock") = Some(clock.clone());
-        let took = u64::try_from(took.as_nanos()).expect("a short wait");
-        self.refusals
-            .lock()
-            .expect("refusals")
-            .push_back((cause, took));
-    }
-
-    /// The peer closes `id`'s session: the connector stores its cause.
-    fn close_as_peer(&self, id: SocketId) {
-        if let Some(held) = self.held.lock().expect("held").get(&id) {
-            held.inbound.close(tables::peer_closed(held.connector));
-        }
-    }
-
-    /// The handshake request the dialer wrote on `id`, decoded.
-    fn request(&self, id: SocketId) -> HandshakeRequest {
-        let bytes = {
-            let held = self.held.lock().expect("held");
-            let held = held.get(&id).expect("a held channel");
-            held.writer.try_pop().expect("the request was written")
-        };
-        let mut reader = BucketReader::new();
-        reader.feed(&bytes).expect("a levin frame");
-        match reader.next_message().expect("one message") {
-            Some(Received::Request { command, payload }) if command == COMMAND_HANDSHAKE => {
-                HandshakeRequest::load(&payload).expect("a handshake request")
-            }
-            other => panic!("not a handshake request: {other:?}"),
-        }
-    }
-
-    fn opened(&self) -> Vec<SocketId> {
-        let mut ids: Vec<SocketId> = self.held.lock().expect("held").keys().copied().collect();
-        ids.sort_by_key(|id| id.get());
-        ids
-    }
-}
-
-impl Dial for HeldDial {
-    fn connect(
-        &self,
-        endpoint: &Endpoint,
-        ceiling: InboundCeiling,
-        now: Tick,
-    ) -> Result<Channel, DialEnd> {
-        self.connects.fetch_add(1, Ordering::AcqRel);
-        let refusal = self.refusals.lock().expect("refusals").pop_front();
-        if let Some((cause, took)) = refusal {
-            if let Some(clock) = self.clock.lock().expect("clock").as_ref() {
-                clock.set(Tick::new(clock.now().get() + took));
-            }
-            return Err(cause);
-        }
-        let open = admit(&self.sockets, endpoint, now, ceiling).map_err(|cause| {
-            DialEnd::new(DialFailure::local(Retry::Again, Reached::NoStream), cause)
-        })?;
-        let ends = StreamEnds::open(SEND_CAP);
-        if let Some(answer) = self.answers.lock().expect("answers").pop_front() {
-            ends.inbound
-                .blocking_send(answer)
-                .expect("room for the answer");
-        }
-        if self.close_on_open.load(Ordering::Acquire) {
-            // The peer's end: recorded, and no sender or queue kept, so the
-            // session's reads end at once.
-            ends.inbound
-                .close(tables::peer_closed(endpoint.connector()));
-            return Ok(Channel {
-                open,
-                session: ends.session,
-                endpoint: *endpoint,
-                gap: None,
-            });
-        }
-        self.held.lock().expect("held").insert(
-            open.id(),
-            Held {
-                connector: endpoint.connector(),
-                inbound: ends.inbound.clone(),
-                writer: ends.writer_queue,
-                _hold: ends.hold,
-            },
-        );
-        Ok(Channel {
-            open,
-            session: ends.session,
-            endpoint: *endpoint,
-            gap: None,
-        })
-    }
-
-    fn stamp_stream_end(&self, connector: ConnectorId, end: StreamEnd) -> DialFailure {
-        tables::tables(connector, end)
-    }
-
-    fn retired(&self, id: SocketId) {
-        self.held.lock().expect("held").remove(&id);
-    }
-
-    fn drive(&self, hub: &Hub, id: SocketId, session: Session) {
-        let hub = hub.clone();
-        thread::spawn(move || drive_inbound(&hub, id, session));
-    }
-}
-
-/// A connect that never resolves, counted while it is alive.
-struct Stalled {
-    alive: Arc<AtomicUsize>,
-}
-
-impl Future for Stalled {
-    type Output = Result<Channel, DialEnd>;
-
-    fn poll(self: Pin<&mut Self>, _cx: &mut Context<'_>) -> Poll<Self::Output> {
-        Poll::Pending
-    }
-}
-
-impl Drop for Stalled {
-    fn drop(&mut self) {
-        self.alive.fetch_sub(1, Ordering::AcqRel);
-    }
-}
-
-/// Every other connect never resolves (an onion that never answers); the
-/// rest are admitted and never answered (a peer silent after the channel).
-struct StallDial {
-    held: HeldDial,
-    connects: AtomicUsize,
-    stalled_alive: Arc<AtomicUsize>,
-    all_stall: bool,
-}
-
-impl StallDial {
-    fn new(sockets: Sockets, all_stall: bool) -> Self {
-        Self {
-            held: HeldDial::answering(sockets, Vec::new()),
-            connects: AtomicUsize::new(0),
-            stalled_alive: Arc::new(AtomicUsize::new(0)),
-            all_stall,
-        }
-    }
-}
-
-impl Dial for StallDial {
-    fn connect(
-        &self,
-        endpoint: &Endpoint,
-        ceiling: InboundCeiling,
-        now: Tick,
-    ) -> Result<Channel, DialEnd> {
-        self.held.connect(endpoint, ceiling, now)
-    }
-
-    fn stamp_stream_end(&self, connector: ConnectorId, end: StreamEnd) -> DialFailure {
-        self.held.stamp_stream_end(connector, end)
-    }
-
-    fn connect_async(
-        &self,
-        endpoint: &Endpoint,
-        ceiling: InboundCeiling,
-        now: Tick,
-    ) -> ConnectFuture {
-        let n = self.connects.fetch_add(1, Ordering::AcqRel);
-        if self.all_stall || n.is_multiple_of(2) {
-            self.stalled_alive.fetch_add(1, Ordering::AcqRel);
-            return Box::pin(Stalled {
-                alive: Arc::clone(&self.stalled_alive),
-            });
-        }
-        let result = self.held.connect(endpoint, ceiling, now);
-        Box::pin(std::future::ready(result))
-    }
-
-    fn retired(&self, id: SocketId) {
-        self.held.retired(id);
-    }
-
-    fn drive(&self, hub: &Hub, id: SocketId, session: Session) {
-        self.held.drive(hub, id, session);
-    }
-}
-
-fn dialer_on(clock: &ManualClock, sockets: &Sockets, dial: Arc<dyn Dial>) -> (Hub, Arc<Dialer>) {
-    let hub = Hub::new(
-        sockets.clone(),
-        InboundCeiling::Bounded(64),
-        Arc::new(|_post| {}),
-        Arc::new(clock.clone()),
-    );
-    hub.install_dial(dial);
-    let dialer = Arc::new(Dialer::new(
-        hub.clone(),
-        RefusedSet::NON_GLOBAL,
-        Arc::new(|| {
-            Some(SyncPayload {
-                current_height: 1,
-                cumulative_difficulty: 1,
-                cumulative_difficulty_top64: 0,
-                top_id: [0; 32],
-            })
-        }),
-    ));
-    dialer.set_network_id(NETWORK);
-    for (connector, route) in [
-        (CLEARNET, Route::Direct),
-        (
-            TOR,
-            Route::Socks(std::net::SocketAddr::from(([127, 0, 0, 1], 9050))),
-        ),
-    ] {
-        assert!(matches!(
-            hub.links().publish_usable(connector, route, Tick::new(1)),
-            RoutePublish::Installed { .. }
-        ));
-    }
-    (hub, dialer)
+/// A rig on `clock` whose peer answers every unqueued dial with `answer`.
+fn rig_answering(clock: &ManualClock, answer: Answer) -> Rig {
+    let rig = Rig::on(clock);
+    rig.peer.answer_unqueued(answer);
+    rig
 }
 
 /// **Stop with B dials in flight on Tor** (the brief's test 6). Two of the
@@ -378,10 +87,18 @@ fn dialer_on(clock: &ManualClock, sockets: &Sockets, dial: Arc<dyn Dial>) -> (Hu
 fn stop_cancels_every_attempt_in_flight_and_the_loop_exits_at_the_bell() {
     const BOUND: usize = 4;
     let clock = ManualClock::new(Tick::new(1));
-    let service = EngineService::start(clock.clone());
-    let sockets = Sockets::new();
-    let dial = Arc::new(StallDial::new(sockets.clone(), false));
-    let (_hub, dialer) = dialer_on(&clock, &sockets, Arc::clone(&dial) as Arc<dyn Dial>);
+    let rig = Rig::on(&clock);
+    // Every other connect never resolves (an onion that never answers);
+    // the rest are admitted and never answered (a peer silent after the
+    // channel).
+    for n in 0..BOUND {
+        rig.peer.answer_next(if n % 2 == 0 {
+            Answer::Stall
+        } else {
+            Answer::Connect
+        });
+    }
+    let dialer = &rig.dialer;
     dialer.set_in_flight_bound(TOR, BOUND);
     let mut rng = SplitMix64::new(1);
     for onion in onions(BOUND) {
@@ -396,17 +113,17 @@ fn stop_cancels_every_attempt_in_flight_and_the_loop_exits_at_the_bell() {
         );
     }
     wait_until("every attempt reached its stall", || {
-        dial.connects.load(Ordering::Acquire) == BOUND && dial.held.opened().len() == BOUND / 2
+        rig.peer.connects() == BOUND && rig.opened().len() == BOUND / 2
     });
     assert_eq!(dialer.in_flight(TOR), BOUND);
-    assert_eq!(dial.stalled_alive.load(Ordering::Acquire), BOUND / 2);
-    assert_eq!(sockets.live(), u64::try_from(BOUND / 2).expect("small"));
+    assert_eq!(rig.peer.stalled_alive.load(Ordering::Acquire), BOUND / 2);
+    assert_eq!(rig.sockets.live(), u64::try_from(BOUND / 2).expect("small"));
 
-    let owner = service
-        .handle()
+    let owner = rig
+        .timing
         .register(OwnerClass::Discovery)
         .expect("register");
-    let running = Arc::clone(&dialer);
+    let running = Arc::clone(dialer);
     let (ended_tx, ended_rx) = std::sync::mpsc::channel();
     let loop_thread = thread::spawn(move || {
         running.run(TOR, &owner, &mut SplitMix64::new(2));
@@ -422,10 +139,10 @@ fn stop_cancels_every_attempt_in_flight_and_the_loop_exits_at_the_bell() {
     loop_thread.join().expect("the loop thread");
     wait_until(
         "every connect was dropped and every channel released",
-        || dial.stalled_alive.load(Ordering::Acquire) == 0 && sockets.live() == 0,
+        || rig.peer.stalled_alive.load(Ordering::Acquire) == 0 && rig.sockets.live() == 0,
     );
     assert_eq!(dialer.in_flight(TOR), 0, "nothing is left in flight");
-    service.close();
+    rig.close_engine();
 }
 
 /// **Stop joins the loops between the cancel and the file** (revision 4,
@@ -436,10 +153,8 @@ fn stop_cancels_every_attempt_in_flight_and_the_loop_exits_at_the_bell() {
 #[test]
 fn stop_joins_the_loops_after_the_cancel_and_before_the_file() {
     let clock = ManualClock::new(Tick::new(1));
-    let service = EngineService::start(clock.clone());
-    let sockets = Sockets::new();
-    let dial = Arc::new(StallDial::new(sockets.clone(), true));
-    let (_hub, dialer) = dialer_on(&clock, &sockets, Arc::clone(&dial) as Arc<dyn Dial>);
+    let rig = rig_answering(&clock, Answer::Stall);
+    let dialer = &rig.dialer;
     let dir = tempfile::tempdir().expect("a directory");
     let path = dir.path().join("p2pstate.bin");
     let mut rng = SplitMix64::new(21);
@@ -455,14 +170,14 @@ fn stop_joins_the_loops_after_the_cancel_and_before_the_file() {
         .expect("admitted");
     assert!(matches!(dialer.launch(TOR, &mut rng), Launch::Running(_)));
     wait_until("the attempt reached its stall", || {
-        dial.stalled_alive.load(Ordering::Acquire) == 1
+        rig.peer.stalled_alive.load(Ordering::Acquire) == 1
     });
 
-    let owner = service
-        .handle()
+    let owner = rig
+        .timing
         .register(OwnerClass::Discovery)
         .expect("register");
-    let running = Arc::clone(&dialer);
+    let running = Arc::clone(dialer);
     let loop_thread = thread::spawn(move || {
         running.run(TOR, &owner, &mut SplitMix64::new(22));
     });
@@ -483,38 +198,29 @@ fn stop_joins_the_loops_after_the_cancel_and_before_the_file() {
         vec![onion],
         "the cancelled draw is written, still seated"
     );
-    service.close();
+    rig.close_engine();
 }
 
 /// One admitted gray address on a dialer that can dial, then stopped
-/// before anything is launched. The held dial would answer; an attempt
-/// that opened a socket shows up in `opened`.
-fn stopped_after_one_gray(
-    seed: u64,
-    n: u16,
-) -> (Sockets, Arc<HeldDial>, Arc<Dialer>, NetworkAddress) {
-    let clock = ManualClock::new(Tick::new(1));
-    let sockets = Sockets::new();
-    let dial = Arc::new(HeldDial::answering(sockets.clone(), vec![reply(NETWORK)]));
-    let (_hub, dialer) = dialer_on(&clock, &sockets, Arc::clone(&dial) as Arc<dyn Dial>);
+/// before anything is launched. The peer would answer; an attempt that
+/// opened a socket shows up in the rig's `opened`.
+fn stopped_after_one_gray(seed: u64, n: u16) -> (Rig, NetworkAddress) {
+    let rig = Rig::new();
+    rig.peer.answer_next(Answer::Answered(reply(NETWORK)));
     let mut rng = SplitMix64::new(seed);
     let address = peer(n);
-    dialer
+    rig.dialer
         .admit_operator(&address, Tick::new(1), &mut rng)
         .expect("admitted");
-    assert!(dialer.shared().lists.is_gray(&address));
-    dialer.stop();
-    (sockets, dial, dialer, address)
+    assert!(rig.dialer.shared().lists.is_gray(&address));
+    rig.dialer.stop();
+    (rig, address)
 }
 
 /// The draw stayed seated: still gray, not white, nothing in flight, and
-/// the held dial opened no socket.
-fn assert_draw_stays_seated(
-    sockets: &Sockets,
-    dial: &HeldDial,
-    dialer: &Dialer,
-    address: &NetworkAddress,
-) {
+/// no socket was opened.
+fn assert_draw_stays_seated(rig: &Rig, address: &NetworkAddress) {
+    let dialer = &rig.dialer;
     assert_eq!(dialer.in_flight(CLEARNET), 0);
     assert!(
         dialer.shared().lists.is_gray(address),
@@ -526,8 +232,8 @@ fn assert_draw_stays_seated(
     assert_eq!(dialer.shared().lists.failed_tests(address), 0);
     assert!(!dialer.shared().lists.is_white(address));
     assert_eq!(dialer.shared().lists.gray_count(CLEARNET), 1);
-    assert!(dial.opened().is_empty(), "no socket was opened");
-    assert_eq!(sockets.live(), 0);
+    assert!(rig.opened().is_empty(), "no socket was opened");
+    assert_eq!(rig.sockets.live(), 0);
 }
 
 /// **Stop, then launch, with no loop running.** The insert reads the stop
@@ -535,20 +241,20 @@ fn assert_draw_stays_seated(
 /// so it stays gray, and nothing is spawned.
 #[test]
 fn a_launch_after_stop_cancels_the_draw_and_opens_nothing() {
-    let (sockets, dial, dialer, address) = stopped_after_one_gray(11, 11);
+    let (rig, address) = stopped_after_one_gray(11, 11);
     let mut rng = SplitMix64::new(12);
-    assert_eq!(dialer.launch(CLEARNET, &mut rng), Launch::Stopped);
-    assert_draw_stays_seated(&sockets, &dial, &dialer, &address);
+    assert_eq!(rig.dialer.launch(CLEARNET, &mut rng), Launch::Stopped);
+    assert_draw_stays_seated(&rig, &address);
 }
 
 /// **Stop, then wake, with no loop running.** The wake runs on the caller
 /// and records nothing: the same cancel as launch, and no socket.
 #[test]
 fn a_wake_after_stop_records_nothing_and_opens_nothing() {
-    let (sockets, dial, dialer, address) = stopped_after_one_gray(13, 13);
+    let (rig, address) = stopped_after_one_gray(13, 13);
     let mut rng = SplitMix64::new(14);
-    assert!(!dialer.wake(CLEARNET, &mut rng));
-    assert_draw_stays_seated(&sockets, &dial, &dialer, &address);
+    assert!(!rig.dialer.wake(CLEARNET, &mut rng));
+    assert_draw_stays_seated(&rig, &address);
 }
 
 /// **A finished `Keep` not yet applied still counts** (the brief's test 7).
@@ -558,14 +264,12 @@ fn a_wake_after_stop_records_nothing_and_opens_nothing() {
 /// leaves exactly the target kept.
 #[test]
 fn a_finished_keep_not_yet_applied_still_counts_toward_the_target() {
-    let clock = ManualClock::new(Tick::new(1));
-    let sockets = Sockets::new();
     let gray = u16::try_from(shekyl_peerlist::white_diversity_floor() + 12).expect("small");
-    let dial = Arc::new(HeldDial::answering(
-        sockets.clone(),
-        std::iter::repeat_n(reply(NETWORK), usize::from(gray) + 8).collect(),
-    ));
-    let (_hub, dialer) = dialer_on(&clock, &sockets, Arc::clone(&dial) as Arc<dyn Dial>);
+    let rig = rig_answering(
+        &ManualClock::new(Tick::new(1)),
+        Answer::Answered(reply(NETWORK)),
+    );
+    let dialer = &rig.dialer;
     let mut rng = SplitMix64::new(7);
     dialer.set_in_flight_bound(CLEARNET, 4);
     dialer.set_target(CLEARNET, 2, &mut rng);
@@ -602,19 +306,17 @@ fn a_finished_keep_not_yet_applied_still_counts_toward_the_target() {
     );
 }
 
-/// **The nonce stays in flight until the result is applied** (the brief's
-/// test 8). With the handshake answered and its result posted but not
-/// applied, an inbound handshake carrying the request's nonce is a
-/// self-connection: the nonce is still in the set. Once applied, it is not.
+/// **The nonce stays in flight until the handshake resolves** (the brief's
+/// test 8, on the session layer's set). While the request is out and
+/// unanswered, an inbound handshake carrying its nonce is a
+/// self-connection: the nonce is in the set. Once the layer has resolved
+/// the handshake and the result is applied, it is not. *Records-was (to
+/// the cutover): the dialer held the set, and the nonce stayed in flight
+/// from the posted result to its application.*
 #[test]
-fn the_nonce_stays_in_flight_until_the_result_is_applied() {
-    let clock = ManualClock::new(Tick::new(1));
-    let sockets = Sockets::new();
-    let dial = Arc::new(HeldDial::answering(
-        sockets.clone(),
-        vec![reply(NETWORK), reply(NETWORK)],
-    ));
-    let (_hub, dialer) = dialer_on(&clock, &sockets, Arc::clone(&dial) as Arc<dyn Dial>);
+fn the_nonce_stays_in_flight_until_the_handshake_resolves() {
+    let rig = Rig::new();
+    let dialer = &rig.dialer;
     let mut rng = SplitMix64::new(8);
     for n in 0..2 {
         dialer
@@ -622,31 +324,41 @@ fn the_nonce_stays_in_flight_until_the_result_is_applied() {
             .expect("admitted");
     }
 
+    // The first dial is connected and left unanswered.
+    rig.peer.answer_next(Answer::Connect);
     let Launch::Running(id) = dialer.launch(CLEARNET, &mut rng) else {
         panic!("a draw");
     };
-    dialer.wait_posted(id);
-    let socket = dial.opened()[0];
-    let nonce = dial.request(socket).nonce;
+    wait_until("the channel opened", || rig.opened().len() == 1);
+    let socket = rig.opened()[0];
+    let nonce = rig.request(socket).nonce;
     assert_eq!(
-        dialer.take_nonce(CLEARNET, &nonce),
+        rig.layer.nonces().take(CLEARNET, &nonce),
         NonceTake::SelfConnection,
-        "posted but not applied: the nonce is still in flight"
+        "unanswered: the nonce is in flight"
     );
+    rig.answer(socket, reply(NETWORK));
+    dialer.wait_posted(id);
     dialer.apply_completions(CLEARNET, &mut rng);
 
-    // A second attempt: once its result is applied, its nonce is gone.
+    // A second attempt, answered: once the layer resolved it, its nonce
+    // is gone. The request is read before the peer answers, as a peer
+    // answers only what it has read: an answer injected at connect can
+    // resolve the dial and discard the unsent request first.
+    rig.peer.answer_next(Answer::Connect);
     let Launch::Running(id) = dialer.launch(CLEARNET, &mut rng) else {
         panic!("a second draw");
     };
+    wait_until("the second channel opened", || rig.opened().len() == 2);
+    let socket = rig.opened()[1];
+    let nonce = rig.request(socket).nonce;
+    rig.answer(socket, reply(NETWORK));
     dialer.wait_posted(id);
-    let socket = *dial.opened().last().expect("the second channel");
-    let nonce = dial.request(socket).nonce;
     dialer.apply_completions(CLEARNET, &mut rng);
     assert_eq!(
-        dialer.take_nonce(CLEARNET, &nonce),
+        rig.layer.nonces().take(CLEARNET, &nonce),
         NonceTake::NotOurs,
-        "applied: the nonce left the set"
+        "resolved: the nonce left the set"
     );
 }
 
@@ -656,10 +368,9 @@ fn the_nonce_stays_in_flight_until_the_result_is_applied() {
 /// nothing is kept: no kept session, no board row, the channel released.
 #[test]
 fn a_close_between_the_response_and_adoption_keeps_nothing() {
-    let clock = ManualClock::new(Tick::new(1));
-    let sockets = Sockets::new();
-    let dial = Arc::new(HeldDial::answering(sockets.clone(), vec![reply(NETWORK)]));
-    let (hub, dialer) = dialer_on(&clock, &sockets, Arc::clone(&dial) as Arc<dyn Dial>);
+    let rig = Rig::new();
+    rig.peer.answer_next(Answer::Answered(reply(NETWORK)));
+    let dialer = &rig.dialer;
     let mut rng = SplitMix64::new(9);
     dialer
         .admit_operator(&peer(200), Tick::new(1), &mut rng)
@@ -669,15 +380,16 @@ fn a_close_between_the_response_and_adoption_keeps_nothing() {
         panic!("a draw");
     };
     dialer.wait_posted(id);
-    let socket = dial.opened()[0];
-    dial.close_as_peer(socket);
+    let socket = rig.opened()[0];
+    rig.close_as_peer(socket);
     let applied = dialer.apply_completions(CLEARNET, &mut rng);
     assert_eq!(applied.len(), 1);
     assert_eq!(applied[0].kept, None, "nothing is kept");
     assert_eq!(dialer.kept_sessions(CLEARNET), 0);
-    assert!(hub.board().rows().is_empty(), "no board row");
+    rig.wait_closed(socket);
+    assert!(rig.layer.board().is_empty(), "no board row");
     assert!(!dialer.shared().lists.is_white(&peer(200)), "not white");
-    wait_until("the channel was released", || sockets.live() == 0);
+    wait_until("the channel was released", || rig.sockets.live() == 0);
 }
 
 /// Count the wakes the loop ran and the dials it launched, from its debug
@@ -693,10 +405,8 @@ fn wakes_and_launches(text: &str) -> (usize, usize) {
 /// had in flight at the end.
 fn run_stalled(bound: usize, steps: u64) -> (usize, usize, usize) {
     let clock = ManualClock::new(Tick::new(1_000_000_000));
-    let service = EngineService::start(clock.clone());
-    let sockets = Sockets::new();
-    let dial = Arc::new(StallDial::new(sockets.clone(), true));
-    let (_hub, dialer) = dialer_on(&clock, &sockets, Arc::clone(&dial) as Arc<dyn Dial>);
+    let rig = rig_answering(&clock, Answer::Stall);
+    let dialer = &rig.dialer;
     dialer.set_in_flight_bound(TOR, bound);
     let mut rng = SplitMix64::new(3);
     for onion in onions(bound + 4) {
@@ -704,11 +414,11 @@ fn run_stalled(bound: usize, steps: u64) -> (usize, usize, usize) {
             .admit_operator(&onion, Tick::new(1), &mut rng)
             .expect("admitted");
     }
-    let owner = service
-        .handle()
+    let owner = rig
+        .timing
         .register(OwnerClass::Discovery)
         .expect("register");
-    let running = Arc::clone(&dialer);
+    let running = Arc::clone(dialer);
     let loop_thread = thread::spawn(move || {
         log_text(tracing::Level::DEBUG, || {
             running.run(TOR, &owner, &mut SplitMix64::new(4));
@@ -724,13 +434,13 @@ fn run_stalled(bound: usize, steps: u64) -> (usize, usize, usize) {
         ));
         // The engine parks until a command when the manual clock is not
         // yet due; a throwaway registration nudges it.
-        drop(service.handle().register(OwnerClass::Interim));
+        drop(rig.timing.register(OwnerClass::Interim));
         thread::sleep(Duration::from_millis(60));
     }
     let in_flight = dialer.in_flight(TOR);
     dialer.stop();
     let text = loop_thread.join().expect("the loop thread");
-    service.close();
+    rig.close_engine();
     let (wakes, launches) = wakes_and_launches(&text);
     (wakes, launches, in_flight)
 }
@@ -764,14 +474,11 @@ fn stalled_dials_hold_the_bound_in_flight_and_the_wake_rate_is_unchanged() {
 fn a_due_keep_retry_does_not_take_the_connector_past_its_target() {
     const TARGET: usize = 2;
     let clock = ManualClock::new(Tick::new(1));
-    let sockets = Sockets::new();
     let gray = onions(shekyl_peerlist::white_diversity_floor() + 4);
-    let dial = Arc::new(HeldDial::answering(
-        sockets.clone(),
-        std::iter::repeat_n(reply(NETWORK), gray.len()).collect(),
-    ));
-    dial.refuse_after(&clock, shekyl_tor::reply_end(0xF0), Duration::ZERO);
-    let (_hub, dialer) = dialer_on(&clock, &sockets, Arc::clone(&dial) as Arc<dyn Dial>);
+    let rig = rig_answering(&clock, Answer::Answered(reply(NETWORK)));
+    rig.peer
+        .refuse_after(shekyl_tor::reply_end(0xF0), Duration::ZERO);
+    let dialer = &rig.dialer;
     let mut rng = SplitMix64::new(31);
     dialer.set_in_flight_bound(TOR, 2);
     dialer.set_target(TOR, TARGET, &mut rng);
@@ -795,13 +502,10 @@ fn a_due_keep_retry_does_not_take_the_connector_past_its_target() {
     for _ in 0..4 {
         dialer.wake(TOR, &mut rng);
     }
-    let kept_sessions = dialer
-        .hub()
+    let kept_sessions = rig
+        .layer
         .board()
-        .rows()
-        .iter()
-        .filter(|row| matches!(row.endpoint(), Endpoint::Tor { .. }))
-        .count();
+        .established_sessions(TOR, Direction::Outbound);
     assert!(
         kept_sessions <= TARGET,
         "kept {kept_sessions} Tor sessions against a target of {TARGET}"
@@ -829,39 +533,37 @@ fn one_tor_attempt_under(
     window: Option<Duration>,
 ) -> TorAttempt {
     let clock = ManualClock::new(Tick::new(1_000_000_000));
-    let sockets = Sockets::new();
-    let dial = Arc::new(HeldDial::answering(sockets.clone(), Vec::new()));
-    let (hub, dialer) = dialer_on(&clock, &sockets, Arc::clone(&dial) as Arc<dyn Dial>);
+    let rig = Rig::on(&clock);
+    let dialer = &rig.dialer;
     dialer.set_window(TOR, window);
     // The link works: an inbound Tor session receives throughout, so the
     // judge counts the attempt's failure once its bracket closes.
-    let held = hub.connect(&Endpoint::TorInbound).expect("accepted");
-    hub.session_established(held.id);
-    dial.connects.store(0, Ordering::Release);
-    life::Life::install(&dialer, &clock).keep_alive();
-    dial.refuse_after(&clock, cause, took);
+    let mut held = rig.accept(Endpoint::TorInbound);
+    rig.establish_inbound(&mut held);
+    rig.peer.reset_connects();
+    life::Life::install(dialer, &clock).keep_alive();
+    rig.peer.refuse_after(cause, took);
     let mut rng = SplitMix64::new(seed);
     let onion = onions(1).remove(0);
     dialer
         .admit_operator(&onion, Tick::new(1), &mut rng)
         .expect("admitted");
     dialer.wake(TOR, &mut rng);
-    assert_eq!(dial.connects.load(Ordering::Acquire), 1, "one attempt");
+    assert_eq!(rig.peer.connects(), 1, "one attempt");
     TorAttempt {
-        clock,
-        dial,
-        dialer,
+        rig,
         onion,
         rng,
+        _held: held,
     }
 }
 
 struct TorAttempt {
-    clock: ManualClock,
-    dial: Arc<HeldDial>,
-    dialer: Arc<Dialer>,
+    rig: Rig,
     onion: NetworkAddress,
     rng: SplitMix64,
+    /// The inbound session's far side, open for the test.
+    _held: shekyl_p2p_session::harness::Wire,
 }
 
 impl TorAttempt {
@@ -869,27 +571,27 @@ impl TorAttempt {
     /// onion cools, its ladder stepped once, and no wake after any retry
     /// wait dials it again.
     fn assert_final(mut self) {
+        let (clock, dialer) = (self.rig.clock.clone(), Arc::clone(&self.rig.dialer));
         assert_eq!(
-            self.dialer.pending_verdicts(TOR),
+            dialer.pending_verdicts(TOR),
             1,
             "the verdict waits for its bracket"
         );
         // A wake inside the bracket sees the live link and counts it; the
         // rest of the bracket then passes.
         let bracket = shekyl_peerlist::dial_profile(TOR).judging.bracket_nanos;
-        self.clock
-            .set(Tick::new(self.clock.now().get() + 1_000_000_000));
-        self.dialer.apply_verdicts(&mut self.rng);
-        self.clock.set(Tick::new(self.clock.now().get() + bracket));
-        self.dialer.apply_verdicts(&mut self.rng);
+        clock.set(Tick::new(clock.now().get() + 1_000_000_000));
+        dialer.apply_verdicts(&mut self.rng);
+        clock.set(Tick::new(clock.now().get() + bracket));
+        dialer.apply_verdicts(&mut self.rng);
         assert!(
-            self.dialer.shared().lists.is_cooling(&self.onion),
+            dialer.shared().lists.is_cooling(&self.onion),
             "the onion cools"
         );
-        assert_eq!(self.dialer.shared().lists.failed_tests(&self.onion), 1);
+        assert_eq!(dialer.shared().lists.failed_tests(&self.onion), 1);
         self.wake_after_every_wait();
         assert_eq!(
-            self.dial.connects.load(Ordering::Acquire),
+            self.rig.peer.connects(),
             1,
             "no further attempt in its test"
         );
@@ -898,15 +600,16 @@ impl TorAttempt {
     /// The test waits for its next attempt: the onion is not cooling, its
     /// ladder has not stepped, and the wake after the wait dials it again.
     fn assert_retries(mut self) {
+        let dialer = Arc::clone(&self.rig.dialer);
         assert!(
-            !self.dialer.shared().lists.is_cooling(&self.onion),
+            !dialer.shared().lists.is_cooling(&self.onion),
             "a deferred attempt records no outcome"
         );
-        assert_eq!(self.dialer.pending_verdicts(TOR), 0, "nor a verdict");
-        assert_eq!(self.dialer.shared().lists.failed_tests(&self.onion), 0);
+        assert_eq!(dialer.pending_verdicts(TOR), 0, "nor a verdict");
+        assert_eq!(dialer.shared().lists.failed_tests(&self.onion), 0);
         self.wake_after_every_wait();
         assert_eq!(
-            self.dial.connects.load(Ordering::Acquire),
+            self.rig.peer.connects(),
             2,
             "the second attempt of the test"
         );
@@ -916,11 +619,12 @@ impl TorAttempt {
     /// wake once. The second attempt, if the test has one, is refused at
     /// once.
     fn wake_after_every_wait(&mut self) {
-        self.clock
-            .set(Tick::new(self.clock.now().get() + 11 * 1_000_000_000));
-        self.dial
-            .refuse_after(&self.clock, shekyl_tor::reply_end(0xF0), Duration::ZERO);
-        self.dialer.wake(TOR, &mut self.rng);
+        let clock = &self.rig.clock;
+        clock.set(Tick::new(clock.now().get() + 11 * 1_000_000_000));
+        self.rig
+            .peer
+            .refuse_after(shekyl_tor::reply_end(0xF0), Duration::ZERO);
+        self.rig.dialer.wake(TOR, &mut self.rng);
     }
 }
 
@@ -989,7 +693,7 @@ fn a_transport_timeout_past_the_window_is_final_and_one_inside_retries() {
 #[test]
 fn the_tally_counts_a_failed_attempt_deferred_for_a_retry() {
     let attempt = one_tor_attempt(46, shekyl_tor::reply_end(0xF0), Duration::ZERO);
-    assert_eq!(attempt.dialer.tor_link_tally().unopened, 1);
+    assert_eq!(attempt.rig.dialer.tor_link_tally().unopened, 1);
     attempt.assert_retries();
 }
 
@@ -1001,14 +705,10 @@ fn the_tally_counts_a_failed_attempt_deferred_for_a_retry() {
 #[test]
 fn a_timeout_inside_the_window_retries_however_late_it_is_applied() {
     let clock = ManualClock::new(Tick::new(1_000_000_000));
-    let sockets = Sockets::new();
-    let dial = Arc::new(HeldDial::answering(sockets.clone(), Vec::new()));
-    dial.refuse_after(
-        &clock,
-        shekyl_tor::reply_end(0x06),
-        Duration::from_secs(103),
-    );
-    let (_hub, dialer) = dialer_on(&clock, &sockets, Arc::clone(&dial) as Arc<dyn Dial>);
+    let rig = Rig::on(&clock);
+    rig.peer
+        .refuse_after(shekyl_tor::reply_end(0x06), Duration::from_secs(103));
+    let dialer = &rig.dialer;
     dialer.set_window(TOR, Some(TOR_WINDOW));
     let mut rng = SplitMix64::new(47);
     let onion = onions(1).remove(0);

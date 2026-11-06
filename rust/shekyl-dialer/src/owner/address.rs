@@ -3,18 +3,18 @@
 // All rights reserved.
 // BSD-3-Clause
 
-//! A list address and a seam endpoint name the same peer.
+//! A list address and a session endpoint name the same peer.
 //!
-//! `shekyl-peerlist` and `shekyl-seam` do not depend on each other. The
-//! dialer is the layer that holds both, so this is where one becomes the
-//! other. An inbound Tor row has no list address: the peer's onion is not
+//! `shekyl-peerlist` and `shekyl-p2p-session` do not depend on each other.
+//! The dialer is the layer that holds both, so this is where one becomes
+//! the other. An inbound Tor row has no list address: the peer's onion is not
 //! on the socket.
 
 use std::collections::BTreeSet;
 use std::net::IpAddr;
 
+use shekyl_p2p_session::{Board, Endpoint};
 use shekyl_peerlist::{ConnectorId, Direction, Host, NetworkAddress};
-use shekyl_seam::{Endpoint, Hub};
 
 /// What this node discloses of itself on `connector`, given its own
 /// addresses there: the line [`super::Dialer::set_own_addresses`] logs when
@@ -27,7 +27,7 @@ pub(super) fn disclosure(connector: ConnectorId, own: &[NetworkAddress]) -> Stri
     }
 }
 
-/// The seam endpoint a list address dials. `None` for an onion host that
+/// The session endpoint a list address dials. `None` for an onion host that
 /// is not a v3 address: the lists do not admit one, and a dial of one is
 /// a local close.
 pub(super) fn endpoint_of(address: &NetworkAddress) -> Option<Endpoint> {
@@ -88,10 +88,10 @@ pub(in crate::owner) struct LiveSessions {
 }
 
 /// Live sessions on `connector`.
-pub(super) fn live_sessions(hub: &Hub, connector: ConnectorId) -> LiveSessions {
+pub(super) fn live_sessions(board: &Board, connector: ConnectorId) -> LiveSessions {
     let mut sessions = BTreeSet::new();
     let mut outbound_hosts = BTreeSet::new();
-    for row in hub.board().rows() {
+    for row in board.rows() {
         if row.connector() != connector {
             continue;
         }

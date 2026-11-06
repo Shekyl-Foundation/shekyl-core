@@ -5,12 +5,12 @@
 
 //! The chain-sync loopback harness (CS-Q11, `P2P_3_CHAIN_SYNC_BRIEF.md`).
 //!
-//! Scripted sync peers over real Levin framing, on a seam dialer whose
-//! channels end in those peers, against a real `ChainStore`, the real
-//! ingest service, the daemon's hasher budget and RandomX. The node runs
-//! the Rust router as the hub's post sink and the sync owner on its own
-//! row; the C++ Levin handler is a stub that records what the router
-//! forwards.
+//! Scripted sync peers over real Levin framing, on loopback connectors
+//! whose channels end in those peers, against a real `ChainStore`, the
+//! real ingest service, the daemon's hasher budget and RandomX. The node
+//! runs the session layer (`shekyl-p2p-session`) with the sync owner on
+//! its dispatch table through the owner's port; the peers and relay
+//! owners are a recorder.
 
 mod chain;
 mod dial;
@@ -18,8 +18,8 @@ mod node;
 mod peer;
 
 pub use chain::{fork_headers, open_store, store_path, Chain, Corpus, Step};
-pub use dial::{Buckets, PeerDial, Silent, SyncPeer};
-pub use node::{caches, substrate, MinerSeat, Node, StubLog};
+pub use dial::{empty_claim, PeerDial, Silent, SyncPeer};
+pub use node::{caches, substrate, MinerSeat, Node, Record, NETWORK_ID};
 pub use peer::{
     announcement, frame, request_headers, Bodies, HeaderChainPeer, MutePeer, Seen, ServingPeer,
 };

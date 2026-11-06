@@ -48,20 +48,21 @@ regtest path is **not** a free pass on V3 consensus rules.
 **Network type.** Regtest is a network like the others
 (`NETWORK_IDENTITY.md` NI-Q8): a row of the network table with its own
 genesis, network id, address prefixes and ports
-(`rust/shekyl-network/src/lib.rs:544`), and the C++ core's `REGTEST`
-beside `MAINNET` / `TESTNET` / `STAGENET`
-(`src/cryptonote_config.h:352-359`). It shares no constant with mainnet.
+(`rust/shekyl-network/src/lib.rs:570-579`). It shares no constant with
+mainnet. The daemon is all Rust (`P2P_3_REMNANT_CUTOVER_BRIEF.md` §1):
+there is no C++ core and no second copy of the table.
 
 **CLI activation.** `--network regtest` selects `Network::Regtest`; the
-daemon hands its code to the C++ core in the snapshot
-(`rust/shekyl-ffi/src/daemon_snapshot_ffi.rs:84`), which `core::init`
-reads at `src/cryptonote_core/cryptonote_core.cpp:101`. The `network` row
+daemon builds the node from that row — the chain rules
+(`rust/shekyl-node/src/lib.rs:911`), the network identity and the p2p
+plan (`rust/shekyl-daemon/src/run.rs:101`, `:303`). The `network` row
 takes one word, so no second network can be named. Companion rows:
 
 - `--dev-difficulty <N>` — pin difficulty to a constant. Unset means
   "use adaptive difficulty," so for instant-mining the harness must pass
-  `--dev-difficulty 1` (or another small value)
-  (`src/cryptonote_core/blockchain.cpp, 1263–1265`).
+  `--dev-difficulty 1` (or another small value); the lever is data on
+  the rule set, `DifficultyRule::Fixed`
+  (`rust/shekyl-chain-rules/src/rule_set.rs:433-446`).
 - `--clearnet off --tor off` — no listener and no dial (recommended for
   hermetic tests). The store persists across runs in the data directory;
   a fresh chain is a fresh directory.
@@ -247,12 +248,12 @@ Internal C++ name: `COMMAND_RPC_GET_BASE_FEE_ESTIMATE` /
 
 ### Filling logic
 
-`src/rpc/rpc_facts_ffi.cpp:125`. The version gate that once chose a
-legacy single-`fee` branch is deleted. The handler always fills `fees`
-with the three priced tiers from
-`Blockchain::get_dynamic_base_fee_estimate_2021_scaling`, and refuses a
-length other than that array
-(`src/rpc/rpc_facts_ffi.cpp:128-137`).
+`rust/shekyl-daemon-rpc/src/methods.rs:1063-1072`. The version gate that
+once chose a legacy single-`fee` branch is deleted. The handler always
+fills `fees` with the three priced tiers of the ladder the chain rules
+derive at the connecting height (`fee_ladder_at`,
+`rust/shekyl-daemon-rpc/src/store_facts.rs:532-543`); the array type
+admits no other length.
 
 **Wallet-side consequence (2026-08-17, PR #490; arity FL-R25).** The
 wallet no longer accepts a scalar-only reply. It previously synthesized

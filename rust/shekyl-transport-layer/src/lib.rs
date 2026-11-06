@@ -49,7 +49,7 @@ pub use ban::{
     ListedBan,
 };
 pub use budget::{LinkBudget, LinkDirection, MessageClass, Observed, Turn};
-pub use cause::{c_header, CloseCause, CloseKind, Phase};
+pub use cause::{CloseCause, CloseKind, Phase};
 pub use clock::{monotonic_ms, recv_mark_ms, unix_ms_of};
 pub use declaration::{
     addressing_of, connector_for, declaration, stack_plan, AddedLayer, Addressing, Assessment,

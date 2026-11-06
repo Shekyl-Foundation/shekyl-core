@@ -234,10 +234,12 @@ four after `VC-D12`):
 The genesis axis was added when `VC-D12`'s first draft excluded the
 `genesis_recipients.*.json` files from the digest on the ground that "the
 genesis block hash already commits to them" — and the steering lane checked
-whether anything compares that hash. Nothing does: no Rust pin of a genesis
-hash exists and no client reads block 0's hash. The daemon pins
-`GENESIS_TX` / `GENESIS_NONCE` per network in `src/cryptonote_config.h:368`
-(and `:500`, `:511`); the client side has never held the answer. So the
+whether anything compares that hash. Nothing did (at `e8838b0095`): no Rust
+pin of a genesis hash existed and no client read block 0's hash. The daemon
+pinned `GENESIS_TX` / `GENESIS_NONCE` per network at line 368 of
+`src/cryptonote_config.h` (and 500, 511) at that tree; the per-network pin
+is now `Genesis` in `rust/shekyl-network/src/genesis.rs:18-22` (network
+identity PR 1, #1264). The client side has never held the answer. So the
 axis joins the tuple rather than serving as an excuse — and it is carried in
 `get_version` with the other three (`VC-R2`, ruled 2026-09-07), not on a
 second call. Genesis does not replace network: `FAKECHAIN` takes

@@ -7,13 +7,12 @@
 #
 # Usage: check_binary_hardening.sh [--tool-prefix <prefix>] <binary>...
 #
-# `shekyld` is a Rust binary that links the C++ remnant (DAEMON_CONFIG_CUTOVER.md
-# DC-Q19, DC-Q21). The C++ executables took their hardening from
-# `LD_SECURITY_FLAGS` through `CMAKE_EXE_LINKER_FLAGS`; the Rust binaries get
-# the same list through `corrosion_add_target_local_rustflags` (shekyld) or
-# rustc's own defaults (shekyl-cli, shekyl-wallet-rpc). A flag list is a claim
-# about the build; this script reads the result off the staged file, so the
-# claim can fail. Every check reads the binary itself: no flag grep, no
+# `shekyld`, `shekyl-cli` and `shekyl-wallet-rpc` are Rust binaries, built by
+# one cargo invocation (`shekyl_rust_bins`); their hardening is rustc's own
+# defaults, not a flag list CMake passes (the C++ remnant shekyld linked, and
+# the Corrosion rustflags that carried `LD_SECURITY_FLAGS` to it, went on
+# 2026-11-05). A default is a claim about the toolchain; this script reads the
+# result off the staged file, so the claim can fail. Every check reads the binary itself: no flag grep, no
 # convention check (rule 47).
 #
 # The object format is read from the magic bytes, and the checks follow it:
@@ -28,8 +27,8 @@
 # What is not read here, and why: the compile-time mitigations (stack
 # protector, FORTIFY, CET, `/GS`) leave no uniform header mark. Their presence
 # is the compiler flag lists in CMakeLists.txt, and a pure-Rust binary has no
-# `__stack_chk_fail` to find. The single-tracing-dispatcher nm gate is
-# src/daemon/CMakeLists.txt's and stays there.
+# `__stack_chk_fail` to find. Nor is the tracing dispatcher: `shekyld` is one
+# cargo link, so its graph holds the one `tracing-core` Cargo.lock resolves.
 #
 # Tools. Cross builds produce a format the host's default tool may not parse
 # (the depends Cross-Mac leg links Mach-O on Linux), so ELF and Mach-O each

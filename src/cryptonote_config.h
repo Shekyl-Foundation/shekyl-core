@@ -31,10 +31,8 @@
 #pragma once
 
 #include <cstdint>
-#include <cstring>
 #include <stdexcept>
 #include <string>
-#include <boost/uuid/uuid.hpp>
 #include "shekyl/economics_params_generated.h"
 #include "shekyl/consensus_constants_generated.h"
 
@@ -357,18 +355,4 @@ namespace cryptonote
     REGTEST,
     UNDEFINED = 255
   };
-  extern "C" int shekyl_network_id(std::uint8_t nettype, std::uint8_t* out);
-
-  inline boost::uuids::uuid network_id_for(network_type nettype)
-  {
-    static_assert(unsigned(MAINNET) == 0 && unsigned(TESTNET) == 1
-               && unsigned(STAGENET) == 2 && unsigned(REGTEST) == 3,
-      "network_type bytes are the shekyl_network_id argument");
-    std::uint8_t bytes[16]{};
-    if (shekyl_network_id(static_cast<std::uint8_t>(nettype), bytes) != 0)
-      throw std::runtime_error("Invalid network type");
-    boost::uuids::uuid id{};
-    std::memcpy(&id, bytes, sizeof bytes);
-    return id;
-  }
 }

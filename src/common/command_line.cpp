@@ -30,26 +30,15 @@
 
 #include "command_line.h"
 #include "common/string_util.h"
-#include "common/i18n.h"
 
 namespace command_line
 {
-  namespace
-  {
-    const char* tr(const char* str)
-    {
-      return i18n_translate(str, "command_line");
-    }
-  }
-
   bool is_yes(const std::string& str)
   {
     if (str == "y" || str == "Y")
       return true;
 
     if (tools::string_util::iequals("yes", str))
-      return true;
-    if (tools::string_util::iequals(command_line::tr("yes"), str))
       return true;
 
     return false;
@@ -61,8 +50,6 @@ namespace command_line
       return true;
 
     if (tools::string_util::iequals("no", str))
-      return true;
-    if (tools::string_util::iequals(command_line::tr("no"), str))
       return true;
 
     return false;

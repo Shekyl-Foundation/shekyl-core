@@ -27,10 +27,11 @@ use std::path::{Path, PathBuf};
 use std::time::Duration;
 
 use shekyl_daemon_config::sections::Tor;
-use shekyl_ffi::dialer_ffi::ConnectorId;
-use shekyl_ffi::origin_verdict::OriginVerdict;
-use shekyl_ffi::tor_link::{ProbeArrival, TorLinkTally};
-use shekyl_ffi::zone_ffi::DownCause;
+use shekyl_node::Network;
+use shekyl_p2p::{
+    dial_profile, ConnectorId, DownCause, OriginVerdict, ProbeArrival, TorLinkTally,
+    TOR_SOCKS_TIMEOUT,
+};
 use shekyl_timing_engine::{Clock, MonotonicClock, OwnerClass, OwnerHandle, Tick};
 use shekyl_tor_control_client::binary::{
     discover_and_verify, discover_and_verify_at, TorBinaryError, VerifiedTorBinary,
@@ -63,7 +64,7 @@ const REPLY_BOUND: Duration = Duration::from_secs(30);
 /// The managed Tor answers a SOCKS request it cannot attach just inside the
 /// Tor dial deadline, so the dial's class is Tor's reply, never a race with
 /// that deadline (`TOR_SUPERVISOR.md` §4.2).
-const SOCKS_TIMEOUT: SocksTimeout = shekyl_ffi::tor_link::TOR_SOCKS_TIMEOUT;
+const SOCKS_TIMEOUT: SocksTimeout = TOR_SOCKS_TIMEOUT;
 /// The supervisor's waits. Its quiet span is the managed Tor's
 /// `SocksTimeout` plus the Tor connector's judging bracket δ
 /// (`DIALER_OUTAGE_EVIDENCE.md` §6), both the Tor connector's own
@@ -73,11 +74,7 @@ fn policy() -> Policy {
     let window = SOCKS_TIMEOUT
         .window()
         .expect("the daemon sets the managed Tor's SocksTimeout");
-    let bracket = Duration::from_nanos(
-        shekyl_ffi::dialer_ffi::dial_profile(ConnectorId::Tor)
-            .judging
-            .bracket_nanos,
-    );
+    let bracket = Duration::from_nanos(dial_profile(ConnectorId::Tor).judging.bracket_nanos);
     Policy::provisional(window + bracket)
 }
 /// The onion's stream cap.
@@ -208,6 +205,8 @@ fn pin_warning_line(error: &TorBinaryError, clearnet_on: bool) -> String {
 }
 
 /// Start the supervisor when Tor is managed. Any other posture returns `None`.
+/// `network` is where the route, the onion and the inbound facet are
+/// published, and whose timing engine the supervisor's waits are owned by.
 #[must_use]
 pub fn begin(
     tor: &Tor,
@@ -215,6 +214,7 @@ pub fn begin(
     virtual_port: u16,
     data_dir: &Path,
     handle: &tokio::runtime::Handle,
+    network: Network,
 ) -> Option<Supervisor> {
     let Tor::Managed { binary } = tor else {
         return None;
@@ -231,6 +231,7 @@ pub fn begin(
             data_dir,
             stop_rx,
             forward_rx,
+            network,
         )
         .await;
     });
@@ -276,8 +277,9 @@ async fn drive(
     data_dir: PathBuf,
     stop: watch::Receiver<bool>,
     forward: watch::Receiver<Option<SocketAddr>>,
+    network: Network,
 ) {
-    let engine = shekyl_ffi::zone_ffi::process_engine();
+    let engine = network.engine();
     let owner = match engine.register(OwnerClass::Housekeeping) {
         Ok(owner) => owner,
         Err(error) => {
@@ -306,10 +308,10 @@ async fn drive(
         tor: TorSetting::Managed,
         clearnet_on,
     };
-    let origin = shekyl_ffi::origin_verdict::watch();
-    let mut tor_link = shekyl_ffi::tor_link::watch();
-    let mut probe_arrivals = shekyl_ffi::tor_link::probe_arrivals();
-    // An arrival from an earlier supervisor in this process is not this one's.
+    let origin = network.origin_verdict();
+    let mut tor_link = network.tor_link_tally();
+    let mut probe_arrivals = network.probe_arrivals();
+    // An arrival from before this supervisor is not this one's.
     probe_arrivals.borrow_and_update();
     let started = now(&owner);
     let (mut core, mut step) = Core::start(policy(), connectors, started);
@@ -344,6 +346,7 @@ async fn drive(
         origin,
         tor_link,
         probe_arrivals,
+        network,
         service: None,
         rounds: None,
         dropped_seen: 0,
@@ -389,6 +392,9 @@ struct Drive {
     /// accepts the take when it names the probe in flight and landed before
     /// that probe's bound.
     probe_arrivals: watch::Receiver<Option<ProbeArrival>>,
+    /// The network the route, the onion and the inbound facet are
+    /// published on, and the probe is minted and dialed through.
+    network: Network,
     /// The onion as last published.
     service: Option<ServiceId>,
     /// That onion's descriptor upload rounds (`TSR-Q5`).
@@ -608,7 +614,7 @@ impl Drive {
                     Err(shutdown) => vec![shutdown],
                 }
             }
-            Action::ProbeAfterJump => vec![probe::jump_probe()],
+            Action::ProbeAfterJump => vec![probe::jump_probe(&self.network)],
             Action::CheckDirectories => {
                 let mut stop = self.stop.clone();
                 match race_stop(&mut stop, self.directories_drawn()).await {
@@ -969,17 +975,16 @@ impl Drive {
             .then_some(Input::StateFileAppeared)
     }
 
+    /// Publish the route on the network's Tor link. The network outlives
+    /// the supervisor, so the link is always there to take it; the core's
+    /// `HostAbsent` input, for a zone host not yet bound, has no producer.
     fn publish_route(&mut self, route: ManagedRunning) -> Input {
-        match shekyl_ffi::zone_ffi::publish_managed_running(&route) {
-            Some(installed) => {
-                self.incarnation = Some(installed);
-                // A facet decided before the route was in has no incarnation
-                // to name until now.
-                self.publish_inbound(self.core.status().inbound);
-                Input::RouteInstalled
-            }
-            None => Input::HostAbsent,
-        }
+        let installed = self.network.publish_managed_running(route.socks());
+        self.incarnation = Some(installed);
+        // A facet decided before the route was in has no incarnation to
+        // name until now.
+        self.publish_inbound(self.core.status().inbound);
+        Input::RouteInstalled
     }
 
     async fn republish(&mut self) -> Input {
@@ -1000,7 +1005,8 @@ impl Drive {
             .await
         {
             Ok(service) => {
-                shekyl_ffi::dialer_ffi::note_own_onion(service.as_str(), self.virtual_port);
+                self.network
+                    .note_own_onion(service.as_str(), self.virtual_port);
                 // A publish starts the onion's rounds afresh: a round left
                 // open by the deleted service is not this one's.
                 self.rounds = Some(UploadRounds::new(service.clone()));
@@ -1022,7 +1028,7 @@ impl Drive {
 
     fn withdraw_route(&mut self, cause: DownCause) {
         if let Some(id) = self.incarnation.take() {
-            let _fell = shekyl_ffi::zone_ffi::publish_tor_down(id, cause);
+            let _fell = self.network.publish_tor_down(id, cause);
         }
     }
 
@@ -1208,9 +1214,7 @@ mod tests {
     /// span of its own, or one read from elsewhere, fails this.
     #[test]
     fn the_posture_lines_quiet_span_is_tors_window_and_the_bracket() {
-        let bracket = shekyl_ffi::dialer_ffi::dial_profile(ConnectorId::Tor)
-            .judging
-            .bracket_nanos;
+        let bracket = dial_profile(ConnectorId::Tor).judging.bracket_nanos;
         assert_eq!(
             policy().quiet_after,
             SOCKS_TIMEOUT.window().expect("set") + Duration::from_nanos(bracket)
@@ -1229,19 +1233,19 @@ mod tests {
             .expect("the daemon sets it")
             .parse()
             .expect("whole seconds");
-        let deadline = shekyl_ffi::tor_link::TOR_DIAL_WITHIN.as_secs();
+        let deadline = shekyl_p2p::TOR_DIAL_WITHIN.as_secs();
         assert!(timeout < deadline, "{timeout} s inside {deadline} s");
         assert!(timeout >= deadline / 2, "not far inside it");
         // The dialer reads the same window the Tor is launched with: an
         // attempt failing at or after it is final within its test.
         assert_eq!(
-            shekyl_ffi::tor_link::TOR_SOCKS_TIMEOUT.window(),
+            TOR_SOCKS_TIMEOUT.window(),
             Some(Duration::from_secs(timeout)),
             "one window"
         );
         assert_eq!(timeout, 105, "120 s less the 15 s margin");
         assert_eq!(
-            shekyl_ffi::tor_link::TOR_SOCKS_TIMEOUT.earliest_expiry(),
+            TOR_SOCKS_TIMEOUT.earliest_expiry(),
             Some(Duration::from_secs(104)),
             "Tor counts a stream's age in whole seconds"
         );
