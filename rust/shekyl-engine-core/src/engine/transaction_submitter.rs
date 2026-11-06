@@ -205,7 +205,10 @@ pub(crate) fn submit_outcome_from_verdict(
 ) -> TxSubmitOutcome {
     match verdict {
         SubmitVerdict::Accepted => TxSubmitOutcome::Submitted { hash },
-        SubmitVerdict::AlreadyInPool => TxSubmitOutcome::AlreadyInPool { hash },
+        SubmitVerdict::AlreadyInPool { relay } => TxSubmitOutcome::AlreadyInPool {
+            hash,
+            relay: *relay,
+        },
         SubmitVerdict::AlreadyInChain { height } => TxSubmitOutcome::AlreadyInChain {
             hash,
             height: *height,
@@ -247,7 +250,7 @@ pub(crate) fn outcome_to_result(outcome: TxSubmitOutcome) -> Result<SubmitSucces
             hash,
             kind: BroadcastKind::Accepted,
         }),
-        TxSubmitOutcome::AlreadyInPool { hash } => Ok(SubmitSuccess::Broadcast {
+        TxSubmitOutcome::AlreadyInPool { hash, .. } => Ok(SubmitSuccess::Broadcast {
             hash,
             kind: BroadcastKind::AlreadyInPool,
         }),
@@ -335,7 +338,7 @@ where
         // own locally-computed hash straight into the shared mapper, nothing to check.
         #[cfg(debug_assertions)]
         if let TxSubmitOutcome::Submitted { hash }
-        | TxSubmitOutcome::AlreadyInPool { hash }
+        | TxSubmitOutcome::AlreadyInPool { hash, .. }
         | TxSubmitOutcome::AlreadyInChain { hash, .. } = &outcome
         {
             debug_assert_eq!(
@@ -620,6 +623,7 @@ mod tests {
     //! daemon), plus the per-`P` `PTransactionSubmitter`'s
     //! ambiguous-failure + username-non-leak proof (SP-T4a).
     use super::*;
+    use shekyl_rpc_client::PoolRelay;
 
     /// Every identity-bearing verdict maps 1:1 and carries the locally
     /// computed hash — never a daemon-supplied id.
@@ -630,10 +634,17 @@ mod tests {
             submit_outcome_from_verdict(&SubmitVerdict::Accepted, hash),
             TxSubmitOutcome::Submitted { hash }
         );
-        assert_eq!(
-            submit_outcome_from_verdict(&SubmitVerdict::AlreadyInPool, hash),
-            TxSubmitOutcome::AlreadyInPool { hash }
-        );
+        for relay in [
+            PoolRelay::Held,
+            PoolRelay::HeldOverdue,
+            PoolRelay::Published,
+        ] {
+            assert_eq!(
+                submit_outcome_from_verdict(&SubmitVerdict::AlreadyInPool { relay }, hash),
+                TxSubmitOutcome::AlreadyInPool { hash, relay },
+                "the relay state passes through; the wallet does not judge it"
+            );
+        }
         assert_eq!(
             submit_outcome_from_verdict(&SubmitVerdict::AlreadyInChain { height: 42 }, hash),
             TxSubmitOutcome::AlreadyInChain { hash, height: 42 },
@@ -673,7 +684,11 @@ mod tests {
             }
         );
         assert_eq!(
-            outcome_to_result(TxSubmitOutcome::AlreadyInPool { hash }).expect("identity outcome"),
+            outcome_to_result(TxSubmitOutcome::AlreadyInPool {
+                hash,
+                relay: PoolRelay::HeldOverdue,
+            })
+            .expect("identity outcome"),
             SubmitSuccess::Broadcast {
                 hash,
                 kind: BroadcastKind::AlreadyInPool,

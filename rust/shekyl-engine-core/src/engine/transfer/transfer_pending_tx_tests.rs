@@ -1917,7 +1917,7 @@ async fn submit_already_in_pool_surfaces_verdict_without_changing_disposition() 
 /// liveness cost)". Asserted on the axis the cap actually lives on —
 /// horizon *reachability*, not the stored number: a daemon claiming
 /// `u64::MAX` must not be able to park `escape_ladder_step` on
-/// `HorizonNotReached` forever, because the F14 lock it places is
+/// `CeilingNotReached` forever, because the F14 lock it places is
 /// persisted and nothing else would ever release it (refresh cannot
 /// observe a spend that never reached the chain).
 ///
@@ -1976,10 +1976,10 @@ async fn submit_already_in_chain_absurd_height_leaves_the_watchdog_horizon_reach
         height: 20,
         synchronized: true,
     };
-    let horizon_reached = 20 + config.escape_horizon_blocks;
+    let ceiling_reached = 20 + config.probe_ceiling_blocks;
     assert_ne!(
-        escape_ladder_step(held, horizon_reached, healthy, config),
-        WatchdogStep::Wait(WaitReason::HorizonNotReached),
+        escape_ladder_step(held, ceiling_reached, healthy, config),
+        WatchdogStep::Wait(WaitReason::CeilingNotReached),
         "a lock baselined at a reached height must clear the horizon once \
          the wallet syncs past it — otherwise the escape ladder never runs \
          and the persisted lock strands the inputs permanently"
@@ -1990,8 +1990,8 @@ async fn submit_already_in_chain_absurd_height_leaves_the_watchdog_horizon_reach
         ..*held
     };
     assert_eq!(
-        escape_ladder_step(&unclamped, horizon_reached, healthy, config),
-        WatchdogStep::Wait(WaitReason::HorizonNotReached),
+        escape_ladder_step(&unclamped, ceiling_reached, healthy, config),
+        WatchdogStep::Wait(WaitReason::CeilingNotReached),
         "sanity: the unclamped baseline is unreachable, so this assertion \
          discriminates rather than passing for any input"
     );

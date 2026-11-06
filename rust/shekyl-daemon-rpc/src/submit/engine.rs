@@ -13,12 +13,14 @@
 
 use std::time::{Duration, Instant};
 
-use shekyl_rpc_types::{RejectCause, SubmitVerdict};
+use shekyl_rpc_types::{PoolRelay, RejectCause, SubmitVerdict};
 use shekyl_types::{BlockHeight, ChainCount};
 
 use crate::consensus::{FCMP_REFERENCE_BLOCK_MAX_AGE, FCMP_REFERENCE_BLOCK_MIN_AGE};
 use crate::submit::certificate::VerificationCertificate;
-use crate::submit::facts::{CommitOutcome, KeyImageConflict, SubmitFacts, SubmitStateShim, TxMeta};
+use crate::submit::facts::{
+    CommitOutcome, KeyImageConflict, OriginPublication, SubmitFacts, SubmitStateShim, TxMeta,
+};
 use crate::submit::fee::fee_clears;
 use crate::submit::phase_a::{parse_submission, ParsedSubmission, SubmitTxKind};
 use crate::submit::verifier::verify_debit_slot_possession;
@@ -83,7 +85,7 @@ impl core::fmt::Display for SubmitClock {
 fn verdict_name(verdict: &SubmitVerdict) -> &'static str {
     match verdict {
         SubmitVerdict::Accepted => "accepted",
-        SubmitVerdict::AlreadyInPool => "already-in-pool",
+        SubmitVerdict::AlreadyInPool { .. } => "already-in-pool",
         SubmitVerdict::AlreadyInChain { .. } => "already-in-chain",
         SubmitVerdict::Rejected { .. } => "rejected",
     }
@@ -154,6 +156,21 @@ enum PoolDisclosure {
 
 /// The disclosure decision, shared by the Phase-B early return and the
 /// Phase-D race classifier so the two cannot drift.
+/// The relay state an owner, or a broadcast-visible foreign caller, is told.
+///
+/// Broadcast presence wins over a stale origin hold: a fluffed transaction
+/// is published. An origin row the zone has not recorded yet is held, so
+/// the wallet waits rather than alarming on a race.
+fn disclosed_relay(facts: &SubmitFacts) -> PoolRelay {
+    if facts.in_pool_broadcast {
+        return PoolRelay::Published;
+    }
+    match facts.origin_publication {
+        Some(OriginPublication::HeldOverdue) => PoolRelay::HeldOverdue,
+        Some(OriginPublication::Held) | None => PoolRelay::Held,
+    }
+}
+
 fn disclose_pool_presence(facts: &SubmitFacts, caller: SubmitCaller) -> PoolDisclosure {
     if !facts.in_pool {
         return PoolDisclosure::Absent;
@@ -356,7 +373,9 @@ impl<S: SubmitStateShim, V: TxVerifier> SubmitEngine<S, V> {
             disclose_pool_presence(&facts, caller),
             PoolDisclosure::Reveal
         ) {
-            return Ok(SubmitVerdict::AlreadyInPool);
+            return Ok(SubmitVerdict::AlreadyInPool {
+                relay: disclosed_relay(&facts),
+            });
         }
 
         // ── Phase C: policy arithmetic + verification (no locks) ───────
@@ -586,7 +605,11 @@ impl<S: SubmitStateShim, V: TxVerifier> SubmitEngine<S, V> {
         //    would be (concealed, below), never `AlreadyInPool`, so the race
         //    outcome is not an oracle.
         let mut concealed = match disclose_pool_presence(fresh, caller) {
-            PoolDisclosure::Reveal => return Some(SubmitVerdict::AlreadyInPool),
+            PoolDisclosure::Reveal => {
+                return Some(SubmitVerdict::AlreadyInPool {
+                    relay: disclosed_relay(fresh),
+                })
+            }
             PoolDisclosure::Conceal => true,
             PoolDisclosure::Absent => false,
         };
@@ -755,7 +778,9 @@ mod clock_tests {
     fn a_verdict_is_named_by_kind_alone() {
         assert_eq!(verdict_name(&SubmitVerdict::Accepted), "accepted");
         assert_eq!(
-            verdict_name(&SubmitVerdict::AlreadyInPool),
+            verdict_name(&SubmitVerdict::AlreadyInPool {
+                relay: PoolRelay::Published,
+            }),
             "already-in-pool"
         );
         assert_eq!(

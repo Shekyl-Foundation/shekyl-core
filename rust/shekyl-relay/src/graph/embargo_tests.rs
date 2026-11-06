@@ -7,8 +7,9 @@
 //! and RX-2, Rick 2026-10-29). Each test names the edit that turns it red.
 
 use shekyl_draw_rng::SplitMix64;
-use shekyl_relay_privacy::params::DandelionParams;
-use shekyl_relay_privacy::schedule::PeerDirection;
+use shekyl_relay_privacy::conformance::RecoveryBudget;
+use shekyl_relay_privacy::params::{origin_retry_one_in, DandelionParams};
+use shekyl_relay_privacy::schedule::{EmbargoTimer, PeerDirection};
 
 use super::*;
 use crate::driver::{Driver, Effect};
@@ -66,16 +67,92 @@ fn originate(z: &mut Relay, sent: &(TxId, TxBlob), rng: &mut SplitMix64) -> Conn
     successor
 }
 
-/// The seconds `origin_retry_secs` derives at the shipped terms.
-///
-/// `shekyl-engine-core` spells the same value (`SHIPPED_ORIGIN_RETRY_SECS`)
-/// because the wallet does not link this scheduler. The derivation owns the
-/// number; this equality is what keeps the spelling a pin. A move updates
-/// both in one change.
+/// The origin retry is the adopted timer's own quantile, and the
+/// publication budget is that interval times the fire count
+/// `RecoveryBudget::for_cap` uses. The reshape budget's mean and its
+/// 1-in-100 deadline are a different clock.
 #[test]
-fn shipped_origin_retry_matches_the_wallet_spelling() {
+fn origin_budget_is_the_recovery_cycle_count_times_the_origin_retry() {
+    let params = DandelionParams::adopted_for_transit_ms(longest_transit());
+    let timer = EmbargoTimer::adopted(&params);
+    let fires = u32::try_from(params.graph.stem_count()).expect("stem count fits u32");
+    let retry_cap = fires
+        .checked_sub(1)
+        .expect("the origin fires at least once");
+    let recovery = RecoveryBudget::for_cap(&timer, retry_cap);
+    assert_eq!(recovery.cycles, fires);
+    assert_eq!(
+        origin_retry_secs(),
+        timer.judge_failed_after_secs(origin_retry_one_in())
+    );
     assert_eq!(origin_retry_secs(), 1_148);
     assert_eq!(origin_retry_ms(), 1_148_000);
+    let budget_ms = u64::from(origin_retry_secs()) * 1_000 * u64::from(recovery.cycles);
+    assert_eq!(origin_publication_budget_ms(), budget_ms);
+    assert_ne!(u64::from(recovery.mean_secs) * 1_000, budget_ms);
+    assert_ne!(u64::from(recovery.failed_secs) * 1_000, budget_ms);
+}
+
+/// The daemon judges an origin hold on its own clock. One millisecond
+/// inside the budget is held; the budget itself, with the hold still
+/// there, is overdue. A relay position is not an origin. Fluffing removes
+/// the hold, so the publication map does not keep a published transaction.
+#[test]
+fn the_daemon_judges_an_origin_hold_against_its_own_budget() {
+    let mut rng = SplitMix64::new(0xB0);
+    let mut z = stem_zone(&[1, 2], &mut rng);
+    let sent = tx(7);
+    let successor = originate(&mut z, &sent, &mut rng);
+    let budget = origin_publication_budget_ms();
+
+    assert_eq!(
+        z.origin_publication(&sent.0, budget - 1),
+        Some(OriginPublication::Held)
+    );
+    // The fire has not run. The hold is still here, and the clock is due.
+    assert_eq!(
+        z.origin_publication(&sent.0, budget),
+        Some(OriginPublication::HeldOverdue)
+    );
+
+    let relayed = tx(8);
+    z.record_stem(
+        std::slice::from_ref(&relayed),
+        successor,
+        Some(id(1)),
+        0,
+        &mut rng,
+    );
+    assert_eq!(
+        z.origin_publication(&relayed.0, budget),
+        None,
+        "a relay position is not this node's origin"
+    );
+
+    let mut fired = stem_zone(&[1, 2], &mut rng);
+    let published = tx(9);
+    originate(&mut fired, &published, &mut rng);
+    let retry = origin_retry_ms();
+    let _ = fired.fire_embargoes(retry, &mut rng);
+    let second = fired.fire_embargoes(budget, &mut rng);
+    assert_eq!(second.published, vec![published.0]);
+    assert_eq!(
+        fired.origin_publication(&published.0, budget),
+        None,
+        "an on-time last fire fluffs, so the hold is gone"
+    );
+
+    let mut waiting = stem_zone(&[1, 2], &mut rng);
+    let unsent = tx(10);
+    waiting.hold_origin(std::slice::from_ref(&unsent), 0);
+    assert_eq!(
+        waiting.origin_publication(&unsent.0, budget - 1),
+        Some(OriginPublication::Held)
+    );
+    assert_eq!(
+        waiting.origin_publication(&unsent.0, budget),
+        Some(OriginPublication::HeldOverdue)
+    );
 }
 
 /// RX-1 and §12.2: the origin's first fire re-stems once to its alternate,

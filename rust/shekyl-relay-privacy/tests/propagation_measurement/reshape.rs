@@ -217,8 +217,9 @@ fn precision_increment_reproduces_delta_table() {
 /// liveness problem that outranks performance. It is not. The cap prices the
 /// worst case off the embargo this measurement builds (`RecoveryBudget`):
 /// `(retry_cap + 1)` of that timer's means, and the same count of its
-/// 1-in-100 failure deadlines. Pool residence is the wallet's clock
-/// (CEN-M10), and `MIN_RELAY_TIME` does not govern an embargoed transaction
+/// 1-in-100 failure deadlines. Pool residence is the wallet's block
+/// ceiling (CEN-M10). An origin's overdue judgment is the daemon's
+/// clock. `MIN_RELAY_TIME` does not govern an embargoed transaction
 /// (§15.4). Neither is this instrument's bound.
 #[test]
 fn reshape_recovery_is_a_cost_not_a_break() {

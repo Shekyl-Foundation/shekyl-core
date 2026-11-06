@@ -10,7 +10,7 @@
 //! The kernel is pure: facts in, one decision out. This module is the
 //! thin scheduler around those audited decisions — it projects the held
 //! set from the ledger's F14 locks, overlays the in-memory probe state
-//! the kernel doc anticipates (per-txid `probed_this_epoch` / wait-epoch
+//! the kernel doc anticipates (per-txid relay sight / wait-epoch
 //! baseline), fetches daemon health, runs the escape ladder per held tx,
 //! executes the rung-1 resubmit-same-bytes probe against the retained
 //! bytes, applies the probe outcome (including the §2.6 confirmed-absent
@@ -73,7 +73,7 @@
 
 use std::collections::{HashMap, HashSet};
 
-use shekyl_rpc_client::RejectCause;
+use shekyl_rpc_client::{PoolRelay, RejectCause};
 use shekyl_types::{BlockHeight, TxHash};
 
 use super::diagnostics::{PendingTxDiagnostic, WatchdogAlarmReason, WatchdogProbeOutcome};
@@ -98,7 +98,7 @@ use super::traits::{DaemonEngine, DaemonHealth, TxSubmitOutcome};
 pub(crate) trait WatchdogHost: Send + Sync {
     /// Project the current held-submit set from the ledger's F14 locks
     /// ([`submit_watchdog::held_submits`](super::submit_watchdog::held_submits)),
-    /// one fresh entry per awaited txid (`probed_this_epoch: false`).
+    /// one fresh entry per awaited txid (`pool_sight` unseen).
     fn held_submits(&self) -> Vec<HeldSubmit>;
 
     /// The wallet's current synced chain height — the horizon reference
@@ -143,7 +143,7 @@ pub(crate) trait WatchdogHost: Send + Sync {
 /// [`tick`](Self::tick), not owned:
 ///
 /// - `overlay`: per-txid [`HeldSubmit`] state carried across ticks — the
-///   `probed_this_epoch` flag and the wait-epoch baseline the kernel
+///   relay sight and the wait-epoch baseline the kernel
 ///   advances on a `RestartWait`. Fresh projections seed missing entries;
 ///   confirmed / released txids are reaped.
 /// - `alarmed`: the edge-trigger latch. Each held tx emits its **first**
@@ -488,7 +488,7 @@ impl SubmitLifecycleDriver {
         outcome: ProbeOutcome,
         probe_height: u64,
     ) {
-        let (disposition, next) = apply_probe_outcome(&held, outcome, probe_height);
+        let (disposition, next) = apply_probe_outcome(&held, outcome, probe_height, self.config);
         match disposition {
             ProbeDisposition::RestartWait | ProbeDisposition::KeepHolding => {
                 if let Some(next) = next {
@@ -536,6 +536,14 @@ enum ProbeVerdict {
     ReferenceStale,
 }
 
+fn probe_outcome_for_relay(relay: PoolRelay) -> ProbeOutcome {
+    match relay {
+        PoolRelay::Held => ProbeOutcome::Held,
+        PoolRelay::HeldOverdue => ProbeOutcome::HeldOverdue,
+        PoolRelay::Published => ProbeOutcome::Published,
+    }
+}
+
 /// Project the daemon [`TxSubmitOutcome`] onto the kernel's presence
 /// facts, splitting off the retryable-rejection arm the kernel has no
 /// representation for.
@@ -544,7 +552,9 @@ fn classify_probe(outcome: TxSubmitOutcome) -> ProbeVerdict {
         TxSubmitOutcome::Submitted { .. } => {
             ProbeVerdict::Kernel(ProbeOutcome::ReofferedAfterAbsence)
         }
-        TxSubmitOutcome::AlreadyInPool { .. } => ProbeVerdict::Kernel(ProbeOutcome::PresentInPool),
+        TxSubmitOutcome::AlreadyInPool { relay, .. } => {
+            ProbeVerdict::Kernel(probe_outcome_for_relay(relay))
+        }
         TxSubmitOutcome::AlreadyInChain { .. } => {
             ProbeVerdict::Kernel(ProbeOutcome::ConfirmedInChain)
         }
@@ -570,7 +580,11 @@ fn classify_probe(outcome: TxSubmitOutcome) -> ProbeVerdict {
 fn probe_trace(outcome: TxSubmitOutcome) -> WatchdogProbeOutcome {
     match outcome {
         TxSubmitOutcome::Submitted { .. } => WatchdogProbeOutcome::ReofferedAfterAbsence,
-        TxSubmitOutcome::AlreadyInPool { .. } => WatchdogProbeOutcome::PresentInPool,
+        TxSubmitOutcome::AlreadyInPool { relay, .. } => match relay {
+            PoolRelay::Held => WatchdogProbeOutcome::Held,
+            PoolRelay::HeldOverdue => WatchdogProbeOutcome::HeldOverdue,
+            PoolRelay::Published => WatchdogProbeOutcome::Published,
+        },
         TxSubmitOutcome::AlreadyInChain { .. } => WatchdogProbeOutcome::ConfirmedInChain,
         TxSubmitOutcome::Rejected { cause, .. } => match cause {
             RejectCause::Malformed
@@ -589,9 +603,8 @@ fn probe_trace(outcome: TxSubmitOutcome) -> WatchdogProbeOutcome {
 /// [`WatchdogAlarmReason`].
 fn project_alarm(reason: AlarmReason) -> WatchdogAlarmReason {
     match reason {
-        AlarmReason::PresentButUnconfirmedPastHorizon => {
-            WatchdogAlarmReason::PresentButUnconfirmedPastHorizon
-        }
+        AlarmReason::HeldOverdue => WatchdogAlarmReason::HeldOverdue,
+        AlarmReason::PublishedUnmined => WatchdogAlarmReason::PublishedUnmined,
         AlarmReason::DaemonPeerless => WatchdogAlarmReason::DaemonPeerless,
         AlarmReason::DaemonOffline => WatchdogAlarmReason::DaemonOffline,
     }

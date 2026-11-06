@@ -25,12 +25,14 @@ use std::collections::VecDeque;
 use std::future::Future;
 use std::sync::{Arc, Mutex};
 
+use super::super::submit_watchdog::PoolSight;
 use super::super::traits::FeeEstimates;
 use shekyl_rpc_client::{Rpc, RpcError};
+use shekyl_rpc_types::PoolRelay;
 
-/// The production escape horizon the driver runs at
+/// The production block ceiling the driver runs at
 /// ([`WatchdogConfig::DEFAULT`]), read rather than re-typed.
-const HORIZON: u64 = WatchdogConfig::DEFAULT.escape_horizon_blocks;
+const CEILING: u64 = WatchdogConfig::DEFAULT.probe_ceiling_blocks;
 
 fn txid(seed: u8) -> TxHash {
     TxHash::from_bytes([seed; 32])
@@ -40,7 +42,7 @@ fn held(seed: u8, baseline: u64) -> HeldSubmit {
     HeldSubmit {
         tx_hash: txid(seed),
         baseline_height: baseline,
-        probed_this_epoch: false,
+        pool_sight: PoolSight::Unseen,
     }
 }
 
@@ -296,7 +298,10 @@ impl DaemonEngine for StubDaemon {
             s.submit_calls += 1;
             s.submit
                 .pop_front()
-                .unwrap_or(Ok(TxSubmitOutcome::AlreadyInPool { hash: txid(0) }))
+                .unwrap_or(Ok(TxSubmitOutcome::AlreadyInPool {
+                    hash: txid(0),
+                    relay: PoolRelay::Held,
+                }))
         }
     }
 
@@ -354,20 +359,20 @@ fn first_alarm_index(events: &[PendingTxDiagnostic]) -> usize {
 // Escape ladder
 // ================================================================
 
-/// §10 item 8 ladder ordering through the driver: a held tx
-/// present-past-horizon is *probed first* (the resubmit-same-bytes
-/// rung), and only then — on the `AlreadyInPool` verdict (F31: no
-/// relay pulse) — escalated to the operator alarm. Rung 3 (rebuild)
-/// is unrepresentable: [`WatchdogStep`] cannot express it, so the
-/// driver has no path to it by construction.
+/// At the block ceiling the driver probes first. A `held_overdue`
+/// answer then alarms. Rung 3 (rebuild) is unrepresentable:
+/// [`WatchdogStep`] cannot express it, so the driver has no path to it.
 #[tokio::test]
-async fn probe_precedes_alarm_present_past_horizon() {
+async fn probe_precedes_the_held_overdue_alarm() {
     let tx = txid(1);
-    let host = StubHost::new(1_000 + HORIZON)
+    let host = StubHost::new(1_000 + CEILING)
         .with_held(held(1, 1_000))
         .with_bytes(tx, vec![0xAB; 8]);
     let daemon = StubDaemon::new();
-    daemon.push_submit(Ok(TxSubmitOutcome::AlreadyInPool { hash: tx }));
+    daemon.push_submit(Ok(TxSubmitOutcome::AlreadyInPool {
+        hash: tx,
+        relay: PoolRelay::HeldOverdue,
+    }));
     let mut d = driver();
 
     d.tick(&host, &daemon).await;
@@ -380,31 +385,40 @@ async fn probe_precedes_alarm_present_past_horizon() {
     );
     assert_eq!(
         alarm_reasons(&events),
-        vec![WatchdogAlarmReason::PresentButUnconfirmedPastHorizon]
+        vec![WatchdogAlarmReason::HeldOverdue]
     );
-    assert!(host.is_held(&tx), "present-but-unconfirmed never releases");
+    assert!(host.is_held(&tx), "held-overdue never releases");
     assert!(host.released().is_empty());
 }
 
-/// The alarm latch is edge-triggered: a persistently
-/// present-past-horizon tx alarms exactly once, and the second tick
-/// (kernel goes straight to the alarm rung, `probed_this_epoch` set)
-/// neither re-probes nor re-alarms — the §5.3 alarm-fatigue bound.
+/// The alarm latch is edge-triggered. Once the daemon has judged the
+/// origin overdue, the next tick returns that alarm before probing
+/// again, and the latch emits the alarm once.
 #[tokio::test]
-async fn alarm_is_edge_triggered_and_probe_not_repeated() {
+async fn held_overdue_alarms_once_and_does_not_probe_again() {
     let tx = txid(1);
-    let host = StubHost::new(1_000 + HORIZON)
+    let host = StubHost::new(1_000 + CEILING)
         .with_held(held(1, 1_000))
         .with_bytes(tx, vec![0xAB; 8]);
     let daemon = StubDaemon::new();
-    daemon.push_submit(Ok(TxSubmitOutcome::AlreadyInPool { hash: tx }));
-    daemon.push_submit(Ok(TxSubmitOutcome::AlreadyInPool { hash: tx }));
+    daemon.push_submit(Ok(TxSubmitOutcome::AlreadyInPool {
+        hash: tx,
+        relay: PoolRelay::HeldOverdue,
+    }));
+    daemon.push_submit(Ok(TxSubmitOutcome::AlreadyInPool {
+        hash: tx,
+        relay: PoolRelay::HeldOverdue,
+    }));
     let mut d = driver();
 
     d.tick(&host, &daemon).await;
     d.tick(&host, &daemon).await;
 
-    assert_eq!(daemon.submit_calls(), 1, "F31: no second resubmit");
+    assert_eq!(
+        daemon.submit_calls(),
+        1,
+        "overdue is already judged; the next tick does not probe"
+    );
     assert_eq!(
         alarm_reasons(&host.events()).len(),
         1,
@@ -420,7 +434,7 @@ async fn alarm_is_edge_triggered_and_probe_not_repeated() {
 #[tokio::test]
 async fn absent_reoffer_restarts_the_wait() {
     let tx = txid(1);
-    let host = StubHost::new(1_000 + HORIZON)
+    let host = StubHost::new(1_000 + CEILING)
         .with_held(held(1, 1_000))
         .with_bytes(tx, vec![0xAB; 8]);
     let daemon = StubDaemon::new();
@@ -434,8 +448,8 @@ async fn absent_reoffer_restarts_the_wait() {
         "a re-offer is a remedy, not an alarm"
     );
 
-    // Second tick: baseline advanced to the probe height, so we are
-    // back inside the horizon → wait, no second probe.
+    // Second tick: baseline advanced to the probe height, so the
+    // ceiling has not elapsed again and the driver does not re-probe.
     d.tick(&host, &daemon).await;
     assert_eq!(
         daemon.submit_calls(),
@@ -452,7 +466,7 @@ async fn absent_reoffer_restarts_the_wait() {
 #[tokio::test]
 async fn terminal_probe_releases_confirmed_absent() {
     let tx = txid(1);
-    let host = StubHost::new(1_000 + HORIZON)
+    let host = StubHost::new(1_000 + CEILING)
         .with_held(held(1, 1_000))
         .with_bytes(tx, vec![0xAB; 8]);
     let daemon = StubDaemon::new();
@@ -482,7 +496,7 @@ async fn terminal_probe_releases_confirmed_absent() {
 async fn missing_bytes_degrade_probe_to_alarm() {
     let tx = txid(1);
     // No `with_bytes` → held-bytes absent (restart crossed the await).
-    let host = StubHost::new(1_000 + HORIZON).with_held(held(1, 1_000));
+    let host = StubHost::new(1_000 + CEILING).with_held(held(1, 1_000));
     let daemon = StubDaemon::new();
     let mut d = driver();
 
@@ -505,7 +519,7 @@ async fn missing_bytes_degrade_probe_to_alarm() {
 #[tokio::test]
 async fn retryable_rejection_alarms_needs_rebuild() {
     let tx = txid(1);
-    let host = StubHost::new(1_000 + HORIZON)
+    let host = StubHost::new(1_000 + CEILING)
         .with_held(held(1, 1_000))
         .with_bytes(tx, vec![0xAB; 8]);
     let daemon = StubDaemon::new();
@@ -530,7 +544,7 @@ async fn retryable_rejection_alarms_needs_rebuild() {
 /// without spending a probe.
 #[tokio::test]
 async fn peerless_daemon_alarms_without_probing() {
-    let host = StubHost::new(1_000 + HORIZON)
+    let host = StubHost::new(1_000 + CEILING)
         .with_held(held(1, 1_000))
         .with_bytes(txid(1), vec![0xAB; 8]);
     let daemon = StubDaemon::new();
@@ -559,7 +573,7 @@ async fn peerless_daemon_alarms_without_probing() {
 /// the driver waits, never probing or alarming.
 #[tokio::test]
 async fn syncing_daemon_waits() {
-    let host = StubHost::new(1_000 + HORIZON)
+    let host = StubHost::new(1_000 + CEILING)
         .with_held(held(1, 1_000))
         .with_bytes(txid(1), vec![0xAB; 8]);
     let daemon = StubDaemon::new();
@@ -584,7 +598,7 @@ async fn syncing_daemon_waits() {
 /// peerless", so the driver makes no decision this tick.
 #[tokio::test]
 async fn health_failure_makes_no_decision() {
-    let host = StubHost::new(1_000 + HORIZON)
+    let host = StubHost::new(1_000 + CEILING)
         .with_held(held(1, 1_000))
         .with_bytes(txid(1), vec![0xAB; 8]);
     let daemon = StubDaemon::new();

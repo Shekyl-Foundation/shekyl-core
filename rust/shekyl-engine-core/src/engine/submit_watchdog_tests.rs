@@ -120,7 +120,7 @@ fn held_submits_projects_lock_bearing_journal_rows() {
     assert_eq!(held[0].baseline_height, 3_900);
     assert_eq!(held[1].tx_hash, TxHash::from_bytes([2; 32]));
     assert_eq!(held[1].baseline_height, 4_000);
-    assert!(held.iter().all(|h| !h.probed_this_epoch));
+    assert!(held.iter().all(|h| h.pool_sight == PoolSight::Unseen));
 }
 
 /// …and rows **leave** it. The projection is journal-only, so the
@@ -252,69 +252,56 @@ fn held(baseline: u64) -> HeldSubmit {
     HeldSubmit {
         tx_hash: TxHash::from_bytes([7; 32]),
         baseline_height: baseline,
-        probed_this_epoch: false,
+        pool_sight: PoolSight::Unseen,
     }
 }
 
-/// F35 upper bound: the production horizon probes while the same bytes
-/// are still submittable — inside the dispatched proof's life, with 2×
-/// margin for wallet refresh lag and wallet–daemon height skew.
+fn sight(baseline: u64, pool_sight: PoolSight) -> HeldSubmit {
+    HeldSubmit {
+        pool_sight,
+        ..held(baseline)
+    }
+}
+
+/// The production ceiling is the dispatched proof's life minus the
+/// refresh-lag margin. The published-unmined count is the fee ladder's
+/// lookback. That it stays inside the ceiling is the module's const
+/// assert, beside [`WatchdogConfig::DEFAULT`].
 #[test]
-fn default_horizon_probes_inside_the_dispatched_proof_life() {
+fn the_ceiling_is_the_proof_life_minus_the_refresh_lag() {
     let life = DISPATCHED_PROOF_LIFE.to_raw();
-    let horizon = WatchdogConfig::DEFAULT.escape_horizon_blocks;
-    assert!(
-        horizon * 2 <= life,
-        "horizon {horizon} must leave 2x margin inside the dispatched proof's life {life}"
+    assert_eq!(PROBE_REFRESH_LAG_BLOCKS, 1);
+    assert_eq!(CFG.probe_ceiling_blocks, life - PROBE_REFRESH_LAG_BLOCKS);
+    assert!(CFG.probe_ceiling_blocks < life);
+    assert_eq!(
+        CFG.published_unmined_blocks,
+        u64::try_from(RELAY_FLOOR_LOOKBACK).expect("the lookback fits")
     );
 }
 
-/// F35 lower bound: the production horizon outlasts the daemon relay
-/// publishing the wallet's own transaction — two origin retries (re-stem,
-/// then fluff) and one block to mine it — at the consensus block target.
-/// Probing sooner alarms on a transaction that is propagating normally.
+/// Below the ceiling an unseen transaction waits. At the ceiling it is
+/// probed. Held at the ceiling is probed again: the last sight is not an
+/// alarm. Rebuild is unrepresentable in [`WatchdogStep`].
 #[test]
-fn escape_horizon_outlasts_the_relays_own_publication() {
-    let block_target = shekyl_economics::EconomicParams::default().daa_target_seconds;
-    // Two origin retries, then one block. The seconds are the relay's pin
-    // (`shekyl-relay` embargo tests), spelled in this crate because the
-    // wallet does not link the relay scheduler.
-    let publish_secs = 2 * SHIPPED_ORIGIN_RETRY_SECS + block_target;
-    let horizon_secs = WatchdogConfig::DEFAULT.escape_horizon_blocks * block_target;
-    assert!(
-        horizon_secs > publish_secs,
-        "horizon {horizon_secs}s must outlast the relay's own publication and one block \
-         ({publish_secs}s)"
-    );
-}
-
-/// §10 item 8 ladder ordering: below horizon → wait; past horizon →
-/// probe precedes alarm; alarm only after the probe was spent.
-/// Rebuild is unrepresentable in [`WatchdogStep`] by construction.
-#[test]
-fn ladder_ordering_probe_precedes_alarm() {
+fn the_ceiling_probes_and_a_held_sight_does_not_alarm() {
     let h = held(1_000);
 
-    // Below horizon: wait.
     assert_eq!(
-        escape_ladder_step(&h, 1_000 + CFG.escape_horizon_blocks - 1, healthy(), CFG),
-        WatchdogStep::Wait(WaitReason::HorizonNotReached)
+        escape_ladder_step(&h, 1_000 + CFG.probe_ceiling_blocks - 1, healthy(), CFG),
+        WatchdogStep::Wait(WaitReason::CeilingNotReached)
     );
-
-    // Past horizon, un-probed: rung 1 (probe), not the alarm.
     assert_eq!(
-        escape_ladder_step(&h, 1_000 + CFG.escape_horizon_blocks, healthy(), CFG),
+        escape_ladder_step(&h, 1_000 + CFG.probe_ceiling_blocks, healthy(), CFG),
         WatchdogStep::ProbeResubmitSameBytes
     );
-
-    // Past horizon, probe already spent: rung 2 (alarm).
-    let probed = HeldSubmit {
-        probed_this_epoch: true,
-        ..h
-    };
     assert_eq!(
-        escape_ladder_step(&probed, 1_000 + CFG.escape_horizon_blocks, healthy(), CFG),
-        WatchdogStep::OperatorAlarm(AlarmReason::PresentButUnconfirmedPastHorizon)
+        escape_ladder_step(
+            &sight(1_000, PoolSight::Held),
+            1_000 + CFG.probe_ceiling_blocks,
+            healthy(),
+            CFG
+        ),
+        WatchdogStep::ProbeResubmitSameBytes
     );
 }
 
@@ -324,7 +311,7 @@ fn ladder_ordering_probe_precedes_alarm() {
 #[test]
 fn health_gates_the_ladder() {
     let h = held(0);
-    let past = CFG.escape_horizon_blocks;
+    let past = CFG.probe_ceiling_blocks;
 
     let behind = DaemonHealth {
         p2p: shekyl_rpc_types::HealthP2p::Running { has_peers: true },
@@ -378,7 +365,7 @@ fn a_restricted_daemon_with_peers_reaches_the_probe_not_the_peerless_alarm() {
     use crate::engine::daemon::synced_chain_facts::{health_from_get_info, GetInfoDocument};
 
     let h = held(0);
-    let past = CFG.escape_horizon_blocks;
+    let past = CFG.probe_ceiling_blocks;
     let reply = |has_peers: bool, status_withheld: bool| {
         let mut reply = GetInfoDocument {
             chain_count: shekyl_types::ChainCount::from_raw(10_000),
@@ -432,81 +419,144 @@ fn a_restricted_daemon_with_peers_reaches_the_probe_not_the_peerless_alarm() {
     }
 }
 
-/// Round-6 minor b presence branching: absent → the resubmit is the
-/// remedy and the wait restarts; present → alarm; in-chain → keep
-/// holding for refresh; terminal → confirmed-absent release.
+/// Absent restarts the wait. Held keeps holding. Held-overdue alarms.
+/// Published under the lookback keeps holding, and at the lookback alarms
+/// as published, not mined. In chain restarts the epoch. A terminal
+/// rejection releases.
 #[test]
 fn probe_outcome_presence_branching() {
     let h = held(1_000);
+    let apply = |outcome, height| apply_probe_outcome(&h, outcome, height, CFG);
 
-    let (disp, next) = apply_probe_outcome(&h, ProbeOutcome::ReofferedAfterAbsence, 2_000);
+    let (disp, next) = apply(ProbeOutcome::ReofferedAfterAbsence, 2_000);
     assert_eq!(disp, ProbeDisposition::RestartWait);
     let next = next.expect("tracking continues");
     assert_eq!(next.baseline_height, 2_000);
-    assert!(!next.probed_this_epoch);
+    assert_eq!(next.pool_sight, PoolSight::Unseen);
 
-    let (disp, next) = apply_probe_outcome(&h, ProbeOutcome::PresentInPool, 2_000);
+    let (disp, next) = apply(ProbeOutcome::Held, 2_000);
+    assert_eq!(disp, ProbeDisposition::KeepHolding);
     assert_eq!(
-        disp,
-        ProbeDisposition::Alarm(AlarmReason::PresentButUnconfirmedPastHorizon)
+        next.expect("tracking continues").pool_sight,
+        PoolSight::Held
     );
-    assert!(next.expect("tracking continues").probed_this_epoch);
 
-    let (disp, next) = apply_probe_outcome(&h, ProbeOutcome::ConfirmedInChain, 2_000);
+    let (disp, next) = apply(ProbeOutcome::HeldOverdue, 1_000);
+    assert_eq!(disp, ProbeDisposition::Alarm(AlarmReason::HeldOverdue));
+    assert_eq!(
+        next.expect("tracking continues").pool_sight,
+        PoolSight::HeldOverdue
+    );
+
+    let under = 1_000 + CFG.published_unmined_blocks - 1;
+    let (disp, next) = apply(ProbeOutcome::Published, under);
+    assert_eq!(disp, ProbeDisposition::KeepHolding);
+    assert_eq!(
+        next.expect("tracking continues").pool_sight,
+        PoolSight::Published
+    );
+    let at = 1_000 + CFG.published_unmined_blocks;
+    let (disp, _) = apply(ProbeOutcome::Published, at);
+    assert_eq!(disp, ProbeDisposition::Alarm(AlarmReason::PublishedUnmined));
+
+    let (disp, next) = apply(ProbeOutcome::ConfirmedInChain, 2_000);
     assert_eq!(disp, ProbeDisposition::KeepHolding);
     let next = next.expect("tracking continues");
-    assert!(
-        !next.probed_this_epoch,
-        "confirmed-in-chain restarts the epoch outright, so a later \
-         re-escalation is routed through a fresh probe — not a direct alarm"
-    );
     assert_eq!(
-        next.baseline_height, 2_000,
-        "confirmed-in-chain restarts the horizon from the probe height"
+        next.pool_sight,
+        PoolSight::Unseen,
+        "in chain restarts the epoch, so the next escalation probes"
     );
+    assert_eq!(next.baseline_height, 2_000);
 
-    let (disp, next) = apply_probe_outcome(&h, ProbeOutcome::RejectedTerminal, 2_000);
+    let (disp, next) = apply(ProbeOutcome::RejectedTerminal, 2_000);
     assert_eq!(disp, ProbeDisposition::ReleaseConfirmedAbsent);
     assert!(next.is_none(), "terminal verdict ends tracking");
 }
 
-/// Regression (round-7 review): a `ConfirmedInChain` probe must not
-/// produce a spurious `PresentButUnconfirmedPastHorizon` alarm — not on the
-/// next tick (the pre-fix bug), and not on the *following* horizon either
-/// (the residual: baseline advanced but the probed flag left set, which
-/// short-circuited the probe straight to a stale-info alarm). The epoch
-/// restarts outright, so re-escalation is routed through a fresh probe and
-/// the alarm rung stays specific to the present-but-unconfirmed branch.
+/// A confirmation observation restarts the wait. The next ceiling probes.
+/// Held on that probe does not alarm. Held-overdue does.
 #[test]
 fn confirmed_in_chain_does_not_alarm_next_tick() {
     let h = held(1_000);
-    let probe_height = 1_000 + CFG.escape_horizon_blocks; // past horizon
-    let (_disp, next) = apply_probe_outcome(&h, ProbeOutcome::ConfirmedInChain, probe_height);
+    let probe_height = 1_000 + CFG.probe_ceiling_blocks;
+    let (_disp, next) = apply_probe_outcome(&h, ProbeOutcome::ConfirmedInChain, probe_height, CFG);
     let next = next.expect("tracking continues");
 
-    // Immediately after the confirmation observation: within the new
-    // horizon → wait, NOT alarm.
     assert_eq!(
         escape_ladder_step(&next, probe_height, healthy(), CFG),
-        WatchdogStep::Wait(WaitReason::HorizonNotReached)
+        WatchdogStep::Wait(WaitReason::CeilingNotReached)
     );
 
-    // A full fresh horizon later without the lock clearing (deep reorg /
-    // refresh stall): re-escalate through a *fresh probe*, NOT a direct
-    // alarm — the kernel re-reads presence before it decides a human is
-    // needed. (The residual bug alarmed here on a tx last seen confirmed.)
-    let re_horizon = probe_height + CFG.escape_horizon_blocks;
+    let again = probe_height + CFG.probe_ceiling_blocks;
     assert_eq!(
-        escape_ladder_step(&next, re_horizon, healthy(), CFG),
+        escape_ladder_step(&next, again, healthy(), CFG),
         WatchdogStep::ProbeResubmitSameBytes
     );
 
-    // The alarm is warranted only once that fresh probe actually observes
-    // the tx present-but-unconfirmed (reorged back to the pool).
-    let (disp, _) = apply_probe_outcome(&next, ProbeOutcome::PresentInPool, re_horizon);
+    let (disp, _) = apply_probe_outcome(&next, ProbeOutcome::Held, again, CFG);
+    assert_eq!(disp, ProbeDisposition::KeepHolding);
+    let (disp, _) = apply_probe_outcome(&next, ProbeOutcome::HeldOverdue, again, CFG);
+    assert_eq!(disp, ProbeDisposition::Alarm(AlarmReason::HeldOverdue));
+}
+
+/// Twenty-five blocks while the daemon still holds the transaction.
+/// Two thousand seconds is the scenario's wall time. This function
+/// takes no duration, and the step is a wait.
+#[test]
+fn twenty_five_blocks_in_two_thousand_seconds_while_held_does_not_alarm() {
+    let h = sight(0, PoolSight::Held);
     assert_eq!(
-        disp,
-        ProbeDisposition::Alarm(AlarmReason::PresentButUnconfirmedPastHorizon)
+        escape_ladder_step(&h, 25, healthy(), CFG),
+        WatchdogStep::Wait(WaitReason::CeilingNotReached)
+    );
+}
+
+/// Held-overdue alarms at every block count, including none and the
+/// ceiling. The decision does not read a block count.
+#[test]
+fn held_overdue_alarms_with_no_block_count() {
+    for age in [0, 25, u64::MAX] {
+        assert_eq!(
+            escape_ladder_step(&sight(0, PoolSight::HeldOverdue), age, healthy(), CFG),
+            WatchdogStep::OperatorAlarm(AlarmReason::HeldOverdue),
+            "age {age}"
+        );
+    }
+}
+
+/// Published and unmined is its own alarm, at the fee-ladder lookback.
+/// One block earlier is a wait. It is not an overdue alarm.
+#[test]
+fn published_unmined_does_not_alarm_as_stuck() {
+    let n = CFG.published_unmined_blocks;
+    let published = sight(0, PoolSight::Published);
+    assert_eq!(
+        escape_ladder_step(&published, n - 1, healthy(), CFG),
+        WatchdogStep::Wait(WaitReason::CeilingNotReached)
+    );
+    assert_eq!(
+        escape_ladder_step(&published, n, healthy(), CFG),
+        WatchdogStep::OperatorAlarm(AlarmReason::PublishedUnmined)
+    );
+}
+
+/// The ceiling probes a held transaction at the proof life minus the
+/// margin. One block earlier waits.
+#[test]
+fn the_ceiling_probes_a_held_transaction_at_life_minus_margin() {
+    let life = DISPATCHED_PROOF_LIFE.to_raw();
+    let margin = PROBE_REFRESH_LAG_BLOCKS;
+    assert_eq!(margin, 1);
+    assert_eq!(CFG.probe_ceiling_blocks, life - margin);
+    let held_tx = sight(0, PoolSight::Held);
+    assert_eq!(
+        escape_ladder_step(&held_tx, life - margin - 1, healthy(), CFG),
+        WatchdogStep::Wait(WaitReason::CeilingNotReached)
+    );
+    assert_eq!(
+        escape_ladder_step(&held_tx, life - margin, healthy(), CFG),
+        WatchdogStep::ProbeResubmitSameBytes
     );
 }
 
@@ -517,7 +567,7 @@ fn confirmed_in_chain_does_not_alarm_next_tick() {
 #[test]
 fn behind_and_peerless_alarms_peerless_not_syncing() {
     let h = held(0);
-    let past = CFG.escape_horizon_blocks;
+    let past = CFG.probe_ceiling_blocks;
     let behind_and_peerless = DaemonHealth {
         p2p: shekyl_rpc_types::HealthP2p::Running { has_peers: false },
         height: 5_000,
@@ -554,7 +604,7 @@ fn the_ladder_and_the_constructor_read_the_same_flag() {
             synchronized,
         };
         let minted = SyncedChainFacts::from_health(health, hash).is_some();
-        let step = escape_ladder_step(&held(0), CFG.escape_horizon_blocks, health, CFG);
+        let step = escape_ladder_step(&held(0), CFG.probe_ceiling_blocks, health, CFG);
         let ladder_waits_on_sync = matches!(step, WatchdogStep::Wait(WaitReason::DaemonSyncing));
         assert_eq!(
             ladder_waits_on_sync, !minted,

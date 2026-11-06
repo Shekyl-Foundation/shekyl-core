@@ -174,6 +174,9 @@ pub(crate) enum TxSubmitOutcome {
     AlreadyInPool {
         /// Locally computed hash, equal to the pool-resident txid.
         hash: TxHash,
+        /// The daemon's relay state. `held_overdue` is already judged
+        /// on the daemon's clock. This outcome does not carry a duration.
+        relay: shekyl_rpc_types::PoolRelay,
     },
 
     /// Identity fact: this txid is in the main chain. Confirmation

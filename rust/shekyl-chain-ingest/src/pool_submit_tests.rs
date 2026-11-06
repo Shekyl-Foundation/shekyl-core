@@ -16,7 +16,7 @@ use shekyl_daemon_rpc::submit::{
     ChainSource, DaemonTxVerifier, RustPoolShim, ShimFault, SubmitCaller, SubmitEngine,
 };
 use shekyl_mempool::Pool;
-use shekyl_rpc_types::{RejectCause, SubmitVerdict};
+use shekyl_rpc_types::{PoolRelay, RejectCause, SubmitVerdict};
 use shekyl_types::UnixSeconds;
 
 use crate::chain_drive::RELAY_FEE_REPRICE_STEPS;
@@ -152,7 +152,9 @@ async fn the_engine_submits_through_the_rust_pool_and_its_door() {
     assert_eq!(first.expect("no engine fault"), SubmitVerdict::Accepted);
     assert_eq!(
         again.expect("no engine fault"),
-        SubmitVerdict::AlreadyInPool
+        SubmitVerdict::AlreadyInPool {
+            relay: PoolRelay::Held,
+        }
     );
     assert_eq!(
         below.expect("no engine fault"),
@@ -576,7 +578,13 @@ async fn a_foreign_caller_is_told_nothing_the_stem_phase_holds() {
         accepted.1 .0 > 0,
         "the subject exists: proofs were verified"
     );
-    assert_eq!(after.0, SubmitVerdict::AlreadyInPool, "fluffed: disclosed");
+    assert_eq!(
+        after.0,
+        SubmitVerdict::AlreadyInPool {
+            relay: PoolRelay::Published,
+        },
+        "fluffed: disclosed"
+    );
     assert_eq!(
         after.1,
         SubmitVerdict::Rejected {

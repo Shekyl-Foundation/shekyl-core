@@ -156,6 +156,22 @@ pub struct SubmitTransactionRequest {
     pub tx_blob: String,
 }
 
+/// The owner tier's relay state for a pool-resident transaction.
+///
+/// The daemon judges `held_overdue` on its own clock. The wallet does
+/// not convert that judgment into blocks, or a block count into a
+/// duration.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum PoolRelay {
+    /// Unpublished, inside the daemon's publication budget.
+    Held,
+    /// Unpublished at or past the daemon's publication budget.
+    HeldOverdue,
+    /// Fluffed. Mining is a block-count question, not this field.
+    Published,
+}
+
 /// The daemon's atomic verdict on one submitted transaction
 /// (`docs/design/DAEMON_SUBMIT_VERDICT.md` §2.1).
 ///
@@ -178,7 +194,17 @@ pub enum SubmitVerdict {
     Accepted,
     /// Identity match: these exact bytes (same txid) are in the pool.
     /// Resolves prior transport ambiguity for this txid.
-    AlreadyInPool,
+    ///
+    /// `relay` is the owner tier's relay state, required (no
+    /// `#[serde(default)]`): pre-genesis, wallet and daemon release
+    /// together, and a field-less `already_in_pool` from a stale daemon
+    /// lands in the `Err` arm. A foreign caller is told `published` only,
+    /// and only once the transaction has fluffed.
+    AlreadyInPool {
+        /// Held, held past the daemon's own publication budget, or
+        /// published and not yet mined.
+        relay: PoolRelay,
+    },
     /// Identity match: this txid is in the main chain, confirmed at
     /// `height`. Confirmation observed by verdict; refresh remains the
     /// settlement authority (reorgs happen).

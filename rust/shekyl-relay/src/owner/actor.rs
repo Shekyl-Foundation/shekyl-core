@@ -35,8 +35,8 @@ use super::snapshot::RelaySnapshot;
 use crate::driver::{Driver, Effect};
 use crate::floor_diag::{AchievedOutConnections, FloorTransition, FloorWatch};
 use crate::graph::{
-    ConnectorId, NodeSync, OriginVerdict, Relay, RelayCarrier, RelayDispatch, RelayNewError,
-    RelayPlan, TxBlob,
+    ConnectorId, NodeSync, OriginPublication, OriginVerdict, Relay, RelayCarrier, RelayDispatch,
+    RelayNewError, RelayPlan, TxBlob,
 };
 use crate::noise_queue::{CarrierOutcome, CarrierToken, NoiseQueues};
 use crate::stem_watch::TxId;
@@ -131,6 +131,10 @@ pub struct RelayHandle {
     inbox: mpsc::UnboundedSender<Cmd>,
     verdict: watch::Receiver<OriginVerdict>,
     snapshot: Arc<Mutex<Arc<RelaySnapshot>>>,
+    /// This node's origin holds, judged on the relay task's clock. Not a
+    /// field of [`RelaySnapshot`]: that snapshot is what health projects,
+    /// and a transaction id does not belong on it.
+    origins: Arc<Mutex<Arc<HashMap<TxId, OriginPublication>>>>,
 }
 
 impl RelayHandle {
@@ -163,6 +167,18 @@ impl RelayHandle {
     #[must_use]
     pub fn snapshot(&self) -> Arc<RelaySnapshot> {
         Arc::clone(&self.snapshot.lock().expect("relay snapshot"))
+    }
+
+    /// This node's judgment of `tx`, if it still holds the origin
+    /// unpublished. Absent once the transaction has fluffed, and absent
+    /// for a relay position.
+    #[must_use]
+    pub fn origin_publication(&self, tx: TxId) -> Option<OriginPublication> {
+        self.origins
+            .lock()
+            .expect("origin publications")
+            .get(&tx)
+            .copied()
     }
 
     /// End the task. Sessions established after this are not relayed to.
@@ -277,6 +293,7 @@ pub fn start<C: Clock + Clone + Send + Sync + 'static>(
     let (inbox_tx, inbox) = mpsc::unbounded_channel();
     let (verdict_tx, verdict) = watch::channel(zone.origin_verdict());
     let snapshot = Arc::new(Mutex::new(Arc::new(RelaySnapshot::default())));
+    let origins = Arc::new(Mutex::new(Arc::new(HashMap::new())));
     let port = Arc::new(Port::new(
         inbox_tx.clone(),
         Arc::clone(&pool),
@@ -286,6 +303,7 @@ pub fn start<C: Clock + Clone + Send + Sync + 'static>(
         inbox: inbox_tx,
         verdict,
         snapshot: Arc::clone(&snapshot),
+        origins: Arc::clone(&origins),
     };
     let actor = Actor {
         driver: Driver::new(zone),
@@ -301,6 +319,7 @@ pub fn start<C: Clock + Clone + Send + Sync + 'static>(
         inbox,
         verdict: verdict_tx,
         snapshot,
+        origins,
     };
     runtime.spawn(actor.run());
     Ok(Started { port, handle })
@@ -329,6 +348,7 @@ struct Actor<C: Clock + Clone + Send + Sync + 'static> {
     inbox: mpsc::UnboundedReceiver<Cmd>,
     verdict: watch::Sender<OriginVerdict>,
     snapshot: Arc<Mutex<Arc<RelaySnapshot>>>,
+    origins: Arc<Mutex<Arc<HashMap<TxId, OriginPublication>>>>,
 }
 
 impl<C: Clock + Clone + Send + Sync + 'static> Actor<C> {
@@ -376,6 +396,7 @@ impl<C: Clock + Clone + Send + Sync + 'static> Actor<C> {
     }
 
     fn publish(&self) {
+        let now = self.now();
         let zone = self.driver.zone();
         let snapshot = RelaySnapshot {
             noise: zone.noise_enabled(),
@@ -390,6 +411,10 @@ impl<C: Clock + Clone + Send + Sync + 'static> Actor<C> {
         };
         if let Ok(mut slot) = self.snapshot.lock() {
             *slot = Arc::new(snapshot);
+        }
+        let judged = zone.origin_publications(now);
+        if let Ok(mut slot) = self.origins.lock() {
+            *slot = Arc::new(judged.into_iter().collect());
         }
         let verdict = zone.origin_verdict();
         self.verdict.send_if_modified(|current| {

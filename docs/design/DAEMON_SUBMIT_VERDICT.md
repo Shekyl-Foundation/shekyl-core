@@ -121,7 +121,9 @@ pub enum SubmitVerdict {
     /// daemon-owned from here (§5.2).
     Accepted,
     /// Identity match: these exact bytes (same txid) are in the pool.
-    AlreadyInPool,
+    /// `relay` is required: `held`, `held_overdue`, or `published`.
+    /// The daemon judges `held_overdue` on its own clock.
+    AlreadyInPool { relay: PoolRelay },
     /// Identity match: this txid is in the main chain, confirmed at
     /// `height`. The height is the lock-lifecycle discriminant (§2.5): it
     /// decides *which release path* clears the awaiting-confirmation lock
@@ -337,7 +339,7 @@ Request-surface trims relative to `COMMAND_RPC_SEND_RAW_TX`:
 | --- | --- |
 | `Accepted` | Pending-tx enters *awaiting confirmation*; watchdog (§5.3) takes over. Outputs move to the awaiting-confirmation lock state (§2.6: persisted, dual release paths) — **not** marked spent at submit-accept (the current `local_pending_tx.rs:775-807` behavior moves to refresh-authoritative confirmation; PR-4). |
 | `AlreadyInPool` | Same as `Accepted` (identity fact: the bytes are held). Resolves prior transport ambiguity for this txid. |
-| `AlreadyInChain{height}` | Confirmation observed by verdict; refresh remains the settlement authority (reorgs happen — the verdict authorizes lock-lifecycle transitions only). Outputs enter the awaiting-confirmation lock in **both** height cases (fund safety first: no selectable window either way); `height` decides the **release path** (F40). *(a) `height` > wallet synced height:* the ordinary §2.6 path-1 release — refresh reaches the confirming block and settles spent-marking; baseline the lock at `height`, not at current daemon height — **clamped to the wallet's own synced height** (amended 2026-08-04, `feat/w4b-submit-verdict`). The clamp is what makes the §7.2 lie-high damage cap ("released by the confirmed-absent watchdog horizon, bounded liveness cost") true rather than claimed: the horizon gate is `synced_height − baseline ≥ escape_horizon_blocks`, so baselining at an unreachable claim (a lying remote node, a reorg-confused daemon, `u64::MAX`) parks it at zero forever — the rung-1 probe never runs, no alarm is raised, and the *persisted* F14 lock strands the inputs across restarts with no exit at all, which is precisely what §2.6's "every exit is verdict, confirmation, or operator alarm" forbids. The clamp costs nothing where the claim is honest: a wallet only holds this lock because it just built and submitted, which requires being at the tip, so an honest (a)-case claim sits a handful of blocks above the synced height against a horizon of hundreds — and it degrades the lie-high case to exactly the baseline the fresh-accept path already uses. Only the persisted baseline is bounded; the raw claim still selects between (a) and (b), still rides `RescanRequest.claimed_height`, and still reaches the consumer on the verdict. *(b) `height` ≤ wallet synced height:* refresh already passed that height without observing the spend — path-1 release is unreachable by construction (the FOLLOWUPS stranded-lock wedge). Enqueue a **targeted re-scan** of the window around `height` (the reorg-heal machinery — the wallet's view of that height is stale or divergent); the re-scan re-observes the spend and settles refresh-authoritatively. A failed re-scan **never releases** (F40-R1: release is refresh- or watchdog-authoritative only); it falls through to the F31 resubmit-as-status-query for a fresh definite verdict, and consecutive fruitless daemon-directed re-scans are breaker-bounded (F40-R2, F28/F37 family) → operator alarm. Every exit is verdict, confirmation, or operator alarm — no silent strand, no daemon-steered release. |
+| `AlreadyInChain{height}` | Confirmation observed by verdict; refresh remains the settlement authority (reorgs happen — the verdict authorizes lock-lifecycle transitions only). Outputs enter the awaiting-confirmation lock in **both** height cases (fund safety first: no selectable window either way); `height` decides the **release path** (F40). *(a) `height` > wallet synced height:* the ordinary §2.6 path-1 release — refresh reaches the confirming block and settles spent-marking; baseline the lock at `height`, not at current daemon height — **clamped to the wallet's own synced height** (amended 2026-08-04, `feat/w4b-submit-verdict`). The clamp is what makes the §7.2 lie-high damage cap ("released by the confirmed-absent watchdog horizon, bounded liveness cost") true rather than claimed: the horizon gate is `synced_height − baseline ≥ probe_ceiling_blocks`, so baselining at an unreachable claim (a lying remote node, a reorg-confused daemon, `u64::MAX`) parks it at zero forever — the rung-1 probe never runs, no alarm is raised, and the *persisted* F14 lock strands the inputs across restarts with no exit at all, which is precisely what §2.6's "every exit is verdict, confirmation, or operator alarm" forbids. The clamp costs nothing where the claim is honest: a wallet only holds this lock because it just built and submitted, which requires being at the tip, so an honest (a)-case claim sits a handful of blocks above the synced height against a horizon of hundreds — and it degrades the lie-high case to exactly the baseline the fresh-accept path already uses. Only the persisted baseline is bounded; the raw claim still selects between (a) and (b), still rides `RescanRequest.claimed_height`, and still reaches the consumer on the verdict. *(b) `height` ≤ wallet synced height:* refresh already passed that height without observing the spend — path-1 release is unreachable by construction (the FOLLOWUPS stranded-lock wedge). Enqueue a **targeted re-scan** of the window around `height` (the reorg-heal machinery — the wallet's view of that height is stale or divergent); the re-scan re-observes the spend and settles refresh-authoritatively. A failed re-scan **never releases** (F40-R1: release is refresh- or watchdog-authoritative only); it falls through to the F31 resubmit-as-status-query for a fresh definite verdict, and consecutive fruitless daemon-directed re-scans are breaker-bounded (F40-R2, F28/F37 family) → operator alarm. Every exit is verdict, confirmation, or operator alarm — no silent strand, no daemon-steered release. |
 | `Rejected{Malformed}` | Release locks, surface, **one-shot rebuild**: if the rebuilt tx also returns `Malformed`, escalate to operator alarm — two independent builds rejected as malformed is a systematic wallet/daemon rule disagreement, not a bad tx; a third silent build burns fees and multiplies linking-tag artifacts (§7.1). Never loop. |
 | `Rejected{FeeTooLow}` | Release, re-estimate fee, rebuild — **once** (F37; the F28 logic applies verbatim): a second consecutive `FeeTooLow` on the rebuilt tx is a systematic fee-model disagreement (a KAT gap on P2, or sustained pool pressure the wallet's estimate never meets) → operator alarm, never loop. The bound is privacy-load-bearing, not just liveness hygiene: unlike `Malformed`, a fee-driven rebuild can *change the input set* — covering a higher fee may pull in an additional input, so each iteration broadcasts a new tx sharing the original key image **and** revealing a newly co-owned input (F30 linkage plus wallet-clustering, once per loop, under the malicious-relay case of §7.1). Covers static-floor, Phase-D re-gate, and pool-pressure variants; under single-egress this verdict carries proof the tx is in neither pool nor chain, so release is safe. |
 | `Rejected{DoubleSpendConflict}` | Terminal release. A different tx spends the input; refresh will surface which. |
@@ -977,8 +979,11 @@ de-risking the multi-daemon reopen in advance.
    the window (item 1). No shipped configuration leaves the embargo
    unarmed. Under an anonymity-network eclipse the fluff still lands in
    the eclipsed outbound set, so the wallet watchdog's operator-alarm
-   rung remains the sole effective backstop there (§7.5). The wallet
-   cannot substitute for this kernel.
+   rung remains the sole effective backstop there (§7.5). The daemon
+   reports an origin still unpublished at or past `origin_retry_secs`
+   times its fires as `held_overdue`; the wallet is told that judgment
+   and holds no relay constant. The wallet cannot substitute for this
+   kernel.
 3. **Honest health context.** The wallet's policy needs to distinguish "tx
    stuck" from "daemon has no peers to relay to" and "daemon is behind."
    The existing info surface's peer/connection counts and
@@ -996,18 +1001,16 @@ de-risking the multi-daemon reopen in advance.
   claims.
 - **Chain-confirmation keying.** The watchdog's success condition is
   confirmation observed via refresh — never a daemon relay claim.
-- **Horizon bound (F35).** The escape horizon must fire **inside the
+- **Block ceiling (F35).** The ceiling must fire **inside the
   dispatched proof's life** (§5.2 item 1): past `DISPATCHED_PROOF_LIFE`
   the pool may already have removed the transaction and the
   resubmit-same-bytes probe is refused `StaleRoot`, so a later watchdog
-  can no longer re-offer the bytes it holds. It must also outlast the
-  relay's own publication (two origin retries and a block to mine), or it
-  probes a transaction that is propagating normally. The default is half
-  `DISPATCHED_PROOF_LIFE`, 25 blocks (`WatchdogConfig::DEFAULT`; both
-  bounds pinned by tests beside it). And the horizon must be sized for the
-  anon-network eclipse case (§7.5) — where the watchdog is the *only*
-  backstop — not only for the clearnet-stem case where the embargo also
-  protects.
+  can no longer re-offer the bytes it holds. The default is that life
+  minus one block (`PROBE_REFRESH_LAG_BLOCKS`, **Assumption — never
+  measured**: the one block the proof-life derivation already leaves for
+  a block that lands between the wallet's check and the daemon's
+  verdict). Overdue is the daemon's judgment, returned as relay state,
+  and it is not a term of this ceiling.
 - **Privacy-tiered escape ladder.** The timeout is itself an attack surface:
   an adversary who can delay confirmation (censoring miner, eclipse) can
   force the wallet past its threshold on demand; if the escape auto-rebuilds
@@ -1017,17 +1020,24 @@ de-risking the multi-daemon reopen in advance.
      daemon dedups; zero new network artifact).
   2. **Operator alarm** — a human decides.
   3. **Deliberate, alarmed rebuild** — never automatic on timeout.
-- **The ladder branches on presence (round-6 minor b).** Resubmit-same-bytes
-  is *inert* for a stuck-but-present tx: it returns `AlreadyInPool` (no
-  relay pulse, F31) and tells the wallet nothing it didn't know. The rungs
-  are therefore presence-conditional, with one resubmit acting as the
-  probe: **absent** (evicted / never landed) → the resubmit *is* the remedy,
-  re-offering through full admission and fresh relay, and the wait restarts;
-  **present-but-unconfirmed past horizon** → skip straight to the alarm rung
-  — repeating the resubmit is pointless by construction, and the eclipse
-  case (§7.5) lands exactly here. Terminal verdicts on the probe
-  (`AlreadyInChain`, `DoubleSpendConflict`, `Rejected{*}`) resolve the wait
-  per §2.5/§2.6.
+- **The ladder branches on the daemon's relay state.** The owner-tier
+  probe returns held, held-overdue, published, absent, or in-chain.
+  **Held** waits. **Held-overdue** alarms: the daemon already compared
+  the origin's age on its own clock with its publication budget
+  (`origin_retry_secs` over the origin's fires, the cycle count
+  `RecoveryBudget::for_cap` prices), and the wallet holds no relay
+  constant. **Published** and unmined past the fee ladder's lookback
+  (`RELAY_FLOOR_LOOKBACK`, **Assumption — never measured**) raises the
+  published-unmined alarm. **Absent** resubmits, and that resubmit is the
+  remedy; the wait restarts. **In chain** keeps holding for refresh.
+  The block ceiling probes whatever state is still waiting, including a
+  transaction the last probe reported held. Block counts and the daemon's
+  clock stay on their own questions. A withheld-blocks stall is the
+  cadence chain-progress watchdog (`CHAIN_STALL_HORIZON`, 30 minutes, the
+  Poisson tail of fifteen missed 120 s targets). It is a wall clock on
+  the tick. This ladder leaves that stall where it is. Terminal verdicts
+  on the probe (`AlreadyInChain`, `DoubleSpendConflict`, `Rejected{*}`)
+  resolve the wait per §2.5/§2.6.
 - **Resubmit is a status query, not a relay trigger (F31, source-verified).**
   An in-pool resubmit early-returns `AlreadyInPool` at Phase B, before
   shim 3 — and the old path behaves identically
@@ -1194,6 +1204,9 @@ privacy-neutral ones (resubmit-same-bytes). Everything linkage-bearing
 > forced fluff into the same eclipsed outbound set rather than not existing —
 > so the conclusion is unchanged: the wallet watchdog's operator-alarm rung
 > remains the sole effective backstop there, and obligations 1–2 stand.
+> Once the embargo has fluffed, that backstop is the published-unmined
+> alarm, a block count. An origin still holding past its budget is
+> `held_overdue`, judged on the daemon's clock.
 
 The F20 resolution rests on the Dandelion++ embargo being *the* mechanism no
 wallet policy can substitute (§5.2 item 2). That mechanism **does not run
@@ -1218,14 +1231,13 @@ That is an acceptable end state (the alarm is precisely the "a human
 decides" rung, and eclipse is not silently survivable in any design), but
 it carries two named obligations:
 
-1. **The watchdog horizon is sized for this case**, not only for the
-   clearnet-stem case where the embargo also protects (§5.3's horizon
-   bound: fire inside the dispatched proof's life, half
-   `DISPATCHED_PROOF_LIFE`).
-2. **The escalation for present-but-unconfirmed goes straight to alarm**
-   (§5.3's presence branch) — the resubmit rung is inert here by
-   construction, and burning horizon-multiples on it delays the only
-   effective response.
+1. **The block ceiling fires inside the dispatched proof's life**
+   (`DISPATCHED_PROOF_LIFE` minus one block), so a probe can still
+   re-offer the bytes. A fluffed transaction that stays unmined alarms
+   at the fee ladder's lookback.
+2. **An origin still unpublished past the daemon's own budget alarms as
+   held-overdue.** The daemon judges that. The wallet does not time it,
+   and the alarm does not wait on a block count.
 
 Cross-boundary honesty: on clearnet the guarantee is "the origin itself
 eventually fluffs" (mechanism); over noise zones it is "the operator is
@@ -1893,18 +1905,20 @@ enumeration above is the complete submit surface.
    **`FeeTooLow` bounded retry** (F37: second consecutive `FeeTooLow` on
    the rebuilt tx → alarm, no third build); watchdog escape-ladder ordering
    (resubmit precedes alarm precedes rebuild; rebuild never fires without
-   the alarm rung) and **presence branching** (round-6 minor b:
-   present-but-unconfirmed past horizon goes straight to alarm; absent
-   re-offers). Awaiting-confirmation invariant (F14, §2.6): **restart
-   mid-await → outputs still excluded from selection** (persistence leg);
-   **evicted-never-confirmed → outputs released after the watchdog
-   horizon**, via verdict where reachable and via observed-absence
-   otherwise (confirmed-absent leg); confirmed-present → refresh clears to
-   spent-final. *Watchdog-execution remainder landed 2026-07-05
-   (`feat/submit-lifecycle-driver`), driven through the §5.3
-   `SubmitLifecycleDriver` over a hermetic `StubHost`/`StubDaemon`:*
-   escape-ladder ordering (`probe_precedes_alarm_present_past_horizon`,
-   `alarm_is_edge_triggered_and_probe_not_repeated`), presence branching
+   the alarm rung) and **presence branching** (round-6 minor b, restated
+   2026-11-06 on the daemon's relay state: held waits, held-overdue
+   alarms, published-unmined past the fee-ladder lookback alarms as
+   published-not-mined, absent re-offers). Awaiting-confirmation invariant
+   (F14, §2.6): **restart mid-await → outputs still excluded from
+   selection** (persistence leg); **evicted-never-confirmed → outputs
+   released after a terminal probe**, via verdict where reachable and via
+   observed-absence otherwise (confirmed-absent leg); confirmed-present →
+   refresh clears to spent-final. *Watchdog-execution remainder landed
+   2026-07-05 (`feat/submit-lifecycle-driver`), driven through the §5.3
+   `SubmitLifecycleDriver` over a hermetic `StubHost`/`StubDaemon`, and
+   the presence names moved with the relay-state ladder:*
+   escape-ladder ordering (`probe_precedes_the_held_overdue_alarm`,
+   `held_overdue_alarms_once_and_does_not_probe_again`), presence branching
    (`absent_reoffer_restarts_the_wait`), confirmed-absent release
    (`terminal_probe_releases_confirmed_absent`), retryable-rejection alarm
    (`retryable_rejection_alarms_needs_rebuild`), restart degradation

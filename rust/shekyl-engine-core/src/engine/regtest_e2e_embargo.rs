@@ -15,12 +15,12 @@
 
 use super::super::*;
 use super::*;
-use crate::engine::submit_watchdog::SHIPPED_ORIGIN_RETRY_SECS;
-
-/// The origin's shipped retry. One spelling
-/// ([`SHIPPED_ORIGIN_RETRY_SECS`]); these walks and the submit watchdog
-/// are the two readers.
-const ORIGIN_RETRY: Duration = Duration::from_secs(SHIPPED_ORIGIN_RETRY_SECS);
+/// The origin's shipped retry, spelled here for these walks only.
+///
+/// The relay crate owns the derivation. The submit watchdog does not
+/// read this duration: overdue is the daemon's judgment, and this
+/// harness waits out the same interval the origin's embargo fires on.
+const ORIGIN_RETRY: Duration = Duration::from_secs(1_148);
 
 /// RX-1 on two live daemons: the origin's only peer is the sink, so it has
 /// no alternate, and its first embargo fire, at the derived retry interval

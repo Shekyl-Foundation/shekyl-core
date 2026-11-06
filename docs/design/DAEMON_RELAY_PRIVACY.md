@@ -3307,8 +3307,10 @@ Fluff-on-expiry *already* recovers slowly (p99 662 s, because the embargo is a
 > off the embargo the measurement builds (`RecoveryBudget`): the worst-case
 > median stays inside `(retry_cap + 1)` embargo means, and the worst-case p99
 > stays inside that many of the timer's 1-in-100 failure deadlines. Pool
-> residence (`DISPATCHED_PROOF_LIFE`, CEN-M10) is the wallet watchdog's clock,
-> not this instrument's.
+> residence (`DISPATCHED_PROOF_LIFE`, CEN-M10) is the wallet's block ceiling.
+> An origin still held past its publication budget is the daemon's clock.
+> A fluffed transaction that stays unmined is a block count. This
+> instrument prices the embargo.
 
 ### 14.6 The one residual where C3 buys something real: W3
 
