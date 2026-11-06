@@ -39,7 +39,8 @@
 //!   mechanism and is not what the daemon runs.
 
 use shekyl_economics::{
-    penalty_free_weight, EconomicParams, EmissionError, PrePenaltyEmission, TxVolume,
+    block_weight_limit, penalty_free_weight, EconomicParams, EmissionError, PrePenaltyEmission,
+    TxVolume,
 };
 
 /// A template priced so far, and what admitting one more body would do.
@@ -209,39 +210,183 @@ impl<'a> Fill<'a> {
     /// after another; the number admitted. Exactly what `count` calls of
     /// [`Self::admit`] admit, stopping at the first refusal — identical
     /// bodies refused once are refused again, since a refusal changes
-    /// nothing.
+    /// nothing. It costs a bounded number of reward pricings, not one per
+    /// body (`ECONOMY_UMBRELLA_PLAN.md` §3.2 b).
     ///
-    /// The bodies that keep the block within [`penalty_free_weight`] and the
-    /// bound leave the reward where it is and add a fee each, so every one
-    /// of them is admitted; they are admitted together, and the walk resumes
-    /// past them. A block of millions of transactions below its median costs
-    /// one step, not millions.
+    /// 1. **The reward does not move.** Bodies that keep the block within
+    ///    [`penalty_free_weight`] and the bound, or that weigh nothing, add
+    ///    a fee each and leave the reward where it is. Every one is admitted
+    ///    until the fees would overflow the coinbase, which is a quotient.
+    /// 2. **The body that crosses the penalty-free weight** is offered
+    ///    alone, so that from here the block is past it and the penalty's
+    ///    product has been formed at the smallest excess the run will see.
+    ///    The product only falls as the excess grows, so it cannot overflow
+    ///    later in the run.
+    /// 3. **The penalty zone.** `admit`'s exits that only depend on the
+    ///    weight or the fees are monotone in the number of bodies, and each
+    ///    is a quotient: the fill's block limit, the penalty's own limit
+    ///    ([`block_weight_limit`], its `BlockTooBig`), the fees' overflow,
+    ///    and `count`. Within them, the bodies whose fee covers the
+    ///    real-valued penalty are all admitted
+    ///    ([`PrePenaltyEmission::bodies_the_fee_covers`] proves it), so the
+    ///    first refusal is at or past that root. Past the root, write
+    ///    `h_j = c·x_j² − fee·j` (the economics helper's notation). Each body
+    ///    there costs more than its fee, so `h` rises and `⌈h⌉` never falls;
+    ///    a body is admitted exactly when `⌈h⌉` stays level. "Every body
+    ///    from the root to `j` is admitted" is then one test,
+    ///    `R(root) − R(j) ≤ fee·(j − root)`, and it is monotone in `j`. So is
+    ///    "the coinbase still fits", because the coinbase does not fall
+    ///    along an admitted run. The last admitted body is found by
+    ///    bisection on the two, with [`PrePenaltyEmission::penalised`] at
+    ///    each probe.
+    ///
+    /// **The bound `B`: how far past the root the first refusal can lie.**
+    /// Let `T = (e·M)² / (A·s²·w²) = 1/(c·w²)`. Past the root, body
+    /// `root + i` costs `δ − fee > 2·c·w²·(i − 1)`, because `δ` rises by
+    /// `2·c·w²` a body and the first past the root already exceeds the fee.
+    /// After `t` bodies, `h` has risen by more than `c·w²·t·(t − 1)`. Once
+    /// that reaches 1, `⌈h⌉` has risen, and the body where it rose was
+    /// refused. So at most `B = t − 1` bodies are admitted past the root,
+    /// `t` the least integer with `t·(t − 1) ≥ T`. That is about
+    /// `e·M / (s·w·√A)`. It is not a constant: it grows with the median and
+    /// shrinks with the reward and the body
+    /// (`ECONOMICS_SIM_PRODUCTION_REBASE.md` §5.28 evaluates it on the sim's
+    /// schedules). The bisection's cost is logarithmic in `count` whatever
+    /// `B` is. `B` bounds where the refusal lies, and the tests check it on
+    /// every case they draw.
+    ///
+    /// Where the economics helper cannot count the root (its products leave
+    /// `u128`, past the penalty's own arithmetic), the bodies are offered
+    /// one at a time, as before.
     pub fn admit_up_to(&mut self, weight: u64, fee: u64, count: u64) -> u64 {
-        let ceiling = self.penalty_free_bodies();
-        let free = match ceiling.checked_sub(self.bodies_weight()) {
-            None => 0,
-            Some(_) if weight == 0 => count,
-            Some(room) => (room / weight).min(count),
-        };
-        let mut admitted = 0;
-        let batch_fees = free
-            .checked_mul(fee)
-            .and_then(|added| self.fees.checked_add(added))
-            .filter(|&fees| self.reward.checked_add(fees).is_some());
-        let batch_weight = free
-            .checked_mul(weight)
-            .and_then(|added| self.block_weight.checked_add(added));
-        if let (Some(fees), Some(block_weight)) = (batch_fees, batch_weight) {
-            // Within the penalty-free weight the reward is the whole
-            // emission, which is what it already is.
-            self.block_weight = block_weight;
-            self.fees = fees;
-            admitted = free;
+        let mut admitted = self.admit_unpenalised(weight, fee, count);
+        if weight > 0 {
+            let free_weight = penalty_free_weight(self.median_weight, self.params);
+            while admitted < count && self.block_weight <= free_weight {
+                if !self.admit(weight, fee) {
+                    return admitted;
+                }
+                admitted += 1;
+            }
+            if admitted < count {
+                admitted += self.admit_penalised(weight, fee, count - admitted);
+            }
         }
+        // After the closed form this offer is refused, or `count` is met.
+        // Where the helper could not count the root it is the whole walk.
         while admitted < count && self.admit(weight, fee) {
             admitted += 1;
         }
         admitted
+    }
+
+    /// Step 1 of [`Self::admit_up_to`]: the bodies that leave the reward
+    /// where it is, admitted together. A zero-weight body never moves the
+    /// reward. A weighted one does not move it while the bodies stay within
+    /// [`Self::penalty_free_bodies`]. Both are refused only past the block
+    /// limit, or where the fees would overflow the coinbase.
+    fn admit_unpenalised(&mut self, weight: u64, fee: u64, count: u64) -> u64 {
+        let steady = if weight == 0 {
+            if self.block_weight <= self.block_limit() {
+                count
+            } else {
+                0
+            }
+        } else {
+            match self.penalty_free_bodies().checked_sub(self.bodies_weight()) {
+                None => 0,
+                Some(room) => (room / weight).min(count),
+            }
+        };
+        // The reward is fixed, so body `i` fits while `coinbase + i·fee`
+        // does. That also keeps the fees alone in range.
+        let admitted = match (u64::MAX - self.coinbase()).checked_div(fee) {
+            Some(fits) => steady.min(fits),
+            None => steady,
+        };
+        // In range: `admitted·weight` is at most the room, and
+        // `admitted·fee` at most the coinbase's headroom.
+        self.block_weight += admitted * weight;
+        self.fees += admitted * fee;
+        admitted
+    }
+
+    /// Step 3 of [`Self::admit_up_to`], from a block past the penalty-free
+    /// weight with `weight > 0`: the bodies admitted before the first
+    /// refusal, admitted together. Zero where the economics helper cannot
+    /// count the root, and the caller walks.
+    fn admit_penalised(&mut self, weight: u64, fee: u64, count: u64) -> u64 {
+        let params = self.params;
+        let median = self.median_weight;
+        let start_weight = self.block_weight;
+        let start_fees = self.fees;
+        // `admit`'s exits in its order: the weight's overflow and the fill's
+        // limit, the penalty's limit, the fees' overflow. Each is monotone in
+        // the bodies, so the run stops at the least of them.
+        let limit = self.block_limit().min(block_weight_limit(median, params));
+        let Some(room) = limit.checked_sub(start_weight) else {
+            return 0;
+        };
+        let mut most = (room / weight).min(count);
+        if let Some(fits) = (u64::MAX - start_fees).checked_div(fee) {
+            most = most.min(fits);
+        }
+        let Some(covered) =
+            self.emission
+                .bodies_the_fee_covers(median, start_weight, weight, fee, params)
+        else {
+            return 0;
+        };
+        let root = covered.min(most);
+        // In range for every `j ≤ most`, by the caps above.
+        let weight_at = |j: u64| start_weight + j * weight;
+        let fees_at = |j: u64| start_fees + j * fee;
+        let reward_at = |j: u64| self.emission.penalised(median, weight_at(j), params).ok();
+        let Some(root_reward) = reward_at(root) else {
+            return 0;
+        };
+        // Bodies `1..=j` are all admitted. Up to the root the penalty never
+        // refuses, and past it the cumulative test stands for the per-body
+        // one. The coinbase must fit.
+        let admitted_through = |j: u64| -> Option<u64> {
+            let reward = reward_at(j)?;
+            reward.checked_add(fees_at(j))?;
+            if j > root {
+                // The reward only falls with the weight, so the cost is not
+                // negative; the comparison is in `u128` to say so.
+                let paid = u128::from(fee) * u128::from(j - root) + u128::from(reward);
+                if u128::from(root_reward) > paid {
+                    return None;
+                }
+            }
+            Some(reward)
+        };
+        let (mut low, mut high) = (0, most);
+        let reward = match admitted_through(most) {
+            Some(reward) => {
+                low = most;
+                reward
+            }
+            None => {
+                // `low` is admitted and `high` is not.
+                while high - low > 1 {
+                    let mid = low + (high - low) / 2;
+                    if admitted_through(mid).is_some() {
+                        low = mid;
+                    } else {
+                        high = mid;
+                    }
+                }
+                match admitted_through(low) {
+                    Some(reward) => reward,
+                    None => return 0,
+                }
+            }
+        };
+        self.block_weight = weight_at(low);
+        self.fees = fees_at(low);
+        self.reward = reward;
+        low
     }
 
     /// The admitted bodies' weight: the block weight less the coinbase.
