@@ -267,6 +267,36 @@ fn wait_until(deadline: Duration, mut done: impl FnMut() -> bool) -> bool {
 }
 
 /// The daemon's resident set, in KiB (`/proc/<pid>/status`, `VmRSS`).
+/// The daemon's resident set once it has stopped moving: unchanged within
+/// 1 MiB over five reads 100 ms apart. Ready (the RPC answers and the p2p
+/// port accepts) comes before start-up has finished allocating: the ingest
+/// service's seed window derives its RandomX caches (256 MiB each) on a
+/// blocking thread, and one finished about 300 ms after ready on an idle
+/// workstation (RSS 274 MiB until the port accepted at 1.78 s, 542 MiB from
+/// 2.1 s). A baseline read in between is not a baseline.
+fn settled_resident_kib(daemon: &Daemon) -> u64 {
+    const SETTLED_READS: usize = 5;
+    const BAND_KIB: u64 = 1024;
+    let deadline = Instant::now() + Duration::from_secs(30);
+    let mut reads = vec![resident_kib(daemon)];
+    loop {
+        std::thread::sleep(Duration::from_millis(100));
+        reads.push(resident_kib(daemon));
+        let last = &reads[reads.len().saturating_sub(SETTLED_READS)..];
+        let (low, high) = (
+            last.iter().copied().min().unwrap_or(0),
+            last.iter().copied().max().unwrap_or(0),
+        );
+        if last.len() == SETTLED_READS && high - low < BAND_KIB {
+            return *last.last().unwrap_or(&high);
+        }
+        assert!(
+            Instant::now() < deadline,
+            "the daemon's resident set never settled in 30 s: {reads:?} KiB"
+        );
+    }
+}
+
 fn resident_kib(daemon: &Daemon) -> u64 {
     let status = std::fs::read_to_string(format!("/proc/{}/status", daemon.pid()))
         .expect("the daemon's /proc status");
@@ -477,7 +507,7 @@ fn a_flood_of_notifications_is_read_one_at_a_time_without_growing_memory() {
     // (`SESSION_QUEUE_DEPTH` = 1); what the peer sends faster than that
     // waits in the kernel's buffers and, when they are full, in the peer.
     let mut peer = Peer::established(&daemon, LoopbackHost::peer(0), genesis_claim());
-    let before = resident_kib(&daemon);
+    let before = settled_resident_kib(&daemon);
     let frame = new_transactions(Vec::new());
     let target: usize = 32 * 1024 * 1024;
     let mut sent = 0usize;
