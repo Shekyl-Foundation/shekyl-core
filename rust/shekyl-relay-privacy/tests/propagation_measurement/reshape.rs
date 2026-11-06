@@ -214,73 +214,84 @@ fn precision_increment_reproduces_delta_table() {
 /// **§14 — reshape's recovery latency is a cost, not a break.** The one place
 /// "reshape strictly dominates fluff-on-expiry under the priority order" can
 /// fail: if re-stem recovery is *catastrophic* (not merely worse), it becomes a
-/// liveness problem that outranks performance. It is not — the cap bounds it.
+/// liveness problem that outranks performance. It is not. The cap prices the
+/// worst case off the embargo this measurement builds (`RecoveryBudget`):
+/// `(retry_cap + 1)` of that timer's means, and the same count of its
+/// 1-in-100 failure deadlines. Pool residence is the wallet's clock
+/// (CEN-M10), and `MIN_RELAY_TIME` does not govern an embargoed transaction
+/// (§15.4). Neither is this instrument's bound.
 #[test]
 fn reshape_recovery_is_a_cost_not_a_break() {
-    use shekyl_relay_privacy::conformance::simulate_reshape_recovery;
+    use shekyl_relay_privacy::conformance::{simulate_reshape_recovery, RecoveryBudget};
+    use shekyl_relay_privacy::schedule::PROPAGATION_FALSE_FAIL_ONE_IN;
 
-    let e = EmbargoTimer::geometric_from_ticks(576, DEFAULT_EMBARGO_TICK_MILLIS); // 144 s
+    // The §14.5 instrument. 576 ticks at the default tick is that section's
+    // 144 s relay-position embargo, not the origin's retry.
+    let embargo = EmbargoTimer::geometric_from_ticks(576, DEFAULT_EMBARGO_TICK_MILLIS);
     let mut rng = SplitMix64::new(0x5EC0);
-    let r = simulate_reshape_recovery(&e, 1, 300_000, &mut rng);
+    const RETRY_CAP: u32 = 1;
+    let recovery = simulate_reshape_recovery(&embargo, RETRY_CAP, 300_000, &mut rng);
+    let budget = RecoveryBudget::for_cap(&embargo, recovery.retry_cap);
 
-    // The shortest residence an honest transaction has in the pool: it was
-    // sent with at least `DISPATCHED_PROOF_LIFE` blocks before its reference
-    // leaves the window and the pool removes it (CEN-M10). The pool has no
-    // lifetime of its own.
-    #[allow(clippy::cast_precision_loss)] // two small consensus integers
-    let residence_s = (shekyl_curve_tree::DISPATCHED_PROOF_LIFE.to_raw()
-        * shekyl_economics::EconomicParams::default().daa_target_seconds)
-        as f64;
-    const MIN_RELAY_S: f64 = 300.0;
+    // The budget is the cap counted in the timer's own units, not a fitted
+    // multiple of either sample.
+    let one_cycle_failed = embargo.judge_failed_after_secs(PROPAGATION_FALSE_FAIL_ONE_IN);
+    assert_eq!(budget.cycles, RETRY_CAP + 1);
+    assert_eq!(budget.mean_secs, embargo.mean_secs() * budget.cycles);
+    assert_eq!(budget.failed_secs, one_cycle_failed * budget.cycles);
 
-    println!("\nRecovery latency for a black-holed tx (embargo 144s, cap=1)");
+    println!(
+        "\nRecovery latency for a black-holed tx (embargo {}s, cap={RETRY_CAP})",
+        embargo.mean_secs()
+    );
     println!(
         "  fluff-on-expiry (1 cycle):    p50 {:.0}s  p90 {:.0}s  p99 {:.0}s",
-        r.fluff_p50_s, r.fluff_p90_s, r.fluff_p99_s
+        recovery.fluff_p50_s, recovery.fluff_p90_s, recovery.fluff_p99_s
     );
     println!(
-        "  reshape worst case (W3, 2c):  p50 {:.0}s  p90 {:.0}s  p99 {:.0}s",
-        r.reshape_worst_p50_s, r.reshape_worst_p90_s, r.reshape_worst_p99_s
+        "  reshape worst case (W3, {}c):  p50 {:.0}s  p90 {:.0}s  p99 {:.0}s",
+        budget.cycles,
+        recovery.reshape_worst_p50_s,
+        recovery.reshape_worst_p90_s,
+        recovery.reshape_worst_p99_s
     );
     println!(
-        "  reshape worst p99 = {:.1}% of the shortest pool residence ({:.0}s)",
-        r.reshape_worst_p99_s / residence_s * 100.0,
-        residence_s
+        "  cap budget: {} means ({}s), {} failure deadlines ({}s)",
+        budget.cycles, budget.mean_secs, budget.cycles, budget.failed_secs
     );
 
     // It IS a cost: reshape's worst case exceeds fluff (an extra embargo cycle).
     assert!(
-        r.reshape_worst_p99_s > r.fluff_p99_s,
+        recovery.reshape_worst_p99_s > recovery.fluff_p99_s,
         "reshape worst-case should exceed fluff (it is a real cost)"
     );
-    // It is NOT a break: the worst case finishes inside the first half of the
-    // shortest residence. The second half is the wallet's: its submit watchdog
-    // probes the same bytes at half `DISPATCHED_PROOF_LIFE`
-    // (`shekyl-engine-core`'s `submit_watchdog`), and a recovery still running
-    // then reads as a stuck transaction.
+    // It is NOT a break: the median stays inside (cap+1) embargo means, and
+    // the tail stays inside that many of the timer's own failure deadlines.
     assert!(
-        r.reshape_worst_p99_s < residence_s / 2.0,
-        "reshape worst-case recovery {:.0}s must finish inside half the shortest pool \
-         residence {residence_s:.0}s (a cost, not a break)",
-        r.reshape_worst_p99_s
+        recovery.reshape_worst_p50_s < f64::from(budget.mean_secs),
+        "reshape median {:.0}s must stay inside {} embargo means ({}s)",
+        recovery.reshape_worst_p50_s,
+        budget.cycles,
+        budget.mean_secs
     );
-    // And it is bounded by ~(cap+1) embargo means, not unbounded — the whole
-    // point of the retry cap.
     assert!(
-        r.reshape_worst_p50_s < 4.0 * MIN_RELAY_S,
-        "reshape median recovery should stay within a few relay cycles, got {:.0}s",
-        r.reshape_worst_p50_s
+        recovery.reshape_worst_p99_s < f64::from(budget.failed_secs),
+        "reshape worst-case p99 {:.0}s must stay inside the cap's failure budget ({}s)",
+        recovery.reshape_worst_p99_s,
+        budget.failed_secs
     );
 
     println!(
-        "\n  Reshape's worst-case recovery (~{:.0}s p99) is {:.1}% of the tx's shortest\n  \
-         pool residence — a cost (a slower recovery, bounded by the retry cap),\n  \
-         not a break (the tx never fails to propagate). Fluff-on-expiry already\n  \
-         recovers slowly (p99 {:.0}s, the 144s memoryless embargo); reshape's\n  \
-         marginal cost is the rare W3 second cycle. The priority order lets us pay\n  \
-         this to stop spending privacy on recovery speed.",
-        r.reshape_worst_p99_s,
-        r.reshape_worst_p99_s / residence_s * 100.0,
-        r.fluff_p99_s
+        "\n  Reshape's worst-case recovery (~{:.0}s p99) sits inside the cap's\n  \
+         budget ({budget_failed}s) — a cost (a slower recovery, bounded by the\n  \
+         retry cap), not a break (the tx never fails to propagate).\n  \
+         Fluff-on-expiry already recovers slowly (p99 {:.0}s, the {mean}s\n  \
+         memoryless embargo); reshape's marginal cost is the rare W3 second\n  \
+         cycle. The priority order lets us pay this to stop spending privacy\n  \
+         on recovery speed.",
+        recovery.reshape_worst_p99_s,
+        recovery.fluff_p99_s,
+        budget_failed = budget.failed_secs,
+        mean = embargo.mean_secs(),
     );
 }

@@ -4524,7 +4524,6 @@ dependencies = [
  "shekyl-p-transport",
  "shekyl-p2p-transport",
  "shekyl-proofs",
- "shekyl-relay",
  "shekyl-rpc-client",
  "shekyl-rpc-transport",
  "shekyl-rpc-types",
@@ -5249,9 +5248,7 @@ dependencies = [
 name = "shekyl-relay-privacy"
 version = "3.1.0"
 dependencies = [
- "shekyl-curve-tree",
  "shekyl-draw-rng",
- "shekyl-economics",
  "shekyl-fcmp",
  "shekyl-levin",
  "shekyl-relay-privacy",

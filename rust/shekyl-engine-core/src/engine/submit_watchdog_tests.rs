@@ -276,7 +276,10 @@ fn default_horizon_probes_inside_the_dispatched_proof_life() {
 #[test]
 fn escape_horizon_outlasts_the_relays_own_publication() {
     let block_target = shekyl_economics::EconomicParams::default().daa_target_seconds;
-    let publish_secs = 2 * u64::from(shekyl_relay::origin_retry_secs()) + block_target;
+    // Two origin retries, then one block. The seconds are the relay's pin
+    // (`shekyl-relay` embargo tests), spelled in this crate because the
+    // wallet does not link the relay scheduler.
+    let publish_secs = 2 * SHIPPED_ORIGIN_RETRY_SECS + block_target;
     let horizon_secs = WatchdogConfig::DEFAULT.escape_horizon_blocks * block_target;
     assert!(
         horizon_secs > publish_secs,

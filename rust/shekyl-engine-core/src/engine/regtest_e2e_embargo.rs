@@ -15,6 +15,12 @@
 
 use super::super::*;
 use super::*;
+use crate::engine::submit_watchdog::SHIPPED_ORIGIN_RETRY_SECS;
+
+/// The origin's shipped retry. One spelling
+/// ([`SHIPPED_ORIGIN_RETRY_SECS`]); these walks and the submit watchdog
+/// are the two readers.
+const ORIGIN_RETRY: Duration = Duration::from_secs(SHIPPED_ORIGIN_RETRY_SECS);
 
 /// RX-1 on two live daemons: the origin's only peer is the sink, so it has
 /// no alternate, and its first embargo fire, at the derived retry interval
@@ -55,12 +61,7 @@ async fn an_origin_with_no_alternate_fluffs_at_its_first_fire_and_is_mined() {
         "fixture: the origin stems its own transaction to the sink"
     );
 
-    // The origin's retry interval at the shipped terms, pinned in
-    // `shekyl-ffi`'s `dandelionpp_ffi` tests to `shekyl_relay::origin_retry_secs`;
-    // this crate does not depend on the relay.
-    const ORIGIN_RETRY_SECS: u64 = 1_148;
-    let retry = Duration::from_secs(ORIGIN_RETRY_SECS);
-    let shown_by = submitted + retry + Duration::from_secs(120);
+    let shown_by = submitted + ORIGIN_RETRY + Duration::from_secs(120);
     let mut state = pair.stem_held(txid).await;
     while state == StemHold::Stem && Instant::now() < shown_by {
         tokio::time::sleep(Duration::from_secs(2)).await;
@@ -74,8 +75,8 @@ async fn an_origin_with_no_alternate_fluffs_at_its_first_fire_and_is_mined() {
         "the first fire with no alternate fluffs and the origin shows it"
     );
     assert!(
-        waited + Duration::from_secs(5) >= retry,
-        "it was published at the retry interval, not before: {waited:?} against {retry:?}"
+        waited + Duration::from_secs(5) >= ORIGIN_RETRY,
+        "it was published at the retry interval, not before: {waited:?} against {ORIGIN_RETRY:?}"
     );
 
     let height = assert_tx_confirmed(origin, txid).await;
@@ -105,10 +106,6 @@ async fn an_origin_whose_successor_drops_re_stems_to_its_alternate_and_never_flu
 
     const MINE_BATCH_BLOCKS: u64 = 10;
     const MAX_MINE_BATCHES: usize = 24;
-    // The origin's retry interval at the shipped terms, pinned in
-    // `shekyl-ffi`'s `dandelionpp_ffi` tests; this crate does not depend on
-    // the relay.
-    const ORIGIN_RETRY: Duration = Duration::from_secs(1_148);
     const SLACK: Duration = Duration::from_secs(120);
 
     let serial = serial_lock().lock_owned().await;

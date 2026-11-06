@@ -66,6 +66,18 @@ fn originate(z: &mut Relay, sent: &(TxId, TxBlob), rng: &mut SplitMix64) -> Conn
     successor
 }
 
+/// The seconds `origin_retry_secs` derives at the shipped terms.
+///
+/// `shekyl-engine-core` spells the same value (`SHIPPED_ORIGIN_RETRY_SECS`)
+/// because the wallet does not link this scheduler. The derivation owns the
+/// number; this equality is what keeps the spelling a pin. A move updates
+/// both in one change.
+#[test]
+fn shipped_origin_retry_matches_the_wallet_spelling() {
+    assert_eq!(origin_retry_secs(), 1_148);
+    assert_eq!(origin_retry_ms(), 1_148_000);
+}
+
 /// RX-1 and §12.2: the origin's first fire re-stems once to its alternate,
 /// the other live slot, at the derived retry interval; its second fire
 /// fluffs to every session and publishes. Red edits: fluff on every fire

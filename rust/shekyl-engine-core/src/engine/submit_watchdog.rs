@@ -93,14 +93,15 @@ pub(crate) struct WatchdogConfig {
     ///
     /// *Lower bound — the probe must not fire on the normal path.* The
     /// daemon's relay publishes its own transaction within two origin
-    /// retries (`shekyl-relay`'s `origin_retry_secs`, 1,148 s at the
-    /// shipped terms: the first fire re-stems to the alternate, the second
-    /// fluffs), and a published transaction mines in the next block. A
-    /// horizon inside that probes a transaction that is still propagating
-    /// normally — and present-but-unconfirmed goes straight to the alarm
-    /// (§5.3), so that is alarm fatigue an adversary can hide inside.
+    /// retries (`SHIPPED_ORIGIN_RETRY_SECS`, the seconds `shekyl-relay`
+    /// pins for `origin_retry_secs`: the first fire re-stems to the
+    /// alternate, the second fluffs), and a published transaction mines
+    /// in the next block. A horizon inside that probes a transaction that
+    /// is still propagating normally — and present-but-unconfirmed goes
+    /// straight to the alarm (§5.3), so that is alarm fatigue an adversary
+    /// can hide inside.
     /// `escape_horizon_outlasts_the_relays_own_publication` pins this
-    /// against the relay's own number and the consensus block target.
+    /// against those seconds and the consensus block target.
     ///
     /// The default is **half [`DISPATCHED_PROOF_LIFE`]** — 25 blocks,
     /// ~50 min at the 120 s target: 2× margin against the upper bound
@@ -422,6 +423,17 @@ pub(crate) fn release_awaiting_confirmation(
     }
     released
 }
+
+/// The origin's shipped retry, in seconds.
+///
+/// `shekyl-relay`'s `origin_retry_secs` derives it (the 1-in-`origin_retry_one_in`
+/// survival quantile of the adopted anonymity timer) and that crate's embargo
+/// tests pin the derivation equal to this value. This crate does not link the
+/// relay scheduler, so the seconds are spelled here. The submit watchdog's
+/// lower bound and the regtest embargo walks are the two readers; a move of
+/// the derivation updates the relay's pin and this spelling in one change.
+#[cfg(test)]
+pub(crate) const SHIPPED_ORIGIN_RETRY_SECS: u64 = 1_148;
 
 #[cfg(test)]
 #[path = "submit_watchdog_tests.rs"]

@@ -3301,6 +3301,15 @@ a **cost** (a slower recovery), not a **break** (a failure to propagate).
 Fluff-on-expiry *already* recovers slowly (p99 662 s, because the embargo is a
 144 s memoryless timer); reshape's marginal cost is only the rare W3 second cycle.
 
+> **Status note 2026-11-06.** The three-day lifetime and the re-relay loop
+> left with the C++ pool. The table above is the measurement as it was taken.
+> The executable form of "a cost, not a break" is the cap's own budget, read
+> off the embargo the measurement builds (`RecoveryBudget`): the worst-case
+> median stays inside `(retry_cap + 1)` embargo means, and the worst-case p99
+> stays inside that many of the timer's 1-in-100 failure deadlines. Pool
+> residence (`DISPATCHED_PROOF_LIFE`, CEN-M10) is the wallet watchdog's clock,
+> not this instrument's.
+
 ### 14.6 The one residual where C3 buys something real: W3
 
 When **both** stem successors are black holes (W3, §12), reshape's re-stem has
