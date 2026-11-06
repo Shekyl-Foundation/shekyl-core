@@ -39,12 +39,46 @@ impl Tick {
     }
 }
 
+/// An instant a [`Clock`] read, and nothing else can make.
+///
+/// A [`Tick`] can be built from any number, so two of them say nothing
+/// about whether they are comparable. This one is minted only by
+/// [`Clock::stamp`], and only this crate's two clocks implement
+/// [`Clock`]. Two stamps taken from clones of one clock share its origin.
+/// The daemon's process clock is one [`MonotonicClock`], built by the
+/// network and handed to every owner through its engine, so a stamp the
+/// dialer takes and one the Tor supervisor takes are on one timeline
+/// (`DIALER_OUTAGE_EVIDENCE.md` §6.1).
+#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)]
+pub struct Stamp(Tick);
+
+impl Stamp {
+    /// The instant, as the clock's tick.
+    pub const fn tick(self) -> Tick {
+        self.0
+    }
+}
+
+mod sealed {
+    /// Only this crate's clocks are clocks: a [`super::Stamp`] is then
+    /// always one a real clock read.
+    pub trait Sealed {}
+    impl Sealed for super::ManualClock {}
+    impl Sealed for super::MonotonicClock {}
+}
+
 /// Something that can say what time it is.
 ///
 /// `wait_for` is how the service thread sleeps. `set_now` is how a test
 /// moves a hand clock. A clock that advances by itself ignores `set_now`.
-pub trait Clock {
+/// Sealed: [`ManualClock`] and [`MonotonicClock`] are the clocks.
+pub trait Clock: sealed::Sealed {
     fn now(&self) -> Tick;
+
+    /// [`Self::now`], as an instant only a clock can mint.
+    fn stamp(&self) -> Stamp {
+        Stamp(self.now())
+    }
 
     /// How long to sleep before `deadline`.
     ///

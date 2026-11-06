@@ -259,10 +259,26 @@ impl std::error::Error for ControlError {}
 /// the supervisor's posture watch (the wallet's `WalletTorControl`, or the daemon's
 /// supervisor once it exists), not through `recv() == None`, which is correct only for a
 /// directly spawned, sole-sender actor.
+///
+/// A consumer with a queue of its own takes the events into it through
+/// [`Self::feeding`]: the daemon's supervisor keeps every discrete input in
+/// one inbox (`TOR_SUPERVISOR.md` §5). The bound and the count are the same.
 #[derive(Clone)]
 pub struct EventSink {
-    sender: mpsc::Sender<ControlReply>,
+    feed: Arc<dyn Fn(ControlReply) -> Fed + Send + Sync>,
     dropped: Arc<AtomicU64>,
+}
+
+/// What a feed did with one event ([`EventSink::feeding`]).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Fed {
+    /// The consumer holds it.
+    Held,
+    /// The consumer already holds [`EVENT_QUEUE_EVENTS`]: the event is
+    /// dropped and counted.
+    Full,
+    /// The consumer is gone: the event is discarded, not counted.
+    Gone,
 }
 
 /// The consumer's end of an [`EventSink`]: the held events, and how many were dropped
@@ -277,14 +293,32 @@ impl EventSink {
     #[must_use]
     pub fn bounded() -> (Self, EventReceiver) {
         let (sender, receiver) = mpsc::channel(EVENT_QUEUE_EVENTS);
-        let dropped = Arc::new(AtomicU64::new(0));
-        (
-            Self {
-                sender,
-                dropped: Arc::clone(&dropped),
-            },
-            EventReceiver { receiver, dropped },
-        )
+        let sink = Self::feeding(move |reply| match sender.try_send(reply) {
+            Ok(()) => Fed::Held,
+            Err(mpsc::error::TrySendError::Full(_)) => Fed::Full,
+            Err(mpsc::error::TrySendError::Closed(_)) => Fed::Gone,
+        });
+        let dropped = Arc::clone(&sink.dropped);
+        (sink, EventReceiver { receiver, dropped })
+    }
+
+    /// A sink whose events `feed` takes into a queue the consumer keeps. The
+    /// feed holds at most [`EVENT_QUEUE_EVENTS`] and never waits: it says
+    /// [`Fed::Full`] when it holds that many, and the sink counts the drop.
+    /// It is called on the control read loop.
+    pub fn feeding(feed: impl Fn(ControlReply) -> Fed + Send + Sync + 'static) -> Self {
+        Self {
+            feed: Arc::new(feed),
+            dropped: Arc::new(AtomicU64::new(0)),
+        }
+    }
+
+    /// How many events were dropped because the consumer was full, since the
+    /// sink was made, across every incarnation that shared it. It never
+    /// decreases.
+    #[must_use]
+    pub fn dropped(&self) -> u64 {
+        self.dropped.load(Ordering::Relaxed)
     }
 
     /// A sink with no consumer: **the correct production value today**, and a
@@ -322,9 +356,9 @@ impl EventSink {
     /// The control read loop is the production caller. A caller that already
     /// holds a framed reply uses this same write.
     pub fn route(&self, reply: ControlReply) {
-        match self.sender.try_send(reply) {
-            Ok(()) | Err(mpsc::error::TrySendError::Closed(_)) => {}
-            Err(mpsc::error::TrySendError::Full(_)) => {
+        match (self.feed)(reply) {
+            Fed::Held | Fed::Gone => {}
+            Fed::Full => {
                 self.dropped.fetch_add(1, Ordering::Relaxed);
             }
         }

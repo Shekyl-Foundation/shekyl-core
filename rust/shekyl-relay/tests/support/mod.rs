@@ -354,6 +354,7 @@ impl Rig {
             timing: timing.clone(),
             runtime: runtime.handle().clone(),
             rng: Box::new(SplitMix64::new(0x5eed)),
+            verdict: None,
         })
         .expect("the relay owner starts");
         let others = Arc::new(Others::default());
@@ -373,7 +374,8 @@ impl Rig {
                 peers: others.clone(),
                 sync: others.clone(),
                 relay: port.clone(),
-                probes: others.clone(),
+                probes: Some(others.clone()),
+                sessions: None,
             },
             connectors: loopback.clone(),
             timing: timing.clone(),
