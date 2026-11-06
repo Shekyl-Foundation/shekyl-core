@@ -8,6 +8,9 @@
 //! Ignored. The registered method is
 //! `docs/benchmarks/rt_w10_request_cost_20261102.md`. `RT_W10_OUT` is the
 //! directory; the test writes `coinbase.tsv` and does not overwrite it.
+//! Unset, the test writes into a temporary directory and removes it: that
+//! is the nightly `store-ignored` lane's run, which proves the harness
+//! still runs and measures nothing (`scripts/ci/ignored_set_chain_store.sh`).
 //! Linux only: the clock is `CLOCK_THREAD_CPUTIME_ID`.
 
 use std::fs::{self, File};
@@ -80,8 +83,14 @@ fn recorded<T, E: std::fmt::Debug>(read: Result<AtHeight<T>, E>, what: &'static 
 #[test]
 #[ignore = "RT-W10 floor-device coinbase span; docs/benchmarks/rt_w10_request_cost_20261102.md"]
 fn rt_w10_coinbase_span_cost() {
-    let out =
-        PathBuf::from(std::env::var("RT_W10_OUT").expect("RT_W10_OUT is the output directory"));
+    // `var_os`: a set value is a path, and need not be UTF-8.
+    let (out, scratch) = match std::env::var_os("RT_W10_OUT") {
+        Some(dir) => (PathBuf::from(dir), false),
+        None => (tmp("rt-w10-out").with_extension("d"), true),
+    };
+    if scratch {
+        drop(fs::remove_dir_all(&out));
+    }
     fs::create_dir_all(&out).expect("the output directory can be created");
     let path = out.join("coinbase.tsv");
     assert!(
@@ -136,4 +145,15 @@ fn rt_w10_coinbase_span_cost() {
     drop(snap);
     drop(store);
     cleanup(&store_path);
+    if scratch {
+        assert_eq!(
+            fs::read_to_string(&path)
+                .expect("read coinbase.tsv")
+                .lines()
+                .count(),
+            1 + 3 * SAMPLES,
+            "the header and three series of every sample"
+        );
+        fs::remove_dir_all(&out).expect("remove the scratch output directory");
+    }
 }

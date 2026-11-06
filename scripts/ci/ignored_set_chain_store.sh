@@ -14,9 +14,13 @@
 #
 # The set: the shard-boundary deletion test over real multi-input spends
 # (`prune_tests::the_boundary_batch_discards_closed_shards_on_real_spends`,
-# minutes of proving — the unit lane runs its padded-record twin) and the
-# two benches (`weights_read_bench`, `slash_scan_bench`). An `#[ignore]`d
-# test no scheduled lane runs is a deleted test with a comment on it.
+# minutes of proving — the unit lane runs its padded-record twin), the
+# two benches (`weights_read_bench`, `slash_scan_bench`) and the RT-W10
+# floor-device harness (`rt_w10_coinbase_span_cost`), which here writes into
+# a temporary directory it removes: the run proves the harness still runs,
+# and its timings off the floor device are not a measurement. An
+# `#[ignore]`d test no scheduled lane runs is a deleted test with a comment
+# on it.
 #
 # Rule 47: the lane asserts every subject it owns is in the set before
 # running it — a renamed, deleted or un-ignored member fails here by name,
@@ -35,6 +39,7 @@ branch="${BRANCH:-the checked-out ref}"
 list=$(cargo test --locked --release -p shekyl-chain-store --lib -- --list --ignored)
 for subject in \
   'store::prune_tests::the_boundary_batch_discards_closed_shards_on_real_spends' \
+  'store::rt_w10_cost::rt_w10_coinbase_span_cost' \
   'store::slash_scan_bench_tests::slash_scan_bench' \
   'store::weights_read_bench_tests::weights_read_bench'
 do
