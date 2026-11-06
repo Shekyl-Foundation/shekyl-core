@@ -5,8 +5,9 @@
 
 //! The endpoint a connector admitted.
 //!
-//! One enum. Clearnet carries the host and the direction. Tor inbound is
-//! this zone with no peer address. Tor outbound is the onion that was dialed.
+//! One enum. Clearnet carries the host and the direction. Tor inbound
+//! carries no peer address: the peer's onion is not known at accept. Tor
+//! outbound is the onion that was dialed.
 
 use std::net::IpAddr;
 
@@ -28,7 +29,7 @@ pub enum Endpoint {
         /// Accepted or dialed.
         direction: Direction,
     },
-    /// Tor inbound. This zone, no peer address.
+    /// Tor inbound. No peer address: the peer's onion is not known at accept.
     TorInbound,
     /// Tor outbound. The v3 service that was dialed.
     ///

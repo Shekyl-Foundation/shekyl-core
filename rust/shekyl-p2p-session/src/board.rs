@@ -168,7 +168,7 @@ impl Board {
     /// Rows of this connector and direction, handshake or not.
     ///
     /// The handshake flag is not part of this count. A dial in flight
-    /// still occupies an outbound slot, so a zone's dial cap reads
+    /// still occupies an outbound slot, so a connector's dial cap reads
     /// [`Direction::Outbound`] for that connector. `established` is a
     /// separate fact on the row. A count of established rows would let
     /// the node dial past the cap while handshakes are outstanding.
